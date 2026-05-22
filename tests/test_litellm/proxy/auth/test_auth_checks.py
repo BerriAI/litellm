@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 import httpx
 import pytest
+from fastapi import status
 
 import litellm
 from litellm.proxy._types import (
@@ -31,6 +32,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    _can_object_call_model,
     _can_object_call_vector_stores,
     _check_end_user_budget,
     _check_team_member_budget,
@@ -125,6 +127,23 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
+def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_values):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_alias"] == "test-team"
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
@@ -204,6 +223,52 @@ def test_get_key_object_from_ui_hash_key_invalid():
     # Test with invalid token
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key("invalid_token")
     assert key_object is None
+
+
+@pytest.mark.parametrize(
+    "object_type,expected_error_type",
+    [
+        ("key", ProxyErrorTypes.key_model_access_denied),
+        ("team", ProxyErrorTypes.team_model_access_denied),
+        ("user", ProxyErrorTypes.user_model_access_denied),
+        ("org", ProxyErrorTypes.org_model_access_denied),
+        ("project", ProxyErrorTypes.project_model_access_denied),
+    ],
+)
+def test_can_object_call_model_denials_return_forbidden(
+    object_type, expected_error_type
+):
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="restricted-model",
+            llm_router=None,
+            models=["allowed-model"],
+            object_type=object_type,
+        )
+
+    assert exc_info.value.type == expected_error_type
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_no_default_models_returns_forbidden():
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    user_object = LiteLLM_UserTable(
+        user_id="test-user",
+        models=[SpecialModelNames.no_default_models.value],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_user_call_model(
+            model="restricted-model",
+            llm_router=None,
+            user_object=user_object,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
@@ -904,6 +969,286 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
     assert "key not allowed to access model" in str(exc_info.value.message)
     assert "my-fake-gpt" in str(exc_info.value.message)
+
+
+# -- Team-member access-group resolution with team-scoped DB models -----------
+
+
+def _make_team_scoped_router(team_id: str = "team-a"):
+    """
+    Build a Router whose model_list looks like what the proxy creates for
+    team-scoped BYOK DB models: the internal model_name is
+    ``<public_name>_<team_id>_<uuid>`` and the public name lives in
+    ``model_info.team_public_model_name``.  Two models belong to the
+    access group ``fast-models``; one (``mock-power``) does not.
+    """
+    from litellm import Router
+
+    model_list = [
+        {
+            "model_name": f"mock-fast-1_{team_id}_aaa",
+            "litellm_params": {
+                "model": "openai/mock-fast-1",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-fast-1-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-fast-1",
+                "access_groups": ["fast-models"],
+            },
+        },
+        {
+            "model_name": f"mock-fast-2_{team_id}_bbb",
+            "litellm_params": {
+                "model": "openai/mock-fast-2",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-fast-2-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-fast-2",
+                "access_groups": ["fast-models"],
+            },
+        },
+        {
+            "model_name": f"mock-power_{team_id}_ccc",
+            "litellm_params": {
+                "model": "openai/mock-power",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-power-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-power",
+            },
+        },
+    ]
+    return Router(model_list=model_list)
+
+
+def test_can_object_call_model_access_group_with_team_id():
+    """
+    When team_id is passed, _can_object_call_model should resolve
+    model_info.access_groups for team-scoped DB models and allow
+    access via group name.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-fast-1",
+        llm_router=router,
+        models=["fast-models", "mock-power"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+def test_can_object_call_model_access_group_without_team_id_fails():
+    """
+    Without team_id the router cannot find team-scoped DB models, so
+    access group resolution fails and the call is denied.
+    This is the pre-fix behavior.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="mock-fast-1",
+            llm_router=router,
+            models=["fast-models", "mock-power"],
+            object_type="team",
+            # team_id intentionally omitted
+        )
+
+
+def test_can_object_call_model_literal_name_with_team_id():
+    """
+    Literal model name matching should still work when team_id is
+    passed — no regression from adding team_id.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-power",
+        llm_router=router,
+        models=["fast-models", "mock-power"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+def test_can_object_call_model_denied_model_with_team_id():
+    """
+    A model not in the allowed list (by name or access group) should
+    still be denied even when team_id is passed.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="mock-vision",
+            llm_router=router,
+            models=["fast-models", "mock-power"],
+            object_type="team",
+            team_id="team-a",
+        )
+
+
+def test_can_object_call_model_second_group_member_with_team_id():
+    """
+    Both models in the access group should be reachable, not just
+    the first one.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-fast-2",
+        llm_router=router,
+        models=["fast-models"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_with_access_group():
+    """
+    End-to-end test of _check_team_member_model_access: a member whose
+    allowed_models contains an access group name should be allowed to
+    call models in that group for team-scoped DB models.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            allowed_models=["fast-models", "mock-power"],
+        ),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        # Should not raise — mock-fast-1 is in the fast-models group
+        await _check_team_member_model_access(
+            model="mock-fast-1",
+            team_object=team,
+            valid_token=token,
+            llm_router=router,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_denied_model():
+    """
+    A member with per-member allowed_models should be denied access to
+    a model that is neither listed by name nor covered by an access group.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            allowed_models=["fast-models", "mock-power"],
+        ),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _check_team_member_model_access(
+                model="mock-vision",
+                team_object=team,
+                valid_token=token,
+                llm_router=router,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+        assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+        assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_no_override_inherits_team():
+    """
+    When a member has no allowed_models (empty budget table), the function
+    should return without raising — the team-level check applies instead.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="bob", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="bob",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        # Should return without raising — no per-member restriction
+        await _check_team_member_model_access(
+            model="mock-vision",
+            team_object=team,
+            valid_token=token,
+            llm_router=router,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
 
 
 # Tag Budget Enforcement Tests
@@ -2688,3 +3033,340 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+# --- resolve_and_validate_end_user_id ---------------------------------------
+
+
+@pytest.fixture
+def _validate_flag_on(monkeypatch):
+    """Enable opt-in DB validation for the duration of a test."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+
+
+def _validation_cache():
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return cache
+
+
+def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=None):
+    """Stub out the DB helpers resolve_and_validate_end_user_id delegates to."""
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(
+        auth_checks, "get_end_user_object", AsyncMock(return_value=end_user)
+    )
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        auth_checks, "_get_fuzzy_user_object", AsyncMock(return_value=fuzzy)
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_returns_none_for_none_input(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    assert (
+        await resolve_and_validate_end_user_id(
+            raw_end_user_id=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_passes_through_when_flag_disabled(monkeypatch):
+    """Default behaviour: flag is off, arbitrary ids pass through untouched."""
+    import litellm
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="codex-session-abc",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "codex-session-abc"
+    cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_passes_through_when_no_prisma_client(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=None,
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="customer-123",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "customer-123"
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["key"] == "end_user_validation:customer-123"
+    assert kwargs["value"] == "valid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_user_id(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "user-xyz"
+    # email fallback should not run for a non-email input
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_email(
+    _validate_flag_on, monkeypatch
+):
+    """Email-shaped ids route through get_user_object with user_email set.
+
+    The fuzzy lookup must happen inside get_user_object so it shares the
+    _should_check_db throttle and user_api_key_cache — no direct raw
+    Prisma calls on the auth path.
+    """
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="Alice@Example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "Alice@Example.com"
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_id"] == "Alice@Example.com"
+    assert user_kwargs["user_email"] == "Alice@Example.com"
+    # email branch must not bypass the cached helper with a raw fuzzy call
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
+    _validate_flag_on, monkeypatch
+):
+    """Non-email ids skip the email fuzzy path to avoid a pointless DB hit."""
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_codex_opaque_identifier(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)  # all helpers return None
+    cache = _validation_cache()
+
+    codex_id = (
+        "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
+        "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
+    )
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id=codex_id,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["value"] == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_preserves_id_when_default_budget_configured(
+    _validate_flag_on, monkeypatch
+):
+    """Don't drop unregistered ids when litellm.max_end_user_budget_id is set.
+
+    The default end-user budget is applied downstream when the id is present
+    but not found in the db — dropping the id here would bypass those limits.
+    """
+    import litellm
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-budget")
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="new-customer",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "new-customer"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="stranger@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_valid_result(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value="valid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+    auth_checks.get_end_user_object.assert_not_awaited()
+    auth_checks.get_user_object.assert_not_awaited()
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_invalid_result(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value="invalid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="bogus",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    # Despite a matching row configured, helpers aren't called — cache wins.
+    auth_checks.get_end_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_swallows_db_errors_and_returns_none(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(
+        auth_checks,
+        "get_end_user_object",
+        AsyncMock(side_effect=Exception("db down")),
+    )
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(side_effect=Exception("db down")),
+    )
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    # DB errors shouldn't raise through the auth path — treat as unknown.
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_reraises_budget_exceeded(
+    _validate_flag_on, monkeypatch
+):
+    """BudgetExceededError from get_end_user_object must bubble up so the
+    auth path enforces spend limits instead of silently dropping the id."""
+    import litellm
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(
+        auth_checks,
+        "get_end_user_object",
+        AsyncMock(
+            side_effect=litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+        ),
+    )
+    cache = _validation_cache()
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await resolve_and_validate_end_user_id(
+            raw_end_user_id="customer-over-budget",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+        )

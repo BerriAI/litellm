@@ -107,9 +107,13 @@ class LiteLLMCommonStrings(Enum):
 SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
-class CostPerToken(TypedDict):
-    input_cost_per_token: float
-    output_cost_per_token: float
+class CostPerToken(TypedDict, total=False):
+    # Required base rates — kept under total=False so we can mark them
+    # Required individually while leaving the cache rates NotRequired.
+    input_cost_per_token: Required[float]
+    output_cost_per_token: Required[float]
+    cache_read_input_token_cost: float
+    cache_creation_input_token_cost: float
 
 
 class ProviderField(TypedDict):
@@ -143,6 +147,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
+    supports_output_config: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -239,6 +244,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     ocr_cost_per_page: Optional[float]  # for OCR models
+    ocr_cost_per_credit: Optional[float]  # for OCR models priced by credit
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
@@ -256,6 +262,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "responses",
+            "ocr",
         ]
     ]
     tpm: Optional[int]
@@ -825,6 +832,7 @@ API_ROUTE_TO_CALL_TYPES = {
     # Realtime API
     "/realtime": [CallTypes.arealtime],
     "/v1/realtime": [CallTypes.arealtime],
+    "/openai/v1/realtime": [CallTypes.arealtime],
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -2760,6 +2768,20 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: Optional[float]
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
+    violation_categories: Optional[List[str]]
+    """Names of the policy items that intervened on this request (e.g. Bedrock
+    topic-policy topic names, content-policy filter types, PII entity types).
+    Populated by the provider hook before redaction so downstream loggers
+    (OTEL, Langfuse, ...) can filter by violation category without parsing
+    the raw guardrail_response blob. Empty/absent when the guardrail allowed
+    the request through."""
+
+    guardrail_action: Optional[str]
+    """Provider's raw top-level action string (e.g. Bedrock's ``GUARDRAIL_INTERVENED``
+    or ``NONE``). Populated by the provider hook so the OTEL integration can
+    surface it as a queryable span attribute without parsing the raw
+    guardrail_response blob."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -2801,6 +2823,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: Optional[int]
     alert_recipients: Optional[List[str]]
     risk_score: Optional[float]
+    violation_categories: Optional[List[str]]
+    guardrail_action: Optional[str]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3214,6 +3238,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    REDUCTO = "reducto"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
@@ -3247,6 +3272,7 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"

@@ -8,10 +8,11 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -43,6 +44,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
+    resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
@@ -50,6 +52,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    get_request_route_template,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -67,6 +70,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -183,22 +187,54 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
 
 
 def _routing_selector_matches_claim(
-    selector_value: Optional[Any], claim_value: Optional[Any]
+    selector_value: Optional[Any],
+    claim_value: Optional[Any],
+    *,
+    split_space_delimited: bool = False,
 ) -> bool:
     if selector_value is None:
         return True
 
-    selector_list = (
+    selector_list: List[str] = (
         [str(v) for v in selector_value]
         if isinstance(selector_value, list)
         else [str(selector_value)]
     )
 
+    if claim_value is None:
+        return False
+
     if isinstance(claim_value, list):
         claim_list = [str(v) for v in claim_value]
-        return any(v in claim_list for v in selector_list)
+    elif (
+        split_space_delimited
+        and isinstance(claim_value, str)
+        and " " in claim_value.strip()
+    ):
+        # OAuth/OIDC often sends scope as a single space-delimited string. Only split
+        # for the scope selector: iss/aud/client_id must stay exact full-string match
+        # on unverified claims (see routing override security review). The elif guard
+        # (`" " in claim_value.strip()`) ensures at least two non-empty tokens survive.
+        claim_list = [v for v in claim_value.strip().split(" ") if v]
+    else:
+        claim_list = [str(claim_value)]
 
-    return str(claim_value) in selector_list if claim_value is not None else False
+    def _selector_matches_claim(selector: str, claim: str) -> bool:
+        # NOTE: wildcard matching is case-sensitive (fnmatch.fnmatchcase).
+        if "*" in selector or "?" in selector:
+            # Without scope splitting, do not let `*` span whitespace: a malformed
+            # iss like "trusted.example.com evil.com" must not match "trusted.*".
+            # Scope uses split_space_delimited so each claim token is checked separately.
+            if not split_space_delimited and any(ch.isspace() for ch in claim):
+                return False
+            return fnmatch.fnmatchcase(claim, selector)
+        return selector == claim
+
+    return any(
+        _selector_matches_claim(selector=s, claim=c)
+        for s in selector_list
+        for c in claim_list
+    )
 
 
 def _matches_routing_override(
@@ -208,6 +244,11 @@ def _matches_routing_override(
         _routing_selector_matches_claim(override.iss, token_claims.get("iss"))
         and _routing_selector_matches_claim(
             override.client_id, token_claims.get("client_id")
+        )
+        and _routing_selector_matches_claim(
+            override.scope,
+            token_claims.get("scope"),
+            split_space_delimited=True,
         )
         and _routing_selector_matches_claim(override.aud, token_claims.get("aud"))
     )
@@ -293,8 +334,22 @@ def _apply_budget_limits_to_end_user_params(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    scope_headers = list(websocket.scope.get("headers") or [])
-    request = Request(scope={"type": "http", "headers": scope_headers})
+    ws_scope = websocket.scope or {}
+    scope_headers = list(ws_scope.get("headers") or [])
+    # ``get_request_route`` falls back to ``request.url.path`` when
+    # ``scope["path"]`` is absent. On WebSockets that fallback reads
+    # ``websocket.url``, which Starlette reconstructs from the (poisonable)
+    # Host header. Carry the ASGI scope's path / root_path so the lookup
+    # never reaches the fallback.
+    synthetic_scope: Dict[str, Any] = {
+        "type": "http",
+        "headers": scope_headers,
+        "path": ws_scope.get("path", ""),
+    }
+    for key in ("root_path", "app_root_path"):
+        if key in ws_scope:
+            synthetic_scope[key] = ws_scope[key]
+    request = Request(scope=synthetic_scope)
 
     request._url = websocket.url
 
@@ -643,6 +698,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    # Stash the proxy-receive instant for the pre-request latency calc —
+    # the OTel Span API exposes no start-time getter, so propagate it.
+    try:
+        request.state.litellm_received_at = start_time
+    except Exception:
+        pass
     route: str = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False
@@ -683,6 +744,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     start_time=start_time,
                     headers=_safe_get_request_headers(request),
                 )
+            )
+            # `route` is the literal path; template from the matched route.
+            open_telemetry_logger.set_proxy_request_route_attributes(
+                parent_otel_span,
+                url_path=route,
+                http_route=get_request_route_template(request),
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
@@ -1005,8 +1072,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(
+        raw_end_user_id = get_end_user_id_from_request_body(
             request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
         )
         if end_user_id:
             try:
@@ -1107,7 +1182,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     raise ProxyException(
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
-                        code=400,
+                        code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
             valid_token = update_valid_token_with_end_user_params(
@@ -1432,7 +1507,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     raise ProxyException(
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
-                        code=400,
+                        code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
 
@@ -1693,7 +1768,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(
+async def _run_centralized_common_checks(  # noqa: PLR0915
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,
@@ -1771,9 +1846,23 @@ async def _run_centralized_common_checks(
         return
 
     parent_otel_span = user_api_key_auth_obj.parent_otel_span
-    end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
+    # In the integrated auth flow ``_user_api_key_auth_builder`` has already
+    # resolved the end-user id and attached it here. Reuse that to avoid a
+    # second extraction pass; fall back to extracting locally when the
+    # function is invoked in isolation (e.g. in direct unit tests).
+    end_user_id = user_api_key_auth_obj.end_user_id
+    if end_user_id is None:
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
 
     fetch_coros = []
     if user_api_key_auth_obj.team_id is not None:
@@ -1939,6 +2028,16 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
     )
 
+    # Merge x-litellm-tags into request_data BEFORE common_checks runs.
+    # _tag_max_budget_check inside common_checks only inspects request_data;
+    # without this pre-merge, header-supplied tags bypass tag-budget
+    # enforcement.
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        request=request,
+        request_data=request_data,
+        user_api_key_dict=user_api_key_auth_obj,
+    )
+
     _ = await common_checks(
         request=request,
         request_body=request_data,
@@ -2094,11 +2193,33 @@ async def user_api_key_auth(
             api_key=api_key,
         )
 
-    end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
-    if end_user_id is not None:
-        user_api_key_auth_obj.end_user_id = end_user_id
+    # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
+    # paths (no master key, /user/auth route, JWT short-circuits) that bypass
+    # the end-user resolution block. If those paths produced an auth obj
+    # without an ``end_user_id`` set, fall back to extracting from the request
+    # body so spend logs are still attributed correctly. Validation honours
+    # ``litellm.validate_end_user_id_in_db``.
+    if user_api_key_auth_obj.end_user_id is None:
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        if raw_end_user_id is not None:
+            resolved_end_user_id = await resolve_and_validate_end_user_id(
+                raw_end_user_id=raw_end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
+            if resolved_end_user_id is not None:
+                user_api_key_auth_obj.end_user_id = resolved_end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj
@@ -2417,7 +2538,7 @@ async def _run_post_custom_auth_checks(
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                 type=ProxyErrorTypes.expired_key,
-                code=400,
+                code=status.HTTP_401_UNAUTHORIZED,
                 param=(
                     abbreviate_api_key(api_key=valid_token.token)
                     if valid_token.token

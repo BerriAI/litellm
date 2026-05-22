@@ -1042,3 +1042,10 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+
+    # `context_management` is allowed for Bedrock InvokeModel only when it
+    # carries `compact_20260112` edits paired with the `compact-2026-01-12`
+    # anthropic-beta header. The Invoke transformation filters edits to the
+    # supported subset and strips the field entirely when nothing remains, so
+    # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
+    context_management: dict

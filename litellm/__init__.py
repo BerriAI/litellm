@@ -206,6 +206,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
+skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[str] = (
@@ -224,6 +225,10 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
+use_legacy_interactions_schema: bool = (
+    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
+)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
+# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -388,6 +393,7 @@ anthropic_beta_headers_url: str = os.getenv(
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
@@ -407,6 +413,12 @@ internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
+# When True, end-user IDs extracted from requests are validated against
+# LiteLLM_EndUserTable / LiteLLM_UserTable. Values that do not resolve to a
+# known row are dropped before reaching spend logs. Defaults to False for
+# backwards compatibility — arbitrary client-supplied identifiers still
+# pass through unchanged.
+validate_end_user_id_in_db: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -414,6 +426,10 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_user_budget_label_include_email_alias: bool = False
+prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
+prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
+prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
@@ -586,6 +602,7 @@ anyscale_models: Set = set()
 cerebras_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
+nvidia_riva_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -625,6 +642,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
 
@@ -812,6 +830,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
             nvidia_nim_models.add(key)
+        elif value.get("litellm_provider") == "nvidia_riva":
+            nvidia_riva_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -890,6 +910,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "reducto":
+            reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
@@ -971,6 +993,7 @@ model_list = list(
     | cerebras_models
     | galadriel_models
     | nvidia_nim_models
+    | nvidia_riva_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -1000,6 +1023,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
+    | reducto_models
     | bedrock_mantle_models
     | set(clarifai_models)
 )
@@ -1067,6 +1091,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
+    "nvidia_riva": nvidia_riva_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
@@ -1105,6 +1130,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
 }
 
@@ -1277,6 +1303,18 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
+from .interactions.agents.main import (
+    acreate as acreate_agent,
+    create as create_agent,
+    alist as alist_agents,
+    list as list_agents,
+    aget as aget_agent,
+    get as get_agent,
+    adelete as adelete_agent,
+    delete as delete_agent,
+    alist_versions as alist_agent_versions,
+    list_versions as list_agent_versions,
+)
 from .skills.main import (
     create_skill,
     acreate_skill,
@@ -1416,6 +1454,12 @@ if TYPE_CHECKING:
     )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
+    from .llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig as BedrockClaudePlatformConfig,
+    )
+    from .llms.bedrock.claude_platform.messages_transformation import (
+        BedrockClaudePlatformMessagesConfig as BedrockClaudePlatformMessagesConfig,
+    )
     from .llms.anthropic.completion.transformation import (
         AnthropicTextConfig as AnthropicTextConfig,
     )
@@ -1617,6 +1661,9 @@ if TYPE_CHECKING:
     )
     from .llms.deepgram.audio_transcription.transformation import (
         DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig,
+    )
+    from .llms.nvidia_riva.audio_transcription.transformation import (
+        NvidiaRivaAudioTranscriptionConfig as NvidiaRivaAudioTranscriptionConfig,
     )
     from .llms.topaz.image_variations.transformation import (
         TopazImageVariationConfig as TopazImageVariationConfig,
@@ -1860,6 +1907,12 @@ if TYPE_CHECKING:
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,
+    )
+    from .llms.dashscope.embed.transformation import (
+        DashScopeEmbeddingConfig as DashScopeEmbeddingConfig,
+    )
+    from .llms.dashscope.rerank.transformation import (
+        DashScopeRerankConfig as DashScopeRerankConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

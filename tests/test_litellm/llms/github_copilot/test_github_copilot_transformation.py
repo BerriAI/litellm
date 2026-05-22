@@ -94,27 +94,33 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
 
 
 @patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
+@patch("litellm.main.openai_chat_completions.completion")
 @patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
-def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_key):
+def test_completion_github_copilot_mock_response(
+    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch
+):
     """Test the completion function with GitHub Copilot provider."""
 
-    # Mock the API key return value
+    # Force chat path through the patched openai_chat_completions instance even if
+    # a previous test left EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER set in the env.
+    monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
+
     mock_api_key = "gh.test-key-123456789"
     mock_get_api_key.return_value = mock_api_key
 
-    # Mock completion response
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = "Hello, I'm GitHub Copilot!"
-    mock_completion.return_value = mock_response
+    # Patch both the class method and the live module-level instance to survive
+    # conftest module reloads that can swap which class object is in use.
+    mock_class_completion.return_value = mock_response
+    mock_instance_completion.return_value = mock_response
 
-    # Test non-streaming completion
     messages = [
         {"role": "system", "content": "You're GitHub Copilot, an AI assistant."},
         {"role": "user", "content": "Hello, who are you?"},
     ]
 
-    # Create a properly formatted headers dictionary
     headers = {
         "editor-version": "Neovim/0.9.0",
         "Copilot-Integration-Id": "vscode-chat",
@@ -128,19 +134,16 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_k
 
     assert response is not None
 
-    # Verify the get_api_key call was made (can be called multiple times)
     assert mock_get_api_key.call_count >= 1
 
-    # Verify the completion call was made with the expected params
-    mock_completion.assert_called_once()
-    args, kwargs = mock_completion.call_args
+    # Exactly one of the two patched targets should have been used.
+    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
+    assert len(invoked) == 1
+    invoked[0].assert_called_once()
+    _, kwargs = invoked[0].call_args
 
-    # Check that the proper authorization header is set
     assert "headers" in kwargs
-    # Check that the model name is correctly formatted
-    assert (
-        kwargs.get("model") == "gpt-4"
-    )  # Model name should be without provider prefix
+    assert kwargs.get("model") == "gpt-4"
     assert kwargs.get("messages") == messages
 
 

@@ -179,3 +179,19 @@ export function choiceToSkipSystemForCreate(choice: SkipSystemMessageChoice | un
   if (choice === "no") return false;
   return undefined;
 }
+
+/** Tri-state UI value for `litellm_params.skip_tool_message_in_guardrail` (inherit = use global). */
+export type SkipToolMessageChoice = "inherit" | "yes" | "no";
+
+export function skipToolMessageToChoice(v: boolean | null | undefined): SkipToolMessageChoice {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "inherit";
+}
+
+/** Create flow: omit key when inheriting global default. */
+export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefined): boolean | undefined {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return undefined;
+}

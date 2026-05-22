@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -543,6 +544,13 @@ def _build_aggregated_sql_query(
 
     where_clause = " AND ".join(sql_conditions)
 
+    # Postgres computes every rollup level the response needs — per-date
+    # totals, per-(date, model), per-(date, model, api_key), per-provider,
+    # etc. — in a single pass via GROUPING SETS. The GROUPING() bitmask
+    # encodes which level a row belongs to so Python can dispatch rows
+    # straight into their buckets without re-summing. The leaf grouping
+    # is omitted on purpose: nothing in the response shape needs it once
+    # all the rollups are present.
     sql_query = f"""
         SELECT
             date,
@@ -552,6 +560,9 @@ def _build_aggregated_sql_query(
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
+            GROUPING(date, api_key, model, model_group,
+                     custom_llm_provider, mcp_namespaced_tool_name,
+                     endpoint) AS group_level,
             SUM(spend)::float AS spend,
             SUM(prompt_tokens)::bigint AS prompt_tokens,
             SUM(completion_tokens)::bigint AS completion_tokens,
@@ -562,32 +573,35 @@ def _build_aggregated_sql_query(
             SUM(failed_requests)::bigint AS failed_requests
         FROM "{pg_table}"
         WHERE {where_clause}
-        GROUP BY date, api_key, model, model_group, custom_llm_provider,
-                 mcp_namespaced_tool_name, endpoint
-        ORDER BY date DESC
+        GROUP BY GROUPING SETS (
+            (date),
+            (date, api_key),
+            (date, model),
+            (date, model, api_key),
+            (date, model_group),
+            (date, model_group, api_key),
+            (date, custom_llm_provider),
+            (date, custom_llm_provider, api_key),
+            (date, mcp_namespaced_tool_name),
+            (date, mcp_namespaced_tool_name, api_key),
+            (date, endpoint),
+            (date, endpoint, api_key),
+            ()
+        )
     """
 
     return sql_query, sql_params
 
 
-async def _aggregate_spend_records(
+def _aggregate_spend_records_sync(
     *,
-    prisma_client: PrismaClient,
     records: List[Any],
+    api_key_metadata: Dict[str, Dict[str, Any]],
     entity_id_field: Optional[str],
     entity_metadata_field: Optional[Dict[str, dict]],
 ) -> Dict[str, Any]:
-    """Aggregate rows into DailySpendData list and total metrics."""
-    api_keys: Set[str] = set()
-    for record in records:
-        if record.api_key:
-            api_keys.add(record.api_key)
-
-    api_key_metadata: Dict[str, Dict[str, Any]] = {}
     model_metadata: Dict[str, Dict[str, Any]] = {}
     provider_metadata: Dict[str, Dict[str, Any]] = {}
-    if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
 
     results: List[DailySpendData] = []
     total_metrics = SpendMetrics()
@@ -629,6 +643,228 @@ async def _aggregate_spend_records(
     results.sort(key=lambda x: x.date, reverse=True)
 
     return {"results": results, "totals": total_metrics}
+
+
+async def _aggregate_spend_records(
+    *,
+    prisma_client: PrismaClient,
+    records: List[Any],
+    entity_id_field: Optional[str],
+    entity_metadata_field: Optional[Dict[str, dict]],
+) -> Dict[str, Any]:
+    """Aggregate rows into DailySpendData list and total metrics.
+
+    The per-row loop is offloaded to a worker thread via asyncio.to_thread so
+    a large result set doesn't peg the event loop.
+    """
+    api_keys: Set[str] = {record.api_key for record in records if record.api_key}
+
+    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    if api_keys:
+        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+
+    return await asyncio.to_thread(
+        _aggregate_spend_records_sync,
+        records=records,
+        api_key_metadata=api_key_metadata,
+        entity_id_field=entity_id_field,
+        entity_metadata_field=entity_metadata_field,
+    )
+
+
+# GROUPING() bitmask values for each grouping set emitted by
+# _build_aggregated_sql_query. Per Postgres semantics, the rightmost argument
+# is the least-significant bit. Argument order:
+#   date, api_key, model, model_group, custom_llm_provider,
+#   mcp_namespaced_tool_name, endpoint
+# A bit is 1 when the corresponding column is rolled up (i.e. NOT in the
+# current grouping set's key), 0 when the column is part of the key.
+_GROUP_GRAND_TOTAL = 127  # 0b1111111 — all rolled up
+_GROUP_DATE = 63  # 0b0111111 — only date kept
+_GROUP_DATE_API_KEY = 31  # 0b0011111
+_GROUP_DATE_MODEL = 47  # 0b0101111
+_GROUP_DATE_MODEL_API_KEY = 15  # 0b0001111
+_GROUP_DATE_MODEL_GROUP = 55  # 0b0110111
+_GROUP_DATE_MODEL_GROUP_API_KEY = 23  # 0b0010111
+_GROUP_DATE_PROVIDER = 59  # 0b0111011
+_GROUP_DATE_PROVIDER_API_KEY = 27  # 0b0011011
+_GROUP_DATE_MCP = 61  # 0b0111101
+_GROUP_DATE_MCP_API_KEY = 29  # 0b0011101
+_GROUP_DATE_ENDPOINT = 62  # 0b0111110
+_GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
+
+
+def _record_to_spend_metrics(record: Any) -> SpendMetrics:
+    """Build a SpendMetrics directly from one already-aggregated rollup row."""
+    return SpendMetrics(
+        spend=record.spend,
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=record.prompt_tokens + record.completion_tokens,
+        cache_read_input_tokens=record.cache_read_input_tokens,
+        cache_creation_input_tokens=record.cache_creation_input_tokens,
+        api_requests=record.api_requests,
+        successful_requests=record.successful_requests,
+        failed_requests=record.failed_requests,
+    )
+
+
+def _key_metadata(
+    api_key_metadata: Dict[str, Dict[str, Any]], api_key: str
+) -> KeyMetadata:
+    meta = api_key_metadata.get(api_key, {})
+    return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
+
+
+def _aggregate_grouping_sets_records_sync(  # noqa: PLR0915
+    *,
+    records: List[Any],
+    api_key_metadata: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the response from rollup rows produced by the GROUPING SETS query.
+
+    Each row carries a `group_level` bitmask (from Postgres GROUPING()) that
+    identifies which rollup level it belongs to. We dispatch the row's
+    pre-aggregated metrics straight into the matching bucket — no per-row
+    summing in Python and no nested update_metrics calls.
+    """
+    total_metrics = SpendMetrics()
+    grouped_data: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_date(date_str: str) -> Dict[str, Any]:
+        bucket = grouped_data.get(date_str)
+        if bucket is None:
+            bucket = {"metrics": SpendMetrics(), "breakdown": BreakdownMetrics()}
+            grouped_data[date_str] = bucket
+        return bucket
+
+    def assign_metric_with_metadata(
+        target: Dict[str, MetricWithMetadata], key: str, metrics: SpendMetrics
+    ) -> None:
+        existing = target.get(key)
+        if existing is None:
+            target[key] = MetricWithMetadata(metrics=metrics, metadata={})
+        else:
+            existing.metrics = metrics
+
+    def assign_api_key_breakdown(
+        target: Dict[str, MetricWithMetadata],
+        parent_key: str,
+        api_key: str,
+        metrics: SpendMetrics,
+    ) -> None:
+        parent = target.get(parent_key)
+        if parent is None:
+            parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
+            target[parent_key] = parent
+        parent.api_key_breakdown[api_key] = KeyMetricWithMetadata(
+            metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
+        )
+
+    for record in records:
+        level = record.group_level
+        metrics = _record_to_spend_metrics(record)
+
+        if level == _GROUP_GRAND_TOTAL:
+            total_metrics = metrics
+            continue
+
+        if level == _GROUP_DATE:
+            ensure_date(record.date)["metrics"] = metrics
+            continue
+
+        breakdown = ensure_date(record.date)["breakdown"]
+
+        if level == _GROUP_DATE_API_KEY:
+            if record.api_key:
+                breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
+                    metrics=metrics,
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
+                )
+        elif level == _GROUP_DATE_MODEL:
+            if record.model:
+                assign_metric_with_metadata(breakdown.models, record.model, metrics)
+        elif level == _GROUP_DATE_MODEL_API_KEY:
+            if record.model and record.api_key:
+                assign_api_key_breakdown(
+                    breakdown.models, record.model, record.api_key, metrics
+                )
+        elif level == _GROUP_DATE_MODEL_GROUP:
+            if record.model_group:
+                assign_metric_with_metadata(
+                    breakdown.model_groups, record.model_group, metrics
+                )
+        elif level == _GROUP_DATE_MODEL_GROUP_API_KEY:
+            if record.model_group and record.api_key:
+                assign_api_key_breakdown(
+                    breakdown.model_groups,
+                    record.model_group,
+                    record.api_key,
+                    metrics,
+                )
+        elif level == _GROUP_DATE_PROVIDER:
+            provider = record.custom_llm_provider or "unknown"
+            assign_metric_with_metadata(breakdown.providers, provider, metrics)
+        elif level == _GROUP_DATE_PROVIDER_API_KEY:
+            if record.api_key:
+                provider = record.custom_llm_provider or "unknown"
+                assign_api_key_breakdown(
+                    breakdown.providers, provider, record.api_key, metrics
+                )
+        elif level == _GROUP_DATE_MCP:
+            if record.mcp_namespaced_tool_name:
+                assign_metric_with_metadata(
+                    breakdown.mcp_servers, record.mcp_namespaced_tool_name, metrics
+                )
+        elif level == _GROUP_DATE_MCP_API_KEY:
+            if record.mcp_namespaced_tool_name and record.api_key:
+                assign_api_key_breakdown(
+                    breakdown.mcp_servers,
+                    record.mcp_namespaced_tool_name,
+                    record.api_key,
+                    metrics,
+                )
+        elif level == _GROUP_DATE_ENDPOINT:
+            if record.endpoint:
+                assign_metric_with_metadata(
+                    breakdown.endpoints, record.endpoint, metrics
+                )
+        elif level == _GROUP_DATE_ENDPOINT_API_KEY:
+            if record.endpoint and record.api_key:
+                assign_api_key_breakdown(
+                    breakdown.endpoints, record.endpoint, record.api_key, metrics
+                )
+
+    results = [
+        DailySpendData(
+            date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+            metrics=data["metrics"],
+            breakdown=data["breakdown"],
+        )
+        for date_str, data in grouped_data.items()
+    ]
+    results.sort(key=lambda x: x.date, reverse=True)
+
+    return {"results": results, "totals": total_metrics}
+
+
+async def _aggregate_grouping_sets_records(
+    *,
+    prisma_client: PrismaClient,
+    records: List[Any],
+) -> Dict[str, Any]:
+    """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
+    api_keys: Set[str] = {r.api_key for r in records if r.api_key}
+
+    api_key_metadata: Dict[str, Dict[str, Any]] = {}
+    if api_keys:
+        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+
+    return await asyncio.to_thread(
+        _aggregate_grouping_sets_records_sync,
+        records=records,
+        api_key_metadata=api_key_metadata,
+    )
 
 
 async def get_daily_activity(
@@ -771,21 +1007,18 @@ async def get_daily_activity_aggregated(
             timezone_offset_minutes=timezone_offset_minutes,
         )
 
-        # Execute GROUP BY query — returns pre-aggregated dicts
+        # Execute GROUPING SETS query — returns one row per rollup level.
         rows = await prisma_client.db.query_raw(sql_query, *sql_params)
         if rows is None:
             rows = []
 
-        # Convert dicts to objects for compatibility with _aggregate_spend_records
         records = [SimpleNamespace(**row) for row in rows]
 
-        # entity_id_field=None skips entity breakdown (entity dimension was
-        # collapsed by the GROUP BY, so per-entity data is not available)
-        aggregated = await _aggregate_spend_records(
+        # The grouping-sets dispatcher places each row directly in its bucket
+        # using the row's GROUPING() bitmask. No Python-side summing needed.
+        aggregated = await _aggregate_grouping_sets_records(
             prisma_client=prisma_client,
             records=records,
-            entity_id_field=None,
-            entity_metadata_field=None,
         )
 
         return SpendAnalyticsPaginatedResponse(

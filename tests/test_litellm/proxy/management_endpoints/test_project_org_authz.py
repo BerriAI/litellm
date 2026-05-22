@@ -34,7 +34,7 @@ async def test_project_perm_check_uses_current_team_not_caller_supplied():
     """The permission check must look at the project's existing team. Even
     if the caller is admin of an unrelated team, they must not pass when no
     explicit team_object is forced through."""
-    from enterprise.litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_user_permission_for_project,
     )
 
@@ -56,7 +56,7 @@ async def test_project_perm_check_uses_current_team_not_caller_supplied():
 
 @pytest.mark.asyncio
 async def test_project_perm_check_allows_team_admin_of_existing_team():
-    from enterprise.litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_user_permission_for_project,
     )
 
@@ -76,7 +76,7 @@ async def test_project_perm_check_allows_team_admin_of_existing_team():
 
 @pytest.mark.asyncio
 async def test_project_perm_check_proxy_admin_always_allowed():
-    from enterprise.litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
         _check_user_permission_for_project,
     )
 

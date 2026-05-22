@@ -158,6 +158,8 @@ jobs:
             CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
+          environment:
+            UV_HTTP_TIMEOUT: "300"
           command: |
             $installer = Join-Path $env:TEMP "uv-install.ps1"
             Invoke-WebRequest -Uri https://astral.sh/uv/0.10.9/install.ps1 -OutFile $installer
@@ -228,7 +230,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm \
+                --cov=./litellm \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -293,7 +295,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm \
+                --cov=./litellm \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -350,7 +352,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -k \"langfuse\""
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -395,12 +405,31 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5 -n 2
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/proxy_admin_ui_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 2"
           no_output_timeout: 15m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml auth_ui_unit_tests_coverage.xml
+            mv .coverage auth_ui_unit_tests_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - auth_ui_unit_tests_coverage.xml
+            - auth_ui_unit_tests_coverage
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
@@ -471,11 +500,30 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/router_unit_tests -x --junitxml=test-results/junit.xml --durations=5 -n 4
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/router_unit_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 4"
           no_output_timeout: 15m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml router_unit_tests_coverage.xml
+            mv .coverage router_unit_tests_coverage
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - router_unit_tests_coverage.xml
+            - router_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
       - *python312_image
@@ -495,7 +543,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest tests/local_testing/ -v -k "assistants" -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -k \"assistants\""
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -528,14 +584,19 @@ jobs:
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
-            IGNORE_DIRS=(
-              "tests/llm_translation/realtime"
-            )
-            IGNORE_ARGS=""
-            for dir in "${IGNORE_DIRS[@]}"; do
-              IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
-            done
-            uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
+            mkdir -p test-results
+            # Glob excludes the realtime/ subdirectory since it has its own job
+            TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -n 4 \
+                --timeout=120 --timeout_method=thread \
+                --retries 2 --retry-delay 5 \
+                --max-worker-restart=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -560,7 +621,17 @@ jobs:
           command: |
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
-            uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/llm_translation/realtime/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -n 4 \
+                --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -593,7 +664,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/agent_tests/**/test_*.py" | grep -v "^tests/agent_tests/local_only_agent_tests/")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -626,7 +705,18 @@ jobs:
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
+            mkdir -p test-results
+            export LITELLM_LOG=WARNING
+            TEST_FILES=$(circleci tests glob "tests/guardrails_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 2 \
+                --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -660,7 +750,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/unified_google_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                --retries 3 --retry-delay 5"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -702,7 +801,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/llm_responses_api_testing/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 8"
           no_output_timeout: 15m
 
       # Store test results
@@ -725,7 +832,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 4"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -758,7 +874,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/search_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 4"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -793,7 +918,15 @@ jobs:
           name: Run enterprise tests
           command: |
             uv run --no-sync python -m prisma generate
-            uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/enterprise/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit-enterprise.xml \
+                --durations=10 \
+                -n 4"
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -815,7 +948,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/batches_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 2"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -848,7 +990,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/litellm_utils_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 2"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -882,7 +1033,16 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/pass_through_unit_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 4"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -916,7 +1076,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/image_gen_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -n 4"
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -939,7 +1107,18 @@ jobs:
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
+            mkdir -p test-results
+            export LITELLM_LOG=WARNING
+            TEST_FILES=$(circleci tests glob "tests/logging_callback_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv \
+                --cov=./litellm --cov-report=xml \
+                -n 4 \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                --timeout=120 --timeout_method=thread"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -972,7 +1151,15 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/audio_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1012,14 +1199,19 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv \
+            mkdir -p test-results
+            TEST_FILES=$(printf "%s\n" \
               tests/local_testing/test_dual_cache.py \
               tests/local_testing/test_redis_batch_optimizations.py \
-              tests/local_testing/test_router_utils.py \
-              --cov=litellm --cov-report=xml \
-              -x -s -v --junitxml=test-results/junit.xml \
-              --durations=5 -n 2 \
-              --reruns 2 --reruns-delay 1
+              tests/local_testing/test_router_utils.py)
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --cov=./litellm --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 -n 2 \
+                --reruns 2 --reruns-delay 1"
           no_output_timeout: 20m
       - run:
           name: Rename the coverage files
@@ -1260,8 +1452,17 @@ jobs:
       - run:
           name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
           command: |
-            uv run --no-sync python -m pytest -v tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit-2.xml \
+                --durations=5"
           no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
 
   build_and_test:
     machine:
@@ -1331,7 +1532,18 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -s -v tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            mkdir -p test-results
+            # Original used `tests/*.py` (top-level only); the `--ignore=...`
+            # flags were vestigial since shell globbing did not descend into
+            # subdirectories. Replicate by globbing only top-level test files.
+            TEST_FILES=$(circleci tests glob "tests/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -s -v -x \
+                --junitxml=test-results/junit.xml \
+                -n 4 \
+                --durations=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -1406,7 +1618,14 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/openai_endpoints_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -s -vv \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -1475,7 +1694,14 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/otel_tests --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/otel_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
             # Clean up first container
       - run:
@@ -1518,7 +1744,14 @@ jobs:
       - run:
           name: Run second round of tests
           command: |
-            uv run --no-sync python -m pytest -v tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit-2.xml \
+                --durations=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -1587,8 +1820,17 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/spend_tracking_tests -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/spend_tracking_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
       - run:
           name: Stop and remove first container
           when: always
@@ -1676,7 +1918,14 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/multi_instance_e2e_tests -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/multi_instance_e2e_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
             # Clean up first container
       # Store test results
@@ -1732,7 +1981,14 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/store_model_in_db_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
       - run:
           name: Stop and remove containers
@@ -1805,9 +2061,18 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x \
+                --junitxml=test-results/junit-2.xml \
+                --durations=5"
           no_output_timeout: 15m
             # Clean up first container
+      - store_test_results:
+          path: test-results
       - run:
           name: Stop and remove first container
           command: |
@@ -1940,7 +2205,14 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+            TEST_FILES=$(circleci tests glob "tests/pass_through_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -v -x \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -1997,9 +2269,16 @@ jobs:
       - run:
           name: Run Claude Agent SDK E2E Tests
           command: |
+            mkdir -p test-results
             export LITELLM_PROXY_URL="http://localhost:4000"
             export LITELLM_API_KEY="sk-1234"
-            uv run --no-sync python -m pytest -vv tests/proxy_e2e_anthropic_messages_tests/ -x -s --junitxml=test-results/junit.xml --durations=5
+            TEST_FILES=$(circleci tests glob "tests/proxy_e2e_anthropic_messages_tests/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --verbose \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+                -vv -x -s \
+                --junitxml=test-results/junit.xml \
+                --durations=5"
           no_output_timeout: 15m
 
       # Store test results
@@ -2025,10 +2304,11 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
+          flags: circleci
 
   ui_build:
     docker:
@@ -2197,10 +2477,15 @@ jobs:
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
             PROXY_LOGOUT_URL: ""
+          # LITELLM_LICENSE is forwarded from the project env so premium-gated
+          # UI flows can be exercised. license.spec.ts asserts the resulting
+          # JWT carries premium_user=true; if it ever stops being passed, that
+          # test fails loudly rather than silently regressing premium coverage.
           command: |
-            uv run --no-sync python -m litellm.proxy.proxy_cli \
-              --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
-              --port 4000
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              uv run --no-sync python -m litellm.proxy.proxy_cli \
+                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --port 4000
           background: true
       - run:
           name: Wait for proxy to be ready
@@ -2217,9 +2502,12 @@ jobs:
             exit 1
       - run:
           name: Run Playwright E2E tests
+          # Forward LITELLM_LICENSE so license.spec.ts can detect that the
+          # proxy was launched with a license and assert premium_user=true.
           command: |
             cd ui/litellm-dashboard
-            npx playwright test --config e2e_tests/playwright.config.ts
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              npx playwright test --config e2e_tests/playwright.config.ts
           no_output_timeout: 10m
       - store_artifacts:
           path: ui/litellm-dashboard/test-results
@@ -2414,6 +2702,8 @@ workflows:
             - local_testing_part1
             - local_testing_part2
             - litellm_assistants_api_testing
+            - litellm_router_unit_testing
+            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image

@@ -807,6 +807,11 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
             "asend_message",
             "call_mcp_tool",
             "acreate_eval",
@@ -1074,6 +1079,11 @@ class ProxyBaseLLMRequestProcessing:
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
+            "acreate_agent",
+            "alist_agents",
+            "aget_agent",
+            "adelete_agent",
+            "alist_agent_versions",
             "asend_message",
             "call_mcp_tool",
             "acreate_eval",
@@ -1512,7 +1522,7 @@ class ProxyBaseLLMRequestProcessing:
             status_code=result.status_code,
             headers=HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=result.headers,
-                custom_headers=None,
+                custom_headers=dict(fastapi_response.headers),
             ),
         )
 

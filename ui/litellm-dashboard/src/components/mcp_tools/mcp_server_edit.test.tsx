@@ -177,6 +177,47 @@ describe("MCPServerEdit (stdio)", () => {
   });
 });
 
+describe("MCPServerEdit (delegate auth)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should clear delegate auth flag when saving a non-oauth2 server", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "none",
+      delegate_auth_to_upstream: false,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "none",
+          delegate_auth_to_upstream: true,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("none");
+    expect(payload.delegate_auth_to_upstream).toBe(false);
+  });
+});
+
 describe("MCPServerEdit (interactive OAuth)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

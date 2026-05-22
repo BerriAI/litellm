@@ -50,6 +50,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
     ]
 )
 
@@ -394,7 +395,9 @@ class RouteChecks:
             return True
 
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if _llm_passthrough_route in route:
+            if route == _llm_passthrough_route or route.startswith(
+                _llm_passthrough_route + "/"
+            ):
                 return True
         return False
 
@@ -671,6 +674,7 @@ class RouteChecks:
             "/key/service-account/generate",
             "/key/block",
             "/key/unblock",
+            "/team/key/bulk_update",
         ]
     )
 

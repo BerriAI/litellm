@@ -161,6 +161,11 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
     | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
 )
 
+# MCP OAuth2 Token Exchange (OBO) Defaults
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -1438,6 +1443,12 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+# Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
+# "employment_type->acme_employment_type,org_info.department->department"
+CLI_SSO_CLAIM_MAP = (
+    os.getenv("CLI_SSO_CLAIM_MAP") or os.getenv("LITELLM_CLI_SSO_CLAIM_MAP") or ""
+)
+CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
@@ -1457,6 +1468,12 @@ KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME = "litellm_expired_ui_session_key_cleanup_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(
+    os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+)
+SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
+    os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+)
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
@@ -1558,6 +1575,15 @@ DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
 DEFAULT_ACCESS_GROUP_CACHE_TTL = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+# Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
+# callers from forcing a DB query per request for unknown names, while bounding
+# staleness so a transient DB error (which surfaces as an empty list) cannot
+# hide a real group for long.
+DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL = 10
+# Maximum number of comma-separated MCP server / access-group tokens accepted
+# in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
+# fan-out an authenticated caller can trigger by stuffing the path with tokens.
+DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS = 16
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
