@@ -1362,7 +1362,7 @@ class TestInitializerValidation:
 class TestCheckContentApiErrorHandling:
     @pytest.mark.asyncio
     async def test_api_error_reraises_when_block_on_violation_true(self):
-        """API/network errors must propagate when block_on_violation=True."""
+        """API/network errors must surface as HTTPException(400) when block_on_violation=True."""
         guardrail = _make_guardrail()
 
         with patch.object(
@@ -1371,7 +1371,7 @@ class TestCheckContentApiErrorHandling:
             new_callable=AsyncMock,
             side_effect=RuntimeError("network failure"),
         ):
-            with pytest.raises(RuntimeError, match="network failure"):
+            with pytest.raises(HTTPException) as exc_info:
                 await guardrail._check_content(
                     user_id="user-1",
                     text="some content",
@@ -1379,6 +1379,37 @@ class TestCheckContentApiErrorHandling:
                     request_data={},
                     block_on_violation=True,
                 )
+
+        assert exc_info.value.status_code == 400
+        assert isinstance(exc_info.value.detail, dict)
+        assert "upstream policy evaluation failed" in exc_info.value.detail.get(
+            "error", ""
+        )
+        assert "network failure" in exc_info.value.detail.get("exception", "")
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+    @pytest.mark.asyncio
+    async def test_http_exception_passes_through_unchanged(self):
+        """HTTPException from upstream layers must propagate as-is (not wrapped)."""
+        guardrail = _make_guardrail()
+        inner = HTTPException(status_code=403, detail="forbidden")
+
+        with patch.object(
+            guardrail,
+            "_compute_protection_scopes",
+            new_callable=AsyncMock,
+            side_effect=inner,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail._check_content(
+                    user_id="user-1",
+                    text="some content",
+                    activity="uploadText",
+                    request_data={},
+                    block_on_violation=True,
+                )
+
+        assert exc_info.value is inner
 
     @pytest.mark.asyncio
     async def test_api_error_not_reraised_when_block_on_violation_false(self):

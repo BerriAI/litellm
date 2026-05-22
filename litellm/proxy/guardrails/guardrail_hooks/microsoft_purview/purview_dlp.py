@@ -141,10 +141,20 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
             if self._should_block(response):
                 status = "guardrail_intervened"
+        except HTTPException:
+            status = "guardrail_failed_to_respond"
+            raise
         except Exception as exc:
             status = "guardrail_failed_to_respond"
             if block_on_violation:
-                raise
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Microsoft Purview DLP: upstream policy evaluation failed",
+                        "activity": activity,
+                        "exception": str(exc),
+                    },
+                ) from exc
             verbose_proxy_logger.warning(
                 "Purview DLP: API/network error in logging-only mode (not re-raised): %s",
                 exc,
