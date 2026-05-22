@@ -32,7 +32,7 @@ This page documents all command-line interface (CLI) arguments available for the
 
 ### --num_workers
    - **Default:** Number of logical CPUs in the system, or `4` if that cannot be determined
-   - The number of uvicorn / gunicorn workers to spin up.
+   - The number of worker processes to spin up (uvicorn, gunicorn, or Granian `--workers`).
    - **Usage:** 
      ```shell
      litellm --num_workers 4
@@ -109,6 +109,22 @@ This page documents all command-line interface (CLI) arguments available for the
    - **Usage:** 
      ```shell
      litellm --run_hypercorn
+     ```
+
+### --run_granian
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - **Status:** Beta — opt in when you want higher gateway throughput; uvicorn remains the default.
+   - Starts the proxy via [Granian](https://github.com/emmett-framework/granian) (Rust-backed ASGI server) instead of uvicorn. Supports HTTP/1 and HTTP/2.
+   - **Why use it:** Granian moves the HTTP layer off Python into a Rust runtime, which tends to handle concurrent proxy traffic more predictably than uvicorn alone. In LiteLLM load tests, Granian showed a **10–20 RPS improvement** over an equivalent uvicorn multi-worker setup, with **better stability under sustained load and fewer request failures**.
+   - **Requirements:** Python 3.9+ and the `granian` package (included in `litellm[proxy]`).
+   - **Limitations when using Granian:**
+     - `--max_requests_before_restart` is not supported (Granian uses `workers_lifetime` in seconds, not a per-request limit).
+     - `--ciphers` is not applied.
+     - `--keepalive_timeout` and `--log_config` apply to uvicorn only.
+   - **Usage:** 
+     ```shell
+     litellm --config config.yaml --run_granian --num_workers 4
      ```
 
 ### --skip_server_startup

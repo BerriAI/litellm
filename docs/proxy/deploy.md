@@ -773,7 +773,46 @@ docker run \
     --run_hypercorn
 ```
 
-### 4. Keepalive Timeout
+### 4. Granian ASGI server (higher throughput) — Beta
+
+:::info Beta feature
+`--run_granian` is in **beta**. Uvicorn is still the default server. Try Granian when you need more gateway throughput or see instability under load with uvicorn; report issues on [GitHub](https://github.com/BerriAI/litellm/issues).
+:::
+
+Use this to run the proxy with [Granian](https://github.com/emmett-framework/granian), a Rust-backed ASGI server. The HTTP stack runs in Rust instead of pure Python, which helps the proxy stay responsive when many clients hit health checks, auth, routing, and caching at once.
+
+**Why it helps:**
+- **Higher throughput** — In LiteLLM benchmarks, Granian showed a **10–20 RPS improvement** over uvicorn with the same worker count (see [PR #26027](https://github.com/BerriAI/litellm/pull/26027)).
+- **Better stability** — Sustained load tests showed steadier latency and fewer spikes than uvicorn.
+- **Fewer failures** — Error rates under load were lower (near-zero failures in the compared runs vs uvicorn).
+
+Granian is included in `litellm[proxy]` and requires Python 3.9+. Scale throughput with `--num_workers`.
+
+**Example** (benchmark setup from [PR #26027](https://github.com/BerriAI/litellm/pull/26027)):
+
+```shell
+litellm --config config.yaml --port 4000 --run_granian --num_workers 4
+```
+
+Or with Docker:
+
+```shell
+docker run docker.litellm.ai/berriai/litellm:main-stable \
+    --config /app/config.yaml \
+    --port 4000 \
+    --run_granian \
+    --num_workers 4
+```
+
+**SSL:** Both `--ssl_certfile_path` and `--ssl_keyfile_path` are required when enabling TLS with Granian.
+
+**Not supported with Granian:**
+- `--max_requests_before_restart` (use Gunicorn if you need per-request worker recycling)
+- `--ciphers` (Hypercorn only)
+
+See [CLI Arguments — Server Backend Options](/docs/proxy/cli#server-backend-options) for full flag details.
+
+### 5. Keepalive Timeout
 
 Defaults to 5 seconds. Between requests, connections must receive new data within this period or be disconnected.
 
@@ -814,7 +853,7 @@ docker run docker.litellm.ai/berriai/litellm:main-stable
 ```
 
 
-### 5. config.yaml file on s3, GCS Bucket Object/url
+### 6. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
@@ -865,7 +904,7 @@ docker run --name litellm-proxy \
 </TabItem>
 </Tabs>
 
-### 6. Disable pulling live model prices
+### 7. Disable pulling live model prices
 
 Disable pulling the model prices from LiteLLM's [hosted model prices file](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), if you're seeing long cold start times or network security issues.
 

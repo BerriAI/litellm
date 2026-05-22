@@ -10,7 +10,7 @@ When running the LiteLLM proxy with multiple workers:
 litellm --config config.yaml --num_workers 4
 ```
 
-Each worker is a **separate process** spawned by uvicorn or gunicorn. Any in-process state initialized in the master process (before `run_server()`) is **not available** in worker processes. This includes:
+Each worker is a **separate process** spawned by uvicorn, gunicorn, or Granian (`--run_granian`). Any in-process state initialized in the master process (before `run_server()`) is **not available** in worker processes. This includes:
 
 - [python-gflags](https://github.com/google/python-gflags) (`gflags.FLAGS`)
 - [absl-py flags](https://abseil.io/docs/python/guides/flags) (`absl.flags.FLAGS`)
