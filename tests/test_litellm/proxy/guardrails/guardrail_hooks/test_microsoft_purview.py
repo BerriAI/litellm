@@ -2236,6 +2236,121 @@ class TestStreamingIteratorHook:
             assert mock_check.call_args.kwargs["text"] == "completion body"
             assert len(chunks) > 0
 
+    @pytest.mark.asyncio
+    async def test_streaming_responses_api_scans_completed_event(self):
+        """Streamed Responses API: assembled ResponsesAPIResponse must be DLP-scanned."""
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponseCreatedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        guardrail = _make_guardrail()
+
+        completed_response = ResponsesAPIResponse(
+            id="resp-stream",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-stream",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "streamed output"}],
+                }
+            ],
+        )
+        created_event = ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=completed_response,
+        )
+        completed_event = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=completed_response,
+        )
+
+        async def fake_response_stream():
+            yield created_event
+            yield completed_event
+
+        with (
+            patch("litellm.main.stream_chunk_builder") as mock_stream_builder,
+            patch.object(
+                guardrail, "_check_content", new_callable=AsyncMock
+            ) as mock_check,
+        ):
+            mock_check.return_value = {"policyActions": []}
+
+            chunks = []
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                response=fake_response_stream(),
+                request_data={},
+            ):
+                chunks.append(chunk)
+
+            mock_stream_builder.assert_not_called()
+            mock_check.assert_called_once()
+            assert mock_check.call_args.kwargs["activity"] == "downloadText"
+            assert mock_check.call_args.kwargs["text"] == "streamed output"
+            assert chunks == [created_event, completed_event]
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_api_violation_blocks_before_yield(self):
+        """Responses API stream with a DLP violation must raise before any chunk is yielded."""
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        guardrail = _make_guardrail()
+
+        completed_response = ResponsesAPIResponse(
+            id="resp-stream-block",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-stream-block",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "SSN: 123-45-6789"}],
+                }
+            ],
+        )
+        completed_event = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=completed_response,
+        )
+
+        async def fake_response_stream():
+            yield completed_event
+
+        with patch.object(
+            guardrail,
+            "_check_content",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(
+                status_code=400,
+                detail={"error": "Microsoft Purview DLP: Content blocked by policy"},
+            ),
+        ):
+            chunks = []
+            with pytest.raises(HTTPException) as exc_info:
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", user_id="user-123"
+                    ),
+                    response=fake_response_stream(),
+                    request_data={},
+                ):
+                    chunks.append(chunk)
+
+            assert exc_info.value.status_code == 400
+            assert len(chunks) == 0
+
 
 # ---------------------------------------------------------------
 # Auto-discovery registration

@@ -209,6 +209,28 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 parts.extend(self._extract_tool_call_args_from_message(msg))
         return parts
 
+    def _assemble_responses_api_from_chunks(
+        self, chunks: List[Any]
+    ) -> Optional[ResponsesAPIResponse]:
+        """Extract the final ``ResponsesAPIResponse`` from a buffered Responses API stream.
+
+        Returns ``None`` when the chunks are not Responses API streaming events,
+        signalling the caller to fall through to ``stream_chunk_builder``. When
+        the stream is a Responses API stream the latest event carrying a
+        ``ResponsesAPIResponse`` body is returned (``response.completed``, or
+        ``response.failed`` / ``response.incomplete`` as fallbacks).
+        """
+        looks_like_responses_api = False
+        final: Optional[ResponsesAPIResponse] = None
+        for chunk in chunks:
+            event_type = getattr(chunk, "type", None)
+            if isinstance(event_type, str) and event_type.startswith("response."):
+                looks_like_responses_api = True
+            candidate = getattr(chunk, "response", None)
+            if isinstance(candidate, ResponsesAPIResponse):
+                final = candidate
+        return final if looks_like_responses_api else None
+
     def _responses_api_input_to_str(
         self, data: Dict[str, Any], raise_on_failure: bool = False
     ) -> Optional[str]:
@@ -422,6 +444,27 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
             all_chunks.append(chunk)
+
+        # Responses API streams emit typed events (e.g. ``response.completed``)
+        # whose final event carries the full ``ResponsesAPIResponse`` — these
+        # are not understood by ``stream_chunk_builder`` (which is built for
+        # chat/text-completion deltas). Detect and scan them via the same
+        # ``_completion_response_text_parts`` path used by non-streaming.
+        responses_api_assembled = self._assemble_responses_api_from_chunks(all_chunks)
+        if responses_api_assembled is not None:
+            parts = self._completion_response_text_parts(responses_api_assembled)
+            if parts:
+                combined = "\n\n---\n\n".join(parts)
+                await self._check_content(
+                    user_id=user_id,
+                    text=combined,
+                    activity="downloadText",
+                    request_data=request_data,
+                    block_on_violation=True,
+                )
+            for chunk in all_chunks:
+                yield chunk
+            return
 
         assembled_response = stream_chunk_builder(chunks=all_chunks)
 
