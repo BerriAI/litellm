@@ -229,6 +229,19 @@ def _get_allow_all_keys_server_ids() -> Set[str]:
     return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
 
 
+def _get_all_known_server_ids() -> Set[str]:
+    """Return all MCP server IDs currently registered in the server manager.
+
+    Servers are removed from the registry when deleted, so any ID absent from
+    this set is a stale (orphaned) reference to a server that no longer exists.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return global_mcp_server_manager.get_all_mcp_server_ids()
+
+
 async def _get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
 ) -> Set[str]:
@@ -334,24 +347,42 @@ async def validate_key_mcp_servers_against_team(
     if requested_servers:
         disallowed_servers = requested_servers - all_allowed_servers
         if disallowed_servers:
-            if team_obj is not None:
-                team_id = team_obj.team_id
-                detail = (
-                    f"Key requests MCP servers not allowed by team '{team_id}': "
-                    f"{sorted(disallowed_servers)}. "
-                    f"Team allows: {sorted(team_allowed_servers)}. "
-                    f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
+            # Skip enforcement for MCP servers that have been deleted.
+            # When an MCP server is removed from the system its ID is no longer
+            # in the registry, but virtual keys may still carry that stale ID.
+            # Blocking key updates because of orphaned references traps admins
+            # in a state where they cannot clean up the key through the UI.
+            # We only enforce the team-scope restriction for server IDs that
+            # actually exist (are registered in the server manager).
+            known_server_ids = _get_all_known_server_ids()
+            disallowed_existing_servers = disallowed_servers & known_server_ids
+            deleted_server_ids = disallowed_servers - known_server_ids
+            if deleted_server_ids:
+                verbose_proxy_logger.debug(
+                    "validate_key_mcp_servers_against_team: ignoring %d deleted "
+                    "(unregistered) MCP server ID(s) during validation: %s",
+                    len(deleted_server_ids),
+                    sorted(deleted_server_ids),
                 )
-            else:
-                detail = (
-                    f"Key is not in a team. Only globally available (allow_all_keys) MCP servers "
-                    f"can be assigned: {sorted(allow_all_keys_servers)}. "
-                    f"Disallowed servers: {sorted(disallowed_servers)}."
+            if disallowed_existing_servers:
+                if team_obj is not None:
+                    team_id = team_obj.team_id
+                    detail = (
+                        f"Key requests MCP servers not allowed by team '{team_id}': "
+                        f"{sorted(disallowed_existing_servers)}. "
+                        f"Team allows: {sorted(team_allowed_servers)}. "
+                        f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
+                    )
+                else:
+                    detail = (
+                        f"Key is not in a team. Only globally available (allow_all_keys) MCP servers "
+                        f"can be assigned: {sorted(allow_all_keys_servers)}. "
+                        f"Disallowed servers: {sorted(disallowed_existing_servers)}."
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": detail},
                 )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": detail},
-            )
 
     # Validate requested access groups (must be subset of team's access groups)
     if requested_access_groups:

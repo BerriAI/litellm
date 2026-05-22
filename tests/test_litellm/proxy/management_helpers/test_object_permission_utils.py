@@ -197,12 +197,16 @@ async def test_validate_key_servers_within_team_scope(
     return_value=set(),
 )
 @patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"server-1", "server-outside"},  # both servers exist in registry
+)
+@patch(
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
 async def test_validate_key_servers_outside_team_scope_raises(
-    mock_access_groups, mock_allow_all
+    mock_access_groups, mock_known_ids, mock_allow_all
 ):
     """Key requests servers NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
@@ -261,12 +265,16 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
     return_value={"global-server"},
 )
 @patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"private-server"},  # server exists in registry
+)
+@patch(
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
 async def test_validate_no_team_non_global_server_raises(
-    mock_access_groups, mock_allow_all
+    mock_access_groups, mock_known_ids, mock_allow_all
 ):
     """Key without a team requesting a non-global server — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
@@ -284,12 +292,16 @@ async def test_validate_no_team_non_global_server_raises(
     return_value=set(),
 )
 @patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"some-server"},  # server exists in registry
+)
+@patch(
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
 async def test_validate_team_no_mcp_config_blocks_all(
-    mock_access_groups, mock_allow_all
+    mock_access_groups, mock_known_ids, mock_allow_all
 ):
     """Team with no object_permission — key can't use any non-global MCP servers."""
     team_obj = _make_team_obj()  # No object_permission
@@ -307,12 +319,16 @@ async def test_validate_team_no_mcp_config_blocks_all(
     return_value=set(),
 )
 @patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"server-1", "server-outside"},  # both servers exist in registry
+)
+@patch(
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
 )
 async def test_validate_tool_permissions_validated_against_team(
-    mock_access_groups, mock_allow_all
+    mock_access_groups, mock_known_ids, mock_allow_all
 ):
     """Server IDs in mcp_tool_permissions should also be validated."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
@@ -454,6 +470,136 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
+
+
+# ---- Tests for deleted (stale) MCP server ID handling (LIT-3278) ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value=set(),  # empty registry — all requested servers are "deleted"
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_deleted_servers_do_not_block_key_update(
+    mock_access_groups, mock_known_ids, mock_allow_all
+):
+    """
+    Stale MCP server IDs on a key (left over after server deletion) must NOT
+    block a key update.  The team is no longer configured with those servers,
+    and the servers no longer exist — the validation should pass so the admin
+    can clean up the key.
+    """
+    team_obj = _make_team_obj(mcp_servers=["active-server"])
+    # Key has two deleted server IDs + one active server
+    await validate_key_mcp_servers_against_team(
+        object_permission={
+            "mcp_servers": ["deleted-server-1", "deleted-server-2", "active-server"]
+        },
+        team_obj=team_obj,
+    )
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"server-outside"},  # this server exists but is not in the team
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_existing_disallowed_server_still_raises(
+    mock_access_groups, mock_known_ids, mock_allow_all
+):
+    """
+    An MCP server that EXISTS but is not in the team's scope must still raise
+    403.  Only truly deleted (unregistered) servers are silently skipped.
+    """
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-1", "server-outside"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "server-outside" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value={"global-server"},
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value=set(),  # all non-global servers are deleted
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_deleted_servers_with_no_team_do_not_raise(
+    mock_access_groups, mock_known_ids, mock_allow_all
+):
+    """
+    A key with no team that carries stale (deleted) server IDs should be
+    updatable.  The global-server is also requested and is valid.
+    """
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["deleted-server", "global-server"]},
+        team_obj=None,
+    )
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
+    return_value={"deleted-server"},  # wait — this server IS in registry (not deleted)
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_mixed_deleted_and_existing_disallowed_raises_for_existing_only(
+    mock_access_groups, mock_known_ids, mock_allow_all
+):
+    """
+    When a key has both a truly deleted server and an existing-but-disallowed
+    server, only the existing one should appear in the error detail.
+    """
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={
+                "mcp_servers": ["server-1", "deleted-server", "phantom-server"]
+            },
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    # deleted-server is in the known registry so it's treated as existing-but-disallowed
+    assert "deleted-server" in str(exc_info.value.detail)
+    # phantom-server is NOT in the known registry so it's silently ignored
+    assert "phantom-server" not in str(exc_info.value.detail)
 
 
 # ---- Tests for validate_key_search_tools_against_team ----
