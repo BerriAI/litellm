@@ -312,6 +312,10 @@ def cost_per_token(  # noqa: PLR0915
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     response: Optional[Any] = None,
     ### REQUEST MODEL ###
     request_model: Optional[str] = None,  # original request model for router detection
@@ -493,6 +497,7 @@ def cost_per_token(  # noqa: PLR0915
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         return prompt_cost, completion_cost
@@ -529,6 +534,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 usage=usage_block,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         return openai_cost_per_second(
@@ -579,7 +585,10 @@ def cost_per_token(  # noqa: PLR0915
         )
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
-            model=model, usage=usage_block, service_tier=service_tier
+            model=model,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
@@ -631,6 +640,7 @@ def cost_per_token(  # noqa: PLR0915
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         if (
@@ -1117,6 +1127,10 @@ def completion_cost(  # noqa: PLR0915
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -1600,6 +1614,7 @@ def completion_cost(  # noqa: PLR0915
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
+                    data_residency=data_residency,
                     response=completion_response,
                     request_model=request_model_for_cost,
                 )
@@ -1811,6 +1826,10 @@ def response_cost_calculator(
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
 ) -> float:
     """
     Returns
@@ -1844,6 +1863,7 @@ def response_cost_calculator(
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
         return response_cost
     except Exception as e:
