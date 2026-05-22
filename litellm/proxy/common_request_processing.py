@@ -1969,7 +1969,9 @@ class ProxyBaseLLMRequestProcessing:
             )
             yield serialize_error(proxy_exception)
         finally:
-            with anyio.CancelScope(shield=True):
+            with anyio.CancelScope(
+                shield=True, deadline=anyio.current_time() + 5
+            ):
                 if hasattr(response, "aclose"):
                     try:
                         # This generator owns final cleanup of the raw upstream stream;

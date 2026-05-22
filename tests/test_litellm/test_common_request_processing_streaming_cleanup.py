@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -134,4 +135,48 @@ async def test_async_streaming_data_generator_swallows_close_errors():
     ]
 
     assert chunks == ["{'content': 'hello'}"]
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_data_generator_closes_response_on_task_cancellation():
+    stream_waiting = asyncio.Event()
+    close_finished = asyncio.Event()
+    mock_response = MagicMock()
+
+    async def mock_aclose():
+        await asyncio.sleep(0)
+        close_finished.set()
+
+    mock_response.aclose = AsyncMock(side_effect=mock_aclose)
+    mock_proxy_logging_obj = _mock_proxy_logging_obj()
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        yield {"content": "hello"}
+        stream_waiting.set()
+        await asyncio.Event().wait()
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+
+    async def consume_stream():
+        async for _ in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "gpt-3.5-turbo"},
+            proxy_logging_obj=mock_proxy_logging_obj,
+            serialize_chunk=lambda chunk: str(chunk),
+            serialize_error=lambda proxy_exception: str(proxy_exception.to_dict()),
+        ):
+            pass
+
+    task = asyncio.create_task(consume_stream())
+    await asyncio.wait_for(stream_waiting.wait(), timeout=1)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    await asyncio.wait_for(close_finished.wait(), timeout=1)
     mock_response.aclose.assert_awaited_once()
