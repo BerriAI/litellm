@@ -2,7 +2,6 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
@@ -285,14 +284,18 @@ class PurviewGuardrailBase:
     ) -> Optional[str]:
         """Resolve the Entra user object ID from request data or auth context.
 
-        Trust order (strongest first). Blocking DLP uses only
-        ``_resolve_trusted_user_id`` (API-key-bound ``user_id``). This resolver
-        also supports audit/logging fallbacks:
+        Returns the strongest available identity walking down four sources, in
+        decreasing trust order:
 
             1. ``user_api_key_dict.user_id`` — LiteLLM key / JWT-bound user
-            2. ``user_api_key_dict.end_user_id`` — request-derived; audit only
+            2. ``user_api_key_dict.end_user_id`` — request-derived
             3. ``metadata["user_api_key_user_id"]`` — proxy-injected from the key
-            4. ``metadata[user_id_field]`` — caller-supplied; audit only
+            4. ``metadata[user_id_field]`` — caller-supplied
+
+        Used only by blocking-mode resolution to disambiguate "no identity at
+        all" from "caller supplied an untrusted identity" for the error
+        message.  Neither blocking nor audit DLP feeds the untrusted
+        fallbacks (2, 4) into Purview itself.
         """
         trusted = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted:
@@ -347,15 +350,22 @@ class PurviewGuardrailBase:
     def _resolve_user_id_from_logging_kwargs(
         self, kwargs: Dict[str, Any]
     ) -> Optional[str]:
-        """Same trust order as ``_resolve_user_id`` for logging-only hooks (no ``UserAPIKeyAuth``)."""
+        """Trusted-identity-only resolver for logging-only hooks.
+
+        Uses only the proxy-injected ``user_api_key_user_id`` (populated from
+        the API-key/JWT-bound ``UserAPIKeyAuth.user_id`` after the proxy
+        strips every caller-supplied ``user_api_key_*`` key from the request
+        metadata).  Caller-influenceable sources (``user_api_key_end_user_id``,
+        ``metadata[user_id_field]``) are not used here so a caller cannot
+        cause Purview audit records to be written under a victim's identity.
+        Returns ``None`` when no trusted identity is available so the audit
+        is skipped rather than misattributed.
+        """
         md = self._logging_kwargs_metadata(kwargs)
-        shim = SimpleNamespace(
-            user_id=md.get("user_api_key_user_id")
-            or kwargs.get("user_api_key_user_id"),
-            end_user_id=md.get("user_api_key_end_user_id")
-            or kwargs.get("user_api_key_end_user_id"),
-        )
-        return self._resolve_user_id({"metadata": md}, shim)
+        uid = md.get("user_api_key_user_id") or kwargs.get("user_api_key_user_id")
+        if uid:
+            return str(uid)
+        return None
 
     # ------------------------------------------------------------------
     # Policy action evaluation

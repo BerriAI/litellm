@@ -760,7 +760,9 @@ class TestResponsesAPIHooks:
             await guardrail.async_logging_hook(
                 kwargs={
                     "input": "prompt body",
-                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                    "litellm_params": {
+                        "metadata": {"user_api_key_user_id": "user-123"}
+                    },
                 },
                 result=result_response,
                 call_type="responses",
@@ -813,7 +815,9 @@ class TestResponsesAPIHooks:
                     # Simulate litellm's logging path which mirrors the raw
                     # responses input under "messages".
                     "messages": "prompt body",
-                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                    "litellm_params": {
+                        "metadata": {"user_api_key_user_id": "user-123"}
+                    },
                 },
                 result=result_response,
                 call_type="aresponses",
@@ -854,13 +858,27 @@ class TestLoggingResolveUserId:
             == "trusted-from-proxy"
         )
 
-    def test_logging_falls_back_to_user_id_field(self):
+    def test_logging_ignores_caller_supplied_user_id_field(self):
+        """Caller-controlled ``metadata[user_id_field]`` must not drive Purview audit attribution."""
         guardrail = _make_guardrail()
         kwargs = {"litellm_params": {"metadata": {"user_id": "only-metadata-user"}}}
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) is None
+
+    def test_logging_kwargs_level_user_api_key_user_id(self):
+        """Top-level ``kwargs["user_api_key_user_id"]`` is also a proxy-injected source."""
+        guardrail = _make_guardrail()
+        kwargs = {
+            "user_api_key_user_id": "from-top-level",
+            "litellm_params": {"metadata": {}},
+        }
         assert (
-            guardrail._resolve_user_id_from_logging_kwargs(kwargs)
-            == "only-metadata-user"
+            guardrail._resolve_user_id_from_logging_kwargs(kwargs) == "from-top-level"
         )
+
+    def test_logging_returns_none_when_no_trusted_identity(self):
+        guardrail = _make_guardrail()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) is None
 
 
 # ---------------------------------------------------------------
@@ -1648,7 +1666,9 @@ class TestAsyncLoggingHookIndependence:
             await guardrail.async_logging_hook(
                 kwargs={
                     "messages": [{"role": "user", "content": "prompt"}],
-                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                    "litellm_params": {
+                        "metadata": {"user_api_key_user_id": "user-123"}
+                    },
                 },
                 result=response,
                 call_type="completion",
@@ -1685,7 +1705,9 @@ class TestAsyncLoggingHookIndependence:
             await guardrail.async_logging_hook(
                 kwargs={
                     "messages": [{"role": "user", "content": "prompt"}],
-                    "litellm_params": {"metadata": {"user_id": "user-123"}},
+                    "litellm_params": {
+                        "metadata": {"user_api_key_user_id": "user-123"}
+                    },
                 },
                 result=response,
                 call_type="completion",
@@ -1706,7 +1728,7 @@ class TestAsyncLoggingHookIndependence:
         ):
             kwargs = {
                 "messages": [{"role": "user", "content": "prompt"}],
-                "litellm_params": {"metadata": {"user_id": "user-123"}},
+                "litellm_params": {"metadata": {"user_api_key_user_id": "user-123"}},
             }
             result_obj = {"some": "result"}
             out_kwargs, out_result = await guardrail.async_logging_hook(
@@ -2122,12 +2144,17 @@ class TestResolveTrustedUserId:
 
 
 # ---------------------------------------------------------------
-# _resolve_user_id_from_logging_kwargs — end_user_id fallback
+# _resolve_user_id_from_logging_kwargs — caller-influenceable identity rejected
 # ---------------------------------------------------------------
 
 
-class TestLoggingEndUserIdFallback:
-    def test_end_user_id_from_metadata(self):
+class TestLoggingRejectsCallerInfluenceableIdentity:
+    """``end_user_id`` is derived from caller-controllable request fields
+    (``user``, ``metadata.user_id``, ``safety_identifier``) so it must not
+    drive Purview audit attribution either.
+    """
+
+    def test_end_user_id_in_metadata_is_ignored(self):
         guardrail = _make_guardrail()
         kwargs = {
             "litellm_params": {
@@ -2136,32 +2163,15 @@ class TestLoggingEndUserIdFallback:
                 }
             }
         }
-        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
-        assert result == "end-user-from-metadata"
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) is None
 
-    def test_end_user_id_fallback_from_top_level_kwargs(self):
-        """end_user_id must fall back to kwargs-level key when absent from metadata."""
+    def test_end_user_id_at_top_level_kwargs_is_ignored(self):
         guardrail = _make_guardrail()
         kwargs = {
             "user_api_key_end_user_id": "end-user-from-kwargs",
             "litellm_params": {"metadata": {}},
         }
-        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
-        assert result == "end-user-from-kwargs"
-
-    def test_metadata_end_user_id_wins_over_kwargs_level(self):
-        """Metadata value must win over top-level kwargs when both exist."""
-        guardrail = _make_guardrail()
-        kwargs = {
-            "user_api_key_end_user_id": "kwargs-end-user",
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key_end_user_id": "metadata-end-user",
-                }
-            },
-        }
-        result = guardrail._resolve_user_id_from_logging_kwargs(kwargs)
-        assert result == "metadata-end-user"
+        assert guardrail._resolve_user_id_from_logging_kwargs(kwargs) is None
 
 
 # ---------------------------------------------------------------
