@@ -442,12 +442,12 @@ class AktoGuardrail(CustomGuardrail):
                 )
 
             if not allowed:
-                # Build a blocked marker payload with 403 status and reason
+                # Build a blocked marker payload with 400 status and reason
                 blocked_payload = self.build_akto_payload(
                     inputs,
                     request_data,
                     include_response=False,
-                    status_code=403,
+                    status_code=400,
                 )
                 blocked_payload["responsePayload"] = json.dumps(
                     {
@@ -459,7 +459,7 @@ class AktoGuardrail(CustomGuardrail):
                 blocked_payload["responseHeaders"] = json.dumps(
                     {"content-type": "application/json"},
                 )
-                # Fire-and-forget ingest of the blocked request, then raise 403
+                # Fire-and-forget ingest of the blocked request, then raise 400
                 task = asyncio.create_task(
                     self.fire_and_forget_request(
                         guardrails=False,
@@ -470,7 +470,7 @@ class AktoGuardrail(CustomGuardrail):
                 self.background_tasks.add(task)
                 task.add_done_callback(self.background_tasks.discard)
                 raise HTTPException(
-                    status_code=403,
+                    status_code=400,
                     detail=reason or "Blocked by Akto Guardrails",
                 )
 

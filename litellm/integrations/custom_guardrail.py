@@ -743,7 +743,9 @@ class CustomGuardrail(CustomLogger):
         Guardrails signal intentional blocks by raising:
         - GuardrailRaisedException (generic guardrail API, tool permission)
         - BlockedPiiEntityError (Presidio PII detection)
-        - HTTPException with status 400 (content policy violation)
+        - HTTPException with status 400 (content policy violation — preferred convention)
+        - HTTPException with status 403 (some guardrail hooks use 403 for blocks, e.g.
+          LiteLLM content filter, Akto; these are intentional blocks, not API errors)
         - ModifyResponseException (passthrough mode violation)
         """
         if isinstance(e, ModifyResponseException):
@@ -753,7 +755,11 @@ class CustomGuardrail(CustomLogger):
         if (
             HTTPException is not None
             and isinstance(e, HTTPException)
-            and e.status_code == 400
+            and e.status_code
+            in (
+                400,
+                403,
+            )
         ):
             return True
         return False

@@ -6,6 +6,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.utils import GuardrailTracingDetail
 
+try:
+    from fastapi import HTTPException
+except ImportError:
+    HTTPException = None  # type: ignore
+
 
 class TestCustomGuardrailDeploymentHook:
 
@@ -1190,3 +1195,107 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestIsGuardrailIntervention:
+    """
+    Test that _is_guardrail_intervention correctly classifies intentional
+    guardrail blocks vs API failures.
+
+    LIT-3253: Topic/category-based guardrails gave guardrail_failed_to_respond
+    instead of guardrail_intervened because they raised HTTPException(403) and
+    _is_guardrail_intervention only accepted status 400.
+    """
+
+    def test_http_400_is_intervention(self):
+        """HTTPException with status 400 is an intentional guardrail block."""
+        assert HTTPException is not None
+        e = HTTPException(status_code=400, detail="Content blocked: keyword detected")
+        assert CustomGuardrail._is_guardrail_intervention(e) is True
+
+    def test_http_403_is_intervention(self):
+        """
+        HTTPException with status 403 is also an intentional guardrail block.
+
+        Several guardrail hooks (LiteLLM content filter, Akto) raise 403 for
+        content policy blocks.  These are intentional blocks — not API failures
+        — so they must be classified as guardrail_intervened, not
+        guardrail_failed_to_respond.
+        """
+        assert HTTPException is not None
+        e = HTTPException(status_code=403, detail="Blocked by Akto Guardrails")
+        assert CustomGuardrail._is_guardrail_intervention(e) is True
+
+    def test_http_500_is_not_intervention(self):
+        """HTTPException with status 500 is an API failure, not a block."""
+        assert HTTPException is not None
+        e = HTTPException(status_code=500, detail="Internal server error")
+        assert CustomGuardrail._is_guardrail_intervention(e) is False
+
+    def test_http_422_is_not_intervention(self):
+        """HTTPException with status 422 is a validation error, not a block."""
+        assert HTTPException is not None
+        e = HTTPException(status_code=422, detail="Unprocessable entity")
+        assert CustomGuardrail._is_guardrail_intervention(e) is False
+
+    def test_generic_exception_is_not_intervention(self):
+        """A generic Python exception is treated as an API failure."""
+        e = ValueError("Something went wrong")
+        assert CustomGuardrail._is_guardrail_intervention(e) is False
+
+    @pytest.mark.asyncio
+    async def test_process_error_403_logs_as_guardrail_intervened(self):
+        """
+        End-to-end: when a guardrail hook raises HTTPException(403),
+        _process_error must log guardrail_status="guardrail_intervened",
+        not "guardrail_failed_to_respond".
+        """
+        assert HTTPException is not None
+        guardrail = CustomGuardrail(guardrail_name="test-content-filter")
+        request_data: dict = {"metadata": {}}
+
+        e = HTTPException(
+            status_code=403,
+            detail={"error": "Content blocked: competitor detected"},
+        )
+
+        with pytest.raises(HTTPException):
+            guardrail._process_error(
+                e=e,
+                request_data=request_data,
+                start_time=0.0,
+                end_time=1.0,
+                duration=1.0,
+            )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        assert slg_list[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_process_error_400_logs_as_guardrail_intervened(self):
+        """
+        End-to-end: when a guardrail hook raises HTTPException(400),
+        _process_error must log guardrail_status="guardrail_intervened".
+        """
+        assert HTTPException is not None
+        guardrail = CustomGuardrail(guardrail_name="test-content-filter")
+        request_data: dict = {"metadata": {}}
+
+        e = HTTPException(
+            status_code=400,
+            detail={"error": "Content blocked: SSN pattern detected"},
+        )
+
+        with pytest.raises(HTTPException):
+            guardrail._process_error(
+                e=e,
+                request_data=request_data,
+                start_time=0.0,
+                end_time=1.0,
+                duration=1.0,
+            )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        assert slg_list[0]["guardrail_status"] == "guardrail_intervened"
