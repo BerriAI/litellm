@@ -288,17 +288,11 @@ class PurviewGuardrailBase:
             3. ``metadata["user_api_key_user_id"]`` — proxy-injected from the key (when present)
             4. ``metadata[user_id_field]`` — caller-supplied; used only when none of the above apply
         """
+        trusted = self._resolve_trusted_user_id(data, user_api_key_dict)
+        if trusted:
+            return trusted
+
         metadata = data.get("metadata") or data.get("litellm_metadata") or {}
-
-        if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id:
-            return str(user_api_key_dict.user_id)
-        if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
-            return str(user_api_key_dict.end_user_id)
-
-        uid = metadata.get("user_api_key_user_id")
-        if uid:
-            return str(uid)
-
         uid = metadata.get(self.user_id_field)
         if uid:
             return str(uid)

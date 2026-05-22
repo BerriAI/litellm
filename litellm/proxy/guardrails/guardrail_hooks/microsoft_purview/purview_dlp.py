@@ -75,9 +75,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         logging_only: bool = False,
         **kwargs: Any,
     ):
-        if logging_only:
-            kwargs["event_hook"] = GuardrailEventHooks.logging_only
-
         supported_event_hooks = [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
@@ -94,7 +91,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
-        self._logging_only = logging_only
         self.guardrail_provider = "microsoft_purview"
         verbose_proxy_logger.info(
             "Initialized Microsoft Purview DLP Guardrail: %s (logging_only=%s)",
