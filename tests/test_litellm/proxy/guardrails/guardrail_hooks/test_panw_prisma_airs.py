@@ -5429,6 +5429,39 @@ class TestPanwAirsTimeoutCoercion:
                 timeout="not-a-number",
             )
 
+    def test_litellm_params_empty_string_timeout_becomes_none(self):
+        """Empty-string timeout (which the dashboard form can send) should
+        be coerced to None, not crash, and not produce float('')."""
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            timeout="",
+        )
+        assert params.timeout is None
+
+    def test_legacy_initializer_handles_unset_timeout(self):
+        """Regression guard: with timeout now a declared Optional[float] = None
+        on BaseLitellmParams, the legacy panw initializer at
+        guardrail_initializers.py:220 must not crash on float(None) when the
+        caller omits timeout entirely."""
+        from litellm.proxy.guardrails.guardrail_initializers import (
+            initialize_panw_prisma_airs,
+        )
+
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            # timeout intentionally omitted - field defaults to None
+        )
+        guardrail_config = {"guardrail_name": "test_legacy"}
+        handler = initialize_panw_prisma_airs(params, guardrail_config)
+        # Default fallback applied, not crashed on float(None)
+        assert handler.timeout == 10.0
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
