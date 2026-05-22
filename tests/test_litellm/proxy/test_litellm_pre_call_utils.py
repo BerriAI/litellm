@@ -2603,6 +2603,52 @@ async def test_add_internal_user_from_user_mapping_resolves_email_header_to_inte
         user_id="internal@example.com",
         prisma_client=fake_prisma_client,
         user_api_key_cache=fake_cache,
+        user_id_upsert=False,
+        user_email="internal@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_can_opt_in_to_user_upsert(
+    monkeypatch,
+):
+    import litellm.proxy.auth.auth_checks as auth_checks
+    import litellm.proxy.proxy_server as proxy_server
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Email": "internal@example.com"}
+    general_settings = {
+        "user_header_mappings": [
+            {
+                "header_name": "X-OpenWebUI-User-Email",
+                "litellm_user_role": "internal_user",
+            }
+        ],
+        "user_header_mappings_upsert_user_id": True,
+    }
+
+    fake_prisma_client = object()
+    fake_cache = object()
+    fake_user = MagicMock()
+    fake_user.user_id = "internal-user-db-id"
+    fake_user.user_email = "internal@example.com"
+    fake_user.user_role = "internal_user"
+
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", fake_cache)
+    get_user_object_mock = AsyncMock(return_value=fake_user)
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user_object_mock)
+
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-user-db-id"
+    get_user_object_mock.assert_awaited_once_with(
+        user_id="internal@example.com",
+        prisma_client=fake_prisma_client,
+        user_api_key_cache=fake_cache,
         user_id_upsert=True,
         user_email="internal@example.com",
     )
@@ -4109,9 +4155,7 @@ def test_resolve_provider_from_deployment_uses_litellm_params_model():
     deployment.litellm_params.custom_llm_provider = None
     router.get_deployment_by_model_group_name.return_value = deployment
 
-    assert (
-        _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
-    )
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
 
 
 def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
@@ -4122,9 +4166,7 @@ def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
     deployment.litellm_params.custom_llm_provider = "bedrock"
     router.get_deployment_by_model_group_name.return_value = deployment
 
-    assert (
-        _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
-    )
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
 
 
 def test_resolve_provider_from_deployment_no_match():

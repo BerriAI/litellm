@@ -746,11 +746,16 @@ class LiteLLMProxyRequestSetup:
                 from litellm.proxy.auth.auth_checks import get_user_object
 
                 if proxy_server.prisma_client is not None:
+                    user_id_upsert = bool(
+                        general_settings.get(
+                            "user_header_mappings_upsert_user_id", False
+                        )
+                    )
                     user_obj = await get_user_object(
                         user_id=str(header_value),
                         prisma_client=proxy_server.prisma_client,
                         user_api_key_cache=proxy_server.user_api_key_cache,
-                        user_id_upsert=True,
+                        user_id_upsert=user_id_upsert,
                         user_email=str(header_value),
                     )
                     if user_obj is not None:
@@ -763,9 +768,12 @@ class LiteLLMProxyRequestSetup:
                             or LitellmUserRoles.INTERNAL_USER
                         )
                         return user_api_key_dict
-            except Exception:
-                # Fall back to using header value if DB unavailable
-                pass
+            except Exception as e:
+                verbose_logger.warning(
+                    "Failed to resolve internal user from mapped header value; falling back to raw header value. header_name=%s error=%s",
+                    header_name,
+                    _sanitize_for_log(e),
+                )
 
         # Default: use the raw header value as the user identifier
         user_api_key_dict.user_id = header_value
