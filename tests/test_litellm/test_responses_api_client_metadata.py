@@ -5,8 +5,8 @@ Responses API bridge to litellm.completion()/acompletion().
 The Responses API handler merges **kwargs into the completion args dict.
 When a client sends client_metadata (an OpenAI Responses API param), it flows
 through kwargs and causes 'unexpected keyword argument' errors at the provider
-SDK level. The fix filters kwargs to only pass litellm-internal params
-(prefixed with 'litellm_').
+SDK level. The fix filters kwargs via a blocklist of Responses-API-only params,
+preserving valid completion kwargs like api_key, mock_response, and litellm_*.
 """
 
 import pytest
@@ -17,7 +17,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 
 
 class TestFilterKwargsForCompletion:
-    """Verify _filter_kwargs_for_completion strips non-litellm kwargs."""
+    """Verify _filter_kwargs_for_completion strips Responses-API-only kwargs."""
 
     def test_strips_client_metadata(self):
         """client_metadata from the Responses API must not pass through."""
@@ -42,13 +42,43 @@ class TestFilterKwargsForCompletion:
         filtered = _filter_kwargs_for_completion(kwargs)
         assert filtered == kwargs
 
-    def test_strips_all_non_litellm_kwargs(self):
-        """Any non-litellm_* kwarg should be stripped."""
+    def test_preserves_api_key(self):
+        """api_key must pass through for BYOK proxy support."""
+        kwargs = {
+            "api_key": "sk-user-provided-key",
+            "litellm_metadata": {},
+            "client_metadata": {"x": 1},
+        }
+        filtered = _filter_kwargs_for_completion(kwargs)
+        assert filtered["api_key"] == "sk-user-provided-key"
+        assert "client_metadata" not in filtered
+
+    def test_preserves_valid_completion_kwargs(self):
+        """Valid litellm.completion() kwargs like mock_response, num_retries, drop_params
+        must pass through (they don't have a litellm_ prefix)."""
+        kwargs = {
+            "mock_response": "hello",
+            "num_retries": 3,
+            "drop_params": True,
+            "input_cost_per_token": 0.01,
+            "client_metadata": {"x": 1},
+        }
+        filtered = _filter_kwargs_for_completion(kwargs)
+        assert filtered["mock_response"] == "hello"
+        assert filtered["num_retries"] == 3
+        assert filtered["drop_params"] is True
+        assert filtered["input_cost_per_token"] == 0.01
+        assert "client_metadata" not in filtered
+
+    def test_strips_responses_api_only_params(self):
+        """Responses-API-only params should be stripped."""
         kwargs = {
             "litellm_metadata": {},
             "client_metadata": {"x": 1},
-            "some_other_param": True,
-            "prompt_id": "p-1",
+            "include": ["file_search_results"],
+            "instructions": "Be helpful",
+            "previous_response_id": "resp_abc",
+            "truncation": "auto",
         }
         filtered = _filter_kwargs_for_completion(kwargs)
         assert filtered == {"litellm_metadata": {}}
@@ -56,8 +86,3 @@ class TestFilterKwargsForCompletion:
     def test_empty_kwargs(self):
         """Empty kwargs should return empty dict."""
         assert _filter_kwargs_for_completion({}) == {}
-
-    def test_no_litellm_kwargs(self):
-        """If only non-litellm kwargs, return empty dict."""
-        kwargs = {"client_metadata": {}, "extra_param": "value"}
-        assert _filter_kwargs_for_completion(kwargs) == {}

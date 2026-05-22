@@ -19,17 +19,29 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+_RESPONSES_API_ONLY_PARAMS = frozenset(
+    {
+        "client_metadata",
+        "include",
+        "instructions",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "truncation",
+        "user",
+    }
+)
+
 
 def _filter_kwargs_for_completion(kwargs: dict) -> dict:
     """
-    Filter kwargs to only include litellm-internal params that are safe to pass
-    to litellm.completion() / litellm.acompletion().
+    Filter kwargs to exclude Responses-API-only params that are NOT valid
+    litellm.completion() / litellm.acompletion() arguments.
 
-    Responses API requests may contain client-specific params (e.g. client_metadata)
-    that are NOT valid litellm.completion() arguments. Passing them through causes
-    'unexpected keyword argument' errors at the provider SDK level.
+    We use a blocklist (not an allowlist) so that valid completion kwargs like
+    api_key, mock_response, num_retries, drop_params, and litellm_* params
+    all pass through.
     """
-    return {k: v for k, v in kwargs.items() if k.startswith("litellm_")}
+    return {k: v for k, v in kwargs.items() if k not in _RESPONSES_API_ONLY_PARAMS}
 
 
 class LiteLLMCompletionTransformationHandler:
