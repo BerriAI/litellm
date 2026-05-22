@@ -1754,6 +1754,10 @@ class JWTAuthManager:
             org_alias=org_alias,
         )
 
+        # Reconcile to canonical UserTable.user_id if get_objects resolved via sso_user_id/email fuzzy match.
+        if user_object is not None and user_object.user_id and user_id != user_object.user_id:
+            user_id = user_object.user_id
+
         # Derive org_id from org_object if resolved by alias
         resolved_org_id = org_object.organization_id if org_object else org_id
 
