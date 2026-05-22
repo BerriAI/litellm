@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * OAuth2 PKCE flow for the *user* connect path.
+ * OAuth2 PKCE flow for the Tools screen re-authentication path.
  *
- * Unlike useMcpOAuthFlow (used in the admin create-server form), this hook
- * targets a server that already exists in the database.  It therefore skips
- * the temp-session cache step and calls /server/oauth/{serverId}/authorize
- * directly with the real server_id.
+ * Unlike useUserMcpOAuthFlow (used in the chat panel), this hook:
+ * - stores the resulting token in sessionStorage via mcpTokenStore only
+ * - does NOT call storeMCPOAuthUserCredential (no backend DB write)
+ * - uses "litellm-tools-mcp-oauth-result" as its result key to avoid
+ *   collisions with the admin and user flows
  *
- * On success it calls storeMCPOAuthUserCredential to persist the token for
- * the user and then invokes onSuccess so the caller can refresh UI state.
+ * The OAuth callback page (src/app/mcp/oauth/callback/page.tsx) writes
+ * to this key so this hook can pick up the result after the redirect.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,37 +18,34 @@ import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
   registerMcpOAuthClient,
-  storeMCPOAuthUserCredential,
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { setToken } from "@/utils/mcpTokenStore";
 import { buildCallbackUrl, clearStorage } from "./mcpOAuthUtils";
 
-export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
+export type ToolsOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
-interface UseUserMcpOAuthFlowOptions {
+interface UseToolsOAuthFlowOptions {
   accessToken: string;
   serverId: string;
   serverAlias?: string | null;
-  /** Scopes to request, e.g. ["repo", "read:user"] */
+  userId?: string | null;
   scopes?: string[];
-  /** Pre-configured client_id if the MCP server record has one. */
   clientId?: string | null;
-  onSuccess: () => void;
+  onSuccess: (accessToken: string) => void;
 }
 
-interface UseUserMcpOAuthFlowResult {
+interface UseToolsOAuthFlowResult {
   startOAuthFlow: () => Promise<void>;
-  status: UserMcpOAuthStatus;
+  status: ToolsOAuthStatus;
   error: string | null;
 }
 
-const FLOW_STATE_KEY = "litellm-user-mcp-oauth-flow-state";
-// Use a user-flow-specific key to avoid collisions with the admin OAuth flow
-// (useMcpOAuthFlow) which uses "litellm-mcp-oauth-result".
-const RESULT_KEY = "litellm-user-mcp-oauth-result";
+const FLOW_STATE_KEY = "litellm-tools-mcp-oauth-flow-state";
+const RESULT_KEY = "litellm-tools-mcp-oauth-result";
 const RETURN_URL_KEY = "litellm-mcp-oauth-return-url";
 
 type StoredFlowState = {
@@ -60,25 +58,20 @@ type StoredFlowState = {
   scopes?: string[];
 };
 
-const setStorage = (key: string, value: string) => {
-  setSecureItem(key, value);
-};
-
-const getStorage = (key: string): string | null => {
-  return getSecureItem(key);
-};
-
-export const useUserMcpOAuthFlow = ({
+export const useToolsOAuthFlow = ({
   accessToken,
   serverId,
   serverAlias,
+  userId,
   scopes,
   clientId: preClientId,
   onSuccess,
-}: UseUserMcpOAuthFlowOptions): UseUserMcpOAuthFlowResult => {
-  const [status, setStatus] = useState<UserMcpOAuthStatus>("idle");
+}: UseToolsOAuthFlowOptions): UseToolsOAuthFlowResult => {
+  const [status, setStatus] = useState<ToolsOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
+  const onSuccessRef = useRef(onSuccess);
+  onSuccessRef.current = onSuccess;
 
   const startOAuthFlow = useCallback(async () => {
     if (typeof window === "undefined") return;
@@ -90,7 +83,6 @@ export const useUserMcpOAuthFlow = ({
       let clientSecret: string | undefined;
 
       if (!clientId) {
-        // Attempt dynamic client registration against the server's registration endpoint.
         try {
           const reg = await registerMcpOAuthClient(accessToken, serverId, {
             client_name: serverAlias || serverId,
@@ -130,10 +122,9 @@ export const useUserMcpOAuthFlow = ({
         scopes,
       };
 
-      setStorage(FLOW_STATE_KEY, JSON.stringify(flowState));
-      const returnUrl = new URL(window.location.href);
-      returnUrl.searchParams.set("mcpOauthReturn", "apps");
-      setStorage(RETURN_URL_KEY, returnUrl.toString());
+      setSecureItem(FLOW_STATE_KEY, JSON.stringify(flowState));
+      // Return to the current page (Tools tab) after the OAuth redirect
+      setSecureItem(RETURN_URL_KEY, window.location.href);
 
       window.location.href = authorizeUrl;
     } catch (err) {
@@ -147,23 +138,20 @@ export const useUserMcpOAuthFlow = ({
   const resumeOAuthFlow = useCallback(async () => {
     if (typeof window === "undefined" || processingRef.current) return;
 
-    const storedResult = getStorage(RESULT_KEY);
+    const storedResult = getSecureItem(RESULT_KEY);
     if (!storedResult) return;
 
-    // When multiple OAuth2ConnectButton components are mounted (one per server
-    // card), each holds its own hook instance.  All run resumeOAuthFlow() on
-    // mount and would compete for the same RESULT_KEY.  Peek at the stored
-    // flow state first: only the hook instance whose serverId matches the one
-    // that initiated the OAuth flow should consume the result.
-    // Guard: only proceed if this hook's flow state exists (startOAuthFlow was
-    // called from this hook).  Without the guard, a tools re-auth redirect writes
-    // to the user result key too, and every OAuth2ConnectButton instance would try
-    // to resume a flow that was never started here.
-    const rawFlowState = getStorage(FLOW_STATE_KEY);
+    // The callback page writes to this result key for every OAuth flow (including
+    // the admin server-creation flow).  Guard: only proceed if *this* hook's flow
+    // state exists, meaning startOAuthFlow() was actually called from the Tools screen.
+    // Without this guard, a stale result written during server creation would trigger
+    // "OAuth session state was lost" when the user navigates to the Tools tab.
+    const rawFlowState = getSecureItem(FLOW_STATE_KEY);
     if (!rawFlowState) return;
 
+    let peeked: StoredFlowState | null = null;
     try {
-      const peeked = JSON.parse(rawFlowState) as StoredFlowState;
+      peeked = JSON.parse(rawFlowState) as StoredFlowState;
       if (peeked.serverId && peeked.serverId !== serverId) return;
     } catch (_) {}
 
@@ -175,8 +163,7 @@ export const useUserMcpOAuthFlow = ({
 
     try {
       payload = JSON.parse(storedResult);
-      const raw = getStorage(FLOW_STATE_KEY);
-      flowState = raw ? JSON.parse(raw) : null;
+      flowState = peeked;
     } catch (_) {
       setError("Failed to resume OAuth flow. Please retry.");
       setStatus("error");
@@ -210,19 +197,22 @@ export const useUserMcpOAuthFlow = ({
         accessToken,
       });
 
-      // Persist the token for this user via the backend.
-      // accessToken comes from props — it is never stored in sessionStorage.
-      await storeMCPOAuthUserCredential(accessToken, flowState.serverId, {
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-        expires_in: token.expires_in,
-        scopes: flowState.scopes,
-      });
+      // Store in sessionStorage only — no backend DB write
+      setToken(
+        flowState.serverId,
+        {
+          access_token: token.access_token,
+          expires_in: token.expires_in,
+          refresh_token: token.refresh_token,
+          token_type: token.token_type,
+        },
+        userId,
+      );
 
       setStatus("success");
       setError(null);
       NotificationsManager.success("Connected successfully");
-      onSuccess();
+      onSuccessRef.current(token.access_token);
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
@@ -232,7 +222,7 @@ export const useUserMcpOAuthFlow = ({
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => { processingRef.current = false; }, 1000);
     }
-  }, [accessToken, serverId, onSuccess]);
+  }, [accessToken, serverId, userId]);
 
   useEffect(() => {
     resumeOAuthFlow();
