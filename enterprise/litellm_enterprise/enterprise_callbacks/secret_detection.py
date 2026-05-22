@@ -6,13 +6,14 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -21,6 +22,41 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 GUARDRAIL_NAME = "hide_secrets"
+
+# Matches a full PEM private-key block (header + base64 body + footer) across
+# multiple lines.  detect-secrets is line-based and only records the BEGIN
+# header as the secret value; _expand_private_key_values uses this pattern to
+# promote that header-only value to the full block so every str.replace call
+# site redacts the entire key, not just the first line.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+)
+
+
+def _expand_private_key_values(
+    detected_secrets: List[Dict[str, Any]], text: str
+) -> List[Dict[str, Any]]:
+    """Expand any 'Private Key' secret entries from the BEGIN-header-only value
+    returned by detect-secrets to the full PEM block found in *text*.
+
+    detect-secrets scans line-by-line, so for PEM keys it records only the
+    ``-----BEGIN … PRIVATE KEY-----`` armor header as the secret value.  This
+    function finds the enclosing PEM block in *text* and replaces the
+    header-only value so downstream ``str.replace`` calls strike the entire
+    key (body + footer) rather than just the first line.
+
+    All other secret types pass through unchanged.
+    """
+    expanded = []
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key":
+            for match in _PEM_BLOCK_RE.finditer(text):
+                if secret.get("value") in match.group(0):
+                    secret = {**secret, "value": match.group(0)}
+                    break
+        expanded.append(secret)
+    return expanded
+
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -453,7 +489,11 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
 
-        return detected_secrets
+        # detect-secrets is line-based: for PEM private keys it records only
+        # the BEGIN armor header as the secret value.  Expand each Private Key
+        # entry to the full PEM block so that downstream str.replace calls
+        # strike the entire key (body + footer), not just the first line.
+        return _expand_private_key_values(detected_secrets, message_content)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
