@@ -11709,6 +11709,25 @@ async def model_info_v2(
             llm_router=llm_router,
         )
 
+    # Defense-in-depth: bound the result by LiteLLM_UserTable.models
+    # (Personal Models) so this endpoint stays consistent with
+    # /v1/models and inference-time can_user_call_model regardless of
+    # which flag combination the caller passed. Without this, a bare
+    # `GET /v2/model/info` (neither user_models_only nor
+    # include_team_models set) returns the full router model_list
+    # — leaking every deployment's litellm_params to anyone
+    # holding a virtual key. See BerriAI/litellm#26420.
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    all_models = await apply_user_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
+
     # Apply teamId filter if provided
     if teamId is not None and teamId.strip():
         all_models = await _filter_models_by_team_id(
@@ -12332,30 +12351,26 @@ async def model_info_v1(  # noqa: PLR0915
         return {"data": [_deployment_info_dict]}
 
     all_models: List[dict] = []
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_router is None:
-        proxy_model_list = []
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
+    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM/USER LEVEL ##
+    # Use the centralized resolver so /v1/model/info honors the same
+    # LiteLLM_UserTable.models (Personal Models) filter as /v1/models
+    # and inference-time can_user_call_model — see
+    # BerriAI/litellm#26420 and PR #10 fix(proxy): apply user.models
+    # filter on /v1/models.
+    from litellm.proxy.utils import get_available_models_for_user
+
+    all_models_str = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    all_models_str = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=None,
+        include_model_access_groups=False,
+        only_model_access_groups=False,
+        return_wildcard_routes=False,
+        user_api_key_cache=user_api_key_cache,
     )
 
     if len(all_models_str) > 0:
