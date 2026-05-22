@@ -97,6 +97,28 @@ def test_get_complete_url():
 
 
 @pytest.mark.serial
+def test_response_id_path_requests_encode_response_id():
+    config = AzureOpenAIResponsesAPIConfig()
+    api_base = (
+        "https://litellm8397336933.openai.azure.com/openai/responses"
+        "?api-version=2024-05-01-preview"
+    )
+
+    url, params = config.transform_cancel_response_api_request(
+        response_id="../../responses/other?x=1#frag",
+        api_base=api_base,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        url
+        == "https://litellm8397336933.openai.azure.com/openai/responses/..%2F..%2Fresponses%2Fother%3Fx%3D1%23frag/cancel?api-version=2024-05-01-preview"
+    )
+    assert params == {}
+
+
+@pytest.mark.serial
 def test_azure_o_series_responses_api_supported_params():
     """Test that Azure OpenAI O-series responses API excludes temperature from supported parameters."""
     config = AzureOpenAIOSeriesResponsesAPIConfig()
@@ -502,3 +524,38 @@ class TestAzureResponsesAPIConfig:
         """
         supported = self.config.get_supported_openai_params(self.model)
         assert "context_management" not in supported
+
+    def test_azure_responses_api_stream_options_unsupported(self):
+        """Test that stream_options is not in Azure Responses API supported params.
+
+        Azure Responses API does not support stream_options. When
+        always_include_stream_usage=True injects stream_options into a request,
+        it must be dropped before forwarding to Azure.
+        See: https://github.com/BerriAI/litellm/issues/28553
+        """
+        supported = self.config.get_supported_openai_params(self.model)
+        assert "stream_options" not in supported
+
+    def test_azure_responses_api_stream_options_dropped_with_drop_params(self):
+        """Test that stream_options is dropped when drop_params=True.
+
+        This covers the always_include_stream_usage=True proxy setting which
+        injects stream_options for all streaming requests.
+        """
+        from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+        request_params = ResponsesAPIOptionalRequestParams(
+            stream=True,
+            stream_options={"include_usage": True},
+            max_output_tokens=1000,
+        )
+
+        mapped_params = self.config.map_openai_params(
+            response_api_optional_params=request_params,
+            model=self.model,
+            drop_params=True,
+        )
+
+        assert "stream_options" not in mapped_params
+        assert mapped_params.get("stream") is True
+        assert mapped_params.get("max_output_tokens") == 1000

@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Uni
 import httpx
 from openai.types.responses import ResponseReasoningItem
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -22,7 +24,7 @@ else:
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
-    AZURE_UNSUPPORTED_PARAMS = ["context_management"]
+    AZURE_UNSUPPORTED_PARAMS = ["context_management", "stream_options"]
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -30,7 +32,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         """
-        Azure Responses API does not support context_management (compaction).
+        Azure Responses API does not support context_management (compaction)
+        or stream_options.
         """
         base_supported_params = super().get_supported_openai_params(model)
         return [
@@ -38,6 +41,36 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             for param in base_supported_params
             if param not in self.AZURE_UNSUPPORTED_PARAMS
         ]
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: "ResponsesAPIOptionalRequestParams",
+        model: str,
+        drop_params: bool,
+    ) -> Dict:
+        """
+        Drop Azure-unsupported parameters when drop_params is enabled.
+
+        Azure Responses API does not support stream_options or context_management.
+        When always_include_stream_usage=True is set on the proxy, stream_options
+        gets injected for all streaming requests and must be removed before the
+        request is forwarded to Azure.
+        """
+        mapped_params = super().map_openai_params(
+            response_api_optional_params=response_api_optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        if drop_params or litellm.drop_params:
+            for param in self.AZURE_UNSUPPORTED_PARAMS:
+                if param in mapped_params:
+                    verbose_logger.debug(
+                        f"Dropping unsupported parameter '{param}' for Azure Responses API"
+                    )
+                    mapped_params.pop(param, None)
+
+        return mapped_params
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -201,7 +234,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        new_path = f"{path}/{encoded_response_id}"
 
         # Reconstruct the URL with all original components but with the modified path
         constructed_url = urlunparse(
@@ -322,7 +358,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Insert the response_id and /cancel at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
-        new_path = f"{path}/{response_id}/cancel"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        new_path = f"{path}/{encoded_response_id}/cancel"
 
         # Reconstruct the URL with all original components but with the modified path
         cancel_url = urlunparse(
