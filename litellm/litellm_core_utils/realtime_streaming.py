@@ -899,9 +899,11 @@ class RealTimeStreaming:
                     ):
                         session = msg_obj.setdefault("session", {})
                         if isinstance(session, dict):
-                            session.setdefault("turn_detection", {})[
-                                "create_response"
-                            ] = False
+                            existing_td = session.get("turn_detection")
+                            if not isinstance(existing_td, dict):
+                                existing_td = {}
+                            existing_td["create_response"] = False
+                            session["turn_detection"] = existing_td
                             message = json.dumps(msg_obj)
                             self._guardrail_turn_detection_update_sent = True
                             verbose_logger.debug(
