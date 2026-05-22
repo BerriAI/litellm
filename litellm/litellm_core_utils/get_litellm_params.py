@@ -105,10 +105,8 @@ def get_litellm_params(
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
-    data_residency: Optional[str] = (
-        infer_openai_data_residency(api_base)
-        if custom_llm_provider == "openai"
-        else None
+    data_residency: Optional[str] = infer_openai_data_residency(
+        custom_llm_provider, api_base
     )
 
     # Build base dict with explicit parameters (always included)
