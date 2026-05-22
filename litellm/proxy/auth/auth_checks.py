@@ -563,10 +563,44 @@ async def _prefetch_common_check_spend_counters(
             valid_token.user_id is not None
             and team_object is not None
             and team_object.team_id is not None
+            and prisma_client is not None
         ):
-            counter_requests[
-                f"spend:team_member:{valid_token.user_id}:{team_object.team_id}"
-            ] = 0.0
+            team_membership = await get_team_membership(
+                user_id=valid_token.user_id,
+                team_id=team_object.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_membership is not None:
+                team_member_budget: Optional[float] = None
+                if (
+                    team_membership.litellm_budget_table is not None
+                    and team_membership.litellm_budget_table.max_budget is not None
+                ):
+                    team_member_budget = team_membership.litellm_budget_table.max_budget
+                else:
+                    default_budget_id = (team_object.metadata or {}).get(
+                        "team_member_budget_id"
+                    )
+                    if isinstance(default_budget_id, str):
+                        default_budget = await get_team_member_default_budget(
+                            budget_id=default_budget_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                        )
+                        if (
+                            default_budget is not None
+                            and default_budget.max_budget is not None
+                            and default_budget.max_budget > 0
+                        ):
+                            team_member_budget = default_budget.max_budget
+
+                if team_member_budget is not None:
+                    member_spend = team_membership.spend
+                    counter_requests[
+                        f"spend:team_member:{valid_token.user_id}:{team_object.team_id}"
+                    ] = member_spend if member_spend is not None else 0.0
 
     if (
         (team_object is None or team_object.team_id is None)
