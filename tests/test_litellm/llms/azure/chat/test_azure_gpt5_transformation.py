@@ -286,6 +286,39 @@ def test_azure_gpt5_1_supports_stop(config: AzureOpenAIGPT5Config):
     assert "stop" in supported
 
 
+def test_azure_gpt5_5_stop_rejected_when_reasoning_effort_not_none(
+    config: AzureOpenAIGPT5Config,
+):
+    """stop is rejected for Azure gpt-5.5 when reasoning_effort is not 'none'.
+
+    When gpt-5.5 is actively reasoning (effort='high'), stop sequences are not
+    valid — only allowed in full chat mode (effort=None or effort='none').
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"stop": ["END"], "reasoning_effort": "high"},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+            api_version="2025-01-01-preview",
+        )
+
+
+def test_azure_gpt5_5_stop_dropped_when_reasoning_effort_not_none_drop_params(
+    config: AzureOpenAIGPT5Config,
+):
+    """stop is silently dropped for Azure gpt-5.5 when reasoning_effort is not 'none' and drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"stop": ["END"], "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+    )
+    assert "stop" not in params
+    assert params.get("reasoning_effort") == "high"
+
+
 # Logprobs support tests for Azure GPT-5.2
 def test_azure_gpt5_2_supports_logprobs(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5.2 models support logprobs parameters.

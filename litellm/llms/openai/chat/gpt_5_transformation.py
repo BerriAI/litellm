@@ -280,10 +280,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
-        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
+        # gpt-5.1/5.2/5.5 support logprobs, top_p, top_logprobs, and stop only when
+        # reasoning_effort="none" — sampling-mode params are not valid when the model
+        # is actively reasoning (effort != "none").
         supports_none = self._supports_reasoning_effort_level(model, "none")
         if supports_none:
-            sampling_params = ["logprobs", "top_logprobs", "top_p"]
+            sampling_params = ["logprobs", "top_logprobs", "top_p", "stop"]
             has_sampling = any(p in non_default_params for p in sampling_params)
             if has_sampling and effective_effort not in (None, "none"):
                 if litellm.drop_params or drop_params:
@@ -292,7 +294,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
+                            "gpt-5.1/5.2/5.5 only support logprobs, top_p, top_logprobs, stop when "
                             "reasoning_effort='none'. Current reasoning_effort='{}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(effective_effort),

@@ -1138,6 +1138,37 @@ def test_gpt5_base_does_not_support_stop(config: OpenAIConfig):
         ), f"stop should not be supported for {model}"
 
 
+def test_gpt5_5_stop_rejected_when_reasoning_effort_not_none(config: OpenAIConfig):
+    """stop is rejected for gpt-5.5 when reasoning_effort is not 'none'.
+
+    Models that support reasoning_effort='none' can use stop sequences only in
+    full chat mode (effort=None or effort='none').  Passing stop alongside an
+    active reasoning effort (e.g. 'high') must raise UnsupportedParamsError so
+    the API receives a valid request.
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"stop": ["END"], "reasoning_effort": "high"},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_stop_dropped_when_reasoning_effort_not_none_drop_params(
+    config: OpenAIConfig,
+):
+    """stop is silently dropped for gpt-5.5 when reasoning_effort is not 'none' and drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"stop": ["END"], "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "stop" not in params
+    assert params.get("reasoning_effort") == "high"
+
+
 def test_gpt5_1_supports_logprobs_top_p(config: OpenAIConfig):
     """gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort='none'."""
     for model in ["gpt-5.1", "gpt-5.2"]:
