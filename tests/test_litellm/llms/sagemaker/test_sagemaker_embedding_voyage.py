@@ -17,6 +17,10 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import embedding
+from litellm.llms.sagemaker.embedding.cohere_transformation import (
+    SagemakerCohereEmbeddingConfig,
+    is_cohere_sagemaker_embedding_model,
+)
 from litellm.llms.sagemaker.embedding.transformation import SagemakerEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -53,6 +57,101 @@ class TestSagemakerEmbeddingFactory:
         assert isinstance(config1, VoyageEmbeddingConfig)
         assert isinstance(config2, VoyageEmbeddingConfig)
         assert isinstance(config3, VoyageEmbeddingConfig)
+
+    def test_get_model_config_cohere_model(self):
+        """Cohere SageMaker endpoints route to SagemakerCohereEmbeddingConfig"""
+        for endpoint_name in (
+            "cohere-embed-multilingual-v3-prod",
+            "my-cohere-marketplace-endpoint",
+            "embed-multilingual-v3-sm-endpoint",
+            "embed-english-v3-endpoint",
+        ):
+            config = SagemakerEmbeddingConfig.get_model_config(endpoint_name)
+            assert isinstance(config, SagemakerCohereEmbeddingConfig), endpoint_name
+
+    def test_is_cohere_sagemaker_embedding_model(self):
+        assert is_cohere_sagemaker_embedding_model("cohere-embed-endpoint")
+        assert is_cohere_sagemaker_embedding_model("embed-english-v3-endpoint")
+        assert is_cohere_sagemaker_embedding_model("EMBED-MULTILINGUAL-V3")
+        assert not is_cohere_sagemaker_embedding_model("sentence-transformers-model")
+        assert not is_cohere_sagemaker_embedding_model("voyage-3-5-embedding")
+
+
+class TestSagemakerCohereEmbeddingConfig:
+    """Cohere-specific SageMaker embedding request/response transforms"""
+
+    def setup_method(self):
+        self.config = SagemakerCohereEmbeddingConfig()
+
+    def test_transform_request_uses_cohere_payload(self):
+        """Bug repro: request must use `texts` + `input_type`, not HF `inputs`"""
+        result = self.config.transform_embedding_request(
+            model="cohere-embed-multilingual-v3",
+            input=["hello"],
+            optional_params={"input_type": "search_query"},
+            headers={},
+        )
+        assert "inputs" not in result
+        assert result["texts"] == ["hello"]
+        assert result["input_type"] == "search_query"
+
+    def test_transform_request_default_input_type(self):
+        result = self.config.transform_embedding_request(
+            model="cohere-embed-multilingual-v3",
+            input=["hello"],
+            optional_params={},
+            headers={},
+        )
+        assert result["texts"] == ["hello"]
+        assert result["input_type"] == "search_document"
+
+    def test_transform_request_normalizes_string_input(self):
+        result = self.config.transform_embedding_request(
+            model="cohere-embed-english-v3",
+            input="hello",
+            optional_params={},
+            headers={},
+        )
+        assert result["texts"] == ["hello"]
+
+    def test_map_openai_params_dimensions_to_output_dimension(self):
+        params = self.config.map_openai_params(
+            non_default_params={"dimensions": 512, "encoding_format": "float"},
+            optional_params={},
+            model="cohere-embed-multilingual-v3",
+            drop_params=False,
+        )
+        assert params["output_dimension"] == 512
+        assert params["embedding_types"] == ["float"]
+
+    def test_transform_response_parses_cohere_payload(self):
+        cohere_response = {
+            "embeddings": [[0.1, 0.2, 0.3]],
+            "meta": {"billed_units": {"input_tokens": 2}},
+        }
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(cohere_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"input": ["hello"]}
+
+        result = self.config.transform_embedding_response(
+            model="cohere-embed-multilingual-v3",
+            raw_response=mock_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=logging_obj,
+            api_key=None,
+            request_data={"texts": ["hello"], "input_type": "search_query"},
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result.object == "list"
+        assert len(result.data) == 1
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.usage.prompt_tokens == 2
 
 
 class TestVoyageEmbeddingConfig:

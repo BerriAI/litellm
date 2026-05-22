@@ -17,6 +17,10 @@ from litellm.types.utils import Usage, EmbeddingResponse
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 
 from ..common_utils import SagemakerError
+from .cohere_transformation import (
+    SagemakerCohereEmbeddingConfig,
+    is_cohere_sagemaker_embedding_model,
+)
 
 
 class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
@@ -38,17 +42,20 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Appropriate embedding config instance
         """
-        if "voyage" in model.lower():
+        model_lower = model.lower()
+        if "voyage" in model_lower:
             return VoyageEmbeddingConfig()
-        else:
-            return cls()
+        if is_cohere_sagemaker_embedding_model(model):
+            return SagemakerCohereEmbeddingConfig()
+        return cls()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         # Check if this is an embedding model
         if "voyage" in model.lower():
             return VoyageEmbeddingConfig().get_supported_openai_params(model)
-        else:
-            return []
+        if is_cohere_sagemaker_embedding_model(model):
+            return SagemakerCohereEmbeddingConfig().get_supported_openai_params(model)
+        return []
 
     def map_openai_params(
         self,
