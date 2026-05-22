@@ -103,6 +103,27 @@ class TestInternalFlagsNotInExtraBody:
         assert "_websearch_interception_converted_stream" not in extra_body
         assert extra_body.get("custom_param") == "value"
 
+    def test_non_openai_provider_flags_excluded(self):
+        """Internal flags should also be filtered for non-OpenAI providers (else branch)."""
+        passed_params = {
+            "_websearch_interception_converted_stream": True,
+            "_other_internal": "skip",
+            "custom_param": "keep",
+        }
+        optional_params = {}
+        openai_params = ["model", "messages"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=openai_params,
+        )
+
+        assert "_websearch_interception_converted_stream" not in result
+        assert "_other_internal" not in result
+        assert result.get("custom_param") == "keep"
+
     def test_no_extra_body_when_only_internal_flags(self):
         """If only internal flags exist (besides openai params), extra_body should be empty."""
         passed_params = {
