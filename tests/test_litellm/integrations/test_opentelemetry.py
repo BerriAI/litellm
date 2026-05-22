@@ -87,6 +87,82 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         # Verify that start_span was never called
         otel.tracer.start_span.assert_not_called()
 
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_create_guardrail_span_with_list_mode_does_not_crash(self, mock_datetime):
+        """When guardrail_mode is a list (e.g. ['pre_call', 'post_call']),
+        _create_guardrail_span must not crash with TypeError: unhashable type: 'list'.
+        GitHub #28486 / LIT-3299.
+        """
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        guardrail_info = {
+            "guardrail_name": "crowdstrike-guardrail",
+            "guardrail_mode": ["pre_call", "post_call"],  # list-valued mode
+            "guardrail_response": "ok",
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
+
+        # Must not raise TypeError: unhashable type: 'list'
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        # Span should still be created and ended
+        otel.tracer.start_span.assert_called_once()
+        mock_span.end.assert_called_once()
+
+
+class TestOpenTelemetryEmitOnce(unittest.TestCase):
+    """Tests for _emit_once deduplication and _make_hashable helper."""
+
+    def test_make_hashable_converts_lists_to_tuples(self):
+        """_make_hashable must return tuples for lists and leave other types unchanged."""
+        assert OpenTelemetry._make_hashable(["a", "b"]) == ("a", "b")
+        assert OpenTelemetry._make_hashable([1, [2, 3]]) == (1, (2, 3))
+        assert OpenTelemetry._make_hashable("string") == "string"
+        assert OpenTelemetry._make_hashable(42) == 42
+        assert OpenTelemetry._make_hashable(None) is None
+
+    def test_emit_once_deduplication_with_list_scope(self):
+        """_emit_once must not raise when a list appears in scope (list guardrail_mode)."""
+        otel = OpenTelemetry()
+        kwargs: dict = {}
+
+        # First call with list-valued scope should return True (emit)
+        result1 = otel._emit_once(
+            kwargs, "guardrail", "my-guardrail", 1234.0, ["pre_call", "post_call"]
+        )
+        assert result1 is True, "First call should emit (return True)"
+
+        # Second call with same list-valued scope should return False (deduplicate)
+        result2 = otel._emit_once(
+            kwargs, "guardrail", "my-guardrail", 1234.0, ["pre_call", "post_call"]
+        )
+        assert result2 is False, "Second call with same scope should be deduplicated"
+
+    def test_emit_once_deduplication_with_string_scope(self):
+        """_emit_once deduplication should work correctly for ordinary string scope."""
+        otel = OpenTelemetry()
+        kwargs: dict = {}
+
+        assert otel._emit_once(kwargs, "success") is True
+        assert otel._emit_once(kwargs, "success") is False
+
+    def test_emit_once_different_scopes_are_independent(self):
+        """Different scope values should each emit exactly once."""
+        otel = OpenTelemetry()
+        kwargs: dict = {}
+
+        assert otel._emit_once(kwargs, "success") is True
+        assert otel._emit_once(kwargs, "failure") is True
+        assert otel._emit_once(kwargs, "success") is False
+        assert otel._emit_once(kwargs, "failure") is False
+
 
 class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
     """team_id / team_alias must land on every child span of a

@@ -865,6 +865,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
+    @staticmethod
+    def _make_hashable(value: object) -> object:
+        """Convert a value to a hashable form so it can be used in a dict key.
+
+        Lists are converted to tuples (recursively). All other types are
+        returned as-is; callers are responsible for passing only primitives,
+        ``None``, or collections of those.
+        """
+        if isinstance(value, list):
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        return value
+
     def _emit_once(self, kwargs: dict, *scope: object) -> bool:
         """Return True the first time this handler is asked to emit a span
         for the given (handler, scope) on this kwargs; False on repeats.
@@ -882,8 +894,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
            can be re-read with mutated entries between calls, so dedupe
            must be at entry granularity. Scope: the entry's stable identity.
 
-        ``scope`` parts can be any hashable identity. The marker is stored
-        in ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it
+        ``scope`` parts should be hashable; list values are automatically
+        coerced to tuples so that callers passing a list-valued
+        ``guardrail_mode`` do not crash with ``TypeError: unhashable type``.
+        The marker is stored in
+        ``kwargs["litellm_params"]["metadata"]["_otel_internal"]`` so it
         is request-local (kwargs is shared across the sync/async callbacks
         and lifecycle hooks for one request).
         """
@@ -907,7 +922,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        dedupe_key = (
+            self.__class__.__name__,
+            id(self),
+            *(self._make_hashable(s) for s in scope),
+        )
         if spans_logged.get(dedupe_key) is True:
             return False
 
