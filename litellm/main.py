@@ -1673,6 +1673,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 reasoning_summary=_reasoning_summary_for_bridge,
             )
 
+        # Use base_model (the true underlying model) for Azure model-type
+        # detection when the deployment name differs from the model name.
+        _azure_detection_model = base_model or model
+
         if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
@@ -1716,7 +1720,9 @@ def completion(  # type: ignore # noqa: PLR0915
             and OpenAIGPT5Config.is_model_gpt_5_model(model)
         ) or (
             custom_llm_provider == "azure"
-            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+                _azure_detection_model
+            )
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(
                 optional_params
@@ -1769,9 +1775,6 @@ def completion(  # type: ignore # noqa: PLR0915
             if max_retries is not None:
                 optional_params["max_retries"] = max_retries
 
-            # Use base_model (the true underlying model) for model-type
-            # detection when the deployment name differs from the model name.
-            _azure_detection_model = base_model or model
             if litellm.AzureOpenAIO1Config().is_o_series_model(
                 model=_azure_detection_model
             ):
