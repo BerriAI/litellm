@@ -1,4 +1,4 @@
-import asyncio
+import threading
 import time
 import uuid
 from collections import OrderedDict
@@ -68,7 +68,15 @@ class PurviewGuardrailBase:
             OrderedDict()
         )
         self._scope_cache_maxsize = 1000
-        self._cache_lock = asyncio.Lock()
+        # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
+        # from both the proxy's main asyncio event loop and from short-lived
+        # event loops created by the logging_hook thread fallback.  In Python
+        # 3.10+ an asyncio.Lock is bound to the first event loop that acquires
+        # it and raises RuntimeError from any other loop, which would silently
+        # break audit logging via the thread fallback.  All critical sections
+        # below are pure in-memory dict ops with no awaits, so a synchronous
+        # lock is both correct and sufficient.
+        self._cache_lock = threading.Lock()
 
     @staticmethod
     def _encode_graph_user_id(user_id: str) -> str:
@@ -82,7 +90,7 @@ class PurviewGuardrailBase:
     async def _get_access_token(self) -> str:
         """Acquire or return cached OAuth2 token via client_credentials grant."""
         now = time.time()
-        async with self._cache_lock:
+        with self._cache_lock:
             if self._token_cache and self._token_cache[1] > now + 60:
                 return self._token_cache[0]
 
@@ -102,7 +110,7 @@ class PurviewGuardrailBase:
         token_data = response.json()
         access_token = token_data["access_token"]
         expires_in = int(token_data.get("expires_in", 3599))
-        async with self._cache_lock:
+        with self._cache_lock:
             self._token_cache = (access_token, now + expires_in)
         verbose_proxy_logger.debug(
             "Purview: acquired new OAuth2 token (expires_in=%ds)", expires_in
@@ -157,7 +165,7 @@ class PurviewGuardrailBase:
         encoded_user_id = self._encode_graph_user_id(user_id)
         now = time.time()
 
-        async with self._cache_lock:
+        with self._cache_lock:
             cached = self._scope_cache.get(user_id)
             if cached and (now - cached[2]) < SCOPE_CACHE_TTL_SECONDS:
                 self._scope_cache.move_to_end(user_id)
@@ -180,7 +188,7 @@ class PurviewGuardrailBase:
         response_json, response_headers = await self._graph_post(url, body)
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
-        async with self._cache_lock:
+        with self._cache_lock:
             self._scope_cache[user_id] = (etag, response_json, now)
             # Move refreshed entry to the end so it is treated as most-recently-used.
             # OrderedDict.__setitem__ preserves existing insertion order for known
@@ -258,7 +266,7 @@ class PurviewGuardrailBase:
 
         # If policies changed, invalidate scope cache so next call re-fetches.
         if response_json.get("protectionScopeState") == "modified":
-            async with self._cache_lock:
+            with self._cache_lock:
                 self._scope_cache.pop(user_id, None)
 
         return response_json

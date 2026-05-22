@@ -418,7 +418,9 @@ class TestPostCallHook:
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_post_call_success_hook(
                     data={},
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", user_id="user-123"
+                    ),
                     response=response,
                 )
 
@@ -662,9 +664,10 @@ class TestResponsesAPIHooks:
             )
 
             mock_check.assert_called_once()
-            assert "policy text in instructions only" in mock_check.call_args.kwargs[
-                "text"
-            ]
+            assert (
+                "policy text in instructions only"
+                in mock_check.call_args.kwargs["text"]
+            )
 
     @pytest.mark.asyncio
     async def test_post_call_responses_api_output_text(self):
@@ -1217,8 +1220,21 @@ class TestInitializerValidation:
             initialize_guardrail,
         )
 
-        litellm_params = Mock()
-        litellm_params.get.return_value = None
+        litellm_params = Mock(
+            spec=[
+                "tenant_id",
+                "client_id",
+                "client_secret",
+                "purview_app_name",
+                "user_id_field",
+                "api_key",
+                "mode",
+                "default_on",
+            ]
+        )
+        litellm_params.tenant_id = None
+        litellm_params.client_id = None
+        litellm_params.client_secret = None
         litellm_params.api_key = "secret"
         litellm_params.mode = "pre_call"
 
@@ -1230,10 +1246,21 @@ class TestInitializerValidation:
             initialize_guardrail,
         )
 
-        litellm_params = Mock()
-        litellm_params.get.side_effect = lambda k, *a: (
-            "test-tenant" if k == "tenant_id" else None
+        litellm_params = Mock(
+            spec=[
+                "tenant_id",
+                "client_id",
+                "client_secret",
+                "purview_app_name",
+                "user_id_field",
+                "api_key",
+                "mode",
+                "default_on",
+            ]
         )
+        litellm_params.tenant_id = "test-tenant"
+        litellm_params.client_id = None
+        litellm_params.client_secret = None
         litellm_params.api_key = "secret"
         litellm_params.mode = "pre_call"
 
@@ -1245,11 +1272,21 @@ class TestInitializerValidation:
             initialize_guardrail,
         )
 
-        litellm_params = Mock()
-        litellm_params.get.side_effect = lambda k, *a: {
-            "tenant_id": "test-tenant",
-            "client_id": "test-client",
-        }.get(k)
+        litellm_params = Mock(
+            spec=[
+                "tenant_id",
+                "client_id",
+                "client_secret",
+                "purview_app_name",
+                "user_id_field",
+                "api_key",
+                "mode",
+                "default_on",
+            ]
+        )
+        litellm_params.tenant_id = "test-tenant"
+        litellm_params.client_id = "test-client"
+        litellm_params.client_secret = None
         litellm_params.api_key = None
         litellm_params.mode = "pre_call"
 
@@ -1745,7 +1782,9 @@ class TestGraphUserIdEncoding:
 
         guardrail.async_handler.post = AsyncMock(side_effect=_capture_post)
 
-        with patch.object(guardrail, "_get_access_token", new_callable=AsyncMock) as mock_token:
+        with patch.object(
+            guardrail, "_get_access_token", new_callable=AsyncMock
+        ) as mock_token:
             mock_token.return_value = "tok"
             await guardrail._compute_protection_scopes("user/with%special")
 

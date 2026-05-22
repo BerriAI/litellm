@@ -12,12 +12,14 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     import litellm
     from litellm.types.guardrails import GuardrailEventHooks
 
-    tenant_id = litellm_params.get("tenant_id")
-    client_id = litellm_params.get("client_id")
+    tenant_id = getattr(litellm_params, "tenant_id", None)
+    client_id = getattr(litellm_params, "client_id", None)
 
     # client_secret can be passed via the standard api_key field or as
     # a dedicated client_secret parameter.
-    client_secret = litellm_params.api_key or litellm_params.get("client_secret")
+    client_secret = litellm_params.api_key or getattr(
+        litellm_params, "client_secret", None
+    )
 
     if not tenant_id:
         raise ValueError("Microsoft Purview: tenant_id is required")
@@ -40,8 +42,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         tenant_id=str(tenant_id),
         client_id=str(client_id),
         client_secret=str(client_secret),
-        purview_app_name=str(litellm_params.get("purview_app_name") or "LiteLLM"),
-        user_id_field=str(litellm_params.get("user_id_field") or "user_id"),
+        purview_app_name=str(
+            getattr(litellm_params, "purview_app_name", None) or "LiteLLM"
+        ),
+        user_id_field=str(getattr(litellm_params, "user_id_field", None) or "user_id"),
         logging_only=logging_only,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
