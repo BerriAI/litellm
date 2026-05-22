@@ -772,8 +772,10 @@ def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
 
     session_configuration_request = json.dumps(
         {
-            "model": "gemini-1.5-flash",
-            "generationConfig": {"responseModalities": ["TEXT"]},
+            "setup": {
+                "model": "gemini-1.5-flash",
+                "generationConfig": {"responseModalities": ["TEXT"]},
+            }
         }
     )
 
