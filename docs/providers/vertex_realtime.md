@@ -174,6 +174,144 @@ await ws.send(json.dumps({
 }))
 ```
 
+## Tool Calling
+
+```python
+import asyncio
+import json
+import websockets
+
+PROXY_URL = "ws://localhost:4000/v1/realtime?model=vertex-gemini-live"
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "unit": {"type": "string", "enum": ["fahrenheit", "celsius"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+
+def get_weather(location: str, unit: str = "fahrenheit") -> dict:
+    return {
+        "location": location,
+        "temperature": 72 if unit == "fahrenheit" else 22,
+        "unit": unit,
+        "conditions": "sunny",
+    }
+
+
+TOOL_FUNCTIONS = {"get_weather": get_weather}
+
+
+async def main():
+    async with websockets.connect(
+        PROXY_URL,
+        additional_headers={
+            "Authorization": "Bearer sk-1234",
+            "X-Serverless-Authorization": "Bearer sk-1234",
+        },
+    ) as ws:
+        _ = json.loads(await ws.recv())  # session.created
+
+        # Required for tool calling: send tools in session.update
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": "Use get_weather for weather questions.",
+                        "modalities": ["audio"],
+                        "tools": TOOLS,
+                    },
+                }
+            )
+        )
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "What's the weather in San Francisco?"}
+                        ],
+                    },
+                }
+            )
+        )
+        await ws.send(json.dumps({"type": "response.create"}))
+
+        async for raw in ws:
+            ev = json.loads(raw)
+            t = ev.get("type", "")
+
+            if t == "response.text.delta":
+                print(ev.get("delta", ""), end="", flush=True)
+            elif t == "response.function_call_arguments.done":
+                fn_name = ev.get("name", "")
+                call_id = ev.get("call_id", "")
+                args = json.loads(ev.get("arguments", "{}"))
+                result = TOOL_FUNCTIONS[fn_name](**args)
+
+                await ws.send(
+                    json.dumps(
+                        {
+                            "type": "conversation.item.create",
+                            "item": {
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": json.dumps(result),
+                            },
+                        }
+                    )
+                )
+                await ws.send(json.dumps({"type": "response.create"}))
+            elif t == "response.done":
+                print("\n[done]")
+                break
+            elif t == "error":
+                print(ev)
+                break
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Config + run
+
+```yaml
+model_list:
+  - model_name: vertex-gemini-live
+    litellm_params:
+      model: vertex_ai/gemini-live-2.5-flash-native-audio
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+
+litellm_settings:
+  # Required for tool calling with Gemini/Vertex Live:
+  # defer setup until client sends session.update (with tools)
+  gemini_live_defer_setup: true
+```
+
+```bash
+litellm --config config.yaml --port 4000
+python test_realtime_tool_calling.py
+```
+
 ## Supported OpenAI Realtime Events
 
 **Client → Proxy (→ Vertex AI)**
@@ -199,5 +337,10 @@ await ws.send(json.dumps({
 ## Limitations
 
 - `session.update` is not forwarded (Vertex AI only accepts one setup message per connection).
-- Tool calling / function calling is not yet supported.
 - Audio transcription requires `outputAudioTranscription: {}` to be set in the initial setup (done automatically by LiteLLM).
+
+## Precaution
+
+- Tool calling depends on `session.update` with `tools`.
+- If you skip `session.update`, tool calls will not be triggered.
+- `gemini_live_defer_setup` defaults to `false` for backward compatibility.
