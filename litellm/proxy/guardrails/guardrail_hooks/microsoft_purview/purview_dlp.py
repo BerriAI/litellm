@@ -211,12 +211,19 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 parts.extend(self._extract_tool_call_args_from_message(msg))
         return parts
 
-    def _responses_api_input_to_str(self, data: Dict[str, Any]) -> Optional[str]:
+    def _responses_api_input_to_str(
+        self, data: Dict[str, Any], raise_on_failure: bool = False
+    ) -> Optional[str]:
         """Extract DLP-scannable text from a Responses API request ``input`` field.
 
         ``input`` may be a plain string or a list of input items (messages).  In
         the latter case the items are converted to chat messages via the standard
         LiteLLM transformation and then concatenated by ``get_prompt_text_for_dlp``.
+
+        When ``raise_on_failure`` is True (blocking mode), a transformation error
+        raises ``HTTPException`` so the request is fail-closed.  In logging-only
+        mode the error is swallowed and ``None`` is returned so audit attempts on
+        the response side can still run.
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
@@ -235,9 +242,19 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             return self.get_prompt_text_for_dlp(cast(List[Any], messages))
         except Exception:
             verbose_proxy_logger.debug(
-                "Purview DLP: failed to transform responses API input; skipping scan",
+                "Purview DLP: failed to transform responses API input",
                 exc_info=True,
             )
+            if raise_on_failure:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            "Microsoft Purview DLP: Responses API input could "
+                            "not be transformed for DLP scanning in blocking mode"
+                        ),
+                    },
+                )
             return None
 
     # ------------------------------------------------------------------
@@ -314,7 +331,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     },
                 )
         elif call_type in ("responses", "aresponses"):
-            prompt_text = self._responses_api_input_to_str(data)
+            prompt_text = self._responses_api_input_to_str(data, raise_on_failure=True)
 
         if not prompt_text:
             return data
@@ -421,14 +438,26 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     ) -> Tuple[dict, Any]:
         """Fire-and-forget async audit logging; returns original (kwargs, result) immediately.
 
-        Unlike the Presidio pattern (which does local text manipulation),
-        ``async_logging_hook`` makes two sequential network calls to the
-        Microsoft Graph API.  Blocking the calling thread — or worse, the
-        event loop thread — until those HTTP round-trips complete would
-        significantly degrade throughput.  Since the hook is audit-only and
-        always returns ``(kwargs, result)`` unchanged, we can schedule the
-        work without waiting and return immediately.
+        In the proxy's async success path, litellm independently calls both
+        ``logging_hook`` (sync) and ``async_logging_hook`` (async) for every
+        ``CustomGuardrail`` callback.  To avoid making two complete sets of
+        Purview API calls per request, this sync hook is a no-op whenever an
+        event loop is running — the framework's async path will invoke
+        ``async_logging_hook`` directly.
+
+        For genuine sync-only call paths (no running event loop, so the async
+        success handler will not fire either), schedule ``async_logging_hook``
+        on a short-lived background daemon thread so audit logging still runs
+        without blocking the caller on two Graph API round-trips.
         """
+
+        try:
+            asyncio.get_running_loop()
+            # Async context — let the framework's async success handler invoke
+            # async_logging_hook to avoid duplicate Purview API calls.
+            return kwargs, result
+        except RuntimeError:
+            pass
 
         async def _log_safe() -> None:
             try:
@@ -440,23 +469,17 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     "Purview audit background logging error: %s", exc
                 )
 
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_log_safe())
-        except RuntimeError:
-            # No running event loop — run in a background daemon thread so
-            # the caller still isn't blocked.
-            def _run_in_new_loop() -> None:
-                new_loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(new_loop)
-                    new_loop.run_until_complete(_log_safe())
-                finally:
-                    new_loop.close()
-                    asyncio.set_event_loop(None)
+        def _run_in_new_loop() -> None:
+            new_loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(_log_safe())
+            finally:
+                new_loop.close()
+                asyncio.set_event_loop(None)
 
-            thread = threading.Thread(target=_run_in_new_loop, daemon=True)
-            thread.start()
+        thread = threading.Thread(target=_run_in_new_loop, daemon=True)
+        thread.start()
 
         return kwargs, result
 
