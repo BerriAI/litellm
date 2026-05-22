@@ -206,6 +206,128 @@ def test_apply_tool_call_transformation_if_needed():
     )
 
 
+def _read_file_tool():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "offset": {"type": "integer"},
+                        "length": {"type": "integer"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+
+
+def _assert_read_file_tool_call(transformed_message, finish_reason):
+    assert finish_reason == "tool_calls"
+    assert transformed_message.content is None
+    assert transformed_message.tool_calls is not None
+    assert len(transformed_message.tool_calls) == 1
+    tool_call = transformed_message.tool_calls[0]
+    assert tool_call.type == "function"
+    assert tool_call.function.name == "read_file"
+    arguments = json.loads(tool_call.function.arguments)
+    assert arguments["path"] == "C:\\Projects\\redaigo\\scripts\\run_etf_v13.py"
+    assert arguments["offset"] in (0, "0")
+    assert arguments["length"] in (3000, "3000")
+
+
+def test_apply_tool_call_transformation_parses_function_parameter_text():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    message = Message(
+        role="assistant",
+        content=(
+            "\n<function>\n"
+            '<parameter name="command">read_file</parameter>\n'
+            '<parameter name="path">C:\\Projects\\redaigo\\scripts\\run_etf_v13.py</parameter>\n'
+            '<parameter name="offset">0</parameter>\n'
+            '<parameter name="length">3000</parameter>\n'
+            "</function>"
+        ),
+    )
+
+    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
+        message, _read_file_tool(), initial_finish_reason="stop"
+    )
+
+    _assert_read_file_tool_call(transformed_message, finish_reason)
+
+
+def test_apply_tool_call_transformation_parses_tool_use_xml_text():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    message = Message(
+        role="assistant",
+        content=(
+            "<tool_use>\n"
+            "<server_name>desktop-commander</server_name>\n"
+            "<tool_name>read_file</tool_name>\n"
+            '<input>{"path": "C:\\\\Projects\\\\redaigo\\\\scripts\\\\run_etf_v13.py", "offset": 0, "length": 3000}</input>\n'
+            "</tool_use>"
+        ),
+    )
+
+    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
+        message, _read_file_tool(), initial_finish_reason="stop"
+    )
+
+    _assert_read_file_tool_call(transformed_message, finish_reason)
+
+
+def test_apply_tool_call_transformation_parses_bare_tool_name_json_text():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    message = Message(
+        role="assistant",
+        content=(
+            "\nread_file\n"
+            '{"path": "C:\\\\Projects\\\\redaigo\\\\scripts\\\\run_etf_v13.py", "offset": 0, "length": 3000}'
+        ),
+    )
+
+    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
+        message, _read_file_tool(), initial_finish_reason="stop"
+    )
+
+    _assert_read_file_tool_call(transformed_message, finish_reason)
+
+
+def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    original_content = "\nread_file\n{}"
+    message = Message(role="assistant", content=original_content)
+
+    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
+        message,
+        [
+            {
+                "type": "function",
+                "function": {"name": "write_file", "parameters": {}},
+            }
+        ],
+        initial_finish_reason="stop",
+    )
+
+    assert finish_reason == "stop"
+    assert transformed_message.content == original_content
+    assert transformed_message.tool_calls is None
+
+
 def test_transform_tool_call_with_cache_control():
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
