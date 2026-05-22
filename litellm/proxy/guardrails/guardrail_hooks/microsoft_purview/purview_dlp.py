@@ -402,6 +402,19 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
 
+        if assembled_response is None and all_chunks:
+            # Fail closed: stream_chunk_builder dropped all chunks, so we cannot
+            # scan the content. Refuse to release the buffered chunks.
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Microsoft Purview DLP: Unable to assemble streamed "
+                        "response for scanning; blocking response."
+                    ),
+                },
+            )
+
         if isinstance(assembled_response, TextCompletionResponse):
             parts = self._completion_response_text_parts(assembled_response)
             if parts:
