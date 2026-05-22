@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Dict, Optional
 import httpx
 import pytest_asyncio
 import yaml
+from prisma import Json
 
 
 MASTER_KEY = "sk-1234"
@@ -124,6 +125,42 @@ async def create_scratch_key(
     return resp.json()["key"]
 
 
+async def create_scratch_team(
+    prisma,
+    team_id: str,
+    *,
+    organization_id: Optional[str] = None,
+    admin_user_ids: Optional[list] = None,
+    member_user_ids: Optional[list] = None,
+) -> str:
+    """Raw-seed a scratch-tagged team row; returns its team_id.
+
+    The target team for the team write matrices (update / member_*). Raw
+    prisma (not POST /team/new) avoids creation side effects — no creator
+    auto-add, no membership rows written onto the world's users — so seeding
+    never mutates the immutable read-world. The authz gates read the team's
+    members_with_roles JSON, so a raw-seeded team exercises them exactly as
+    a /team/new-created team would. team_id must start with the scratch
+    prefix so the `scratch` fixture reclaims the row.
+    """
+    admin_user_ids = list(admin_user_ids or [])
+    member_user_ids = list(member_user_ids or [])
+    members_with_roles = [
+        {"user_id": uid, "role": "admin"} for uid in admin_user_ids
+    ] + [{"user_id": uid, "role": "user"} for uid in member_user_ids]
+    data: Dict[str, Any] = {
+        "team_id": team_id,
+        "team_alias": team_id,
+        "admins": admin_user_ids,
+        "members": admin_user_ids + member_user_ids,
+        "members_with_roles": Json(members_with_roles),
+    }
+    if organization_id is not None:
+        data["organization_id"] = organization_id
+    await prisma.db.litellm_teamtable.create(data=data)
+    return team_id
+
+
 @pytest_asyncio.fixture
 async def scratch(prisma):
     handle = Scratch(prefix=f"{SCRATCH_PREFIX}{uuid.uuid4().hex[:12]}")
@@ -154,3 +191,16 @@ async def scratch(prisma):
         await prisma.db.litellm_budgettable.delete_many(
             where={"budget_id": {"startswith": handle.prefix}}
         )
+        # /team/member_add writes LiteLLM_UserTable.teams; the available-team
+        # self-join writes it on a world actor whose row must survive. Strip
+        # dangling scratch-team refs so the read-world stays immutable.
+        polluted = await prisma.db.litellm_usertable.find_many(
+            where={"teams": {"isEmpty": False}}
+        )
+        for user in polluted:
+            cleaned = [t for t in user.teams if not t.startswith(handle.prefix)]
+            if cleaned != list(user.teams):
+                await prisma.db.litellm_usertable.update(
+                    where={"user_id": user.user_id},
+                    data={"teams": {"set": cleaned}},
+                )

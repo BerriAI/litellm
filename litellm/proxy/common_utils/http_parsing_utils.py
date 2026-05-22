@@ -12,7 +12,6 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
-
 _FORM_CONTENT_TYPES: frozenset[str] = frozenset(
     {"application/x-www-form-urlencoded", "multipart/form-data"}
 )
@@ -301,7 +300,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any]
+    form_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
