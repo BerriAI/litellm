@@ -26,6 +26,24 @@ class TencentCloudChatConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("TENCENT_CLOUD_API_KEY")
         return api_base, dynamic_api_key
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        if model.startswith("tencent_cloud/"):
+            model = model[len("tencent_cloud/") :]
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def validate_environment(
         self,
         headers: dict,
