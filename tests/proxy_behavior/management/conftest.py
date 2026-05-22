@@ -13,7 +13,6 @@ from prisma import Json
 
 from litellm.proxy.utils import hash_token
 
-
 MASTER_KEY = "sk-1234"
 SCRATCH_PREFIX = "scratch-"
 
@@ -108,12 +107,19 @@ async def create_scratch_key(
     user_id: str,
     team_id: Optional[str] = None,
     organization_id: Optional[str] = None,
+    key_alias: Optional[str] = None,
 ) -> str:
     """Seed a scratch-tagged key via /key/generate; returns its cleartext.
 
     Shared by the write-scenario matrices (key update/regenerate/delete).
+    key_alias defaults to scratch_prefix; pass a distinct scratch-prefixed
+    alias when a single scenario needs more than one key (/key/generate
+    enforces unique aliases).
     """
-    body: Dict[str, Any] = {"key_alias": scratch_prefix, "user_id": user_id}
+    body: Dict[str, Any] = {
+        "key_alias": key_alias or scratch_prefix,
+        "user_id": user_id,
+    }
     if team_id is not None:
         body["team_id"] = team_id
     if organization_id is not None:
