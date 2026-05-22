@@ -320,9 +320,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     ):
         try:
             import hashlib
+            from urllib.parse import quote
 
-            import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -347,8 +347,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
             verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
 
+            # Percent-encode the object key exactly once (preserving "/" path
+            # separators). Team aliases used as key prefixes may contain spaces
+            # or other reserved characters (#, +, &, unicode, ...). See SRE-3573.
+            object_key_encoded = quote(batch_logging_element.s3_object_key, safe="/")
+
             # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_key_encoded}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
@@ -361,7 +366,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         if self.s3_endpoint_url.startswith("https://")
                         else "http://"
                     )
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{object_key_encoded}"
                 else:
                     # Path-style: endpoint/bucket/key
                     url = (
@@ -369,7 +374,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         + "/"
                         + self.s3_bucket_name
                         + "/"
-                        + batch_logging_element.s3_object_key
+                        + object_key_encoded
                     )
 
             # Convert JSON to string
@@ -386,26 +391,30 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
             }
-            req = requests.Request("PUT", url, data=json_string, headers=headers)
-            prepped = req.prepare()
 
-            # Sign the request
+            # Sign the request directly from the already-encoded URL. We use
+            # S3SigV4Auth (not the generic SigV4Auth) because the generic signer
+            # re-quotes the path when building the canonical request, turning a
+            # single-encoded "%20" into a double-encoded "%2520". httpx sends the
+            # single-encoded "%20" on the wire, so the canonical URI no longer
+            # matches what S3 verifies -> 403 SignatureDoesNotMatch. S3SigV4Auth
+            # signs the path as-is, so the signed URI matches the wire. SRE-3573.
             aws_request = AWSRequest(
-                method=prepped.method,
-                url=prepped.url,
-                data=prepped.body,
-                headers=prepped.headers,
+                method="PUT",
+                url=url,
+                data=json_string,
+                headers=headers,
             )
             aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
                 aws_region_name=self.s3_region_name
             )
-            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
-            request_url = prepped.url or url
+            # Send the exact same (already-encoded) URL that was signed.
+            request_url = url
 
             # Make the request with retry for transient S3 errors (500/503)
             max_retries = 3
@@ -518,9 +527,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     def upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
         try:
             import hashlib
+            from urllib.parse import quote
 
-            import requests
-            from botocore.auth import SigV4Auth
+            from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
@@ -536,8 +545,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_region_name=self.s3_region_name,
             )
 
+            # Percent-encode the object key exactly once (preserving "/" path
+            # separators). Team aliases used as key prefixes may contain spaces
+            # or other reserved characters (#, +, &, unicode, ...). See SRE-3573.
+            object_key_encoded = quote(batch_logging_element.s3_object_key, safe="/")
+
             # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_key_encoded}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
@@ -550,7 +564,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         if self.s3_endpoint_url.startswith("https://")
                         else "http://"
                     )
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{object_key_encoded}"
                 else:
                     # Path-style: endpoint/bucket/key
                     url = (
@@ -558,7 +572,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         + "/"
                         + self.s3_bucket_name
                         + "/"
-                        + batch_logging_element.s3_object_key
+                        + object_key_encoded
                     )
 
             # Convert JSON to string
@@ -575,26 +589,30 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
                 "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
             }
-            req = requests.Request("PUT", url, data=json_string, headers=headers)
-            prepped = req.prepare()
 
-            # Sign the request
+            # Sign the request directly from the already-encoded URL. We use
+            # S3SigV4Auth (not the generic SigV4Auth) because the generic signer
+            # re-quotes the path when building the canonical request, turning a
+            # single-encoded "%20" into a double-encoded "%2520". httpx sends the
+            # single-encoded "%20" on the wire, so the canonical URI no longer
+            # matches what S3 verifies -> 403 SignatureDoesNotMatch. S3SigV4Auth
+            # signs the path as-is, so the signed URI matches the wire. SRE-3573.
             aws_request = AWSRequest(
-                method=prepped.method,
-                url=prepped.url,
-                data=prepped.body,
-                headers=prepped.headers,
+                method="PUT",
+                url=url,
+                data=json_string,
+                headers=headers,
             )
             aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
                 aws_region_name=self.s3_region_name
             )
-            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
-            request_url = prepped.url or url
+            # Send the exact same (already-encoded) URL that was signed.
+            request_url = url
 
             httpx_client = _get_httpx_client(
                 params=(

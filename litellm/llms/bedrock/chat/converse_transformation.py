@@ -1223,7 +1223,11 @@ class AmazonConverseConfig(BaseConfig):
         # Only apply parallel_tool_use_config when tools are present — Bedrock rejects
         # tool_choice in additionalModelRequestFields when there is no toolConfig.
         has_tools = bool(inference_params.get("tools"))
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model) and has_tools:
+        if (
+            parallel_tool_use_config is not None
+            and is_claude_4_5_on_bedrock(model)
+            and has_tools
+        ):
             for key, value in parallel_tool_use_config.items():
                 if (
                     key in additional_request_params

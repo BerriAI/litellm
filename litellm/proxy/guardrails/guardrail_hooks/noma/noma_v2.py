@@ -8,8 +8,6 @@ import enum
 import json
 import os
 from datetime import datetime
-
-from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
 
