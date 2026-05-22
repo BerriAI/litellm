@@ -43,4 +43,27 @@ describe("NotificationsBell", () => {
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));
     expect(screen.queryByRole("button", { name: /^mark as read$/i })).not.toBeInTheDocument();
   });
+
+  it("should sync sibling instances when one is dismissed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <div data-testid="bell-a">
+          <NotificationsBell />
+        </div>
+        <div data-testid="bell-b">
+          <NotificationsBell />
+        </div>
+      </>,
+    );
+
+    // Both bells start unread → both render the "Mark as read" affordance once opened.
+    const [bellA, bellB] = screen.getAllByRole("button", { name: /^notifications$/i });
+    await user.click(bellA);
+    await user.click(screen.getByRole("button", { name: /^mark as read$/i }));
+
+    // Dismissing in bell A must also clear bell B without a remount.
+    await user.click(bellB);
+    expect(screen.queryByRole("button", { name: /^mark as read$/i })).not.toBeInTheDocument();
+  });
 });

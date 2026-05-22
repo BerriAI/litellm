@@ -1,31 +1,24 @@
 "use client";
 
+import {
+  HIDE_AGENT_PLATFORM_BANNER_KEY,
+  useHideAgentPlatformBanner,
+} from "@/app/(dashboard)/hooks/useHideAgentPlatformBanner";
+import { emitLocalStorageChange, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { BellOutlined } from "@ant-design/icons";
 import { Badge, Button, Popover, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 
-const STORAGE_KEY = "litellmHideAgentPlatformBanner";
 export const AGENT_PLATFORM_URL = "https://github.com/BerriAI/litellm-agent-platform";
 
 export const NotificationsBell: React.FC = () => {
-  const [hasUnread, setHasUnread] = useState(false);
+  const hidden = useHideAgentPlatformBanner();
+  const hasUnread = !hidden;
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    try {
-      setHasUnread(localStorage.getItem(STORAGE_KEY) !== "true");
-    } catch {
-      setHasUnread(true);
-    }
-  }, []);
-
   const markDismissed = () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, "true");
-    } catch {
-      /* ignore */
-    }
-    setHasUnread(false);
+    setLocalStorageItem(HIDE_AGENT_PLATFORM_BANNER_KEY, "true");
+    emitLocalStorageChange(HIDE_AGENT_PLATFORM_BANNER_KEY);
     setOpen(false);
   };
 
