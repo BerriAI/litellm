@@ -1227,7 +1227,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
-                # Handle toolCall from Gemini
+                # Handle toolCall from Gemini. Skip entirely if there are no
+                # function calls in the payload — emitting an orphaned
+                # response.created/response.done pair with no output items
+                # would confuse OpenAI-compatible clients.
+                if not value.get("functionCalls"):
+                    continue
+
                 # Emit response.created preamble if this is the first event in the response
                 if current_response_id is None:
                     current_response_id = f"resp_{uuid.uuid4()}"
@@ -1323,6 +1329,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 }
                                 for te in tool_call_events
                             ],
+                            conversation_id=current_conversation_id,
                         ),
                     )
                 )
@@ -1351,10 +1358,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
             ):
+                # Pass the locally-updated state (rather than the original
+                # input snapshot) so that prior iterations of this loop —
+                # e.g. a tool-call or response.done that just reset
+                # current_response_id/current_output_item_id to None — are
+                # honoured by the modality handler.
+                _modality_input: RealtimeResponseTransformInput = {
+                    **realtime_response_transform_input,
+                    "current_output_item_id": current_output_item_id,
+                    "current_response_id": current_response_id,
+                    "current_conversation_id": current_conversation_id,
+                    "current_delta_chunks": current_delta_chunks,
+                    "current_item_chunks": current_item_chunks,
+                    "current_delta_type": current_delta_type,
+                    "session_configuration_request": session_configuration_request,
+                }
                 _returned_message = self.handle_openai_modality_event(
                     openai_event,
                     json_message,
-                    realtime_response_transform_input,
+                    _modality_input,
                     delta_type="text" if "text" in openai_event.value else "audio",
                 )
                 returned_message.extend(_returned_message["returned_message"])
