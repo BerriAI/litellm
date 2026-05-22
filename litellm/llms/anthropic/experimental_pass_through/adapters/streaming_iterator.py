@@ -103,29 +103,39 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start:
                     self._increment_content_block_index()
 
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
+
+                if not self.sent_content_block_start:
+                    self.sent_content_block_start = True
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    if (
+                        processed_chunk.get("type") == "content_block_delta"
+                        and isinstance(processed_chunk.get("delta"), dict)
+                        and processed_chunk["delta"].get("type")
+                        in ("text_delta", "input_json_delta")
+                        and processed_chunk["delta"].get(
+                            "text", processed_chunk["delta"].get("partial_json", "")
+                        )
+                    ):
+                        self.chunk_queue.append(processed_chunk)
+                    return self.chunk_queue.popleft()
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
@@ -243,30 +253,40 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start:
                     self._increment_content_block_index()
 
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
+
+                if not self.sent_content_block_start:
+                    self.sent_content_block_start = True
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    if (
+                        processed_chunk.get("type") == "content_block_delta"
+                        and isinstance(processed_chunk.get("delta"), dict)
+                        and processed_chunk["delta"].get("type")
+                        in ("text_delta", "input_json_delta")
+                        and processed_chunk["delta"].get(
+                            "text", processed_chunk["delta"].get("partial_json", "")
+                        )
+                    ):
+                        self.chunk_queue.append(processed_chunk)
+                    return self.chunk_queue.popleft()
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
