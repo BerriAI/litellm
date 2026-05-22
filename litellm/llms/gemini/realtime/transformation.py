@@ -1251,7 +1251,31 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_response_id = f"resp_{uuid.uuid4()}"
                     current_output_item_id = f"item_{uuid.uuid4()}"
 
-                    # Emit response.created
+                    # Mirror the audio/text path: include modalities,
+                    # temperature, and max_output_tokens on response.created so
+                    # spec-compliant clients see consistent response metadata
+                    # regardless of whether the response starts with content or
+                    # a tool call.
+                    session_setup: BidiGenerateContentSetup = {}
+                    if session_configuration_request is not None:
+                        try:
+                            session_setup = json.loads(
+                                session_configuration_request
+                            ).get("setup", {})
+                        except (json.JSONDecodeError, TypeError):
+                            session_setup = {}
+                    tool_call_generation_config = (
+                        session_setup.get("generationConfig", {}) or {}
+                    )
+                    tool_call_modalities = [
+                        modality.lower()
+                        for modality in cast(
+                            List[str],
+                            tool_call_generation_config.get(
+                                "responseModalities", ["AUDIO"]
+                            ),
+                        )
+                    ]
                     returned_message.append(
                         {
                             "type": "response.created",
@@ -1262,6 +1286,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 "status": "in_progress",
                                 "output": [],
                                 "conversation_id": current_conversation_id,
+                                "modalities": tool_call_modalities,
+                                "temperature": tool_call_generation_config.get(
+                                    "temperature"
+                                ),
+                                "max_output_tokens": tool_call_generation_config.get(
+                                    "maxOutputTokens"
+                                ),
                             },
                         }
                     )

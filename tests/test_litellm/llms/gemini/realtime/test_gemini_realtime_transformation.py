@@ -715,6 +715,12 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[0]["type"] == "response.created"
     assert "response" in responses[0]
     assert responses[0]["response"]["status"] == "in_progress"
+    # response.created on the tool-call path mirrors the audio/text preamble:
+    # modalities/temperature/max_output_tokens are present so spec-compliant
+    # clients see consistent response metadata regardless of payload type.
+    assert "modalities" in responses[0]["response"]
+    assert "temperature" in responses[0]["response"]
+    assert "max_output_tokens" in responses[0]["response"]
     assert responses[1]["type"] == "response.output_item.added"
     assert responses[1]["item"]["type"] == "function_call"
     assert responses[1]["item"]["status"] == "in_progress"
