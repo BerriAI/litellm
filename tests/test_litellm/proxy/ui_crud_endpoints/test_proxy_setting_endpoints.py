@@ -1863,3 +1863,86 @@ class TestProxySettingEndpoints:
         assert "field_schema" in data
         assert "properties" in data["field_schema"]
         assert "role_mappings" in data["field_schema"]["properties"]
+
+
+class TestUserBannerUISettings:
+    """Tests for the admin-configurable user banner feature (LIT-3042)."""
+
+    def test_user_banner_fields_persisted(self, monkeypatch):
+        """Banner config (enabled, message, type) is stored in the database."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        existing_record = MagicMock()
+        existing_record.ui_settings = json.dumps(
+            {"disable_model_add_for_internal_users": False}
+        )
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+        from litellm.proxy._types import LitellmUserRoles
+
+        async def mock_admin_auth():
+            return MagicMock(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        app.dependency_overrides[user_api_key_auth] = mock_admin_auth
+
+        try:
+            payload = {
+                "user_banner_enabled": True,
+                "user_banner_message": "Scheduled maintenance on Friday",
+                "user_banner_type": "warning",
+            }
+            response = client.patch("/update/ui_settings", json=payload)
+            assert response.status_code == 200
+
+            mock_prisma.db.litellm_uisettings.upsert.assert_called_once()
+            call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+            create_data = call_args.kwargs["data"]["create"]
+            stored = json.loads(create_data["ui_settings"])
+
+            assert stored["user_banner_enabled"] is True
+            assert stored["user_banner_message"] == "Scheduled maintenance on Friday"
+            assert stored["user_banner_type"] == "warning"
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+    def test_user_banner_invalid_type_rejected(self, monkeypatch):
+        """Invalid banner type values (e.g. 'critical') are rejected with HTTP 422."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        existing_record = MagicMock()
+        existing_record.ui_settings = json.dumps({})
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=existing_record
+        )
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+        from litellm.proxy._types import LitellmUserRoles
+
+        async def mock_admin_auth():
+            return MagicMock(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        app.dependency_overrides[user_api_key_auth] = mock_admin_auth
+
+        try:
+            payload = {
+                "user_banner_enabled": True,
+                "user_banner_message": "Hello",
+                "user_banner_type": "critical",  # not in the allowed Literal
+            }
+            response = client.patch("/update/ui_settings", json=payload)
+            assert response.status_code == 422
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)

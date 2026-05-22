@@ -5,12 +5,16 @@ import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdat
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import PageVisibilitySettings from "./PageVisibilitySettings";
-import { Alert, Card, Divider, Skeleton, Space, Switch, Typography } from "antd";
+import { Alert, Button, Card, Divider, Input, Select, Skeleton, Space, Switch, Typography } from "antd";
+import { useState } from "react";
 
 export default function UISettings() {
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useUISettings();
   const { mutate: updateSettings, isPending: isUpdating, error: updateError } = useUpdateUISettings(accessToken);
+
+  const [bannerMessage, setBannerMessage] = useState<string | undefined>(undefined);
+  const [bannerType, setBannerType] = useState<string | undefined>(undefined);
 
   const schema = data?.field_schema;
   const property = schema?.properties?.disable_model_add_for_internal_users;
@@ -27,8 +31,12 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const userBannerEnabledProperty = schema?.properties?.user_banner_enabled;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
+  const isBannerEnabled = Boolean(values.user_banner_enabled);
+  const currentBannerMessage = bannerMessage !== undefined ? bannerMessage : (values.user_banner_message ?? "");
+  const currentBannerType = bannerType !== undefined ? bannerType : (values.user_banner_type ?? "info");
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
   const isVectorStoresDisabled = Boolean(values.disable_vector_stores_for_internal_users);
@@ -205,6 +213,39 @@ export default function UISettings() {
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleUserBanner = (checked: boolean) => {
+    updateSettings(
+      { user_banner_enabled: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("Banner setting updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleSaveBanner = () => {
+    updateSettings(
+      {
+        user_banner_message: currentBannerMessage,
+        user_banner_type: currentBannerType,
+      },
+      {
+        onSuccess: () => {
+          setBannerMessage(undefined);
+          setBannerType(undefined);
+          NotificationManager.success("Banner settings saved successfully");
         },
         onError: (error) => {
           NotificationManager.fromBackend(error);
@@ -462,6 +503,61 @@ export default function UISettings() {
             isUpdating={isUpdating}
             onUpdate={handleUpdatePageVisibility}
           />
+          <Divider />
+
+          {/* User Banner */}
+          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+            <Space align="start" size="middle">
+              <Switch
+                checked={isBannerEnabled}
+                disabled={isUpdating}
+                loading={isUpdating}
+                onChange={handleToggleUserBanner}
+                aria-label={userBannerEnabledProperty?.description ?? "Enable user banner"}
+              />
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>Publish user banner</Typography.Text>
+                <Typography.Text type="secondary">
+                  {userBannerEnabledProperty?.description ??
+                    "If true, shows the configured banner message to dashboard users"}
+                </Typography.Text>
+              </Space>
+            </Space>
+
+            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Typography.Text strong>Banner message</Typography.Text>
+              <Input.TextArea
+                value={currentBannerMessage}
+                disabled={isUpdating}
+                onChange={(e) => setBannerMessage(e.target.value)}
+                placeholder="Enter banner message..."
+                rows={3}
+                style={{ width: "100%" }}
+              />
+              <Space>
+                <Select
+                  value={currentBannerType}
+                  disabled={isUpdating}
+                  onChange={(val) => setBannerType(val)}
+                  style={{ width: 160 }}
+                  options={[
+                    { value: "info", label: "Info" },
+                    { value: "success", label: "Success" },
+                    { value: "warning", label: "Warning" },
+                    { value: "error", label: "Error" },
+                  ]}
+                />
+                <Button
+                  type="primary"
+                  loading={isUpdating}
+                  disabled={isUpdating}
+                  onClick={handleSaveBanner}
+                >
+                  Save banner
+                </Button>
+              </Space>
+            </Space>
+          </Space>
         </Space>
       )}
     </Card>

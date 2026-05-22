@@ -1,6 +1,6 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -160,6 +160,21 @@ class UISettings(BaseModel):
         default=False,
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
+    user_banner_enabled: bool = Field(
+        default=False,
+        description="If true, shows the configured banner message to dashboard users",
+    )
+
+    user_banner_message: Optional[str] = Field(
+        default=None,
+        description="Message content displayed in the banner",
+    )
+
+    user_banner_type: Literal["info", "success", "warning", "error"] = Field(
+        default="info",
+        description="Visual style of the banner alert",
+    )
+
 
 
 class UISettingsResponse(SettingsResponse):
@@ -184,6 +199,9 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
+    "user_banner_enabled",
+    "user_banner_message",
+    "user_banner_type",
 }
 
 # Flags that must be synced from the persisted UISettings into
