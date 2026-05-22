@@ -118,13 +118,29 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             )
 
         embeddings = response_data["embeddings"]
-        # The Cohere SageMaker container returns embeddings as a flat list of
-        # embedding vectors: [[float, ...], [float, ...], ...]
         output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
+
+        if isinstance(embeddings, dict):
+            # Cohere v2 containers return embeddings keyed by type when
+            # ``embedding_types`` is set, e.g.:
+            #   {"float": [[0.1, ...], ...], "int8": [[1, ...], ...]}
+            # Follow the same flattening pattern used in the hosted
+            # CohereEmbeddingConfig._transform_response so callers get the same
+            # shape regardless of whether they hit the cloud API or a SageMaker
+            # Marketplace container.
+            for _embedding_type, embedding_list in embeddings.items():
+                for idx, embedding in enumerate(embedding_list):
+                    output_data.append(
+                        {"object": "embedding", "index": idx, "embedding": embedding}
+                    )
+        else:
+            # Flat list: the standard Cohere SageMaker response when
+            # ``embedding_types`` is not set.
+            # [[float, ...], [float, ...], ...]
+            for idx, embedding in enumerate(embeddings):
+                output_data.append(
+                    {"object": "embedding", "index": idx, "embedding": embedding}
+                )
 
         model_response.object = "list"
         model_response.data = output_data

@@ -215,6 +215,50 @@ class TestSagemakerCohereEmbeddingResponse:
                 request_data={"texts": ["hello"], "input_type": "search_document"},
             )
 
+    def test_transform_response_dict_embeddings_cohere_v2(self):
+        """
+        Cohere v2 containers return embeddings keyed by type when embedding_types
+        is set, e.g. {"float": [[...], ...], "int8": [[...], ...]}.
+
+        The response parser must flatten them the same way the hosted
+        CohereEmbeddingConfig._transform_response does, not iterate over the
+        string keys.
+        """
+        cohere_v2_response = {
+            "id": "xyz",
+            "embeddings": {
+                "float": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+                "int8": [[1, 2, 3], [4, 5, 6]],
+            },
+            "texts": ["hello", "world"],
+        }
+
+        model_response = EmbeddingResponse()
+        result = self.config.transform_embedding_response(
+            model="cohere.embed-multilingual-v3",
+            raw_response=self._make_response(cohere_v2_response),
+            model_response=model_response,
+            logging_obj=None,
+            request_data={
+                "texts": ["hello", "world"],
+                "input_type": "search_document",
+                "embedding_types": ["float", "int8"],
+            },
+        )
+
+        assert result.object == "list"
+        # 2 types × 2 texts = 4 embedding entries
+        assert len(result.data) == 4
+        # Each entry must have a real vector, not a string type key
+        for entry in result.data:
+            assert isinstance(entry["embedding"], list), (
+                f"embedding must be a vector, got {type(entry['embedding'])!r}: "
+                f"{entry['embedding']!r}"
+            )
+            assert all(
+                isinstance(v, (int, float)) for v in entry["embedding"]
+            ), "embedding values must be numeric"
+
 
 class TestSagemakerCohereOpenAIParams:
     """Test OpenAI parameter mapping for Cohere SageMaker embeddings."""
