@@ -81,7 +81,10 @@ def test_session_created_does_not_overwrite_session_configuration_request():
     )
 
     # Must keep original setup payload (with "setup"), not overwrite with session.created event.
-    assert transformed["session_configuration_request"] == session_configuration_request_str
+    assert (
+        transformed["session_configuration_request"]
+        == session_configuration_request_str
+    )
 
     # Also verify emitted session.created reflects audio modality from setup payload.
     session_created = transformed["response"][0]
@@ -287,7 +290,7 @@ def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
 def test_gemini_realtime_tool_call_transformation():
     """Test transformation of Gemini toolCall to OpenAI function_call_arguments.done format."""
     config = GeminiRealtimeConfig()
-    
+
     # Gemini toolCall message format
     gemini_tool_call = {
         "toolCall": {
@@ -300,11 +303,11 @@ def test_gemini_realtime_tool_call_transformation():
             ]
         }
     }
-    
+
     gemini_tool_call_str = json.dumps(gemini_tool_call)
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id = "test-trace-123"
-    
+
     # Transform the toolCall message
     result = config.transform_realtime_response(
         gemini_tool_call_str,
@@ -320,27 +323,29 @@ def test_gemini_realtime_tool_call_transformation():
             "current_delta_type": None,
         },
     )
-    
+
     print("Tool call transformation result:", json.dumps(result, indent=2))
-    
+
     # Verify the transformation
     responses = result["response"]
     assert len(responses) > 0, "Expected at least one response event"
-    
+
     # Find the function_call_arguments.done event
     function_call_event = None
     for event in responses:
         if event.get("type") == "response.function_call_arguments.done":
             function_call_event = event
             break
-    
-    assert function_call_event is not None, "Expected function_call_arguments.done event"
+
+    assert (
+        function_call_event is not None
+    ), "Expected function_call_arguments.done event"
     assert function_call_event["call_id"] == "call_123"
     assert function_call_event["name"] == "get_weather"
     assert function_call_event["response_id"] == "resp_123"
     assert function_call_event["item_id"] == "item_123_tool_0"
     assert function_call_event["output_index"] == 0
-    
+
     # Verify arguments are properly serialized as JSON string
     args = json.loads(function_call_event["arguments"])
     assert args["location"] == "San Francisco"
@@ -350,7 +355,7 @@ def test_gemini_realtime_tool_call_transformation():
 def test_gemini_realtime_session_update_with_tools():
     """Test transformation of OpenAI session.update with tools to Gemini setup format."""
     config = GeminiRealtimeConfig()
-    
+
     # OpenAI format session update with tools
     session_update = {
         "type": "session.update",
@@ -384,28 +389,30 @@ def test_gemini_realtime_session_update_with_tools():
             ],
         },
     }
-    
+
     # Transform to Gemini format (first session.update, so setup should be sent)
     messages = config.transform_realtime_request(
-        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
     )
-    
+
     assert len(messages) == 1, "Expected one setup message"
-    
+
     gemini_setup = json.loads(messages[0])
     assert "setup" in gemini_setup
-    
+
     setup_config = gemini_setup["setup"]
-    
+
     # Verify tools are at top level, not in generationConfig
     assert "tools" in setup_config
     assert "tools" not in setup_config.get("generationConfig", {})
-    
+
     # Verify tool structure matches Gemini format
     tools = setup_config["tools"]
     assert len(tools) == 1
     assert "function_declarations" in tools[0]
-    
+
     function_decl = tools[0]["function_declarations"][0]
     assert function_decl["name"] == "get_weather"
     assert "Get the current weather" in function_decl["description"]
@@ -424,7 +431,9 @@ def test_gemini_session_update_defaults_to_audio_modality():
     }
 
     messages = config.transform_realtime_request(
-        json.dumps(session_update), "gemini-2.5-flash", session_configuration_request=None
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
     )
 
     assert len(messages) == 1
@@ -458,17 +467,19 @@ def test_gemini_realtime_function_call_output_transformation():
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id = "trace_func_output"
     config.transform_realtime_response(
-        json.dumps({
-            "toolCall": {
-                "functionCalls": [
-                    {
-                        "id": "call_123",
-                        "name": "get_weather",
-                        "args": {"location": "San Francisco"},
-                    }
-                ]
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_123",
+                            "name": "get_weather",
+                            "args": {"location": "San Francisco"},
+                        }
+                    ]
+                }
             }
-        }),
+        ),
         "gemini-2.5-flash",
         logging_obj,
         realtime_response_transform_input={
@@ -489,29 +500,33 @@ def test_gemini_realtime_function_call_output_transformation():
         "item": {
             "type": "function_call_output",
             "call_id": "call_123",
-            "output": json.dumps({
-                "location": "San Francisco",
-                "temperature": 72,
-                "unit": "fahrenheit",
-                "conditions": "sunny",
-            }),
+            "output": json.dumps(
+                {
+                    "location": "San Francisco",
+                    "temperature": 72,
+                    "unit": "fahrenheit",
+                    "conditions": "sunny",
+                }
+            ),
         },
     }
-    
+
     # Transform to Gemini format
     messages = config.transform_realtime_request(
-        json.dumps(function_output), "gemini-2.5-flash", session_configuration_request="existing"
+        json.dumps(function_output),
+        "gemini-2.5-flash",
+        session_configuration_request="existing",
     )
-    
+
     assert len(messages) == 1, "Expected one toolResponse message"
-    
+
     gemini_response = json.loads(messages[0])
     assert "toolResponse" in gemini_response
-    
+
     tool_response = gemini_response["toolResponse"]
     assert "functionResponses" in tool_response
     assert len(tool_response["functionResponses"]) == 1
-    
+
     func_response = tool_response["functionResponses"][0]
     assert func_response["id"] == "call_123"
     assert func_response["name"] == "get_weather"
@@ -523,31 +538,35 @@ def test_gemini_realtime_function_call_output_transformation():
 def test_gemini_realtime_user_text_transformation():
     """Test transformation of OpenAI user message to Gemini clientContent format."""
     config = GeminiRealtimeConfig()
-    
+
     # OpenAI format user message
     user_message = {
         "type": "conversation.item.create",
         "item": {
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": "What's the weather in London?"}],
+            "content": [
+                {"type": "input_text", "text": "What's the weather in London?"}
+            ],
         },
     }
-    
+
     # Transform to Gemini format
     messages = config.transform_realtime_request(
-        json.dumps(user_message), "gemini-2.5-flash", session_configuration_request="existing"
+        json.dumps(user_message),
+        "gemini-2.5-flash",
+        session_configuration_request="existing",
     )
-    
+
     assert len(messages) == 1, "Expected one clientContent message"
-    
+
     gemini_message = json.loads(messages[0])
     assert "clientContent" in gemini_message
-    
+
     client_content = gemini_message["clientContent"]
     assert "turns" in client_content
     assert len(client_content["turns"]) == 1
-    
+
     turn = client_content["turns"][0]
     assert turn["role"] == "user"
     assert len(turn["parts"]) == 1
@@ -661,19 +680,19 @@ def test_gemini_tool_call_emits_response_created_preamble():
     config = GeminiRealtimeConfig()
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id = "trace_123"
-    
+
     gemini_tool_call = {
         "toolCall": {
             "functionCalls": [
                 {
                     "id": "call_123",
                     "name": "get_weather",
-                    "args": {"location": "San Francisco", "unit": "fahrenheit"}
+                    "args": {"location": "San Francisco", "unit": "fahrenheit"},
                 }
             ]
         }
     }
-    
+
     # Transform with current_response_id=None to trigger preamble emission
     result = config.transform_realtime_response(
         json.dumps(gemini_tool_call),
@@ -689,7 +708,7 @@ def test_gemini_tool_call_emits_response_created_preamble():
             "current_delta_type": None,
         },
     )
-    
+
     responses = result["response"]
     # Should have: response.created, output_item.added, function_call_arguments.done, output_item.done, conversation.item.created, response.done
     assert len(responses) >= 6
@@ -782,13 +801,15 @@ def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
     post_tool_events = post_tool_result["response"]
     assert post_tool_events[0]["type"] == "response.created"
     assert post_tool_events[0]["response"]["id"] != tool_response_id
-    assert post_tool_result["current_response_id"] == post_tool_events[0]["response"]["id"]
+    assert (
+        post_tool_result["current_response_id"] == post_tool_events[0]["response"]["id"]
+    )
 
 
 def test_gemini_function_call_output_includes_name():
     """Verify function_call_output includes name field from stored mapping."""
     config = GeminiRealtimeConfig()
-    
+
     # First, receive a toolCall from Gemini (this stores the call_id → name mapping)
     gemini_tool_call = {
         "toolCall": {
@@ -796,15 +817,15 @@ def test_gemini_function_call_output_includes_name():
                 {
                     "id": "call_123",
                     "name": "get_weather",
-                    "args": {"location": "San Francisco"}
+                    "args": {"location": "San Francisco"},
                 }
             ]
         }
     }
-    
+
     logging_obj = MagicMock()
     logging_obj.litellm_trace_id = "trace_123"
-    
+
     config.transform_realtime_response(
         json.dumps(gemini_tool_call),
         "gemini-2.5-flash",
@@ -819,34 +840,128 @@ def test_gemini_function_call_output_includes_name():
             "current_delta_type": None,
         },
     )
-    
+
     # Verify mapping was stored
     assert "call_123" in config._tool_call_id_to_name
     assert config._tool_call_id_to_name["call_123"] == "get_weather"
-    
+
     # Now send a function_call_output back (this should include the name)
     function_output = {
         "type": "conversation.item.create",
         "item": {
             "type": "function_call_output",
             "call_id": "call_123",
-            "output": json.dumps({"result": "72 degrees"})
-        }
+            "output": json.dumps({"result": "72 degrees"}),
+        },
     }
-    
+
     result = config.transform_realtime_request(
         json.dumps(function_output),
         "gemini-2.5-flash",
         session_configuration_request="{}",
     )
-    
+
     assert len(result) == 1
     tool_response = json.loads(result[0])
     assert "toolResponse" in tool_response
     assert "functionResponses" in tool_response["toolResponse"]
     assert len(tool_response["toolResponse"]["functionResponses"]) == 1
-    
+
     function_response = tool_response["toolResponse"]["functionResponses"][0]
     assert function_response["id"] == "call_123"
     assert function_response["name"] == "get_weather"  # ✅ Name is included
     assert "response" in function_response
+
+
+def test_gemini_subsequent_session_update_forwards_tools_merged_with_original_setup():
+    """A client session.update sent after the auto-setup must forward tools/
+    instructions as a follow-up setup, merged with the original setup so we
+    don't drop the pre-existing config (model, generationConfig, etc.)."""
+    config = GeminiRealtimeConfig()
+
+    original_setup = {
+        "setup": {
+            "model": "models/gemini-2.5-flash-native-audio",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+            "inputAudioTranscription": {},
+            "systemInstruction": {"role": "user", "parts": [{"text": "original"}]},
+        }
+    }
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "instructions": "Be concise.",
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(original_setup),
+    )
+
+    assert len(messages) == 1
+    follow_up = json.loads(messages[0])["setup"]
+    assert "tools" in follow_up
+    assert follow_up["tools"][0]["function_declarations"][0]["name"] == "get_weather"
+    # systemInstruction overwritten by client's instructions
+    assert follow_up["systemInstruction"]["parts"][0]["text"] == "Be concise."
+    # Original generationConfig / model / inputAudioTranscription preserved
+    assert follow_up["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert follow_up["model"] == "models/gemini-2.5-flash-native-audio"
+    assert follow_up["inputAudioTranscription"] == {}
+
+
+def test_gemini_subsequent_session_update_with_turn_detection_only_preserves_original_tools():
+    """A subsequent session.update carrying only turn_detection (the
+    guardrail-injected disable) must keep the original tools/generationConfig."""
+    config = GeminiRealtimeConfig()
+
+    original_setup = {
+        "setup": {
+            "model": "models/gemini-2.5-flash-native-audio",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+            "inputAudioTranscription": {},
+            "tools": [
+                {
+                    "function_declarations": [
+                        {"name": "lookup", "description": "x", "parameters": {}}
+                    ]
+                }
+            ],
+        }
+    }
+
+    session_update = {
+        "type": "session.update",
+        "session": {"turn_detection": {"create_response": False}},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(original_setup),
+    )
+
+    assert len(messages) == 1
+    follow_up = json.loads(messages[0])["setup"]
+    assert follow_up["tools"] == original_setup["setup"]["tools"]
+    assert (
+        follow_up["realtimeInputConfig"]["automaticActivityDetection"]["disabled"]
+        is True
+    )

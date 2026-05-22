@@ -297,84 +297,62 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         On the FIRST session.update (when session_configuration_request is None),
         the full setup with all configuration is sent.
 
-        Subsequent session.update messages are normally ignored because Gemini
-        doesn't support dynamic updates of arbitrary fields. As an exception,
-        a session.update that carries a ``turn_detection`` change (used by the
-        guardrail layer to disable VAD auto-response so transcription guardrails
-        can gate replies) is forwarded as a follow-up setup carrying just the
-        ``realtimeInputConfig`` change.
+        Subsequent session.update messages are forwarded as a follow-up setup
+        with the new fields merged into the original setup. Gemini Live treats
+        a follow-up BidiGenerateContentSetup as a full session replacement
+        rather than a partial merge, so we carry forward the previous setup
+        (tools, generationConfig, inputAudioTranscription, systemInstruction,
+        ...) and overlay the new fields on top. This preserves the old
+        behavior where clients could refine the session via session.update
+        (e.g. add tools after the auto-setup on connect), and also keeps the
+        guardrail-driven turn_detection update working.
         """
         session_payload = json_message.get("session") or {}
+        # Normalize GA-remapped fields (``output_modalities``,
+        # nested ``audio.input.transcription``,
+        # ``audio.input.turn_detection``) back to their flat beta keys so
+        # ``map_openai_params`` picks them up. Without this, GA clients'
+        # explicit modality / transcription / turn-detection settings
+        # would be silently dropped because ``map_openai_params`` only
+        # recognises the flat OpenAI-beta key names.
+        session_payload = self._normalize_session_payload_for_mapping(session_payload)
+        new_overrides = self.map_openai_params(
+            optional_params={}, non_default_params=session_payload
+        )
+
         if session_configuration_request is None:
-            # First session.update - send the setup with all configuration.
-            # Normalize GA-remapped fields (``output_modalities``,
-            # nested ``audio.input.transcription``,
-            # ``audio.input.turn_detection``) back to their flat beta keys so
-            # ``map_openai_params`` picks them up. Without this, GA clients'
-            # explicit modality / transcription / turn-detection settings
-            # would be silently dropped because ``map_openai_params`` only
-            # recognises the flat OpenAI-beta key names.
-            session_payload = self._normalize_session_payload_for_mapping(
-                session_payload
-            )
-            client_session_configuration_request = self.map_openai_params(
-                optional_params={}, non_default_params=session_payload
-            )
-            generation_config = client_session_configuration_request.setdefault(
-                "generationConfig", {}
-            )
+            generation_config = new_overrides.setdefault("generationConfig", {})
             generation_config.setdefault("responseModalities", ["AUDIO"])
-            client_session_configuration_request.setdefault(
-                "inputAudioTranscription", {}
-            )
-            client_session_configuration_request["model"] = f"models/{model}"
-            gemini_setup_msg = json.dumps(
-                {"setup": client_session_configuration_request}
-            )
+            new_overrides.setdefault("inputAudioTranscription", {})
+            new_overrides["model"] = f"models/{model}"
             verbose_logger.debug(
                 "Gemini Realtime: Sending initial setup with tools to backend"
             )
-            return [gemini_setup_msg]
+            return [json.dumps({"setup": new_overrides})]
 
-        # Subsequent session.update: only forward if it carries a
-        # turn_detection change (e.g. guardrail-injected disable of VAD
-        # auto-response). Anything else is dropped because Gemini doesn't
-        # support dynamic updates.
-        turn_detection = self._extract_turn_detection(session_payload)
-        if turn_detection is not None:
-            transformed_audio_activity_config = self.map_automatic_turn_detection(
-                cast(OpenAIRealtimeTurnDetection, turn_detection)
+        if not new_overrides:
+            verbose_logger.debug(
+                "Gemini Realtime: Ignoring session.update (no mappable fields)"
             )
-            if len(transformed_audio_activity_config) > 0:
-                # Gemini Live treats a subsequent BidiGenerateContentSetup as a
-                # full session replacement rather than a partial merge. Carry
-                # forward the original setup (tools, generationConfig,
-                # inputAudioTranscription, systemInstruction, ...) and only
-                # override realtimeInputConfig so the guardrail-driven VAD
-                # change doesn't silently drop tools or other config.
-                try:
-                    original_setup = cast(
-                        BidiGenerateContentSetup,
-                        json.loads(session_configuration_request).get("setup", {}),
-                    )
-                except (json.JSONDecodeError, AttributeError):
-                    original_setup = {}
-                follow_up_setup: BidiGenerateContentSetup = {
-                    **original_setup,
-                    "model": f"models/{model}",
-                    "realtimeInputConfig": BidiGenerateContentRealtimeInputConfig(
-                        automaticActivityDetection=transformed_audio_activity_config
-                    ),
-                }
-                verbose_logger.debug(
-                    "Gemini Realtime: Forwarding turn_detection-only session.update as setup"
-                )
-                return [json.dumps({"setup": follow_up_setup})]
+            return []
 
+        try:
+            original_setup = cast(
+                BidiGenerateContentSetup,
+                json.loads(session_configuration_request).get("setup", {}),
+            )
+        except (json.JSONDecodeError, AttributeError):
+            original_setup = {}
+
+        follow_up_setup: BidiGenerateContentSetup = {
+            **original_setup,
+            **new_overrides,
+            "model": f"models/{model}",
+        }
         verbose_logger.debug(
-            "Gemini Realtime: Ignoring session.update (setup already sent)"
+            "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
-        return []
+        return [json.dumps({"setup": follow_up_setup})]
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
         """
