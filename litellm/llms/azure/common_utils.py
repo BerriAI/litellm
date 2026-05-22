@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Union, cast
@@ -450,6 +451,25 @@ class BaseAzureLLM(BaseOpenAILLM):
         ] = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
+        _lp = litellm_params or {}
+        _ad_provider = _lp.get("azure_ad_token_provider")
+        _ad_token = _lp.get("azure_ad_token")
+        _client_secret = _lp.get("client_secret")
+        _azure_password = _lp.get("azure_password")
+        client_initialization_params["azure_ad_token"] = (
+            hashlib.sha256(_ad_token.encode()).hexdigest()
+            if isinstance(_ad_token, str)
+            else None
+        )
+        client_initialization_params["azure_ad_token_provider"] = (
+            f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
+            f"|tenant_id={_lp.get('tenant_id')}"
+            f"|client_id={_lp.get('client_id')}"
+            f"|client_secret={hashlib.sha256(_client_secret.encode()).hexdigest() if isinstance(_client_secret, str) else None}"
+            f"|azure_username={_lp.get('azure_username')}"
+            f"|azure_password={hashlib.sha256(_azure_password.encode()).hexdigest() if isinstance(_azure_password, str) else None}"
+            f"|azure_scope={_lp.get('azure_scope')}"
+        )
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,

@@ -1818,6 +1818,164 @@ def test_azure_v1_api_key_wins_over_ad_token(api_version):
         assert client._api_key_provider is None
 
 
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_separates_distinct_ad_providers(api_version):
+    """
+    Two configs sharing api_base/api_version but with different AD token
+    providers must not share a cached OpenAI client, otherwise requests for
+    one config would be sent with another config's AD credentials.
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def provider_a():
+        return "token-a"
+
+    def provider_b():
+        return "token-b"
+
+    def _init_for(provider):
+        return {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": provider,
+        }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_for(provider_a)
+        client_a = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider_a},
+            _is_async=True,
+        )
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_for(provider_b)
+        client_b = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider_b},
+            _is_async=True,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert isinstance(client_b, AsyncOpenAI)
+    assert client_a is not client_b
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_separates_distinct_entra_credentials(api_version):
+    """
+    Configs that synthesize an AD provider from tenant_id/client_id/client_secret
+    must not share a cached client when those inputs differ.
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def synth_provider():
+        return "synthesized-token"
+
+    def _init_synth():
+        return {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": synth_provider,
+        }
+
+    common = {
+        "api_key": None,
+        "api_base": api_base,
+        "api_version": api_version,
+        "_is_async": True,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_synth()
+        client_a = base_llm.get_azure_openai_client(
+            litellm_params={
+                "tenant_id": "tenant-a",
+                "client_id": "client-a",
+                "client_secret": "secret-a",
+            },
+            **common,
+        )
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_synth()
+        client_b = base_llm.get_azure_openai_client(
+            litellm_params={
+                "tenant_id": "tenant-b",
+                "client_id": "client-b",
+                "client_secret": "secret-b",
+            },
+            **common,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert isinstance(client_b, AsyncOpenAI)
+    assert client_a is not client_b
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_reuses_for_identical_ad_config(api_version):
+    """
+    Identical AD configs should still share a cached client (regression guard
+    so the cache-key change doesn't accidentally disable caching).
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def provider():
+        return "tok"
+
+    init_return = {
+        "api_key": None,
+        "azure_endpoint": api_base,
+        "api_version": api_version,
+        "azure_ad_token": None,
+        "azure_ad_token_provider": provider,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = init_return
+        client_a = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider},
+            _is_async=True,
+        )
+        client_b = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider},
+            _is_async=True,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert client_a is client_b
+
+
 def test_azure_traditional_api_uses_azure_openai_client():
     """
     Test that traditional Azure API versions still use AzureOpenAI client.
