@@ -888,9 +888,15 @@ if MCP_AVAILABLE:
         """
         Create a temporary MCP client from *request*, run *operation*, and return the result.
 
-        For M2M OAuth servers (those with ``client_id``, ``client_secret``, and
-        ``token_url``), the incoming ``oauth2_headers`` are dropped so that
-        ``resolve_mcp_auth`` can auto-fetch a token via ``client_credentials``.
+        OAuth flow is determined exclusively by ``request.oauth2_flow``:
+
+        * ``"client_credentials"`` (M2M): the incoming ``oauth2_headers`` are dropped so
+          that ``resolve_mcp_auth`` can auto-fetch a machine token via the
+          ``client_credentials`` grant.  Callers that previously relied on auto-detection
+          (presence of ``client_id``, ``client_secret``, and ``token_url``) must now
+          store ``oauth2_flow="client_credentials"`` on the server record.
+        * ``"authorization_code"`` / ``None`` (interactive / BYOK): the per-user token
+          carried in ``oauth2_headers`` is forwarded as-is to the upstream MCP server.
 
         Args:
             request: MCP server configuration submitted by the UI.
