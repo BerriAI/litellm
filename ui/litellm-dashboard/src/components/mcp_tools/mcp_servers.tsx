@@ -21,6 +21,9 @@ import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import UserFieldsModal from "./UserFieldsModal";
+import { getMissingUserFields, getUserFieldDefs, removeUserFieldDefs } from "./userFields";
+import { ExclamationCircleFilled } from "@ant-design/icons";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -64,6 +67,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [userFieldsServer, setUserFieldsServer] = useState<MCPServer | null>(null);
+  const [userFieldsRefreshKey, setUserFieldsRefreshKey] = useState(0);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -84,6 +89,40 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       console.error("Failed to restore MCP edit view state", err);
     }
   }, []);
+
+  // PROTOTYPE: auto-open the user-fields modal when navigated to with
+  // ?openUserFields=<server_id> (this is the deep-link target shown in the
+  // mocked Claude Code error message).
+  useEffect(() => {
+    if (typeof window === "undefined" || !mcpServers) return;
+    const params = new URLSearchParams(window.location.search);
+    const targetId = params.get("openUserFields");
+    if (!targetId) return;
+    const target = serversWithHealth.find((s) => s.server_id === targetId);
+    if (!target) return;
+    setUserFieldsServer(target);
+    params.delete("openUserFields");
+    const remaining = params.toString();
+    const newUrl =
+      window.location.pathname + (remaining ? `?${remaining}` : "") + window.location.hash;
+    window.history.replaceState({}, "", newUrl);
+  }, [mcpServers, serversWithHealth]);
+
+  // Servers with one or more missing user fields for the current user (prototype)
+  const serversNeedingUserFields = React.useMemo(() => {
+    if (!serversWithHealth || !userID) return [];
+    // userFieldsRefreshKey participates so this recomputes after a save.
+    void userFieldsRefreshKey;
+    return serversWithHealth
+      .map((server) => {
+        const defs = getUserFieldDefs(server.server_id);
+        if (defs.length === 0) return null;
+        const missing = getMissingUserFields(server.server_id, userID);
+        if (missing.length === 0) return null;
+        return { server, missingCount: missing.length };
+      })
+      .filter((x): x is { server: MCPServer; missingCount: number } => x !== null);
+  }, [serversWithHealth, userID, userFieldsRefreshKey]);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -173,8 +212,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        userID,
+        (server: MCPServer) => setUserFieldsServer(server),
+        userFieldsRefreshKey,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, userID, userFieldsRefreshKey],
   );
 
   function handleDelete(server_id: string) {
@@ -189,6 +231,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     try {
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
+      removeUserFieldDefs(serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
       refetch();
     } catch (error) {
@@ -331,6 +374,45 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           )}
         </div>
       </div>
+      {serversNeedingUserFields.length > 0 && (
+        <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 flex items-start gap-3">
+          <ExclamationCircleFilled style={{ color: "#dc2626", fontSize: 22, marginTop: 2 }} />
+          <div className="flex-1">
+            <div className="font-semibold text-red-800">
+              {serversNeedingUserFields.length} MCP server
+              {serversNeedingUserFields.length === 1 ? " needs" : "s need"} your configuration
+            </div>
+            <div className="text-sm text-red-700 mt-0.5">
+              These servers won&apos;t work in Claude Code (or anywhere else) until you fill in
+              your per-user fields:
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {serversNeedingUserFields.map(({ server, missingCount }) => (
+                <button
+                  key={server.server_id}
+                  onClick={() => setUserFieldsServer(server)}
+                  className="inline-flex items-center gap-1.5 bg-white hover:bg-red-100 border border-red-300 rounded-md px-2.5 py-1 text-xs font-medium text-red-700 transition-colors"
+                >
+                  {server.mcp_info?.logo_url && (
+                    <img
+                      src={server.mcp_info.logo_url}
+                      alt=""
+                      className="h-4 w-4 object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  )}
+                  <span>{server.server_name || server.alias || server.server_id.slice(0, 7)}</span>
+                  <span className="inline-flex items-center justify-center bg-red-600 text-white rounded-full text-[10px] font-bold h-4 min-w-4 px-1">
+                    {missingCount}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
         onClose={() => setDiscoveryVisible(false)}
@@ -461,6 +543,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken || ""}
         />
       )}
+
+      <UserFieldsModal
+        server={userFieldsServer}
+        userId={userID || ""}
+        open={!!userFieldsServer && !!userID}
+        onClose={() => setUserFieldsServer(null)}
+        onSaved={() => setUserFieldsRefreshKey((k) => k + 1)}
+      />
     </div>
   );
 };

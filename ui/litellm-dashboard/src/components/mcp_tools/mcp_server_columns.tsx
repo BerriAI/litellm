@@ -5,7 +5,8 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined } from "@ant-design/icons";
+import { CheckOutlined, ExclamationCircleFilled } from "@ant-design/icons";
+import { getUserFieldDefs, getMissingUserFields } from "./userFields";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,6 +93,9 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  userId?: string | null,
+  onConfigureUserFields?: (server: MCPServer) => void,
+  userFieldsRefreshKey?: number,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -258,6 +262,53 @@ export const mcpServerColumns = (
         <Tooltip title={date.toLocaleString()}>
           <span className="text-xs text-gray-600">{date.toLocaleDateString()}</span>
         </Tooltip>
+      );
+    },
+  },
+  {
+    id: "user_fields_status",
+    header: "Your Fields",
+    cell: ({ row }) => {
+      // reference refresh key so the cell re-evaluates when values change
+      void userFieldsRefreshKey;
+      const server = row.original;
+      const defs = getUserFieldDefs(server.server_id);
+      if (defs.length === 0) {
+        return <span className="text-gray-300 text-xs">—</span>;
+      }
+      if (!userId) {
+        return <span className="text-gray-400 text-xs">{defs.length} field{defs.length === 1 ? "" : "s"}</span>;
+      }
+      const missing = getMissingUserFields(server.server_id, userId);
+
+      if (missing.length === 0) {
+        return (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+              <CheckOutlined style={{ fontSize: 10 }} /> All set
+            </span>
+            {onConfigureUserFields && (
+              <button
+                className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
+                onClick={() => onConfigureUserFields(server)}
+              >
+                Update
+              </button>
+            )}
+          </div>
+        );
+      }
+
+      // MISSING — the visual centerpiece of the prototype
+      return (
+        <button
+          onClick={() => onConfigureUserFields && onConfigureUserFields(server)}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 border border-red-300 ring-1 ring-red-200 animate-pulse cursor-pointer transition-colors"
+          title="Click to configure"
+        >
+          <ExclamationCircleFilled style={{ fontSize: 12 }} />
+          {missing.length} field{missing.length === 1 ? "" : "s"} missing
+        </button>
       );
     },
   },

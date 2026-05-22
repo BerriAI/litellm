@@ -18,6 +18,8 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import UserFieldsAdminSection from "./UserFieldsAdminSection";
+import { UserField, setUserFieldDefs } from "./userFields";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -74,6 +76,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
+  const [userFields, setUserFields] = useState<UserField[]>([]);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
@@ -106,6 +109,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           searchValue,
           aliasManuallyEdited,
           logoUrl,
+          userFields,
         }),
       );
     } catch (err) {
@@ -209,6 +213,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (parsed.logoUrl) {
         setLogoUrl(parsed.logoUrl);
+      }
+      if (Array.isArray(parsed.userFields)) {
+        setUserFields(parsed.userFields);
       }
     } catch (err) {
       console.error("Failed to restore MCP create state", err);
@@ -409,6 +416,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
 
+        // PROTOTYPE: persist per-user-field defs in localStorage keyed by the
+        // newly-created server's id. Real impl would save these server-side.
+        const validUserFields = userFields.filter(
+          (f) => f && f.name && f.name.trim() !== "",
+        );
+        if (response?.server_id) {
+          setUserFieldDefs(response.server_id, validUserFields);
+        }
+
         NotificationsManager.success(
           isAdmin
             ? "MCP Server created successfully"
@@ -420,6 +436,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setAllowedTools([]);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
+        setUserFields([]);
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -441,6 +458,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setAllowedTools([]);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
+    setUserFields([]);
     setModalVisible(false);
   };
 
@@ -987,6 +1005,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
+
+          {/* Per-User Fields Section (admin defines fields each end-user must fill in) */}
+          <div className="mt-8">
+            <UserFieldsAdminSection value={userFields} onChange={setUserFields} />
           </div>
 
           {/* Permission Management / Access Control Section */}
