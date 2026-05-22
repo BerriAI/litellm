@@ -105,12 +105,9 @@ def get_litellm_params(
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
-    # Derive data_residency from an OpenAI regional api_base (eu./us.api.openai.com)
-    # so custom callbacks can read kwargs["litellm_params"]["data_residency"]
-    # without having to parse the URL.
     data_residency: Optional[str] = (
         infer_openai_data_residency(api_base)
-        if custom_llm_provider == "openai" or custom_llm_provider is None
+        if custom_llm_provider == "openai"
         else None
     )
 

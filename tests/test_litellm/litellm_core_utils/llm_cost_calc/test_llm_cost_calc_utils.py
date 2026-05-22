@@ -1427,10 +1427,18 @@ def test_image_count_prevents_text_tokens_fallback():
 
 @pytest.fixture
 def _local_model_cost_map():
+    prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    prev_model_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    yield
-    os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+    try:
+        yield
+    finally:
+        litellm.model_cost = prev_model_cost
+        if prev_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = prev_env
 
 
 @pytest.mark.parametrize("data_residency", ["eu", "us"])
