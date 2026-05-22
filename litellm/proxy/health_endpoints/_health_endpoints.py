@@ -26,7 +26,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
@@ -152,6 +151,9 @@ async def test_endpoint(request: Request):
         dict: A dictionary containing the route of the request URL.
     """
     # ping the proxy server to check if its healthy
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
     return {"route": get_request_route(request)}
 
 

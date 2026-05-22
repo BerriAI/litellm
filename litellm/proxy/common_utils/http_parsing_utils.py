@@ -6,7 +6,6 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -547,6 +546,9 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         request_data: The request data dictionary to populate
         request: The FastAPI Request object
     """
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
     path = get_request_route(request)
     vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
     if vector_store_match:

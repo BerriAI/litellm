@@ -13,7 +13,6 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -119,6 +118,11 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
         request_route = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
