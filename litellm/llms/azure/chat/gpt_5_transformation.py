@@ -90,6 +90,14 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if "tool_choice" not in params:
             params.append("tool_choice")
 
+        # Azure OpenAI supports the "user" param for GPT-5 deployments, but the
+        # grandparent OpenAIGPTConfig only adds it when the model is in
+        # litellm.open_ai_chat_completion_models. Normalizing to "azure/<name>"
+        # for capability lookups above causes that check to miss, so add it
+        # back here.
+        if "user" not in params:
+            params.append("user")
+
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
