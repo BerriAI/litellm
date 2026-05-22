@@ -2933,6 +2933,13 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             except Exception:
                 existing_model = {}
                 model_cost_key = key
+        # ``get_model_info`` returns ``litellm_provider: None`` when the
+        # provider is unknown (e.g. custom deployments registered via
+        # ``Router.add_deployment``). Persisting that None into
+        # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
+        # custom pricing on subsequent cost lookups.
+        if existing_model.get("litellm_provider") is None:
+            existing_model.pop("litellm_provider", None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -5499,9 +5506,15 @@ def _get_model_info_from_model_cost(key: str) -> dict:
 def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) -> bool:
     """
     Check if the model info provider matches the custom provider.
+
+    A missing ``litellm_provider`` key and a ``litellm_provider`` set to
+    ``None`` both mean "no specific provider constraint" and are treated
+    as a wildcard match. ``register_model`` may persist ``None`` here via
+    ``get_model_info`` when a deployment is registered without a provider,
+    so normalising the two cases keeps custom pricing applied consistently.
     """
     if custom_llm_provider and (
-        "litellm_provider" in model_info
+        model_info.get("litellm_provider") is not None
         and model_info["litellm_provider"] != custom_llm_provider
     ):
         if custom_llm_provider == "vertex_ai" and model_info[
