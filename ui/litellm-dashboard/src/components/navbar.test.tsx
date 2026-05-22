@@ -137,16 +137,10 @@ Object.defineProperty(window, "location", {
 
 describe("Navbar", () => {
   const defaultProps = {
-    userID: "test-user",
-    userEmail: "test@example.com",
-    userRole: "Admin",
-    premiumUser: false,
     proxySettings: {},
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
-    isDarkMode: false,
-    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {

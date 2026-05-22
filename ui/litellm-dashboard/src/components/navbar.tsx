@@ -19,18 +19,12 @@ import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
-  userID: string | null;
-  userEmail: string | null;
-  userRole: string | null;
-  premiumUser: boolean;
   proxySettings: any;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
-  isDarkMode: boolean;
-  toggleDarkMode: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
