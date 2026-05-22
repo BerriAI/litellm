@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.config_import_helpers import (
     _import_general_settings,
     _import_keys_section,
     _import_section,
+    _post_import_cache_refresh,
 )
 
 router = APIRouter()
@@ -345,9 +346,6 @@ async def _fetch_export_sections(
         }
 
 
-# ---------------------------------------------------------------------------
-# Auth helper
-# ---------------------------------------------------------------------------
 def _get_prisma_with_auth(user_api_key_dict: UserAPIKeyAuth, action: str = "access"):
     from litellm.proxy.proxy_server import prisma_client  # avoid circular import
 
@@ -366,9 +364,6 @@ def _get_prisma_with_auth(user_api_key_dict: UserAPIKeyAuth, action: str = "acce
     return prisma_client
 
 
-# ---------------------------------------------------------------------------
-# GET /config/export
-# ---------------------------------------------------------------------------
 @router.get(
     "/config/export",
     tags=["config.yaml"],
@@ -483,6 +478,8 @@ async def import_config(
     except Exception as e:
         verbose_proxy_logger.error("config/import failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+    await _post_import_cache_refresh(result, dry_run)
 
     non_gs = [s for s in result.sections_attempted if s != "general_settings"]
     verbose_proxy_logger.info(

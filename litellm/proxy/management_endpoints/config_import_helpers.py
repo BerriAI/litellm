@@ -6,9 +6,47 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.config_export_types import (
     SAFE_GENERAL_SETTINGS_KEYS,
     _KEYS_UPDATE_STRIP,
+    ImportResult,
     ImportSectionResult,
     _deep_merge,
 )
+
+_ROUTING_SECTIONS = frozenset(
+    {"models", "agents", "guardrails", "mcp_servers", "general_settings"}
+)
+_AUTH_SECTIONS = frozenset({"keys", "users", "teams"})
+
+
+async def _post_import_cache_refresh(result: ImportResult, dry_run: bool) -> None:
+    """Invalidate stale in-memory state after a successful import.
+
+    - Auth sections (keys/users/teams): flush user_api_key_cache so the next
+      request re-reads updated access/budget fields from the DB.
+    - Routing sections (models/agents/guardrails/mcp_servers/general_settings):
+      reload the llm_router deployment list from the DB via clear_cache().
+    """
+    if dry_run:
+        return
+    attempted = set(result.sections_attempted)
+    if attempted & _AUTH_SECTIONS:
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache  # avoid circular
+
+            user_api_key_cache.flush_cache()
+        except Exception as e:
+            verbose_proxy_logger.warning("post-import auth cache flush failed: %s", e)
+    if attempted & _ROUTING_SECTIONS:
+        try:
+            from litellm.proxy.management_endpoints.model_management_endpoints import (
+                clear_cache,
+            )
+
+            await clear_cache()
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "post-import router cache refresh failed: %s", e
+            )
+
 
 # ---------------------------------------------------------------------------
 # Generic upsert helper — uses pre-loaded cache (no N+1 queries)
