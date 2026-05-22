@@ -115,24 +115,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
-    def is_model_gpt_5_5_or_newer(cls, model: str) -> bool:
-        """Check if the model is gpt-5.5 or newer (5.5, 5.6, etc., including pro/dated variants).
-
-        gpt-5.5 is a full-featured text model that supports stop sequences.
-        Earlier reasoning-only models (gpt-5, gpt-5.1, gpt-5.2, gpt-5.3, gpt-5.4)
-        do not support stop sequences.
-        """
-        model_name = model.split("/")[-1]
-        if not model_name.startswith("gpt-5."):
-            return False
-        try:
-            version_str = model_name.replace("gpt-5.", "").split("-")[0]
-            major = version_str.split(".")[0]
-            return int(major) >= 5
-        except (ValueError, IndexError):
-            return False
-
-    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
@@ -201,9 +183,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             "web_search_options",
         ]
 
-        # gpt-5.5+ are full-featured text models that support stop sequences.
-        # Earlier reasoning-only models (gpt-5, gpt-5.1 – gpt-5.4) do not.
-        if not self.is_model_gpt_5_5_or_newer(model):
+        if not _supports_factory(
+            model=model, custom_llm_provider=None, key="supports_stop"
+        ):
             non_supported_params.append("stop")
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"

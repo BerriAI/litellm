@@ -1321,25 +1321,6 @@ class TestGPT55StopParam:
     Earlier reasoning-only models (gpt-5, gpt-5.1 – gpt-5.4) must not.
     """
 
-    def test_is_model_gpt_5_5_or_newer_positive(self):
-        config = OpenAIGPT5Config()
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.5") is True
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.5-pro") is True
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.5-2026-01-01") is True
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.6") is True
-        assert config.is_model_gpt_5_5_or_newer("openai/gpt-5.5") is True
-
-    def test_is_model_gpt_5_5_or_newer_negative(self):
-        config = OpenAIGPT5Config()
-        assert config.is_model_gpt_5_5_or_newer("gpt-5") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.1") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.2") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.3") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.4") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5.4-pro") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-5-chat") is False
-        assert config.is_model_gpt_5_5_or_newer("gpt-4o") is False
-
     def test_gpt55_stop_in_supported_params(self):
         config = OpenAIGPT5Config()
         supported = config.get_supported_openai_params(model="gpt-5.5")

@@ -1,7 +1,17 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 @pytest.fixture()
