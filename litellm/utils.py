@@ -4839,7 +4839,11 @@ def add_provider_specific_params_to_optional_params(
         ):
             extra_body = passed_params.pop("extra_body", None) or {}
             for k in passed_params.keys():
-                if k not in openai_params and passed_params[k] is not None:
+                if (
+                    k not in openai_params
+                    and passed_params[k] is not None
+                    and not k.startswith("_")
+                ):
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
                 optional_params["extra_body"] = {}
