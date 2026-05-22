@@ -328,6 +328,12 @@ def handle_generic_response(
     model_response.created = int(dt.timestamp())
     model_response.model = completion_response.modelId
 
+    if not completion_response.chatResponse.choices:
+        raise OCIError(
+            message="OCI response contained no choices",
+            status_code=raw_response.status_code,
+        )
+
     response_choice = completion_response.chatResponse.choices[0]
     message = model_response.choices[0].message  # type: ignore
     response_message = response_choice.message
