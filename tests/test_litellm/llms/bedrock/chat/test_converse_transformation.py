@@ -257,8 +257,10 @@ def test_apply_tool_call_transformation_parses_function_parameter_text():
         ),
     )
 
-    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
-        message, _read_file_tool(), initial_finish_reason="stop"
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
     )
 
     _assert_read_file_tool_call(transformed_message, finish_reason)
@@ -279,8 +281,10 @@ def test_apply_tool_call_transformation_parses_tool_use_xml_text():
         ),
     )
 
-    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
-        message, _read_file_tool(), initial_finish_reason="stop"
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
     )
 
     _assert_read_file_tool_call(transformed_message, finish_reason)
@@ -298,11 +302,32 @@ def test_apply_tool_call_transformation_parses_bare_tool_name_json_text():
         ),
     )
 
-    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
-        message, _read_file_tool(), initial_finish_reason="stop"
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
     )
 
     _assert_read_file_tool_call(transformed_message, finish_reason)
+
+
+def test_apply_tool_call_transformation_parses_bare_zero_arg_tool_call():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    message = Message(role="assistant", content="\nread_file\n{}")
+
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
+    )
+
+    assert finish_reason == "tool_calls"
+    assert transformed_message.content is None
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert json.loads(transformed_message.tool_calls[0].function.arguments) == {}
 
 
 def test_apply_tool_call_transformation_parses_tool_call_json_tag_text():
@@ -318,8 +343,10 @@ def test_apply_tool_call_transformation_parses_tool_call_json_tag_text():
         ),
     )
 
-    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
-        message, _read_file_tool(), initial_finish_reason="stop"
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
     )
 
     _assert_read_file_tool_call(transformed_message, finish_reason)
@@ -332,15 +359,17 @@ def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
     original_content = "\nread_file\n{}"
     message = Message(role="assistant", content=original_content)
 
-    transformed_message, finish_reason = config.apply_tool_call_transformation_if_needed(
-        message,
-        [
-            {
-                "type": "function",
-                "function": {"name": "write_file", "parameters": {}},
-            }
-        ],
-        initial_finish_reason="stop",
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message,
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "write_file", "parameters": {}},
+                }
+            ],
+            initial_finish_reason="stop",
+        )
     )
 
     assert finish_reason == "stop"

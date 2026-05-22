@@ -527,9 +527,9 @@ class AmazonConverseConfig(BaseConfig):
         ## Filter out 'cross-region' from model name
         base_model = BedrockModelInfo.get_base_model(model)
 
-        is_anthropic_model = base_model.startswith("anthropic") or base_model.startswith(
-            "claude-"
-        )
+        is_anthropic_model = base_model.startswith(
+            "anthropic"
+        ) or base_model.startswith("claude-")
 
         if (
             is_anthropic_model
@@ -1832,7 +1832,11 @@ class AmazonConverseConfig(BaseConfig):
         if tool_call_match is None:
             return None, {}
 
-        tool_call = self._parse_tool_call_json_arguments(tool_call_match.group(1).strip())
+        tool_call = self._parse_tool_call_json_arguments(
+            tool_call_match.group(1).strip()
+        )
+        if tool_call is None:
+            return None, {}
         tool_name = tool_call.get("name")
         arguments = tool_call.get("arguments", {})
         if not isinstance(tool_name, str):
@@ -1883,9 +1887,12 @@ class AmazonConverseConfig(BaseConfig):
             r"<input>(.*?)</input>", body, re.DOTALL | re.IGNORECASE
         )
         if tool_name_match is not None:
-            return tool_name_match.group(1).strip(), self._parse_tool_call_json_arguments(
+            arguments = self._parse_tool_call_json_arguments(
                 input_match.group(1).strip() if input_match is not None else ""
             )
+            if arguments is None:
+                return None, {}
+            return tool_name_match.group(1).strip(), arguments
 
         return self._parse_bare_text_tool_call(body)
 
@@ -1898,20 +1905,22 @@ class AmazonConverseConfig(BaseConfig):
 
         tool_name = lines[0]
         arguments = self._parse_tool_call_json_arguments("\n".join(lines[1:]))
-        if arguments == {}:
+        if arguments is None:
             return None, {}
 
         return tool_name, arguments
 
-    def _parse_tool_call_json_arguments(self, json_text: str) -> dict[str, Any]:
+    def _parse_tool_call_json_arguments(
+        self, json_text: str
+    ) -> Optional[dict[str, Any]]:
         if not json_text:
             return {}
         try:
             parsed_arguments = json.loads(json_text)
         except Exception:
-            return {}
+            return None
         if not isinstance(parsed_arguments, dict):
-            return {}
+            return None
         return parsed_arguments
 
     def _text_content_tool_call_transformation(
