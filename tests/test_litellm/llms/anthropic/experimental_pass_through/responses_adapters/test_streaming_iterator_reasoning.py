@@ -11,10 +11,6 @@ providers.
 """
 
 import asyncio
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
@@ -47,7 +43,7 @@ def _collect(wrapper):
             out.append(chunk)
         return out
 
-    return asyncio.get_event_loop().run_until_complete(_drive())
+    return asyncio.run(_drive())
 
 
 def _build_stream_with_reasoning(rs_id: str, enc: str):

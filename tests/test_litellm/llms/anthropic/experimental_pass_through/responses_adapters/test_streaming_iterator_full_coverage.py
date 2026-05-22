@@ -59,7 +59,7 @@ def _collect(wrapper):
             out.append(chunk)
         return out
 
-    return asyncio.get_event_loop().run_until_complete(_drive())
+    return asyncio.run(_drive())
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ def test_async_anthropic_sse_wrapper_yields_event_data_bytes():
             out.append(b)
         return out
 
-    payloads = asyncio.get_event_loop().run_until_complete(_drive())
+    payloads = asyncio.run(_drive())
     assert payloads, "expected SSE byte chunks"
     # Every chunk is bytes shaped like b"event: <type>\ndata: {json}\n\n"
     for b in payloads:
