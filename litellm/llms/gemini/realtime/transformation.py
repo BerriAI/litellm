@@ -1152,15 +1152,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             # Check if this key or any nested key matches our mapping. Use a
             # distinct loop variable so we don't shadow ``openai_event`` and
-            # leak the last dict value when no entry matches.
+            # leak the last dict value when no entry matches. Scope dotted-key
+            # lookups to the current ``key``/``value`` pair — checking the
+            # whole ``json_message`` would let a sibling key (e.g.
+            # ``serverContent.turnComplete``) misclassify the event currently
+            # being processed (e.g. ``toolCall``).
             for map_key, candidate_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
-                if map_key == key or (
-                    "." in map_key
-                    and GeminiRealtimeConfig.get_nested_value(json_message, map_key)
-                    is not None
-                ):
+                if map_key == key:
                     openai_event = candidate_event
                     break
+                if "." in map_key:
+                    prefix, _, nested_path = map_key.partition(".")
+                    if (
+                        prefix == key
+                        and isinstance(value, dict)
+                        and GeminiRealtimeConfig.get_nested_value(value, nested_path)
+                        is not None
+                    ):
+                        openai_event = candidate_event
+                        break
         if openai_event is None:
             raise ValueError(f"Unknown openai event: {key}, value: {value}")
         return openai_event
@@ -1311,6 +1321,30 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if current_conversation_id is None:
                     current_conversation_id = f"conv_{uuid.uuid4()}"
 
+                # Extract session-level response metadata once so both
+                # response.created and response.done can include matching
+                # modalities/temperature/max_output_tokens fields.
+                session_setup: BidiGenerateContentSetup = {}
+                if session_configuration_request is not None:
+                    try:
+                        session_setup = json.loads(session_configuration_request).get(
+                            "setup", {}
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        session_setup = {}
+                tool_call_generation_config = (
+                    session_setup.get("generationConfig", {}) or {}
+                )
+                tool_call_modalities = [
+                    modality.lower()
+                    for modality in cast(
+                        List[str],
+                        tool_call_generation_config.get(
+                            "responseModalities", ["AUDIO"]
+                        ),
+                    )
+                ]
+
                 # Emit response.created preamble if this is the first event in the response
                 if current_response_id is None:
                     current_response_id = f"resp_{uuid.uuid4()}"
@@ -1321,26 +1355,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     # spec-compliant clients see consistent response metadata
                     # regardless of whether the response starts with content or
                     # a tool call.
-                    session_setup: BidiGenerateContentSetup = {}
-                    if session_configuration_request is not None:
-                        try:
-                            session_setup = json.loads(
-                                session_configuration_request
-                            ).get("setup", {})
-                        except (json.JSONDecodeError, TypeError):
-                            session_setup = {}
-                    tool_call_generation_config = (
-                        session_setup.get("generationConfig", {}) or {}
-                    )
-                    tool_call_modalities = [
-                        modality.lower()
-                        for modality in cast(
-                            List[str],
-                            tool_call_generation_config.get(
-                                "responseModalities", ["AUDIO"]
-                            ),
-                        )
-                    ]
                     returned_message.append(
                         {
                             "type": "response.created",
@@ -1420,31 +1434,43 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 tool_call_responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                     get_empty_usage(),
                 )
-                returned_message.append(
-                    OpenAIRealtimeDoneEvent(
-                        type="response.done",
-                        event_id=f"event_{uuid.uuid4()}",
-                        response=OpenAIRealtimeResponseDoneObject(
-                            id=current_response_id,
-                            object="realtime.response",
-                            status="completed",
-                            output=[
-                                {
-                                    "id": te["item_id"],
-                                    "object": "realtime.item",
-                                    "type": "function_call",
-                                    "status": "completed",
-                                    "call_id": te["call_id"],
-                                    "name": te["name"],
-                                    "arguments": te["arguments"],
-                                }
-                                for te in tool_call_events
-                            ],
-                            conversation_id=current_conversation_id,
-                            usage=tool_call_responses_api_usage.model_dump(),
-                        ),
-                    )
+                tool_call_done_event = OpenAIRealtimeDoneEvent(
+                    type="response.done",
+                    event_id=f"event_{uuid.uuid4()}",
+                    response=OpenAIRealtimeResponseDoneObject(
+                        id=current_response_id,
+                        object="realtime.response",
+                        status="completed",
+                        output=[
+                            {
+                                "id": te["item_id"],
+                                "object": "realtime.item",
+                                "type": "function_call",
+                                "status": "completed",
+                                "call_id": te["call_id"],
+                                "name": te["name"],
+                                "arguments": te["arguments"],
+                            }
+                            for te in tool_call_events
+                        ],
+                        conversation_id=current_conversation_id,
+                        modalities=tool_call_modalities,
+                        usage=tool_call_responses_api_usage.model_dump(),
+                    ),
                 )
+                tool_call_temperature = tool_call_generation_config.get("temperature")
+                if tool_call_temperature is not None:
+                    tool_call_done_event["response"][
+                        "temperature"
+                    ] = tool_call_temperature
+                tool_call_max_output_tokens = tool_call_generation_config.get(
+                    "maxOutputTokens"
+                )
+                if tool_call_max_output_tokens is not None:
+                    tool_call_done_event["response"][
+                        "max_output_tokens"
+                    ] = tool_call_max_output_tokens
+                returned_message.append(tool_call_done_event)
                 # Reset IDs so the next model turn (after tool results) starts a
                 # fresh response with its own response.created preamble.
                 current_output_item_id = None
