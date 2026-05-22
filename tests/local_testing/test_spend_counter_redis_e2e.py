@@ -9,11 +9,17 @@ Two layers:
 2. **Auth fix** — real ``get_current_spend`` / ``prefetch_spend_counters`` path:
    fails when the fix is not applied (shows amplification), passes with the fix.
 
-Default target: litellm_redis from docker compose (localhost:6379).
+Targets localhost:6379 by default (docker compose ``litellm_redis``). Ignores CI's
+shared ``REDIS_HOST`` / ``REDIS_PASSWORD`` so these skip cleanly in jobs without a
+local Redis container — no CircleCI config changes required.
 
 Run locally:
   docker compose up -d redis
   uv run pytest tests/local_testing/test_spend_counter_redis_e2e.py -vv
+
+Optional env overrides:
+  REDIS_E2E_HOST / REDIS_E2E_PORT — non-default Redis host
+  REDIS_E2E_USE_PASSWORD=true + REDIS_PASSWORD — authenticated Redis
 """
 
 from __future__ import annotations
@@ -41,7 +47,14 @@ CONCURRENT_AUTH_REQUESTS = 24
 
 
 def _redis_host_port() -> Tuple[str, int]:
-    return os.getenv("REDIS_HOST", "localhost"), int(os.getenv("REDIS_PORT", "6379"))
+    """
+    E2E always targets local docker-compose Redis unless explicitly overridden.
+
+    Do not read global REDIS_HOST — CI sets that to a shared remote instance.
+    """
+    host = os.getenv("REDIS_E2E_HOST", "localhost")
+    port = int(os.getenv("REDIS_E2E_PORT", "6379"))
+    return host, port
 
 
 def _optional_redis_password() -> str | None:
@@ -51,32 +64,68 @@ def _optional_redis_password() -> str | None:
     return None
 
 
-def _redis_reachable() -> bool:
+def _redis_e2e_password() -> str | None:
+    """Password the tests will use — mirrors the autouse fixture below."""
+    if os.getenv("REDIS_E2E_USE_PASSWORD", "").lower() == "true":
+        return _optional_redis_password()
+    return None
+
+
+def _redis_e2e_available() -> bool:
+    """
+    True only when Redis accepts the auth mode these tests use.
+
+    CI often sets REDIS_PASSWORD for a shared remote Redis, but most jobs run
+    without a job-local Redis container. These E2E tests intentionally connect
+    passwordless (docker compose litellm_redis) unless REDIS_E2E_USE_PASSWORD=true
+    — probe with that same config and skip otherwise.
+    """
     host, port = _redis_host_port()
     try:
         with socket.create_connection((host, port), timeout=2):
-            return True
+            pass
     except OSError:
         return False
+
+    try:
+        import redis
+
+        client = redis.Redis(
+            host=host,
+            port=port,
+            password=_redis_e2e_password(),
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        client.ping()
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _require_local_redis():
+    """
+    Skip the whole module unless local Redis is reachable with the E2E auth mode.
+
+    Runs at module setup (not import) and does not use CI's shared REDIS_HOST.
+    """
+    if not _redis_e2e_available():
+        pytest.skip(
+            "No local Redis for E2E — start via `docker compose up -d redis`, "
+            "or set REDIS_E2E_USE_PASSWORD=true with REDIS_PASSWORD"
+        )
 
 
 @pytest.fixture(autouse=True)
 def _passwordless_redis_for_e2e(monkeypatch):
-    """litellm_redis from docker compose has no AUTH."""
+    """Match docker compose litellm_redis (no AUTH) unless opted into password mode."""
     if os.getenv("REDIS_E2E_USE_PASSWORD", "").lower() != "true":
         monkeypatch.delenv("REDIS_PASSWORD", raising=False)
-
-
-pytestmark = [
-    pytest.mark.skipif(
-        not _redis_reachable(),
-        reason=(
-            "Redis not reachable — start litellm_redis via "
-            "`docker compose up -d redis` (defaults to localhost:6379)"
-        ),
-    ),
-]
-
+        monkeypatch.delenv("REDIS_HOST", raising=False)
+        monkeypatch.delenv("REDIS_PORT", raising=False)
+        monkeypatch.delenv("REDIS_URL", raising=False)
 
 def _build_counter_keys(run_id: str) -> Dict[str, float]:
     return {
@@ -97,11 +146,17 @@ def _make_redis_cache(*, max_connections: int) -> RedisCache:
         "max_connections": max_connections,
         "socket_timeout": 5.0,
     }
-    password = _optional_redis_password()
+    password = _redis_e2e_password()
     if password:
         kwargs["password"] = password
 
-    with patch("litellm.caching.redis_cache.RedisCache._setup_health_pings"):
+    with (
+        patch("litellm.caching.redis_cache.RedisCache._setup_health_pings"),
+        patch(
+            "litellm._redis._redis_kwargs_from_environment",
+            return_value={},
+        ),
+    ):
         return RedisCache(**kwargs)
 
 
@@ -117,7 +172,7 @@ async def _delete_counters(redis_cache: RedisCache, counter_keys: List[str]) -> 
 
 async def _admin_client() -> aioredis.Redis:
     host, port = _redis_host_port()
-    password = _optional_redis_password()
+    password = _redis_e2e_password()
     url = (
         f"redis://:{password}@{host}:{port}/0"
         if password
