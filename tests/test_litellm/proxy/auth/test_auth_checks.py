@@ -3016,3 +3016,190 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# LIT-3244  Vector store file routes must not be blocked by team model access
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        # Vector store management routes — must be True
+        ("/v1/vector_stores", True),
+        ("/v1/vector_stores/vs_abc123", True),
+        ("/v1/vector_stores/vs_abc123/files", True),
+        ("/v1/vector_stores/vs_abc123/files/file_xyz", True),
+        ("/v1/vector_stores/vs_abc123/search", True),
+        ("/vector_stores", True),
+        ("/vector_stores/vs_abc123", True),
+        ("/vector_stores/vs_abc123/files", True),
+        ("/vector_stores/vs_abc123/files/file_xyz", True),
+        # Other routes — must be False
+        ("/v1/chat/completions", False),
+        ("/chat/completions", False),
+        ("/v1/embeddings", False),
+        ("/v1/files", False),
+        ("/v1/batches", False),
+    ],
+)
+def test_is_vector_store_management_route(route: str, expected: bool):
+    """_is_vector_store_management_route must recognise all VS CRUD paths."""
+    from litellm.proxy.auth.auth_checks import _is_vector_store_management_route
+
+    assert _is_vector_store_management_route(route) is expected
+
+
+@pytest.mark.asyncio
+async def test_common_checks_skips_team_model_check_for_vector_store_routes():
+    """Regression test for LIT-3244.
+
+    A team with a restricted models list must NOT be blocked from accessing
+    vector store file endpoints just because a model name is embedded in the
+    managed vector store ID.  The model check is replaced by vector-store-level
+    access control (assert_user_can_access_vector_store_id).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    # Team that is restricted to a single model — e.g. "gpt-4o"
+    team_object = LiteLLM_TeamTable(
+        team_id="team-jwt-123",
+        models=["gpt-4o"],
+    )
+
+    # The request_body contains a vector_store_id that, when decoded,
+    # yields a routing model name that is NOT in the team's allowed list.
+    request_body = {
+        "vector_store_id": "vs_provider_abc",
+        # Simulate a model extracted from the managed resource ID
+        # by having it directly in request_data (worst-case scenario).
+        # In production this comes from _extract_models_from_managed_resource_id.
+    }
+
+    valid_token = UserAPIKeyAuth(
+        token="jwt-user-token",
+        team_id="team-jwt-123",
+    )
+
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.query_params = {}
+
+    mock_proxy_logging = MagicMock()
+
+    # Patch get_model_from_request so it returns a model that would normally
+    # fail the team model check — this simulates the model being decoded from
+    # the vector_store_id.
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_model_from_request",
+            return_value="azure-openai-private-deployment",
+        ),
+        # Stub out the budget/organisation/tag checks so only the model check matters
+        patch(
+            "litellm.proxy.auth.auth_checks._global_proxy_budget_check",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.vector_store_access_check",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.check_tools_allowlist",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        # This must NOT raise — the model check should be skipped for VS routes
+        result = await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/vector_stores/vs_provider_abc/files",
+            llm_router=None,
+            proxy_logging_obj=mock_proxy_logging,
+            valid_token=valid_token,
+            request=mock_request,
+            skip_budget_checks=True,
+        )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_enforces_team_model_check_for_non_vector_store_routes():
+    """The team model check must still fire for non-VS routes (e.g. /chat/completions)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, ProxyErrorTypes, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-jwt-456",
+        models=["gpt-4o"],
+    )
+
+    request_body = {"model": "azure-openai-private-deployment"}
+
+    valid_token = UserAPIKeyAuth(
+        token="jwt-user-token",
+        team_id="team-jwt-456",
+    )
+
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.query_params = {}
+
+    mock_proxy_logging = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_model_from_request",
+            return_value="azure-openai-private-deployment",
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._key_access_group_grants_model",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.vector_store_access_check",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.check_tools_allowlist",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        # This MUST raise — the team can only access gpt-4o
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body=request_body,
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=mock_proxy_logging,
+                valid_token=valid_token,
+                request=mock_request,
+                skip_budget_checks=True,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied

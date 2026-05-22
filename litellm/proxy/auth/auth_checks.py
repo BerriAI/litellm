@@ -267,10 +267,17 @@ async def _run_project_checks(
     skip_budget_checks: bool,
     valid_token: Optional[UserAPIKeyAuth],
     proxy_logging_obj: ProxyLogging,
+    skip_model_check: bool = False,
 ) -> None:
     """
     Run all project-level checks: blocked, model access, budget, soft budget.
     Extracted from common_checks() to keep statement count manageable.
+
+    Args:
+        skip_model_check: When True, skip the project model-access check.
+            Set for vector store management routes where the model is decoded
+            from the managed resource ID and is an internal routing detail,
+            not the model the caller intends to invoke.
     """
     if project_object is None:
         return
@@ -282,7 +289,9 @@ async def _run_project_checks(
         )
 
     # 2.2 If project can call model
-    if _model and len(project_object.models) > 0:
+    # Skip for vector store management routes — same rationale as the team check:
+    # the model is decoded from the managed VS ID, not from the caller's intent.
+    if _model and len(project_object.models) > 0 and not skip_model_check:
         can_project_access_model(
             model=_model,
             project_object=project_object,
@@ -491,6 +500,30 @@ async def check_tools_allowlist(
         )
 
 
+_VECTOR_STORE_MANAGEMENT_ROUTE_PREFIXES = (
+    "/v1/vector_stores",
+    "/vector_stores",
+)
+
+
+def _is_vector_store_management_route(route: str) -> bool:
+    """Returns True for vector store CRUD routes.
+
+    Vector store management routes (/v1/vector_stores/...) use their own
+    access-control gate (``assert_user_can_access_vector_store_id`` and
+    ``vector_store_access_check``).  The model embedded in a LiteLLM-managed
+    vector store ID is an internal routing detail — it must not be used to
+    enforce team model-access on these routes.
+
+    This is different from chat-completion routes (e.g. /chat/completions)
+    that *use* vector stores as tools: those routes carry an explicit ``model``
+    field and should still be subject to the normal model-access check.
+    """
+    return any(
+        route.startswith(prefix) for prefix in _VECTOR_STORE_MANAGEMENT_ROUTE_PREFIXES
+    )
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -541,7 +574,12 @@ async def common_checks(  # noqa: PLR0915
         )
 
     # 2. If team can call model (or key's access_group_ids grant it)
-    if _model and team_object:
+    # Skip for vector store management routes — access is controlled by vector
+    # store ownership (team_id / object_permission), not by model access.  The
+    # model embedded in a managed vector store ID is an internal routing detail
+    # and must not be used to gate CRUD operations on the vector store itself.
+    _skip_model_check = _is_vector_store_management_route(route)
+    if _model and team_object and not _skip_model_check:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
             try:
                 await can_team_access_model(
@@ -564,7 +602,13 @@ async def common_checks(  # noqa: PLR0915
                     raise
 
     # 2.2. If team member has per-member model scope, enforce it
-    if _model and team_object and valid_token and valid_token.user_id:
+    if (
+        _model
+        and team_object
+        and valid_token
+        and valid_token.user_id
+        and not _skip_model_check
+    ):
         with tracer.trace(
             "litellm.proxy.auth.common_checks.check_team_member_model_access"
         ):
@@ -600,7 +644,14 @@ async def common_checks(  # noqa: PLR0915
                     )
 
     ## 2.1 If user can call model (if personal key)
-    if _model and team_object is None and user_object is not None:
+    # Same guard as checks 2 and 2.2: skip for vector store management routes
+    # where the model comes from the managed VS ID, not from the caller's intent.
+    if (
+        _model
+        and team_object is None
+        and user_object is not None
+        and not _skip_model_check
+    ):
         with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
             await can_user_call_model(
                 model=_model,
@@ -617,6 +668,7 @@ async def common_checks(  # noqa: PLR0915
             skip_budget_checks=skip_budget_checks,
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
+            skip_model_check=_skip_model_check,
         )
 
     # If this is a free model, skip all budget checks
