@@ -934,19 +934,22 @@ class RealTimeStreaming:
                         if isinstance(session, dict):
                             td_overridden = False
                             flat_td = session.get("turn_detection")
-                            if flat_td is not None:
+                            flat_td_present = flat_td is not None
+                            if flat_td_present:
                                 if not isinstance(flat_td, dict):
                                     flat_td = {}
                                 if flat_td.get("create_response") is not False:
                                     flat_td["create_response"] = False
                                     session["turn_detection"] = flat_td
                                     td_overridden = True
+                            nested_td_present = False
                             audio = session.get("audio")
                             if isinstance(audio, dict):
                                 audio_input = audio.get("input")
                                 if isinstance(audio_input, dict):
                                     nested_td = audio_input.get("turn_detection")
                                     if nested_td is not None:
+                                        nested_td_present = True
                                         if not isinstance(nested_td, dict):
                                             nested_td = {}
                                         if (
@@ -956,6 +959,16 @@ class RealTimeStreaming:
                                             nested_td["create_response"] = False
                                             audio_input["turn_detection"] = nested_td
                                             td_overridden = True
+                            # Symmetric with the first-update injection block:
+                            # if the client omitted turn_detection entirely on
+                            # a subsequent session.update, still inject the
+                            # ``create_response: False`` override so the
+                            # transcription guardrail cannot be re-enabled by
+                            # any downstream merge that drops the original
+                            # disable.
+                            if not flat_td_present and not nested_td_present:
+                                session["turn_detection"] = {"create_response": False}
+                                td_overridden = True
                             if td_overridden:
                                 message = json.dumps(msg_obj)
 
