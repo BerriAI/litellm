@@ -880,7 +880,7 @@ class TestMCPPublicRouteGuard:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
         ) as mock_auth:
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             mock_auth.assert_not_called()
             assert isinstance(auth_result, UserAPIKeyAuth)
 
@@ -997,7 +997,7 @@ class TestMCPOAuth2FallbackTargetGating:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
@@ -1157,7 +1157,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
@@ -1400,7 +1400,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -1437,7 +1437,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -1668,6 +1668,91 @@ class TestMCPDelegateAuthToUpstream:
             assert (
                 _get_mcp_servers_in_path(path_input) or []
             ) == expected, f"path={path_input!r} → routing expected {expected!r}"
+
+    def test_canonical_mcp_suffix_resolves_to_single_segment_alias(self):
+        """
+        Regression (delegate-auth e2e): the canonical MCP transport URL
+        ``/mcp/<alias>/mcp`` must parse to the single-segment alias when
+        no two-segment server with that name is registered. Previously the
+        regex preferred the two-segment match, so ``/mcp/atlassian1/mcp``
+        was parsed as the (non-existent) server ``atlassian1/mcp``,
+        breaking every spec-conforming MCP client that uses the canonical
+        URL form against a delegate-auth server.
+
+        Both the auth parser and the routing parser must agree, and both
+        must consult the registry — preferring the two-segment form only
+        when such a server actually exists (to preserve slashed-tenant
+        aliases like ``custom_solutions/user_123``).
+        """
+        from unittest.mock import patch
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_mcp_servers_in_path,
+        )
+
+        single_segment = TestMCPDelegateAuthToUpstream._make_server(
+            auth_type="oauth2",
+        )
+
+        def lookup_only_single(name):
+            # Only ``atlassian1`` is registered. Two-segment lookups (e.g.
+            # ``atlassian1/mcp``) must miss so the parser falls back to the
+            # single-segment alias.
+            return single_segment if name == "atlassian1" else None
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+            side_effect=lookup_only_single,
+        ):
+            for path_input in (
+                "/mcp/atlassian1/mcp",
+                "/mcp/atlassian1/sse",
+                "/mcp/atlassian1/mcp/messages",
+            ):
+                assert MCPRequestHandler._extract_target_server_names_from_path(
+                    path_input
+                ) == ["atlassian1"], f"auth parser failed for {path_input!r}"
+                assert (_get_mcp_servers_in_path(path_input) or []) == [
+                    "atlassian1"
+                ], f"routing parser failed for {path_input!r}"
+
+    def test_two_segment_alias_resolves_when_registered(self):
+        """
+        Slashed-tenant aliases (e.g. ``custom_solutions/user_123``) keep
+        working after the registry-aware fix: when the two-segment form is
+        actually a registered server, the parser returns it — even when the
+        URL also has trailing path segments.
+        """
+        from unittest.mock import patch
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_mcp_servers_in_path,
+        )
+
+        two_segment = TestMCPDelegateAuthToUpstream._make_server(
+            auth_type="oauth2",
+        )
+
+        def lookup_only_two_segment(name):
+            return two_segment if name == "custom_solutions/user_123" else None
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+            side_effect=lookup_only_two_segment,
+        ):
+            for path_input in (
+                "/mcp/custom_solutions/user_123",
+                "/mcp/custom_solutions/user_123/chat/completions",
+                "/mcp/custom_solutions/user_123/mcp",
+            ):
+                assert MCPRequestHandler._extract_target_server_names_from_path(
+                    path_input
+                ) == [
+                    "custom_solutions/user_123"
+                ], f"auth parser failed for {path_input!r}"
+                assert (_get_mcp_servers_in_path(path_input) or []) == [
+                    "custom_solutions/user_123"
+                ], f"routing parser failed for {path_input!r}"
 
     async def test_delegate_does_not_bypass_on_extra_path_segment(self):
         """
