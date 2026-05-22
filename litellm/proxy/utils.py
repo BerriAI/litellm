@@ -46,6 +46,10 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.spend_tracking.failure_payload_enricher import (
+    enrich_failure_request_data,
+    resolve_failure_start_time,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -2107,9 +2111,9 @@ class ProxyLogging:
         # Lift the first-handoff instant onto request_data (top-level
         # internal key, not metadata) so failure-path callbacks can still
         # compute preprocessing latency after the logging object is popped.
-        _logging_obj = request_data.get("litellm_logging_obj")
-        if _logging_obj is not None:
-            _model_call_details = getattr(_logging_obj, "model_call_details", {})
+        _litellm_logging_obj = request_data.get("litellm_logging_obj")
+        if _litellm_logging_obj is not None:
+            _model_call_details = getattr(_litellm_logging_obj, "model_call_details", {})
             _first_handoff = _model_call_details.get("first_api_call_start_time")
             if _first_handoff is not None:
                 request_data["first_api_call_start_time"] = _first_handoff
@@ -2123,6 +2127,23 @@ class ProxyLogging:
             if _recovered_usage is not None:
                 request_data["combined_usage_object"] = _recovered_usage
                 request_data["response_cost"] = _model_call_details.get("response_cost")
+
+        # Bake identification / upstream-attribution / timing data out of
+        # ``litellm_logging_obj`` into plain dict keys on ``request_data``
+        # BEFORE we pop it. Otherwise callbacks (notably the spend-log
+        # writer) only see a request_data with the Logging object stripped
+        # off and can't reconstruct api_base / model_group / model_id /
+        # request_tags / start_time, which leaves failure rows blank.
+        # Idempotent and error-shielded — never blocks the callback loop.
+        _litellm_logging_obj = request_data.get("litellm_logging_obj")
+        enrich_failure_request_data(
+            request_data=request_data,
+            litellm_logging_obj=_litellm_logging_obj,
+            original_exception=original_exception,
+        )
+        request_data["_litellm_failure_start_time"] = resolve_failure_start_time(
+            _litellm_logging_obj
+        )
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
