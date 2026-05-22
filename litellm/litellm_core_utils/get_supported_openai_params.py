@@ -154,7 +154,9 @@ def get_supported_openai_params(  # noqa: PLR0915
                 model=_azure_detection_model
             )
         else:
-            return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
+            return litellm.AzureOpenAIConfig().get_supported_openai_params(
+                model=_azure_detection_model
+            )
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vercel_ai_gateway":
