@@ -17,7 +17,7 @@ Azure Foundry supports the following Claude models:
 |-------|-------|
 | Description | Claude models deployed via Microsoft Azure Foundry. Uses the same API as Anthropic's Messages API but with Azure authentication. |
 | Provider Route on LiteLLM | `azure_ai/` (add this prefix to Claude model names - e.g. `azure_ai/claude-sonnet-4-5`) |
-| Provider Doc | [Azure Foundry Claude Models ↗](https://learn.microsoft.com/en-us/azure/ai-services/foundry-models/claude) |
+| Provider Doc | [Azure Foundry Claude Models ↗](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude) |
 | API Endpoint | `https://<resource-name>.services.ai.azure.com/anthropic/v1/messages` |
 | Supported Endpoints | `/chat/completions`, `/anthropic/v1/messages`|
 
