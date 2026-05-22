@@ -178,16 +178,19 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
         # Ensure Vertex defaults for realtimeInputConfig apply even when
         # the client provided a partial ``turn_detection`` (e.g. only
-        # ``silence_duration_ms``). ``map_openai_params`` defaults
-        # ``disabled=True`` when ``create_response`` is absent, which would
-        # otherwise silently disable VAD here.
+        # ``silence_duration_ms``). ``map_automatic_turn_detection`` sets
+        # ``disabled=True`` whenever ``create_response`` is absent or
+        # ``False`` — the latter being how transcription guardrails
+        # suppress automatic responses — which would otherwise silently
+        # disable VAD here and break speech detection / transcription
+        # events. Vertex Live has no "VAD on, no auto-response" mode, so
+        # always keep VAD active; ``create_response: True`` already maps
+        # to ``disabled=False`` and is therefore unaffected.
         realtime_input_config = setup_config.setdefault("realtimeInputConfig", {})
         automatic_detection = realtime_input_config.setdefault(
             "automaticActivityDetection", {}
         )
-        client_turn_detection = self._extract_turn_detection(session_params) or {}
-        if "create_response" not in client_turn_detection:
-            automatic_detection["disabled"] = False
+        automatic_detection["disabled"] = False
         automatic_detection.setdefault("silenceDurationMs", 800)
 
         setup_config.setdefault("inputAudioTranscription", {})
