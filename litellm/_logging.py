@@ -459,9 +459,18 @@ def _scrub_secrets(text: str) -> str:
 
 
 class CredentialScrubberFilter(logging.Filter):
-    """Logging filter that redacts credential values from all log records."""
+    """Logging filter that redacts credential values from all log records.
+
+    Complements SecretRedactionFilter (value-shape matching) by matching on
+    secret key names (api_key=, encryption_key=, redis_password=, …).
+
+    Opt-out: set LITELLM_DISABLE_REDACT_SECRETS=true to disable all redaction.
+    Dict args: keys matching _SECRET_KEY_NAME_RE are redacted regardless of
+    value type; other keys have their string values pattern-scrubbed.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # Honour the LITELLM_DISABLE_REDACT_SECRETS opt-out env var.
         if not _ENABLE_SECRET_REDACTION:
             return True
         if record.msg and isinstance(record.msg, str):
