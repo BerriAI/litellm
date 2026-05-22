@@ -573,7 +573,9 @@ async def test_deleted_servers_with_no_team_do_not_raise(
 )
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_all_known_server_ids",
-    return_value={"deleted-server"},  # wait — this server IS in registry (not deleted)
+    # "disallowed-existing-server" is in the registry but NOT in the team's allowed list.
+    # "orphaned-server" is absent from the registry — it was deleted.
+    return_value={"disallowed-existing-server"},
 )
 @patch(
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
@@ -584,22 +586,27 @@ async def test_mixed_deleted_and_existing_disallowed_raises_for_existing_only(
     mock_access_groups, mock_known_ids, mock_allow_all
 ):
     """
-    When a key has both a truly deleted server and an existing-but-disallowed
-    server, only the existing one should appear in the error detail.
+    When a key has both a truly deleted (orphaned) server ID and an existing-but-
+    disallowed server, only the existing-but-disallowed one should appear in the
+    403 error.  The orphaned ID is silently skipped.
     """
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
             object_permission={
-                "mcp_servers": ["server-1", "deleted-server", "phantom-server"]
+                "mcp_servers": [
+                    "server-1",
+                    "disallowed-existing-server",  # exists in registry but not in team
+                    "orphaned-server",  # not in registry (deleted) — should be ignored
+                ]
             },
             team_obj=team_obj,
         )
     assert exc_info.value.status_code == 403
-    # deleted-server is in the known registry so it's treated as existing-but-disallowed
-    assert "deleted-server" in str(exc_info.value.detail)
-    # phantom-server is NOT in the known registry so it's silently ignored
-    assert "phantom-server" not in str(exc_info.value.detail)
+    # The existing-but-disallowed server IS flagged
+    assert "disallowed-existing-server" in str(exc_info.value.detail)
+    # The orphaned (deleted) server is silently skipped and must NOT appear in the error
+    assert "orphaned-server" not in str(exc_info.value.detail)
 
 
 # ---- Tests for validate_key_search_tools_against_team ----
