@@ -53,6 +53,55 @@ def truncate_tool_name(name: str) -> str:
 _MCP_NAMESPACE_PATTERN = re.compile(r"^mcp__([^_]+(?:_[^_]+)*)__(.+)$")
 
 
+# Pattern matching the wallet/MCP-style validation error returned by
+# claude-agent-sdk when a tool call is missing a required field. Example:
+#   "Input validation error: 'to' is a required property"
+_VALIDATION_REQUIRED_FIELD_PATTERN = re.compile(
+    r"(?:Input |MCP )?validation error[s]?[:\s]+'([^']+)' is a required property",
+    re.IGNORECASE,
+)
+# Companion pattern for the wrapped MCP variant the SDK emits, e.g.
+#   "<tool_use_error>Error: No such tool available: transfer</tool_use_error>"
+_NO_SUCH_TOOL_PATTERN = re.compile(
+    r"No such tool available[:\s]+(\S+)",
+    re.IGNORECASE,
+)
+
+# Hints appended to tool_result error messages on routes that go through
+# the Anthropic→OpenAI passthrough. Empirically, Gemini-flash-lite
+# tends to loop or give up on the raw error text; adding a concrete
+# corrective instruction breaks the loop. The hint is intentionally
+# explicit about WHERE to find the missing value (the user's prompt),
+# which is the model's blind spot per the audit in #12.
+_VALIDATION_HINT_TEMPLATE = (
+    "\n\nCORRECTION: your previous tool_use call did not include the "
+    "required '{field}' argument. Look in the user's original message "
+    "for the value (e.g. recipient address, token symbol, amount, chain "
+    "name). Re-emit the tool_use with the same name but include the "
+    "'{field}' field populated. Do not ask the user for information "
+    "that is already in their message."
+)
+
+
+def augment_tool_result_error_for_correction(content: str) -> str:
+    """If a tool_result message contains a 'required property' validation
+    error or a 'No such tool available' error, append a corrective hint
+    that nudges weaker models toward fixing the call instead of looping
+    or asking the user for already-provided info.
+
+    Pure string transformation; no behaviour for non-error tool_results.
+    See cryptitalk-wallet-litellm#12 for the failure mode this addresses.
+    """
+    if not content or not isinstance(content, str):
+        return content
+    m = _VALIDATION_REQUIRED_FIELD_PATTERN.search(content)
+    if m is not None:
+        field = m.group(1)
+        if _VALIDATION_HINT_TEMPLATE.format(field=field) not in content:
+            return content + _VALIDATION_HINT_TEMPLATE.format(field=field)
+    return content
+
+
 def strip_mcp_namespace(name: str) -> str:
     """Strip the ``mcp__<server>__`` prefix from a tool name.
 
@@ -469,7 +518,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 tool_result = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
-                                    content=str(content.get("content", "")),
+                                    content=augment_tool_result_error_for_correction(
+                                        str(content.get("content", ""))
+                                    ),
                                 )
                                 self._add_cache_control_if_applicable(
                                     content, tool_result, model
@@ -488,7 +539,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                         tool_result = ChatCompletionToolMessage(
                                             role="tool",
                                             tool_call_id=content.get("tool_use_id", ""),
-                                            content=c,
+                                            content=augment_tool_result_error_for_correction(
+                                                c
+                                            ),
                                         )
                                         self._add_cache_control_if_applicable(
                                             content, tool_result, model
@@ -501,7 +554,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 tool_call_id=content.get(
                                                     "tool_use_id", ""
                                                 ),
-                                                content=c.get("text", ""),
+                                                content=augment_tool_result_error_for_correction(
+                                                    c.get("text", "")
+                                                ),
                                             )
                                             self._add_cache_control_if_applicable(
                                                 content, tool_result, model
