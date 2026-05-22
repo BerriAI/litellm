@@ -1190,3 +1190,77 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestIsGuardrailIntervention:
+    """Unit tests for CustomGuardrail._is_guardrail_intervention().
+
+    Ensures both the canonical (400) and legacy (403) status codes are
+    recognised as intentional content-policy blocks, while real server errors
+    and generic exceptions are not.
+    """
+
+    def test_http_400_is_intervention(self):
+        """HTTP 400 is the canonical status for a content-policy block."""
+        from fastapi import HTTPException
+
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                HTTPException(status_code=400, detail="Content blocked")
+            )
+            is True
+        )
+
+    def test_http_403_is_intervention_backward_compat(self):
+        """HTTP 403 must still be treated as an intentional block.
+
+        Before v1.86, litellm_content_filter raised HTTPException(403) for all
+        content blocks.  Operators may have existing custom guardrails or error
+        handlers that also use 403.  Recognising 403 here avoids changing the
+        ``guardrail_status`` logged to Langfuse / DataDog on upgrade.
+        """
+        from fastapi import HTTPException
+
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                HTTPException(status_code=403, detail="Content blocked (legacy)")
+            )
+            is True
+        )
+
+    def test_http_500_is_not_intervention(self):
+        """A 500 Internal Server Error is a failure, not an intentional block."""
+        from fastapi import HTTPException
+
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                HTTPException(status_code=500, detail="Internal error")
+            )
+            is False
+        )
+
+    def test_http_404_is_not_intervention(self):
+        """A 404 Not Found is not an intentional guardrail block."""
+        from fastapi import HTTPException
+
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                HTTPException(status_code=404, detail="Not found")
+            )
+            is False
+        )
+
+    def test_generic_exception_is_not_intervention(self):
+        """A plain ValueError is not a guardrail intervention."""
+        assert CustomGuardrail._is_guardrail_intervention(ValueError("oops")) is False
+
+    def test_modify_response_exception_is_intervention(self):
+        """ModifyResponseException always signals an intentional block (passthrough mode)."""
+        from litellm.exceptions import ModifyResponseException
+
+        e = ModifyResponseException(
+            message="Content blocked",
+            model="gpt-4",
+            request_data={"messages": []},
+        )
+        assert CustomGuardrail._is_guardrail_intervention(e) is True

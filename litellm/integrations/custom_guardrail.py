@@ -737,18 +737,23 @@ class CustomGuardrail(CustomLogger):
         (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
-        - HTTPException with status 400 (content policy violation)
+        - HTTPException with status 400 (content policy violation — standard, matches
+          Bedrock, OpenAI Moderations, Azure Text Moderation, and LakeraAI)
+        - HTTPException with status 403 (legacy — accepted for backward compatibility
+          with existing deployments that relied on the old content-filter behaviour
+          before v1.86; new guardrails should raise 400)
         - ModifyResponseException (passthrough mode violation)
         """
 
         if isinstance(e, ModifyResponseException):
             return True
-        if (
-            HTTPException is not None
-            and isinstance(e, HTTPException)
-            and e.status_code == 400
-        ):
-            return True
+        if HTTPException is not None and isinstance(e, HTTPException):
+            # 400 is the canonical status for an intentional content-policy block.
+            # 403 is accepted for backward compatibility: the built-in
+            # litellm_content_filter previously raised 403, and operators may have
+            # custom guardrails or error-handlers that also use 403 for blocks.
+            if e.status_code in (400, 403):
+                return True
         return False
 
     def _process_error(
