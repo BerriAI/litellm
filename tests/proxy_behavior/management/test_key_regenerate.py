@@ -1,4 +1,9 @@
+import litellm
 import pytest
+
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 
 from .actors import TEAM_ALPHA, TEAM_BETA, Actor
 from .conftest import create_scratch_key
@@ -115,3 +120,46 @@ async def test_key_path_regenerate_smoke(proxy_client, scratch, world):
     assert new_cleartext.startswith("sk-") and new_cleartext != target_cleartext
     assert (await _info(proxy_client, target_cleartext)).status_code == 401
     assert (await _info(proxy_client, new_cleartext)).status_code == 200
+
+
+async def test_key_regenerate_enforces_upperbound_key_params(
+    proxy_client, scratch, world, monkeypatch
+):
+    """Regenerate runs _enforce_upperbound_key_params: a max_budget above
+    litellm.upperbound_key_generate_params is rejected 400, a value within the
+    bound is accepted. Pins #26340 (db8ef44323) — regenerate previously
+    bypassed the upperbound. upperbound_key_generate_params is module-level
+    litellm.* state, so monkeypatch save/restores it."""
+    admin = world.keys[Actor.PROXY_ADMIN]
+    over_key = await create_scratch_key(
+        proxy_client,
+        admin.cleartext,
+        scratch.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{scratch.prefix}-over",
+    )
+    within_key = await create_scratch_key(
+        proxy_client,
+        admin.cleartext,
+        scratch.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{scratch.prefix}-within",
+    )
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(max_budget=100.0),
+    )
+    headers = {"Authorization": f"Bearer {admin.cleartext}"}
+
+    over = await proxy_client.post(
+        "/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0}
+    )
+    assert over.status_code == 400, over.text
+
+    within = await proxy_client.post(
+        "/key/regenerate",
+        headers=headers,
+        json={"key": within_key, "max_budget": 50.0},
+    )
+    assert within.status_code == 200, within.text
