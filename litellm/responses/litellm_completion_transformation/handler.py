@@ -20,6 +20,18 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 
+def _filter_kwargs_for_completion(kwargs: dict) -> dict:
+    """
+    Filter kwargs to only include litellm-internal params that are safe to pass
+    to litellm.completion() / litellm.acompletion().
+
+    Responses API requests may contain client-specific params (e.g. client_metadata)
+    that are NOT valid litellm.completion() arguments. Passing them through causes
+    'unexpected keyword argument' errors at the provider SDK level.
+    """
+    return {k: v for k, v in kwargs.items() if k.startswith("litellm_")}
+
+
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
@@ -59,7 +71,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         completion_args = {}
-        completion_args.update(kwargs)
+        completion_args.update(_filter_kwargs_for_completion(kwargs))
         completion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
@@ -109,7 +121,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         acompletion_args = {}
-        acompletion_args.update(kwargs)
+        acompletion_args.update(_filter_kwargs_for_completion(kwargs))
         acompletion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
