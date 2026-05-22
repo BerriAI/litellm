@@ -2059,6 +2059,44 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["max_output_tokens"] == 65536
 
 
+def test_gemini_3_1_flash_lite_ga_pricing():
+    """
+    Test that gemini-3.1-flash-lite (GA) has pricing entries for all providers.
+
+    gemini-3.1-flash-lite became generally available on May 7, 2026.
+    Entries must exist for the direct, gemini/, vertex_ai/, and openrouter/ prefixes
+    so that callers can use the GA model name without getting a missing-model error.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    ga_models = [
+        ("gemini-3.1-flash-lite", "vertex_ai-language-models"),
+        ("gemini/gemini-3.1-flash-lite", "gemini"),
+        ("vertex_ai/gemini-3.1-flash-lite", "vertex_ai-language-models"),
+        ("openrouter/google/gemini-3.1-flash-lite", "openrouter"),
+    ]
+
+    for model_name, expected_provider in ga_models:
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert (
+            model_info["litellm_provider"] == expected_provider
+        ), f"{model_name}: expected provider {expected_provider!r}, got {model_info['litellm_provider']!r}"
+        assert (
+            model_info["input_cost_per_token"] == 2.5e-07
+        ), f"{model_name}: unexpected input cost"
+        assert (
+            model_info["output_cost_per_token"] == 1.5e-06
+        ), f"{model_name}: unexpected output cost"
+        assert (
+            model_info["max_input_tokens"] == 1048576
+        ), f"{model_name}: unexpected max_input_tokens"
+        assert (
+            model_info["max_output_tokens"] == 65536
+        ), f"{model_name}: unexpected max_output_tokens"
+
+
 def test_custom_pricing_applies_cache_read_input_cost():
     """
     Bug 1 reproduction: custom_cost_per_token with cache_read_input_token_cost

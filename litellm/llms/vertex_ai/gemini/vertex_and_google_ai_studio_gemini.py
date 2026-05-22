@@ -280,7 +280,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         - gemini-3-pro-preview
         - gemini-3-flash
         - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
+        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite, gemini-3.1-flash-lite-preview
         - gemini-3.5-flash
         - Any future Gemini 3.x models
         """
@@ -947,7 +947,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
+        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite, gemini-3.1-flash-lite-preview,
         # gemini-3.5-flash, and any future 3.x-flash variants.
         is_gemini3flash = model and (
             "flash" in model.lower() and "gemini-3" in model.lower()
