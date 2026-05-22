@@ -881,8 +881,29 @@ async def get_customer_daily_activity(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get daily activity for specific organizations or all accessible organizations.
+    Get daily activity for specific end-users or all end-users.
+
+    Admin-only — mirrors the access policy on /customer/list. End-users have
+    no per-tenant ownership column on LiteLLM_EndUserTable, so there is no
+    safe way to scope this endpoint to a non-admin caller's data.
     """
+    # Admin-only. Without this gate, any authenticated key could omit
+    # end_user_ids, the underlying daily-activity builder would treat
+    # entity_id=None as "no filter", and the response would expose every
+    # tenant's end-user spend data (cross-tenant disclosure).
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
