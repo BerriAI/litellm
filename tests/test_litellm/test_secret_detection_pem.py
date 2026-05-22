@@ -97,6 +97,44 @@ def test_expand_empty_list():
     assert result == []
 
 
+def test_expand_two_same_type_pem_blocks_each_get_own_block():
+    """Two same-type PEM blocks in one message each get their own full block.
+
+    Regression for the bug where both detected secrets were mapped to the
+    first matching block, causing the second key's body+footer to slip
+    through str.replace unredacted.
+    """
+    key1 = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    key2 = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    header = "-----BEGIN RSA PRIVATE KEY-----"
+    text = f"First key:\n{key1}\nSecond key:\n{key2}\n"
+
+    # detect-secrets produces two entries with the same header-only value
+    detected = [
+        {"type": "Private Key", "value": header},
+        {"type": "Private Key", "value": header},
+    ]
+
+    result = _expand_private_key_values(detected, text)
+
+    assert len(result) == 2
+    assert result[0]["value"] == key1, "First entry should be assigned the first block"
+    assert (
+        result[1]["value"] == key2
+    ), "Second entry should be assigned the second block"
+    assert (
+        result[0]["value"] != result[1]["value"]
+    ), "Each secret must map to a distinct block so both get redacted"
+
+
 # ---------------------------------------------------------------------------
 # Integration: scan_message_for_secrets returns the full block
 # ---------------------------------------------------------------------------
