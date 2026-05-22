@@ -525,7 +525,10 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
-            if isinstance(event, dict) and event.get("type") == "session.created":
+            is_session_created_event = (
+                isinstance(event, dict) and event.get("type") == "session.created"
+            )
+            if is_session_created_event:
                 if self._session_created_sent_to_client:
                     # A synthetic session.created (with placeholder defaults) was
                     # already forwarded to the client when we connected.  The
@@ -535,16 +538,14 @@ class RealTimeStreaming:
                     # `session.updated` so the client learns the corrected
                     # configuration without seeing two `session.created` events.
                     event = {**event, "type": "session.updated"}
-                    await self._maybe_send_guardrail_turn_detection_update()
                 else:
                     self._session_created_sent_to_client = True
             event_str = json.dumps(event)
-            ## For audio/VAD guardrail path: forward session.created first, then inject.
-            if (
-                isinstance(event, dict)
-                and event.get("type") == "session.created"
-                and self._has_audio_transcription_guardrails()
-            ):
+            ## For audio/VAD guardrail path: forward the (possibly re-typed)
+            ## session.created first, then inject the guardrail turn-detection
+            ## update. Handling first and duplicate session.created via the same
+            ## path keeps the event-then-guardrail ordering consistent.
+            if is_session_created_event and self._has_audio_transcription_guardrails():
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
                 await self._maybe_send_guardrail_turn_detection_update()

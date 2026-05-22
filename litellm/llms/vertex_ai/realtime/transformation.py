@@ -155,6 +155,21 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
         """Build Vertex AI setup configuration with proper model path and defaults."""
+        # Normalize ``turn_detection`` to the top level so map_openai_params
+        # picks it up whether the client used the flat beta shape or the
+        # GA nested shape (session.audio.input.turn_detection). Without
+        # this, guardrail-injected ``create_response: False`` would be
+        # silently dropped for GA clients because map_openai_params only
+        # looks at top-level keys.
+        extracted_turn_detection = self._extract_turn_detection(session_params)
+        if (
+            extracted_turn_detection is not None
+            and "turn_detection" not in session_params
+        ):
+            session_params = {
+                **session_params,
+                "turn_detection": extracted_turn_detection,
+            }
         setup_config = self.map_openai_params(
             optional_params={}, non_default_params=session_params
         )
