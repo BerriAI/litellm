@@ -1467,9 +1467,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     "maxOutputTokens"
                 )
                 if tool_call_max_output_tokens is not None:
-                    tool_call_done_event["response"][
-                        "max_output_tokens"
-                    ] = tool_call_max_output_tokens
+                    tool_call_done_event["response"]["max_output_tokens"] = cast(
+                        int, tool_call_max_output_tokens
+                    )
                 returned_message.append(tool_call_done_event)
                 # Reset IDs so the next model turn (after tool results) starts a
                 # fresh response with its own response.created preamble.
