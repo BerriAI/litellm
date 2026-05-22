@@ -19,7 +19,6 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm import embedding
 from litellm.llms.sagemaker.embedding.cohere_transformation import (
     SagemakerCohereEmbeddingConfig,
-    is_cohere_sagemaker_embedding_model,
 )
 from litellm.llms.sagemaker.embedding.transformation import SagemakerEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
@@ -61,20 +60,13 @@ class TestSagemakerEmbeddingFactory:
     def test_get_model_config_cohere_model(self):
         """Cohere SageMaker endpoints route to SagemakerCohereEmbeddingConfig"""
         for endpoint_name in (
-            "cohere-embed-multilingual-v3-prod",
+            "cohere.embed-multilingual-v3",
+            "cohere-embed-english-v3-prod",
             "my-cohere-marketplace-endpoint",
-            "embed-multilingual-v3-sm-endpoint",
-            "embed-english-v3-endpoint",
+            "COHERE-EMBED-V4",
         ):
             config = SagemakerEmbeddingConfig.get_model_config(endpoint_name)
             assert isinstance(config, SagemakerCohereEmbeddingConfig), endpoint_name
-
-    def test_is_cohere_sagemaker_embedding_model(self):
-        assert is_cohere_sagemaker_embedding_model("cohere-embed-endpoint")
-        assert is_cohere_sagemaker_embedding_model("embed-english-v3-endpoint")
-        assert is_cohere_sagemaker_embedding_model("EMBED-MULTILINGUAL-V3")
-        assert not is_cohere_sagemaker_embedding_model("sentence-transformers-model")
-        assert not is_cohere_sagemaker_embedding_model("voyage-3-5-embedding")
 
 
 class TestSagemakerCohereEmbeddingConfig:
@@ -83,10 +75,12 @@ class TestSagemakerCohereEmbeddingConfig:
     def setup_method(self):
         self.config = SagemakerCohereEmbeddingConfig()
 
+    MODEL = "cohere.embed-multilingual-v3"
+
     def test_transform_request_uses_cohere_payload(self):
         """Bug repro: request must use `texts` + `input_type`, not HF `inputs`"""
         result = self.config.transform_embedding_request(
-            model="cohere-embed-multilingual-v3",
+            model=self.MODEL,
             input=["hello"],
             optional_params={"input_type": "search_query"},
             headers={},
@@ -97,7 +91,7 @@ class TestSagemakerCohereEmbeddingConfig:
 
     def test_transform_request_default_input_type(self):
         result = self.config.transform_embedding_request(
-            model="cohere-embed-multilingual-v3",
+            model=self.MODEL,
             input=["hello"],
             optional_params={},
             headers={},
@@ -107,7 +101,7 @@ class TestSagemakerCohereEmbeddingConfig:
 
     def test_transform_request_normalizes_string_input(self):
         result = self.config.transform_embedding_request(
-            model="cohere-embed-english-v3",
+            model=self.MODEL,
             input="hello",
             optional_params={},
             headers={},
@@ -118,7 +112,7 @@ class TestSagemakerCohereEmbeddingConfig:
         params = self.config.map_openai_params(
             non_default_params={"dimensions": 512, "encoding_format": "float"},
             optional_params={},
-            model="cohere-embed-multilingual-v3",
+            model=self.MODEL,
             drop_params=False,
         )
         assert params["output_dimension"] == 512
@@ -138,7 +132,7 @@ class TestSagemakerCohereEmbeddingConfig:
         logging_obj.model_call_details = {"input": ["hello"]}
 
         result = self.config.transform_embedding_response(
-            model="cohere-embed-multilingual-v3",
+            model=self.MODEL,
             raw_response=mock_response,
             model_response=EmbeddingResponse(),
             logging_obj=logging_obj,
