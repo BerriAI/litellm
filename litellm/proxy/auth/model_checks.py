@@ -11,7 +11,6 @@ from litellm.router_utils.fallback_event_handlers import get_fallback_model_grou
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.utils import get_valid_models
 
-
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 

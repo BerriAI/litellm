@@ -1,5 +1,5 @@
 """
-Cost calculator for DeepSeek Chat models. 
+Cost calculator for DeepSeek Chat models.
 
 Handles prompt caching scenario.
 """

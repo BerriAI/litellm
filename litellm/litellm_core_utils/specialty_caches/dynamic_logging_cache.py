@@ -1,9 +1,9 @@
 """
 This is a cache for LangfuseLoggers.
 
-Langfuse Python SDK initializes a thread for each client. 
+Langfuse Python SDK initializes a thread for each client.
 
-This ensures we do 
+This ensures we do
 1. Proper cleanup of Langfuse initialized clients.
 2. Re-use created langfuse clients.
 """
