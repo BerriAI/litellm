@@ -848,6 +848,7 @@ class RealTimeStreaming:
                 message = await self.websocket.receive_text()
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
+                guardrail_turn_detection_injected = False
                 try:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
@@ -905,7 +906,7 @@ class RealTimeStreaming:
                             existing_td["create_response"] = False
                             session["turn_detection"] = existing_td
                             message = json.dumps(msg_obj)
-                            self._guardrail_turn_detection_update_sent = True
+                            guardrail_turn_detection_injected = True
                             verbose_logger.debug(
                                 "Injected turn_detection into first session.update for audio transcription guardrails"
                             )
@@ -933,7 +934,14 @@ class RealTimeStreaming:
                 self.store_input(message=message)
 
                 ## FORWARD TO BACKEND
-                await self._send_to_backend(message)
+                # Only mark the guardrail turn_detection update as sent after the
+                # backend actually accepted the message. Setting the flag earlier
+                # would permanently disable the injection if ``_send_to_backend``
+                # raised — neither this loop nor
+                # ``_maybe_send_guardrail_turn_detection_update`` would retry.
+                sent = await self._send_to_backend(message)
+                if guardrail_turn_detection_injected and sent:
+                    self._guardrail_turn_detection_update_sent = True
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
