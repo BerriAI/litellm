@@ -1,12 +1,14 @@
 import logging
+import sys
+from unittest.mock import patch
+
+import litellm._logging as log_module
+from litellm._logging import CredentialScrubberFilter, _scrub_secrets
 
 
 class TestScrubSecrets:
-    """Tests for the _scrub_secrets() helper."""
 
     def test_known_patterns_are_redacted(self):
-        from litellm._logging import _scrub_secrets
-
         for text, secret in [
             ("api_key=sk-abcdef123456789", "sk-abcdef"),
             ("aws_secret_key: AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
@@ -15,9 +17,6 @@ class TestScrubSecrets:
             assert secret not in _scrub_secrets(text)
 
     def test_non_secrets_pass_through(self):
-        # Non-secret fields and values < 6 chars are not redacted
-        from litellm._logging import _scrub_secrets
-
         result = _scrub_secrets(
             "model=gpt-4o, endpoint=https://api.openai.com, api_key=abc"
         )
@@ -26,20 +25,16 @@ class TestScrubSecrets:
         assert "abc" in result  # < 6 chars, not redacted
 
     def test_pem_value_not_partially_redacted(self):
-        from litellm._logging import _scrub_secrets
-
         pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
         result = _scrub_secrets(f"private_key = {pem}")
         assert "MIIE" not in result or "-----BEGIN" in result
 
 
 class TestCredentialScrubberFilter:
-    """Tests for CredentialScrubberFilter.filter() — covers every branch."""
 
     def _make_record(self, msg, args=None):
-        # Always construct with args=() then set record.args directly.
-        # Passing a dict to LogRecord.__init__ as args triggers a KeyError on
-        # Python 3.13 (args[0] lookup on a str-keyed dict).
+        # Construct with args=() then set record.args directly — passing a dict
+        # to LogRecord.__init__ triggers a KeyError on Python 3.13.
         record = logging.LogRecord(
             name="test",
             level=logging.DEBUG,
@@ -54,63 +49,42 @@ class TestCredentialScrubberFilter:
         return record
 
     def test_string_msg_with_secret_is_redacted(self):
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("api_key=sk-secret123456789")
-        result = f.filter(record)
-        assert result is True  # filter must never drop records
+        assert f.filter(record) is True
         assert "sk-secret123456789" not in record.msg
 
     def test_non_string_msg_untouched(self):
-        # Branch: msg exists but is not a str — must not crash
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record(12345)
         f.filter(record)
         assert record.msg == 12345
 
     def test_none_msg_untouched(self):
-        # Branch: record.msg is falsy
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record(None)
         f.filter(record)
         assert record.msg is None
 
     def test_dict_args_secret_redacted(self):
-        # Branch: record.args is a dict whose string value contains a key=value secret
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("config %s", {"info": "api_key=sk-secret123456789"})
         f.filter(record)
         assert "sk-secret123456789" not in str(record.args)
 
     def test_dict_args_non_string_value_untouched(self):
-        # Branch: record.args is a dict with a non-string value — must pass through
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("config %s", {"count": 42})
         f.filter(record)
         assert record.args == {"count": 42}  # type: ignore[comparison-overlap]
 
     def test_tuple_args_secret_redacted(self):
-        # Branch: record.args is a tuple whose string element contains key=value secret
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("config: %s", ("api_key=sk-secret123456789",))
         f.filter(record)
         assert "sk-secret123456789" not in str(record.args)
 
     def test_tuple_args_mixed_types_non_string_passthrough(self):
-        # Branch: tuple contains non-string elements — ints/None pass through untouched
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record(
             "vals=%s %s %s %s",
@@ -130,34 +104,22 @@ class TestCredentialScrubberFilter:
         assert "sk-dictval12345678901" not in str(args[3])
 
     def test_no_args_no_crash(self):
-        # Branch: record.args is falsy (empty tuple)
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("plain message with no args")
         f.filter(record)
         assert record.msg == "plain message with no args"
 
-    def test_filter_registered_on_verbose_logger(self):
-        import litellm._logging as log_module
-
-        filter_types = [type(f).__name__ for f in log_module.verbose_logger.filters]
-        assert "CredentialScrubberFilter" in filter_types
-
-    def test_filter_registered_on_verbose_proxy_logger(self):
-        import litellm._logging as log_module
-
-        filter_types = [
-            type(f).__name__ for f in log_module.verbose_proxy_logger.filters
-        ]
-        assert "CredentialScrubberFilter" in filter_types
+    def test_filter_registered_on_all_loggers(self):
+        for logger in (
+            log_module.verbose_logger,
+            log_module.verbose_proxy_logger,
+            log_module.verbose_router_logger,
+        ):
+            assert any(
+                type(f).__name__ == "CredentialScrubberFilter" for f in logger.filters
+            )
 
     def test_filter_respects_disable_redaction_env_var(self):
-        # Branch: _ENABLE_SECRET_REDACTION is False — filter must pass record unmodified
-        from unittest.mock import patch
-
-        from litellm._logging import CredentialScrubberFilter
-
         with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
             f = CredentialScrubberFilter()
             record = self._make_record("api_key=sk-secret123456789")
@@ -165,10 +127,6 @@ class TestCredentialScrubberFilter:
             assert "sk-secret123456789" in record.msg
 
     def test_dict_args_secret_key_name_redacts_raw_value(self):
-        # Branch: dict key is itself a secret field name — raw value must be redacted
-        # even without a key=value pattern inside the value string.
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("config %s", {"api_key": "sk-rawsecretvalue123"})
         f.filter(record)
@@ -176,10 +134,7 @@ class TestCredentialScrubberFilter:
         assert "[REDACTED]" in str(record.args)
 
     def test_dict_args_secret_key_non_string_value_redacted(self):
-        # Branch: dict key is a secret name but value is not a str (e.g. bytes).
-        # Key-name check must fire regardless of value type.
-        from litellm._logging import CredentialScrubberFilter
-
+        # Key-name check fires for non-string values too (e.g. bytes).
         f = CredentialScrubberFilter()
         record = self._make_record("config %s", {"api_key": b"sk-bytessecret123"})
         f.filter(record)
@@ -187,11 +142,6 @@ class TestCredentialScrubberFilter:
         assert "[REDACTED]" in str(record.args)
 
     def test_exc_traceback_secret_redacted(self):
-        # Branch: record.exc_info — secret in exception message is scrubbed from exc_text
-        import sys
-
-        from litellm._logging import CredentialScrubberFilter
-
         try:
             raise ValueError("api_key=sk-secretinexception12345")
         except ValueError:
@@ -204,11 +154,6 @@ class TestCredentialScrubberFilter:
         assert "sk-secretinexception12345" not in record.exc_text
 
     def test_extra_fields_secret_redacted(self):
-        # Branch: extra fields via logger.debug("msg", extra={...})
-        # Secret-named key → value replaced with [REDACTED]
-        # Non-secret key with embedded key=value secret → value scrubbed inline
-        from litellm._logging import CredentialScrubberFilter
-
         f = CredentialScrubberFilter()
         record = self._make_record("msg")
         record.api_key = "sk-extrasecret123456789"  # type: ignore[attr-defined]
@@ -218,13 +163,7 @@ class TestCredentialScrubberFilter:
         assert "sk-embeddedsecret12345" not in getattr(record, "debug_info", "")
 
     def test_exc_format_error_is_silently_ignored(self):
-        # Branch: lines 493-494 — except Exception: pass
-        # When formatException() itself raises, filter must not propagate the error.
-        import sys
-        from unittest.mock import patch
-
-        from litellm._logging import CredentialScrubberFilter
-
+        # When formatException() raises, filter must not propagate the error.
         try:
             raise ValueError("api_key=sk-secretinexception12345")
         except ValueError:
@@ -235,5 +174,5 @@ class TestCredentialScrubberFilter:
         with patch(
             "logging.Formatter.formatException", side_effect=RuntimeError("fmt failed")
         ):
-            f.filter(record)  # must not raise
-        assert record.exc_text is None  # no text set when formatter failed
+            f.filter(record)
+        assert record.exc_text is None
