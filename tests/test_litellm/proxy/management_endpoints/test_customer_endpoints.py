@@ -409,3 +409,105 @@ async def test_get_customer_daily_activity_with_end_user_aliases(monkeypatch):
         "end-user-1": {"alias": "Customer One"},
         "end-user-2": {"alias": "Customer Two"},
     }
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_non_admin_blocked(monkeypatch):
+    """Non-admin callers must be rejected with 401.
+
+    Regression test for cross-tenant disclosure: prior to the fix, any
+    authenticated key (including service-account keys with user_id=None) could
+    call /customer/daily/activity with no end_user_ids and receive every
+    tenant's end-user spend data. The handler must mirror /customer/list and
+    refuse non-admin callers.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    get_daily_activity_mock = AsyncMock()
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    non_admin_roles = [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ]
+
+    for role in non_admin_roles:
+        auth = UserAPIKeyAuth(user_role=role, user_id="someone")
+        with pytest.raises(HTTPException) as exc:
+            await get_customer_daily_activity(
+                end_user_ids=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                page=1,
+                page_size=10,
+                exclude_end_user_ids=None,
+                user_api_key_dict=auth,
+            )
+        assert exc.value.status_code == 401
+        assert "Admin-only" in exc.value.detail["error"]
+
+    # Service-account-style key: user_id=None, no role.
+    auth_no_role = UserAPIKeyAuth(user_id=None)
+    with pytest.raises(HTTPException) as exc:
+        await get_customer_daily_activity(
+            end_user_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_end_user_ids=None,
+            user_api_key_dict=auth_no_role,
+        )
+    assert exc.value.status_code == 401
+
+    get_daily_activity_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_admin_view_only_allowed(monkeypatch):
+    """PROXY_ADMIN_VIEW_ONLY is treated as admin for this read-only endpoint."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="viewer1"
+    )
+    result = await get_customer_daily_activity(
+        end_user_ids=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_end_user_ids=None,
+        user_api_key_dict=auth,
+    )
+
+    get_daily_activity_mock.assert_awaited_once()
+    assert result is mocked_response
