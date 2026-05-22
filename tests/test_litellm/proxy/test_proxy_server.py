@@ -1928,23 +1928,6 @@ async def test_delete_deployment_type_mismatch():
     # Create mock ProxyConfig instance
     pc = ProxyConfig()
 
-    pc.get_config = MagicMock(
-        return_value={
-            "model_list": [
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345678},
-                },
-                {
-                    "model_name": "openai-gpt-4o",
-                    "litellm_params": {"model": "gpt-4o"},
-                    "model_info": {"id": 12345679},
-                },
-            ]
-        }
-    )
-
     # Mock llm_router with string IDs (this is the source of the type mismatch)
     mock_llm_router = MagicMock()
     mock_llm_router.get_model_ids.return_value = [
