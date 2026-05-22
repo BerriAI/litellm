@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -1276,7 +1277,7 @@ def create_pass_through_route(
                 InitPassThroughEndpointHelpers,
             )
 
-            path = request.url.path
+            path = get_request_route(request)
 
             # Parse request data based on content type
             (

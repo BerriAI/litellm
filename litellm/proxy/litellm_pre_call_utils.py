@@ -25,6 +25,8 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -333,11 +335,10 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata"
     """
-    path = request.url.path
-
-    if "thread" in path or "assistant" in path:
+    if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
 
+    path = get_request_route(request)
     if any(route in path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
 

@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -118,15 +119,14 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
+        request_route = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
-        # Match on request.url.path (path-only, exact prefix) so the substring
-        # cannot be smuggled via query string, hostname, or a deeper URL segment.
-        if request.url.path.startswith("/.well-known/"):
+        if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
             not litellm_api_key
             and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
-                path=request.url.path, mcp_servers=mcp_servers
+                path=request_route, mcp_servers=mcp_servers
             )
         ):
             # Operator opted this oauth2 server into upstream-delegated auth
@@ -174,7 +174,7 @@ class MCPRequestHandler:
                     "401",
                     "403",
                 ) and MCPRequestHandler._target_servers_use_oauth2(
-                    path=request.url.path, mcp_servers=mcp_servers
+                    path=request_route, mcp_servers=mcp_servers
                 ):
                     verbose_logger.debug(
                         "MCP OAuth2: target server is OAuth2-mode, treating "

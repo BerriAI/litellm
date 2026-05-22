@@ -14,6 +14,7 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+from .auth_utils import get_request_route
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -627,7 +628,8 @@ class RouteChecks:
         Returns:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
-        if "thread" in request.url.path or "assistant" in request.url.path:
+        route = get_request_route(request)
+        if "thread" in route or "assistant" in route:
             return True
         return False
 

@@ -29,6 +29,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UserAPIKeyAuth,
     VirtualKeyEvent,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
 
@@ -469,7 +470,7 @@ def management_endpoint_wrapper(func):
 
                     if open_telemetry_logger is not None:
                         if _http_request:
-                            _route = _http_request.url.path
+                            _route = get_request_route(_http_request)
                             _request_body: dict = await _read_request_body(
                                 request=_http_request
                             )
@@ -514,7 +515,7 @@ def management_endpoint_wrapper(func):
                 if open_telemetry_logger is not None:
                     _http_request = kwargs.get("http_request")
                     if _http_request:
-                        _route = _http_request.url.path
+                        _route = get_request_route(_http_request)
                         _request_body: dict = await _read_request_body(
                             request=_http_request
                         )
