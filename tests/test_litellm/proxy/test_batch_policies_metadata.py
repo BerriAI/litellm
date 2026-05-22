@@ -114,6 +114,19 @@ class TestSanitizeOpenAIBatchMetadata:
         result = _sanitize_openai_batch_metadata({"tags": [1, 2, 3]})
         assert result == {"tags": "1,2,3"}
 
+    def test_scalar_int_value_converted_to_str(self):
+        """User-supplied int metadata must not be silently dropped."""
+        result = _sanitize_openai_batch_metadata({"priority": 1, "retries": 3})
+        assert result == {"priority": "1", "retries": "3"}
+
+    def test_scalar_float_value_converted_to_str(self):
+        result = _sanitize_openai_batch_metadata({"threshold": 0.95})
+        assert result == {"threshold": "0.95"}
+
+    def test_scalar_bool_value_converted_to_str(self):
+        result = _sanitize_openai_batch_metadata({"is_urgent": True, "debug": False})
+        assert result == {"is_urgent": "True", "debug": "False"}
+
 
 # ---------------------------------------------------------------------------
 # End-to-end scenario: simulate pre-call hooks injecting metadata then

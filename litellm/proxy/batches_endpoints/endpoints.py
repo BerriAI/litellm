@@ -57,6 +57,7 @@ def _sanitize_openai_batch_metadata(
     Rules applied:
     - String values → kept as-is
     - List values → joined into a comma-separated string (e.g. ``"policy_a,policy_b"``)
+    - Scalar primitives (int, float, bool) → converted to string (e.g. ``3 → "3"``)
     - All other types (dicts, objects, …) → dropped to avoid leaking internal state
       and to prevent 400 validation errors from OpenAI
     """
@@ -68,6 +69,8 @@ def _sanitize_openai_batch_metadata(
             sanitized[k] = v
         elif isinstance(v, list):
             sanitized[k] = ",".join(str(item) for item in v)
+        elif isinstance(v, (int, float, bool)):
+            sanitized[k] = str(v)
         # else: drop complex objects (dicts, Pydantic models, etc.)
     return sanitized or None
 
