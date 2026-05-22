@@ -194,7 +194,11 @@ CLAUDE_CODE_VERSION="$(env -i \
   TMPDIR="${TMPDIR:-/tmp}" \
   claude --version 2>/dev/null \
   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?' \
-  | head -n1)"
+  | head -n1 || true)"
+# `|| true` above keeps `set -Eeuo pipefail` from aborting silently when
+# `grep` finds no match (exit 1) — without it the assignment inherits the
+# pipeline's non-zero exit, `set -e` kills the script, and the operator
+# never sees the helpful diagnostic below.
 [[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not parse semver from 'claude --version'"
 log "local claude code: ${CLAUDE_CODE_VERSION}"
 

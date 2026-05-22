@@ -35,6 +35,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_DAILY = REPO_ROOT / "tests" / "claude_code" / "cron_vm" / "run_daily.sh"
 
+# The extracted snippet starts AFTER `log`/`die` are defined in run_daily.sh,
+# so the test harness has to provide its own stubs. Without them, a failure
+# inside the snippet (e.g. jq returning an empty LITELLM_VERSION) would crash
+# with `bash: die: command not found` (exit 127) instead of the intended
+# diagnostic, making test failures unnecessarily hard to debug.
+_PREAMBLE = (
+    "set -Eeuo pipefail\n"
+    "log() { printf '==> %s\\n' \"$*\" >&2; }\n"
+    "die() { printf 'ERROR: %s\\n' \"$*\" >&2; exit 1; }\n"
+)
+
 
 def test_run_daily_does_not_early_break_on_first_stable_page() -> None:
     """The regex pattern `select(test("...stable$"))] | length > 0` followed
@@ -211,8 +222,10 @@ def test_run_daily_resolves_highest_semver_across_pages(tmp_path: Path) -> None:
 
     snippet = _extract_resolution_snippet()
     script = (
-        "set -Eeuo pipefail\n"
-        f"WORKDIR={workdir!s}\n" + snippet + 'printf "%s" "${LITELLM_VERSION}"\n'
+        _PREAMBLE
+        + f"WORKDIR={workdir!s}\n"
+        + snippet
+        + 'printf "%s" "${LITELLM_VERSION}"\n'
     )
 
     env = {
@@ -249,8 +262,10 @@ def test_run_daily_terminates_on_empty_page(tmp_path: Path) -> None:
 
     snippet = _extract_resolution_snippet()
     script = (
-        "set -Eeuo pipefail\n"
-        f"WORKDIR={workdir!s}\n" + snippet + 'printf "%s" "${LITELLM_VERSION}"\n'
+        _PREAMBLE
+        + f"WORKDIR={workdir!s}\n"
+        + snippet
+        + 'printf "%s" "${LITELLM_VERSION}"\n'
     )
 
     env = {
