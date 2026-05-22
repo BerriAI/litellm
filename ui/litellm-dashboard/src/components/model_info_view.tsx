@@ -256,11 +256,21 @@ export default function ModelInfoView({
         tags: values.tags,
       };
 
-      if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
-        updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // User explicitly cleared the field — signal null so the backend removes the override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
       }
-      if (form.isFieldTouched("output_cost") && values.output_cost !== undefined && values.output_cost !== null) {
-        updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          // User explicitly cleared the field — signal null so the backend removes the override.
+          updatedLitellmParams.output_cost_per_token = null;
+        }
       }
 
       // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).

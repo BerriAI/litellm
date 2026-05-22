@@ -1497,6 +1497,156 @@ class TestUpdateDBModelBlocked:
         assert "blocked" not in result
 
 
+class TestUpdateDBModelClearPricing:
+    """When a user explicitly sets a pricing field to null, `update_db_model` must
+    remove it from *both* litellm_params and model_info (SPECIAL_MODEL_INFO_PARAMS
+    fields are mirrored between the two by Deployment.__init__).
+
+    Regression for LIT-3250: impossible to remove custom input/output cost for
+    wildcard models.
+    """
+
+    def _build_model_with_pricing(self) -> "Deployment":
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        return Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                input_cost_per_token=0.000001,
+                output_cost_per_token=0.000002,
+            ),
+            model_info=ModelInfo(id="dep-pricing-0"),
+        )
+
+    def test_clear_input_cost_removes_from_litellm_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateDeployment, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None)
+            ),
+        )
+
+        litellm_params = result.get("litellm_params")
+        assert litellm_params is not None
+        import json
+
+        params_dict = json.loads(litellm_params)
+        assert (
+            "input_cost_per_token" not in params_dict
+        ), "input_cost_per_token should be removed from litellm_params after explicit null"
+
+    def test_clear_input_cost_removes_from_model_info(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateDeployment, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None)
+            ),
+        )
+
+        model_info = result.get("model_info")
+        assert model_info is not None
+        import json
+
+        info_dict = json.loads(model_info)
+        assert "input_cost_per_token" not in info_dict, (
+            "input_cost_per_token should be removed from model_info after explicit null "
+            "(SPECIAL_MODEL_INFO_PARAMS sync)"
+        )
+
+    def test_clear_output_cost_removes_from_both(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateDeployment, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=None)
+            ),
+        )
+
+        import json
+
+        params_dict = json.loads(result["litellm_params"])
+        info_dict = json.loads(result["model_info"])
+        assert "output_cost_per_token" not in params_dict
+        assert "output_cost_per_token" not in info_dict
+
+    def test_non_null_pricing_update_still_works(self):
+        """Setting a new pricing value should still be persisted correctly."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateDeployment, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.000005)
+            ),
+        )
+
+        import json
+
+        params_dict = json.loads(result["litellm_params"])
+        assert params_dict.get("input_cost_per_token") == 0.000005
+
+    def test_omitted_pricing_field_is_left_untouched(self):
+        """A field not present in the patch must not be cleared (PATCH semantics)."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateDeployment, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            # patch only touches output_cost — input_cost must survive
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=0.000003)
+            ),
+        )
+
+        import json
+
+        params_dict = json.loads(result["litellm_params"])
+        # input_cost_per_token was NOT in the patch, so it should be preserved
+        assert params_dict.get("input_cost_per_token") == 0.000001
+
+    def test_clear_pricing_via_model_info_removes_from_both(self):
+        """Sending null in model_info (instead of litellm_params) should also clear
+        from litellm_params via the SPECIAL_MODEL_INFO_PARAMS sync path."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, ModelInfo, updateDeployment
+
+        result = update_db_model(
+            db_model=self._build_model_with_pricing(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-pricing-0", input_cost_per_token=None)
+            ),
+        )
+
+        import json
+
+        params_dict = json.loads(result["litellm_params"])
+        info_dict = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params_dict
+        assert "input_cost_per_token" not in info_dict
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""
