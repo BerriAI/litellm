@@ -202,6 +202,107 @@ async def test_circuit_breaker_open_skips_redis():
     assert fr.call_count == 0  # method body never executed
 
 
+@pytest.mark.asyncio
+async def test_circuit_breaker_disabled_does_not_open_after_failures():
+    """
+    Baseline for LIT-3263 mitigation: with REDIS_CIRCUIT_BREAKER_ENABLED=false,
+    repeated Redis failures must not open the circuit or fast-fail subsequent calls.
+    """
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=2,
+                recovery_timeout=60,
+                enabled=False,
+            )
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def do_thing(self):
+            self.call_count += 1
+            raise ConnectionError("pool exhausted")
+
+    fr = FakeRedis()
+    for _ in range(5):
+        with pytest.raises(ConnectionError, match="pool exhausted"):
+            await fr.do_thing()
+
+    assert fr.call_count == 5
+    assert fr._circuit_breaker._state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_enabled_opens_after_failures():
+    """With the circuit breaker enabled, consecutive failures open the circuit."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=2,
+                recovery_timeout=60,
+                enabled=True,
+            )
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def do_thing(self):
+            self.call_count += 1
+            raise ConnectionError("pool exhausted")
+
+    fr = FakeRedis()
+    with pytest.raises(ConnectionError, match="pool exhausted"):
+        await fr.do_thing()
+    with pytest.raises(ConnectionError, match="pool exhausted"):
+        await fr.do_thing()
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        await fr.do_thing()
+
+    assert fr.call_count == 2
+    assert fr._circuit_breaker._state == "open"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_disabled_always_calls_redis():
+    """When disabled, the guard never fast-fails and does not track failures."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=1,
+                recovery_timeout=60,
+                enabled=False,
+            )
+            self._circuit_breaker._state = "open"
+            self._circuit_breaker._opened_at = time.time()
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def do_thing(self):
+            self.call_count += 1
+            raise Exception("redis down")
+
+    fr = FakeRedis()
+    with pytest.raises(Exception, match="redis down"):
+        await fr.do_thing()
+
+    assert fr.call_count == 1
+    assert fr._circuit_breaker._state == "open"
+    assert fr._circuit_breaker._failure_count == 0
+
+
 def test_circuit_breaker_closes_on_recovery():
     """After recovery_timeout expires, probe is allowed and success closes the circuit."""
     from litellm.caching.redis_cache import RedisCircuitBreaker

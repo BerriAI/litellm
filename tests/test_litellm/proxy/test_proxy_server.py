@@ -5530,7 +5530,7 @@ async def test_get_current_spend_reads_redis_first():
 
     # Mock Redis with cross-pod authoritative value
     mock_redis = AsyncMock()
-    mock_redis.async_get_cache = AsyncMock(return_value=0.90)
+    mock_redis.async_batch_get_cache = AsyncMock(return_value={"spend:key:test": 0.90})
     counter_cache.redis_cache = mock_redis
 
     import litellm.proxy.proxy_server as ps
@@ -5547,8 +5547,49 @@ async def test_get_current_spend_reads_redis_first():
         )
         # Should return Redis value (0.90), not in-memory (0.30)
         assert result == 0.90
-        mock_redis.async_get_cache.assert_called_once_with(key="spend:key:test")
+        mock_redis.async_batch_get_cache.assert_called_once_with(["spend:key:test"])
     finally:
+        ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_prefetch_spend_counters_uses_single_mget():
+    """prefetch_spend_counters should resolve all keys in one Redis MGET."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    mock_redis = AsyncMock()
+    mock_redis.async_batch_get_cache = AsyncMock(
+        return_value={
+            "spend:key:a": 1.0,
+            "spend:team:b": 2.0,
+        }
+    )
+    counter_cache.redis_cache = mock_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import (
+            clear_spend_counter_prefetch,
+            get_current_spend,
+            prefetch_spend_counters,
+        )
+
+        await prefetch_spend_counters(
+            {
+                "spend:key:a": 0.0,
+                "spend:team:b": 0.0,
+            }
+        )
+        assert await get_current_spend("spend:key:a", 0.0) == 1.0
+        assert await get_current_spend("spend:team:b", 0.0) == 2.0
+        mock_redis.async_batch_get_cache.assert_called_once()
+    finally:
+        clear_spend_counter_prefetch()
         ps.spend_counter_cache = original
 
 
@@ -5859,15 +5900,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
@@ -6418,8 +6460,9 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
     request through against a stale in-process `team_membership.spend`.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     recorded_seeds: list = []
 
@@ -6430,6 +6473,9 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
     fake_redis = AsyncMock()
     fake_redis.async_set_cache = AsyncMock(side_effect=record_set_cache)
     fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_batch_get_cache = AsyncMock(
+        return_value={"spend:team_member:user-1:team-1": None}
+    )
     counter_cache.redis_cache = fake_redis
 
     # DB has authoritative spend=362.0; caller hands us stale fallback=30.0
@@ -6472,8 +6518,9 @@ async def test_get_current_spend_uses_fallback_when_db_unavailable():
     must degrade to the caller-supplied fallback rather than raising.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
@@ -6505,8 +6552,9 @@ async def test_get_current_spend_coalesces_concurrent_reseeds():
     import asyncio as _asyncio
 
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     counter_key = "spend:team_member:user-1:team-coalesce"
 
@@ -6578,8 +6626,9 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
     can still hold the pre-reset value across pods.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
@@ -6746,8 +6795,9 @@ async def test_reseed_warms_cache_even_on_zero_db_spend():
     zero-spend entities.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     counter_key = "spend:team_member:user-1:team-zero-warm"
     redis_store: dict = {}
@@ -7398,8 +7448,9 @@ async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
     fall-through returned $30, enforcement passed, bypass.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     counter_key = "spend:team_member:user-1:team-1"
 
@@ -7408,6 +7459,7 @@ async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
 
     # Redis cleanly returns None (key expired or never written on this pod).
     fake_redis = AsyncMock()
+    fake_redis.async_batch_get_cache = AsyncMock(return_value={counter_key: None})
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     fake_redis.async_increment = AsyncMock(return_value=500.0)
     counter_cache.redis_cache = fake_redis
@@ -7440,15 +7492,18 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
     than going straight to DB - in-memory is at least same-pod-fresh and
     cheaper than a DB query during a Redis outage."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch, get_current_spend
 
+    clear_spend_counter_prefetch()
     counter_cache = DualCache()
     counter_key = "spend:team_member:user-1:team-1"
 
     counter_cache.in_memory_cache.set_cache(key=counter_key, value=42.0)
 
     fake_redis = AsyncMock()
-    fake_redis.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    fake_redis.async_batch_get_cache = AsyncMock(
+        side_effect=ConnectionError("redis down")
+    )
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()

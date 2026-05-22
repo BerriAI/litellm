@@ -491,6 +491,117 @@ async def check_tools_allowlist(
         )
 
 
+def _append_budget_window_spend_counter_requests(
+    counter_requests: Dict[str, float],
+    prefix: str,
+    budget_limits: Optional[List[Any]],
+) -> None:
+    if not budget_limits:
+        return
+    for window in budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_requests[f"{prefix}:window:{w['budget_duration']}"] = 0.0
+
+
+async def _prefetch_common_check_spend_counters(
+    *,
+    request_body: dict,
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    end_user_object: Optional[LiteLLM_EndUserTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Batch-fetch all spend counters needed by common_checks budget enforcement
+    in one Redis MGET to reduce connection pool pressure under high load.
+    """
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.proxy_server import prefetch_spend_counters
+
+    counter_requests: Dict[str, float] = {}
+
+    if team_object is not None and team_object.max_budget is not None:
+        counter_requests[f"spend:team:{team_object.team_id}"] = team_object.spend or 0.0
+        _append_budget_window_spend_counter_requests(
+            counter_requests=counter_requests,
+            prefix=f"spend:team:{team_object.team_id}",
+            budget_limits=team_object.budget_limits,
+        )
+
+    if valid_token is not None:
+        _append_budget_window_spend_counter_requests(
+            counter_requests=counter_requests,
+            prefix=f"spend:key:{valid_token.token}",
+            budget_limits=valid_token.budget_limits,
+        )
+        org_id: Optional[str] = valid_token.org_id
+        if org_id is None and team_object is not None:
+            org_id = team_object.organization_id
+        if org_id is not None and prisma_client is not None:
+            try:
+                org_table = await get_org_object(
+                    org_id=org_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    include_budget_table=True,
+                )
+            except Exception:
+                org_table = None
+            if org_table is not None and (
+                org_table.litellm_budget_table is None
+                or org_table.litellm_budget_table.max_budget is None
+                or org_table.litellm_budget_table.max_budget <= 0
+            ):
+                pass
+            elif org_table is not None:
+                counter_requests[f"spend:org:{org_id}"] = org_table.spend or 0.0
+        if (
+            valid_token.user_id is not None
+            and team_object is not None
+            and team_object.team_id is not None
+        ):
+            counter_requests[
+                f"spend:team_member:{valid_token.user_id}:{team_object.team_id}"
+            ] = 0.0
+
+    if (
+        (team_object is None or team_object.team_id is None)
+        and user_object is not None
+        and user_object.max_budget is not None
+    ):
+        counter_requests[f"spend:user:{user_object.user_id}"] = user_object.spend or 0.0
+
+    if (
+        end_user_object is not None
+        and end_user_object.litellm_budget_table is not None
+        and end_user_object.litellm_budget_table.max_budget is not None
+    ):
+        counter_requests[f"spend:end_user:{end_user_object.user_id}"] = (
+            end_user_object.spend or 0.0
+        )
+
+    tags = get_tags_from_request_body(request_body=request_body)
+    if tags and prisma_client is not None:
+        tag_objects = await get_tag_objects_batch(
+            tag_names=tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        for tag_name, tag_object in tag_objects.items():
+            if (
+                tag_object.litellm_budget_table is not None
+                and tag_object.litellm_budget_table.max_budget is not None
+            ):
+                counter_requests[f"spend:tag:{tag_name}"] = tag_object.spend or 0.0
+
+    await prefetch_spend_counters(counter_requests)
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -621,6 +732,17 @@ async def common_checks(  # noqa: PLR0915
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
+        await _prefetch_common_check_spend_counters(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_object=end_user_object,
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
         # 3. If team is in budget
         with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
             await _team_max_budget_check(

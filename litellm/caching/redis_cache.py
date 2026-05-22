@@ -16,12 +16,13 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypeAlias, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
+    REDIS_CIRCUIT_BREAKER_ENABLED,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
@@ -42,16 +43,16 @@ if TYPE_CHECKING:
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
 
-    pipeline = Pipeline
-    cluster_pipeline = ClusterPipeline
-    async_redis_client = Redis
-    async_redis_cluster_client = RedisCluster
+    AsyncRedisClient: TypeAlias = Redis
+    AsyncRedisClusterClient: TypeAlias = RedisCluster
+    RedisPipeline: TypeAlias = Pipeline
+    RedisClusterPipeline: TypeAlias = ClusterPipeline
     Span = Union[_Span, Any]
 else:
-    pipeline = Any
-    cluster_pipeline = Any
-    async_redis_client = Any
-    async_redis_cluster_client = Any
+    AsyncRedisClient: TypeAlias = Any
+    AsyncRedisClusterClient: TypeAlias = Any
+    RedisPipeline: TypeAlias = Any
+    RedisClusterPipeline: TypeAlias = Any
     Span = Any
 
 
@@ -114,15 +115,24 @@ class RedisCircuitBreaker:
     OPEN = "open"
     HALF_OPEN = "half_open"
 
-    def __init__(self, failure_threshold: int, recovery_timeout: int) -> None:
+    def __init__(
+        self,
+        failure_threshold: int,
+        recovery_timeout: int,
+        *,
+        enabled: bool = True,
+    ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
+        self.enabled = enabled
         self._failure_count = 0
         self._opened_at: Optional[float] = None
         self._state = self.CLOSED
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
+        if not self.enabled:
+            return False
         if self._state == self.HALF_OPEN:
             # Probe already in flight — fast-fail all concurrent requests.
             # Only the one call that caused the OPEN→HALF_OPEN transition
@@ -136,6 +146,8 @@ class RedisCircuitBreaker:
         return False
 
     def record_failure(self) -> None:
+        if not self.enabled:
+            return
         self._failure_count += 1
         self._opened_at = time.time()
         if self._failure_count >= self.failure_threshold:
@@ -164,16 +176,18 @@ def _redis_circuit_breaker_guard(method):  # type: ignore
 
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):  # type: ignore
-        if self._circuit_breaker.is_open():
+        if self._circuit_breaker.enabled and self._circuit_breaker.is_open():
             raise Exception(
                 f"Redis circuit breaker is open — skipping {method.__name__}"
             )
         try:
             result = await method(self, *args, **kwargs)
-            self._circuit_breaker.record_success()
+            if self._circuit_breaker.enabled:
+                self._circuit_breaker.record_success()
             return result
         except Exception:
-            self._circuit_breaker.record_failure()
+            if self._circuit_breaker.enabled:
+                self._circuit_breaker.record_failure()
             raise
 
     return wrapper
@@ -220,7 +234,7 @@ class RedisCache(BaseCache):
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_async_client: Optional[
-            Union[async_redis_client, async_redis_cluster_client]
+            Union[AsyncRedisClient, AsyncRedisClusterClient]
         ] = None
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
@@ -243,6 +257,7 @@ class RedisCache(BaseCache):
         self._circuit_breaker = RedisCircuitBreaker(
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
 
         self._setup_health_pings()
@@ -327,7 +342,7 @@ class RedisCache(BaseCache):
 
     def init_async_client(
         self,
-    ) -> Union[async_redis_client, async_redis_cluster_client]:
+    ) -> Union[AsyncRedisClient, AsyncRedisClusterClient]:
         from litellm import in_memory_llm_clients_cache
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
@@ -336,7 +351,7 @@ class RedisCache(BaseCache):
         cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(
-                Union[async_redis_client, async_redis_cluster_client], cached_client
+                Union[AsyncRedisClient, AsyncRedisClusterClient], cached_client
             )
         else:
             # Create new connection pool and client for current event loop
@@ -637,7 +652,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_helper(
         self,
-        pipe: Union[pipeline, cluster_pipeline],
+        pipe: Union[RedisPipeline, RedisClusterPipeline],
         cache_list: List[Tuple[Any, Any]],
         ttl: Optional[float],
     ) -> List:
@@ -727,7 +742,7 @@ class RedisCache(BaseCache):
 
     async def _set_cache_sadd_helper(
         self,
-        redis_client: async_redis_client,
+        redis_client: AsyncRedisClient,
         key: str,
         value: List,
         ttl: Optional[float],
@@ -1222,7 +1237,8 @@ class RedisCache(BaseCache):
         self.redis_client.flushall()
 
     async def disconnect(self):
-        await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        if self.async_redis_conn_pool is not None:
+            await self.async_redis_conn_pool.disconnect(inuse_connections=True)
         try:
             self.redis_client.close()
         except Exception as e:
@@ -1277,7 +1293,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_increment_helper(
         self,
-        pipe: pipeline,
+        pipe: RedisPipeline,
         increment_list: List[RedisPipelineIncrementOperation],
     ) -> Optional[List[float]]:
         """Helper function for pipeline increment operations"""
@@ -1441,7 +1457,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_rpush_helper(
         self,
-        pipe: pipeline,
+        pipe: RedisPipeline,
         rpush_list: List[RedisPipelineRpushOperation],
     ) -> List[int]:
         """Helper function for pipeline rpush operations"""
@@ -1510,7 +1526,7 @@ class RedisCache(BaseCache):
             raise e
 
     async def handle_lpop_count_for_older_redis_versions(
-        self, pipe: pipeline, key: str, count: int
+        self, pipe: RedisPipeline, key: str, count: int
     ) -> List[bytes]:
         result: List[bytes] = []
         for _ in range(count):
@@ -1593,7 +1609,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_lpop_helper(
         self,
-        pipe: pipeline,
+        pipe: RedisPipeline,
         lpop_list: List[RedisPipelineLpopOperation],
     ) -> List[Optional[List[str]]]:
         """Helper function for pipeline lpop operations.
