@@ -177,7 +177,7 @@ async def test_proxy_failure_metrics():
 @pytest.mark.flaky(retries=3, delay=2)
 async def test_proxy_success_metrics():
     """
-    Make 1 good /chat/completions call to "openai/gpt-3.5-turbo"
+    Make 1 good /chat/completions call to "openai/gpt-5-mini"
     GET /metrics
     Assert the success metric is incremented by 1
     """
@@ -610,22 +610,18 @@ def extract_user_budget_metrics(metrics_text: str, user_id: str) -> Dict[str, fl
     # Escape user_id for regex pattern matching
     escaped_user_id = re.escape(user_id)
 
-    # Get remaining budget
-    remaining_pattern = (
-        f'litellm_remaining_user_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
-    )
+    # Get remaining budget (user_email and user_alias may also be present as labels)
+    remaining_pattern = rf'litellm_remaining_user_budget_metric{{[^}}]*user="{escaped_user_id}"[^}}]*}} ([0-9.]+)'
     remaining_match = re.search(remaining_pattern, metrics_text)
     metrics["remaining"] = float(remaining_match.group(1)) if remaining_match else None
 
     # Get total budget
-    total_pattern = (
-        f'litellm_user_max_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
-    )
+    total_pattern = rf'litellm_user_max_budget_metric{{[^}}]*user="{escaped_user_id}"[^}}]*}} ([0-9.]+)'
     total_match = re.search(total_pattern, metrics_text)
     metrics["total"] = float(total_match.group(1)) if total_match else None
 
     # Get remaining hours
-    hours_pattern = f'litellm_user_budget_remaining_hours_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    hours_pattern = rf'litellm_user_budget_remaining_hours_metric{{[^}}]*user="{escaped_user_id}"[^}}]*}} ([0-9.]+)'
     hours_match = re.search(hours_pattern, metrics_text)
     metrics["remaining_hours"] = float(hours_match.group(1)) if hours_match else None
 

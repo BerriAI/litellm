@@ -62,8 +62,8 @@ def testing_litellm_router():
     return Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
                 "model_id": "test_deployment",
             },
             {
@@ -113,7 +113,7 @@ def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     """
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
     _exception = litellm.exceptions.RateLimitError(
-        "Rate limit", "openai", "gpt-3.5-turbo"
+        "Rate limit", "openai", "gpt-5-mini"
     )
     assert (
         _should_cooldown_deployment(
@@ -129,7 +129,7 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     """
     # Test 401 error (auth limit) -> always cooldown a deployment returning 401s
     _exception = litellm.exceptions.AuthenticationError(
-        "Unauthorized", "openai", "gpt-3.5-turbo"
+        "Unauthorized", "openai", "gpt-5-mini"
     )
     assert (
         _should_cooldown_deployment(
@@ -151,7 +151,7 @@ async def test_should_cooldown_deployment(testing_litellm_router):
 
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
     _exception = litellm.exceptions.RateLimitError(
-        "Rate limit", "openai", "gpt-3.5-turbo"
+        "Rate limit", "openai", "gpt-5-mini"
     )
     assert (
         _should_cooldown_deployment(
@@ -211,8 +211,8 @@ async def test_should_cooldown_deployment_allowed_fails_set_on_router():
     router = Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
                 "model_id": "test_deployment",
             },
         ]
@@ -295,8 +295,8 @@ def router():
     return Router(
         model_list=[
             {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4"},
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "gpt-5.5"},
                 "model_info": {
                     "id": "gpt-4--0",
                 },
@@ -445,7 +445,7 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     )
 
     _exception = litellm.exceptions.InternalServerError(
-        "Internal error", "openai", "gpt-3.5-turbo"
+        "Internal error", "openai", "gpt-5-mini"
     )
 
     # With only 1 request, should NOT cooldown (below minimum threshold)

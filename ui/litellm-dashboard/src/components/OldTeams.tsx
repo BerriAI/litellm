@@ -45,6 +45,7 @@ import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -1445,6 +1446,30 @@ const Teams: React.FC<TeamProps> = ({
                           accessToken={accessToken || ""}
                           placeholder="Select vector stores (optional)"
                         />
+                      </Form.Item>
+                      <Form.Item
+                        label="Allowed Pass Through Routes"
+                        name="allowed_passthrough_routes"
+                        className="mt-8"
+                      >
+                        <Tooltip
+                          title={
+                            !premiumUser
+                              ? "Premium feature - Upgrade to set allowed pass through routes"
+                              : !isProxyAdminRole(userRole || "")
+                                ? "Only proxy admins can set allowed pass through routes"
+                                : ""
+                          }
+                          placement="top"
+                        >
+                          <PassThroughRoutesSelector
+                            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                            value={form.getFieldValue("allowed_passthrough_routes")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select pass through routes (optional)"
+                            disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
+                          />
+                        </Tooltip>
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

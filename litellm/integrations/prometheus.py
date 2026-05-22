@@ -3540,6 +3540,10 @@ class PrometheusLogger(CustomLogger):
             user_object.budget_reset_at = user_info.budget_reset_at
             if user_object.max_budget is None and user_info.max_budget is not None:
                 user_object.max_budget = user_info.max_budget
+            if user_info.user_email is not None:
+                user_object.user_email = user_info.user_email
+            if user_info.user_alias is not None:
+                user_object.user_alias = user_info.user_alias
 
         return user_object
 
@@ -3556,6 +3560,8 @@ class PrometheusLogger(CustomLogger):
         """
         enum_values = UserAPIKeyLabelValues(
             user=user.user_id,
+            user_email=user.user_email or "",
+            user_alias=user.user_alias or "",
         )
 
         _labels = prometheus_label_factory(

@@ -1,0 +1,49 @@
+LiteLLM componentized — release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Components:
+{{- if .Values.gateway.enabled }}
+  - gateway  : Service {{ include "litellm.gateway.fullname" . }} on port {{ .Values.gateway.service.port }}
+{{- end }}
+{{- if .Values.backend.enabled }}
+  - backend  : Service {{ include "litellm.backend.fullname" . }} on port {{ .Values.backend.service.port }}
+{{- end }}
+{{- if .Values.ui.enabled }}
+  - ui       : Service {{ include "litellm.ui.fullname" . }} on port {{ .Values.ui.service.port }}
+{{- end }}
+
+Port-forward examples:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.gateway.fullname" . }} {{ .Values.gateway.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.backend.fullname" . }} {{ .Values.backend.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.ui.fullname" . }} {{ .Values.ui.service.port }}
+
+Reminders:
+  - Sensitive values come from Secret references only. Before installing, set:
+      - masterKey.secretName                                   (Secret with the proxy master key)
+      - database.writer.{host,port,dbname}                     (writer connection pieces)
+      - database.writer.passwordSecret.{name,usernameKey,passwordKey}
+                                                               (Secret holding the writer DB username + password)
+      - database.writer.useIAMAuth: true                       (optional — chart sets IAM_TOKEN_DB_AUTH=true and
+                                                                omits DATABASE_PASSWORD / DATABASE_URL so the proxy
+                                                                mints the URL from an IAM token at startup)
+      - database.reader.host                                   (optional — enables read-replica routing; reader
+                                                                .passwordSecret.name is required when set, unless
+                                                                .useIAMAuth is true)
+      - database.reader.useIAMAuth: true                       (optional, requires database.writer.useIAMAuth: true —
+                                                                chart emits DATABASE_*_READ_REPLICA env vars and
+                                                                omits DATABASE_PASSWORD_READ_REPLICA /
+                                                                DATABASE_URL_READ_REPLICA so the proxy mints the
+                                                                reader URL from an IAM token at startup)
+      - redis.passwordSecret.name                              (optional — set when redis.host is provided and the
+                                                                cache requires auth)
+      - redis.cluster: true                                    (optional — chart sets REDIS_CLUSTER_NODES from
+                                                                redis.host / redis.port so the proxy's Cache()
+                                                                constructs a RedisClusterCache; the cluster client
+                                                                discovers remaining nodes from CLUSTER SLOTS)
+  - Per-component extras (gateway / backend / ui):
+      - {component}.extraEnv / envConfigMaps / envSecrets      (the latter two are lists of resource names →
+                                                                envFrom configMapRef / secretRef)
+      - {component}.logLevel                                   (renders as LITELLM_LOG)
+      - gateway.config.proxy_config                            (rendered into a ConfigMap and mounted at
+                                                                /app/config/config.yaml; gateway reads it via
+                                                                CONFIG_FILE_PATH)
+  - Enable ingress.enabled=true to dispatch / → ui, gateway data-plane prefixes → gateway, and the catch-all → backend.

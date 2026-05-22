@@ -184,6 +184,7 @@ autoscaling:
   maxReplicas: 100
   targetCPUUtilizationPercentage: 80
   # targetMemoryUtilizationPercentage: 80
+  # behavior: {}
 
 # Autoscaling with keda is mutually exclusive with hpa
 keda:
