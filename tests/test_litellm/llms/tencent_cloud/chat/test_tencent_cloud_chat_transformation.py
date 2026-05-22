@@ -117,3 +117,13 @@ class TestTencentCloudChatConfig:
             headers={},
         )
         assert result["model"] == "minimax-m2.7"
+
+    def test_provider_config_manager_returns_tencent_cloud_config(self):
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="minimax-m2.7",
+            provider=LlmProviders.TENCENT_CLOUD,
+        )
+        assert isinstance(config, TencentCloudChatConfig)
