@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     OpenTelemetryConfig = _OpenTelemetryConfig
     Span = Union[_Span, Any]
     OpenTelemetry = _OpenTelemetry
-    LITELLM_TRACER_NAME = _LITELLM_TRACER_NAME
+    LITELLM_TRACER_NAME: str = _LITELLM_TRACER_NAME
 else:
     Protocol = Any
     OpenTelemetryConfig = Any
@@ -121,9 +121,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             try:
                 provider.force_flush()
             except Exception as e:
-                verbose_logger.debug(
-                    "ArizePhoenixLogger: TracerProvider force_flush failed: %s", e
-                )
+                verbose_logger.debug("ArizePhoenixLogger: TracerProvider force_flush failed: %s", e)
 
     def _get_litellm_resource_for_project(self, project_name: str):
         """
@@ -140,10 +138,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             "model_id": project_name,
             "service.name": project_name,
         }
-        if getattr(self.config, "deployment_environment", None):
-            project_attributes["deployment.environment"] = (
-                self.config.deployment_environment
-            )
+        deployment_environment = getattr(self.config, "deployment_environment", None)
+        if deployment_environment is not None:
+            project_attributes["deployment.environment"] = deployment_environment
 
         env_resource = OTELResourceDetector().detect()
         project_resource = Resource.create(project_attributes)  # type: ignore[arg-type]
@@ -159,13 +156,9 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         with self._project_providers_lock:
             if project_name in self._project_providers:
                 self._project_providers.move_to_end(project_name)
-                return self._project_providers[project_name].get_tracer(
-                    LITELLM_TRACER_NAME
-                )
+                return self._project_providers[project_name].get_tracer(LITELLM_TRACER_NAME)
 
-            provider = TracerProvider(
-                resource=self._get_litellm_resource_for_project(project_name)
-            )
+            provider = TracerProvider(resource=self._get_litellm_resource_for_project(project_name))
             provider.add_span_processor(self._shared_span_processor)
 
             if len(self._project_providers) >= _MAX_PROJECT_PROVIDERS:
@@ -234,17 +227,13 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         auth_metadata = metadata.get("user_api_key_auth_metadata")
         if isinstance(auth_metadata, dict):
-            return ArizePhoenixLogger._normalize_project_name(
-                auth_metadata.get(metadata_key)
-            )
+            return ArizePhoenixLogger._normalize_project_name(auth_metadata.get(metadata_key))
         return None
 
     @staticmethod
     def _metadata_project_from_kwargs(kwargs: dict, metadata_key: str) -> Optional[str]:
         for metadata in ArizePhoenixLogger._iter_metadata_dicts_from_kwargs(kwargs):
-            project = ArizePhoenixLogger._project_from_metadata_dict(
-                metadata, metadata_key
-            )
+            project = ArizePhoenixLogger._project_from_metadata_dict(metadata, metadata_key)
             if project:
                 return project
         return None
@@ -257,21 +246,16 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         Priority: metadata.phoenix_project_name_override, metadata.phoenix_project_name,
         PHOENIX_PROJECT_NAME / ARIZE_PROJECT_NAME env, then ``default``.
         """
-        override = ArizePhoenixLogger._metadata_project_from_kwargs(
-            kwargs, "phoenix_project_name_override"
-        )
+        override = ArizePhoenixLogger._metadata_project_from_kwargs(kwargs, "phoenix_project_name_override")
         if override:
             return override
 
-        phoenix_name = ArizePhoenixLogger._metadata_project_from_kwargs(
-            kwargs, "phoenix_project_name"
-        )
+        phoenix_name = ArizePhoenixLogger._metadata_project_from_kwargs(kwargs, "phoenix_project_name")
         if phoenix_name:
             return phoenix_name
 
         env_name = ArizePhoenixLogger._normalize_project_name(
-            os.environ.get("PHOENIX_PROJECT_NAME")
-            or os.environ.get("ARIZE_PROJECT_NAME")
+            os.environ.get("PHOENIX_PROJECT_NAME") or os.environ.get("ARIZE_PROJECT_NAME")
         )
         if env_name:
             return env_name
@@ -302,11 +286,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
 
-        traceparent_ctx = (
-            self.get_traceparent_from_header(headers=headers)
-            if headers.get("traceparent")
-            else None
-        )
+        traceparent_ctx = self.get_traceparent_from_header(headers=headers) if headers.get("traceparent") else None
 
         is_proxy_mode = bool(proxy_server_request)
 
@@ -314,9 +294,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
             parent_span = tracer.start_span(
                 name="litellm_proxy_request",
-                start_time=(
-                    self._to_ns(start_time_val) if start_time_val is not None else None
-                ),
+                start_time=(self._to_ns(start_time_val) if start_time_val is not None else None),
                 context=traceparent_ctx,
                 kind=self.span_kind.SERVER,
             )
@@ -326,14 +304,10 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         return traceparent_ctx, None
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
-        self._handle_phoenix_trace(
-            kwargs, response_obj, start_time, end_time, success=True
-        )
+        self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=True)
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
-        self._handle_phoenix_trace(
-            kwargs, response_obj, start_time, end_time, success=False
-        )
+        self._handle_phoenix_trace(kwargs, response_obj, start_time, end_time, success=False)
 
     def _handle_phoenix_trace(
         self,
@@ -434,9 +408,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         if api_key is not None:
             otlp_auth_headers = f"Authorization=Bearer {api_key}"
         elif "app.phoenix.arize.com" in endpoint:
-            raise ValueError(
-                "PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com)."
-            )
+            raise ValueError("PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com).")
 
         project_name = os.environ.get("PHOENIX_PROJECT_NAME") or "default"
 

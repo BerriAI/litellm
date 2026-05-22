@@ -211,8 +211,6 @@ _SAFE_CLIENT_CALLBACK_PARAMS: FrozenSet[str] = frozenset(
 _EXTRA_BANNED_OBSERVABILITY_PARAMS: FrozenSet[str] = frozenset(
     {
         "posthog_api_url",
-        "phoenix_project_name",
-        "phoenix_project_name_override",
         "wandb_api_key",
         "weave_project_id",
     }
