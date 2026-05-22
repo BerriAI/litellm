@@ -226,9 +226,29 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                 )
                 return [gemini_setup_msg]
 
-            verbose_logger.debug(
-                "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+            # A follow-up session.update can't be forwarded as a second setup
+            # (Vertex Live closes the WebSocket with 1007). If this drop is
+            # silencing the audio-transcription guardrail's create_response
+            # disable, surface a warning so operators know the model will
+            # auto-respond before the guardrail can gate it on Vertex AI.
+            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
+                json_message.get("session") or {}
             )
+            if (
+                isinstance(client_turn_detection, dict)
+                and client_turn_detection.get("create_response") is False
+            ):
+                verbose_logger.warning(
+                    "Vertex AI Realtime: Dropping subsequent session.update "
+                    "(turn_detection.create_response=False) — Vertex Live "
+                    "rejects a second setup message. Audio-transcription "
+                    "guardrails cannot suppress the model's auto-response on "
+                    "Vertex AI in non-deferred mode."
+                )
+            else:
+                verbose_logger.debug(
+                    "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+                )
             return []
 
         return super().transform_realtime_request(

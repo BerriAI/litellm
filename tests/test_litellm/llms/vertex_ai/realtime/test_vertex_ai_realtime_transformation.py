@@ -288,3 +288,61 @@ async def test_vertex_realtime_text_in_text_out():
     # response.done should have been forwarded
     done_msgs = [m for m in sent_to_client if '"response.done"' in m]
     assert done_msgs, "Expected response.done to be sent to client"
+
+
+def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
+    """A subsequent session.update carrying the guardrail's
+    ``create_response: False`` cannot be forwarded as a follow-up setup on
+    Vertex AI (1007). Surface a warning so operators know the auto-response
+    suppression is being silently dropped."""
+    import logging
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {"turn_detection": {"create_response": False}},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = cfg.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash-native-audio",
+            session_configuration_request=json.dumps({"setup": {"model": "x"}}),
+        )
+
+    assert result == []
+    assert any(
+        "Vertex AI Realtime" in record.message
+        and "create_response=False" in record.message
+        for record in caplog.records
+    )
+
+
+def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog):
+    """A subsequent session.update without ``create_response: False`` is a
+    routine drop and should stay at debug level (no warning)."""
+    import logging
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {"instructions": "Be concise."},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cfg.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash-native-audio",
+            session_configuration_request=json.dumps({"setup": {"model": "x"}}),
+        )
+
+    assert not any(
+        "Vertex AI Realtime" in record.message and "session.update" in record.message
+        for record in caplog.records
+    )
