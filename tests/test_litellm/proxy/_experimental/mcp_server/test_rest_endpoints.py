@@ -163,8 +163,9 @@ class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_m2m_credentials_forwarded_to_server_model(self, monkeypatch):
         """M2M OAuth credentials (client_id, client_secret) from the nested
-        ``credentials`` dict must be forwarded to the MCPServer model so that
-        ``has_client_credentials`` returns True and the proxy auto-fetches tokens."""
+        ``credentials`` dict must be forwarded to the MCPServer model.
+        has_client_credentials is True only when oauth2_flow is explicitly
+        set to 'client_credentials' — NOT from field presence alone."""
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
@@ -190,10 +191,12 @@ class TestExecuteWithMcpClient:
         async def ok_operation(client):
             return {"status": "ok"}
 
+        # Explicitly opt into client_credentials flow.
         payload = NewMCPServerRequest(
             server_name="m2m-server",
             url="https://example.com",
             auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
             token_url="https://auth.example.com/token",
             credentials={
                 "client_id": "my-id",
@@ -242,10 +245,12 @@ class TestExecuteWithMcpClient:
         async def ok_operation(client):
             return {"status": "ok"}
 
+        # Explicitly opt into client_credentials flow.
         payload = NewMCPServerRequest(
             server_name="m2m-server",
             url="https://example.com",
             auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
             token_url="https://auth.example.com/token",
             credentials={
                 "client_id": "my-id",
@@ -266,6 +271,83 @@ class TestExecuteWithMcpClient:
         assert (
             captured["extra_headers"] is None
             or "Authorization" not in captured["extra_headers"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_interactive_oauth_preserves_user_token(self, monkeypatch):
+        """Regression test for LIT-3282 (Slack MCP shows no tools after OAuth).
+
+        An interactive-OAuth server (authorization_code) that has client_id,
+        client_secret, AND token_url configured MUST NOT be treated as M2M.
+        The per-user access token in oauth2_headers must be forwarded to the
+        upstream MCP server unchanged.
+
+        Before the fix, _execute_with_mcp_client auto-detected
+        ``oauth2_flow="client_credentials"`` from field presence, which dropped
+        the user's token and attempted an M2M token fetch that always failed for
+        Slack (and any other interactive-only IdP).
+        """
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["server"] = kwargs.get("server")
+            captured["extra_headers"] = kwargs.get("extra_headers")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        # Slack-like server: has client_id, client_secret, token_url but
+        # oauth2_flow is NOT set (interactive auth, not M2M).
+        slack_payload = NewMCPServerRequest(
+            server_name="slack-mcp",
+            url="https://slack.com/api/mcp",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://slack.com/api/oauth.v2.access",
+            authorization_url="https://slack.com/oauth/v2/authorize",
+            # oauth2_flow intentionally absent — must not auto-detect M2M
+            credentials={
+                "client_id": "slack-app-client-id",
+                "client_secret": "slack-app-client-secret",
+            },
+        )
+
+        user_slack_token = "xoxb-user-slack-token"
+        incoming_oauth2 = {"Authorization": f"Bearer {user_slack_token}"}
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            slack_payload,
+            ok_operation,
+            oauth2_headers=incoming_oauth2,
+        )
+
+        assert result["status"] == "ok"
+
+        server = captured["server"]
+        # Interactive OAuth must NOT be treated as client_credentials.
+        assert server.has_client_credentials is False
+
+        # The user's Slack token must be present in the headers forwarded to
+        # the MCP server — it must not have been silently dropped.
+        assert captured["extra_headers"] is not None
+        assert captured["extra_headers"].get("Authorization") == (
+            f"Bearer {user_slack_token}"
         )
 
     @pytest.mark.asyncio

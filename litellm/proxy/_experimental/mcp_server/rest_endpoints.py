@@ -906,17 +906,17 @@ if MCP_AVAILABLE:
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 
+            # Only honour the flow the caller asked for.  Do NOT auto-detect
+            # ``client_credentials`` from the presence of client_id / client_secret /
+            # token_url — those fields are also used in interactive
+            # (authorization_code) OAuth flows such as Slack or GitHub Enterprise.
+            # Auto-detection caused interactive-OAuth servers to have their
+            # per-user access token silently dropped and replaced with a failing
+            # M2M token-fetch attempt.  See MCPServer.has_client_credentials for
+            # the canonical note on this regression.
             _oauth2_flow: Optional[
                 Literal["client_credentials", "authorization_code"]
-            ] = request.oauth2_flow or (
-                "client_credentials"
-                if client_id and client_secret and request.token_url
-                else None
-            )
-            # client_credentials requires token_url to fetch a token; without it the
-            # incoming auth header would be dropped with nothing to replace it.
-            if _oauth2_flow == "client_credentials" and not request.token_url:
-                _oauth2_flow = None
+            ] = request.oauth2_flow
 
             server_model = MCPServer(
                 server_id=request.server_id or "",
