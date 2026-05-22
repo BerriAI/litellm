@@ -210,25 +210,43 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         return normalized if normalized else None
 
     @staticmethod
-    def _metadata_project_from_kwargs(kwargs: dict, metadata_key: str) -> Optional[str]:
-        standard_logging_payload = kwargs.get("standard_logging_object")
-        if isinstance(standard_logging_payload, dict):
-            metadata = standard_logging_payload.get("metadata")
+    def _iter_metadata_dicts_from_kwargs(kwargs: dict):
+        """Yield request metadata dicts; standard_logging_object before litellm_params."""
+        for key in ("standard_logging_object", "litellm_params"):
+            found_key = kwargs.get(key)
+            if not isinstance(found_key, dict):
+                continue
+            metadata = found_key.get("metadata")
             if isinstance(metadata, dict):
-                return ArizePhoenixLogger._normalize_project_name(
-                    metadata.get(metadata_key)
-                )
+                yield metadata
 
-        litellm_params = kwargs.get("litellm_params")
-        if isinstance(litellm_params, dict):
-            metadata = litellm_params.get("metadata") or {}
-        else:
-            metadata = {}
-        if isinstance(metadata, dict):
+    @staticmethod
+    def _project_from_metadata_dict(metadata: dict, metadata_key: str) -> Optional[str]:
+        """
+        Read a Phoenix project field from proxy/SDK metadata.
+
+        Checks the metadata root (per-request / client) then
+        ``user_api_key_auth_metadata`` (team/key metadata from the proxy).
+        """
+        direct = ArizePhoenixLogger._normalize_project_name(metadata.get(metadata_key))
+        if direct:
+            return direct
+
+        auth_metadata = metadata.get("user_api_key_auth_metadata")
+        if isinstance(auth_metadata, dict):
             return ArizePhoenixLogger._normalize_project_name(
-                metadata.get(metadata_key)
+                auth_metadata.get(metadata_key)
             )
+        return None
 
+    @staticmethod
+    def _metadata_project_from_kwargs(kwargs: dict, metadata_key: str) -> Optional[str]:
+        for metadata in ArizePhoenixLogger._iter_metadata_dicts_from_kwargs(kwargs):
+            project = ArizePhoenixLogger._project_from_metadata_dict(
+                metadata, metadata_key
+            )
+            if project:
+                return project
         return None
 
     @staticmethod
@@ -420,10 +438,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
                 "PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com)."
             )
 
-        project_name = (
-            os.environ.get("PHOENIX_PROJECT_NAME")
-            or "default"
-        )
+        project_name = os.environ.get("PHOENIX_PROJECT_NAME") or "default"
 
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers,

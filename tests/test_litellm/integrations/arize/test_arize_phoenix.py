@@ -7,7 +7,6 @@ from litellm.integrations.arize.arize_phoenix import (
     ArizePhoenixConfig,
     ArizePhoenixLogger,
 )
-from litellm.integrations.arize._utils import ArizeOTELAttributes
 
 
 class TestArizePhoenixConfig(unittest.TestCase):
@@ -289,6 +288,46 @@ class TestResolveProjectName:
         with patch.dict("os.environ", {}, clear=True):
             assert ArizePhoenixLogger._resolve_project_name(kwargs) == "default"
 
+    def test_resolves_override_from_user_api_key_auth_metadata(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name_override": "claude-code",
+                    },
+                },
+            },
+        }
+        with patch.dict("os.environ", {}, clear=True):
+            assert ArizePhoenixLogger._resolve_project_name(kwargs) == "claude-code"
+
+    def test_resolves_phoenix_name_from_user_api_key_auth_metadata(self):
+        kwargs = {
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name": "team-project",
+                    },
+                },
+            },
+        }
+        with patch.dict("os.environ", {}, clear=True):
+            assert ArizePhoenixLogger._resolve_project_name(kwargs) == "team-project"
+
+    def test_request_metadata_override_beats_user_api_key_auth_metadata(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "phoenix_project_name_override": "per-request",
+                    "user_api_key_auth_metadata": {
+                        "phoenix_project_name_override": "claude-code",
+                    },
+                },
+            },
+        }
+        with patch.dict("os.environ", {}, clear=True):
+            assert ArizePhoenixLogger._resolve_project_name(kwargs) == "per-request"
+
 
 class TestProjectNameNotOnSpan:
     """Project routing uses Resource on TracerProvider, not span attributes."""
@@ -315,7 +354,6 @@ class TestPerProjectTracerProviderCache:
     def test_different_metadata_routes_to_different_resource(self):
         from datetime import datetime
 
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
             InMemorySpanExporter,
         )
@@ -701,7 +739,9 @@ class TestPhoenixTraceHandling:
 
 
 class TestGetArizePhoenixConfigProjectName:
-    @patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "phoenix-config-proj"}, clear=True)
+    @patch.dict(
+        "os.environ", {"PHOENIX_PROJECT_NAME": "phoenix-config-proj"}, clear=True
+    )
     def test_project_name_from_phoenix_env(self):
         config = ArizePhoenixLogger.get_arize_phoenix_config()
         assert config.project_name == "phoenix-config-proj"
