@@ -12,12 +12,69 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import all_litellm_params
 
 router = APIRouter()
+
+
+async def _forward_jsonrpc_to_agent(
+    agent_url: str,
+    body: dict,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> JSONResponse:
+    """
+    Forward a raw JSON-RPC request to the upstream agent and return the response.
+
+    Used for A2A methods that are not handled by the A2A SDK (e.g. tasks/get,
+    tasks/cancel, tasks/resubscribe).  The request is forwarded verbatim so
+    that the caller's params and id are preserved unchanged.
+    """
+    request_id = body.get("id")
+
+    try:
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if extra_headers:
+            headers.update(extra_headers)
+
+        http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.A2AProvider,
+        )
+        response = await http_handler.client.post(
+            agent_url,
+            json=body,
+            headers=headers,
+        )
+        try:
+            content = response.json()
+        except Exception:
+            content = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32603,
+                    "message": f"Agent returned non-JSON response: {response.text[:200]}",
+                },
+            }
+        return JSONResponse(content=content, status_code=response.status_code)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error forwarding JSON-RPC request to agent at {agent_url}: {e}"
+        )
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32603, "message": f"Internal error: {str(e)}"},
+            },
+            status_code=500,
+        )
 
 
 def _jsonrpc_error(
@@ -330,7 +387,12 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         method = body.get("method")
         params = body.get("params", {})
 
-        if params:
+        # Extract litellm-specific params (e.g. 'guardrails') from the JSON-RPC
+        # params for message-sending methods only.  Task-lifecycle methods such
+        # as tasks/get carry their own params (e.g. {"id": <task_id>}) which
+        # must not be confused with LiteLLM's own "id" field.
+        _is_message_method = method in ("message/send", "message/stream")
+        if params and _is_message_method:
             # extract any litellm params from the params - eg. 'guardrails'
             params_to_remove = []
             for key, value in params.items():
@@ -515,6 +577,28 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
+            )
+        elif method in ("tasks/get", "tasks/cancel", "tasks/resubscribe"):
+            # Forward task-lifecycle JSON-RPC methods directly to the upstream
+            # agent.  These methods are part of the A2A spec but are not
+            # mediated by the Python A2A SDK client; a plain HTTP pass-through
+            # is the correct behaviour for a transparent proxy.
+            if not agent_url:
+                return _jsonrpc_error(
+                    request_id,
+                    -32000,
+                    f"Agent '{agent_id}' has no URL configured",
+                    500,
+                )
+            return await _forward_jsonrpc_to_agent(
+                agent_url=agent_url,
+                body={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": method,
+                    "params": params,
+                },
+                extra_headers=agent_extra_headers,
             )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")

@@ -317,14 +317,18 @@ async def asend_message(
     )
     card_url = getattr(agent_card, "url", None) if agent_card else None
 
-    context_id = trace_id or str(uuid.uuid4())
-    message = request.params.message
-    if isinstance(message, dict):
-        if message.get("context_id") is None:
-            message["context_id"] = context_id
-    else:
-        if getattr(message, "context_id", None) is None:
-            message.context_id = context_id
+    # Do NOT auto-inject context_id when the caller omitted it.
+    #
+    # context_id is an A2A session handle (A2A spec §3.4.1).  Strict agents
+    # reject unknown contextId values with -32054 "Session not found".  The
+    # proxy has no knowledge of which sessions exist on the upstream agent, so
+    # silently injecting a UUID breaks those agents with no way for the caller
+    # to opt out.
+    #
+    # context_id (A2A session) and trace_id (LiteLLM distributed tracing) are
+    # distinct concepts and must not be conflated.  If the caller wants to
+    # maintain a session context_id, they must supply it in the message
+    # themselves.
 
     a2a_response = await _execute_a2a_send_with_retry(
         a2a_client=a2a_client,
