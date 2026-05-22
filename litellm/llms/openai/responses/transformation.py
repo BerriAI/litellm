@@ -126,9 +126,21 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        """No transform applied since inputs are in OpenAI spec already"""
+        """Strip Anthropic-only `cache_control` markers before sending to OpenAI.
+
+        OpenAI's Responses API rejects unknown fields on input content blocks
+        with HTTP 400 ("Unknown parameter: 'input[0].content[0].cache_control'").
+        Chat Completions strips these in
+        `remove_cache_control_flag_from_messages_and_tools`; mirror that here.
+        """
 
         input = self._validate_input_param(input)
+        tools = response_api_optional_request_params.get("tools")
+        input, tools = self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=input, tools=tools
+        )
+        if tools is not None:
+            response_api_optional_request_params["tools"] = tools
         final_request_params = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
@@ -136,6 +148,38 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
 
         return final_request_params
+
+    def remove_cache_control_flag_from_input_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        input: Union[str, ResponseInputParam],
+        tools: Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]] = None,
+    ) -> Tuple[
+        Union[str, ResponseInputParam],
+        Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]],
+    ]:
+        """Sibling of `remove_cache_control_flag_from_messages_and_tools` on
+        the chat path. Strips Anthropic-only `cache_control` markers from
+        Responses API input content blocks and tools.
+
+        `filter_value_from_dict` mutates each dict in place, so the same
+        objects are returned.
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+        )
+
+        if isinstance(input, list):
+            for item in input:
+                if isinstance(item, dict):
+                    filter_value_from_dict(cast(dict, item), "cache_control")
+
+        if tools is not None:
+            for tool in tools:
+                if isinstance(tool, dict):
+                    filter_value_from_dict(cast(dict, tool), "cache_control")
+
+        return input, tools
 
     def _validate_input_param(
         self, input: Union[str, ResponseInputParam]
@@ -604,6 +648,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         url = str(parsed_url.copy_with(path=compact_path))
 
         input = self._validate_input_param(input)
+        tools = response_api_optional_request_params.get("tools")
+        input, tools = self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=input, tools=tools
+        )
+        if tools is not None:
+            response_api_optional_request_params["tools"] = tools
         data = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
