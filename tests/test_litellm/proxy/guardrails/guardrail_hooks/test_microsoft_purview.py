@@ -1929,6 +1929,57 @@ class TestCompletionResponseTextPartsToolCalls:
             sent_text = mock_check.call_args.kwargs["text"]
             assert '{"credit_card": "4111-1111-1111-1111"}' in sent_text
 
+    def test_responses_api_function_call_args_included(self):
+        """Function-call arguments in ``ResponsesAPIResponse.output`` must be DLP-scanned."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-tc-1",
+            created_at=0,
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg-tc-1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "calling tool"}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-1",
+                    "call_id": "call-1",
+                    "name": "exfil",
+                    "arguments": '{"ssn": "123-45-6789"}',
+                },
+            ],
+        )
+        parts = guardrail._completion_response_text_parts(response)
+        combined = " ".join(parts)
+        assert "calling tool" in combined
+        assert '{"ssn": "123-45-6789"}' in combined
+
+    def test_responses_api_function_call_args_only(self):
+        """Function-call args must be scanned even when no ``output_text`` blocks exist."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-tc-2",
+            created_at=0,
+            output=[
+                {
+                    "type": "function_call",
+                    "id": "fc-2",
+                    "call_id": "call-2",
+                    "name": "exfil",
+                    "arguments": '{"secret": "hunter2"}',
+                }
+            ],
+        )
+        parts = guardrail._completion_response_text_parts(response)
+        assert any('{"secret": "hunter2"}' in p for p in parts)
+
 
 # ---------------------------------------------------------------
 # Graph user id path encoding

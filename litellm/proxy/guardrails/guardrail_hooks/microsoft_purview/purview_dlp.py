@@ -182,6 +182,32 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         return response
 
+    @staticmethod
+    def _extract_responses_api_function_call_args(result: Any) -> List[str]:
+        """Return tool-call argument strings from a ``ResponsesAPIResponse.output``.
+
+        ``ResponsesAPIResponse.output_text`` only aggregates ``output_text``
+        content blocks and ignores ``function_call`` items.  Model-generated
+        tool-call arguments can themselves contain sensitive data, so we
+        extract them explicitly to keep DLP coverage consistent with the
+        chat (``ModelResponse``) path.
+        """
+        args: List[str] = []
+        output = getattr(result, "output", None)
+        if not output:
+            return args
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                arguments = item.get("arguments")
+            else:
+                item_type = getattr(item, "type", None)
+                arguments = getattr(item, "arguments", None)
+            if item_type == "function_call" and isinstance(arguments, str):
+                if arguments.strip():
+                    args.append(arguments)
+        return args
+
     def _completion_response_text_parts(self, result: Any) -> List[str]:
         """Collect non-empty text segments from chat, text completions, or responses API.
 
@@ -201,6 +227,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             text = result.output_text
             if text and text.strip():
                 parts.append(text)
+            # Include tool-call arguments from ``function_call`` output items
+            # (``output_text`` ignores them).
+            parts.extend(self._extract_responses_api_function_call_args(result))
         elif isinstance(result, ModelResponse) and result.choices:
             for chat_choice in result.choices:
                 if not isinstance(chat_choice, Choices):
