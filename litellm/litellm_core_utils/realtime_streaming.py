@@ -889,9 +889,6 @@ class RealTimeStreaming:
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
-                ## LOGGING
-                self.store_input(message=message)
-
                 ## GUARDRAIL: Inject turn_detection into first session.update if needed
                 try:
                     msg_obj = json.loads(message)
@@ -913,6 +910,12 @@ class RealTimeStreaming:
                         )
                 except (json.JSONDecodeError, AttributeError):
                     pass
+
+                ## LOGGING
+                # Log after any in-place modifications (GA remap, guardrail
+                # turn_detection injection) so audit logs reflect what we
+                # actually forward to the backend.
+                self.store_input(message=message)
 
                 ## FORWARD TO BACKEND
                 if self.provider_config:

@@ -223,6 +223,27 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             optional_params.pop("generationConfig")
         return optional_params
 
+    @staticmethod
+    def _extract_turn_detection(session: dict) -> Optional[dict]:
+        """Extract turn_detection from a session.update payload.
+
+        Handles both the flat beta shape (``session.turn_detection``) and the
+        GA shape (``session.audio.input.turn_detection``).
+        """
+        if not isinstance(session, dict):
+            return None
+        td = session.get("turn_detection")
+        if isinstance(td, dict):
+            return td
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            input_cfg = audio.get("input")
+            if isinstance(input_cfg, dict):
+                td = input_cfg.get("turn_detection")
+                if isinstance(td, dict):
+                    return td
+        return None
+
     def _handle_session_update(
         self,
         json_message: dict,
@@ -232,13 +253,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """
         Handle session.update by sending setup to Gemini.
 
-        Only sends setup on the FIRST session.update (when session_configuration_request is None).
-        Subsequent session.update messages are ignored because Gemini doesn't support dynamic updates.
+        On the FIRST session.update (when session_configuration_request is None),
+        the full setup with all configuration is sent.
+
+        Subsequent session.update messages are normally ignored because Gemini
+        doesn't support dynamic updates of arbitrary fields. As an exception,
+        a session.update that carries a ``turn_detection`` change (used by the
+        guardrail layer to disable VAD auto-response so transcription guardrails
+        can gate replies) is forwarded as a follow-up setup carrying just the
+        ``realtimeInputConfig`` change.
         """
+        session_payload = json_message.get("session") or {}
         if session_configuration_request is None:
             # First session.update - send the setup with all configuration
             client_session_configuration_request = self.map_openai_params(
-                optional_params={}, non_default_params=json_message["session"]
+                optional_params={}, non_default_params=session_payload
             )
             generation_config = client_session_configuration_request.setdefault(
                 "generationConfig", {}
@@ -255,12 +284,32 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "Gemini Realtime: Sending initial setup with tools to backend"
             )
             return [gemini_setup_msg]
-        else:
-            # Subsequent session.update - ignore (Gemini doesn't support dynamic updates)
-            verbose_logger.debug(
-                "Gemini Realtime: Ignoring session.update (setup already sent)"
+
+        # Subsequent session.update: only forward if it carries a
+        # turn_detection change (e.g. guardrail-injected disable of VAD
+        # auto-response). Anything else is dropped because Gemini doesn't
+        # support dynamic updates.
+        turn_detection = self._extract_turn_detection(session_payload)
+        if turn_detection is not None:
+            transformed_audio_activity_config = self.map_automatic_turn_detection(
+                cast(OpenAIRealtimeTurnDetection, turn_detection)
             )
-            return []
+            if len(transformed_audio_activity_config) > 0:
+                follow_up_setup: BidiGenerateContentSetup = {
+                    "model": f"models/{model}",
+                    "realtimeInputConfig": BidiGenerateContentRealtimeInputConfig(
+                        automaticActivityDetection=transformed_audio_activity_config
+                    ),
+                }
+                verbose_logger.debug(
+                    "Gemini Realtime: Forwarding turn_detection-only session.update as setup"
+                )
+                return [json.dumps({"setup": follow_up_setup})]
+
+        verbose_logger.debug(
+            "Gemini Realtime: Ignoring session.update (setup already sent)"
+        )
+        return []
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
         """
