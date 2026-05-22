@@ -972,14 +972,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 delta_type=current_delta_type
             )
         else:
-            # Check if this key or any nested key matches our mapping
-            for map_key, openai_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
+            # Check if this key or any nested key matches our mapping. Use a
+            # distinct loop variable so we don't shadow ``openai_event`` and
+            # leak the last dict value when no entry matches.
+            for map_key, candidate_event in MAP_GEMINI_FIELD_TO_OPENAI_EVENT.items():
                 if map_key == key or (
                     "." in map_key
                     and GeminiRealtimeConfig.get_nested_value(json_message, map_key)
                     is not None
                 ):
-                    openai_event = openai_event
+                    openai_event = candidate_event
                     break
         if openai_event is None:
             raise ValueError(f"Unknown openai event: {key}, value: {value}")

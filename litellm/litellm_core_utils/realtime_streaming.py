@@ -254,25 +254,32 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
-    async def _send_to_backend(self, message: str) -> None:
+    async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
         If a provider_config is set the message is first passed through
         transform_realtime_request so that provider-specific translation
         (e.g. dropping session.update for Vertex AI) is applied even for
         guardrail-injected messages.
+
+        Returns True if at least one message was actually delivered to the
+        backend, False if the provider transformation produced no output and
+        the message was effectively dropped.
         """
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
             )
+            sent = False
             for msg in transformed:
                 # Cache setup immediately once we send it so concurrent client
                 # session.update messages don't emit duplicate setup packets.
                 self._cache_session_configuration_request(msg)
                 await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
-        else:
-            await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+                sent = True
+            return sent
+        await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+        return True
 
     def _cache_session_configuration_request(self, transformed_message: str) -> None:
         """Store setup payload once sent to backend."""
@@ -308,8 +315,13 @@ class RealTimeStreaming:
             return
         if not self._has_audio_transcription_guardrails():
             return
-        await self._send_to_backend(self._make_disable_auto_response_message())
-        self._guardrail_turn_detection_update_sent = True
+        sent = await self._send_to_backend(self._make_disable_auto_response_message())
+        # Only mark as sent when the provider transformation actually delivered
+        # the update to the backend. Otherwise (e.g. Gemini drops session.update
+        # after the initial setup), leave the flag unset so future opportunities
+        # — such as a duplicate session.created — can retry.
+        if sent:
+            self._guardrail_turn_detection_update_sent = True
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -879,7 +891,7 @@ class RealTimeStreaming:
 
                 ## LOGGING
                 self.store_input(message=message)
-                
+
                 ## GUARDRAIL: Inject turn_detection into first session.update if needed
                 try:
                     msg_obj = json.loads(message)
@@ -891,7 +903,9 @@ class RealTimeStreaming:
                     ):
                         # Inject turn_detection into the first session.update
                         session = msg_obj.setdefault("session", {})
-                        session.setdefault("turn_detection", {})["create_response"] = False
+                        session.setdefault("turn_detection", {})[
+                            "create_response"
+                        ] = False
                         message = json.dumps(msg_obj)
                         self._guardrail_turn_detection_update_sent = True
                         verbose_logger.debug(
@@ -899,7 +913,7 @@ class RealTimeStreaming:
                         )
                 except (json.JSONDecodeError, AttributeError):
                     pass
-                
+
                 ## FORWARD TO BACKEND
                 if self.provider_config:
                     message = self.provider_config.transform_realtime_request(
