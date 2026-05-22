@@ -323,10 +323,27 @@ class TestAzureGPT55StopParam:
         supported = config.get_supported_openai_params(model="gpt-5.5")
         assert "stop" in supported
 
+    def test_azure_gpt55_series_stop_in_supported_params(
+        self, config: AzureOpenAIGPT5Config
+    ):
+        for model in (
+            "gpt5_series/gpt-5.5",
+            "azure/gpt-5.5",
+            "gpt5_series/gpt-5.5-pro",
+        ):
+            supported = config.get_supported_openai_params(model=model)
+            assert "stop" in supported, f"stop should be supported for {model}"
+
     def test_azure_gpt5_stop_not_in_supported_params(
         self, config: AzureOpenAIGPT5Config
     ):
-        for model in ("gpt-5", "gpt-5.1", "gpt-5.4"):
+        for model in (
+            "gpt-5",
+            "gpt-5.1",
+            "gpt-5.4",
+            "gpt5_series/gpt-5",
+            "gpt5_series/gpt-5.4",
+        ):
             supported = config.get_supported_openai_params(model=model)
             assert (
                 "stop" not in supported
