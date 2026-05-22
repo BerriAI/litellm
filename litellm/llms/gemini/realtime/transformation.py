@@ -345,8 +345,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         except json.JSONDecodeError:
             output_dict = {"result": output}
 
-        # Look up the function name from stored mapping
-        function_name = self._tool_call_id_to_name.get(call_id)
+        # Look up the function name from stored mapping and remove the
+        # entry to prevent unbounded growth in long-running sessions.
+        function_name = self._tool_call_id_to_name.pop(call_id, None)
         if not function_name:
             verbose_logger.warning(
                 f"Gemini Realtime: Function name not found for call_id={call_id}. "
