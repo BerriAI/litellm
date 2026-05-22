@@ -2464,7 +2464,9 @@ def supports_native_streaming(model: str, custom_llm_provider: Optional[str]) ->
     """
     try:
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            suppress_debug_info=True,
         )
 
         model_info = _get_model_info_helper(
@@ -2500,7 +2502,9 @@ def supports_response_schema(
     try:
         get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
         model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            suppress_debug_info=True,
         )
     except Exception as e:
         verbose_logger.debug(
@@ -2603,7 +2607,9 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
     """
     try:
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            suppress_debug_info=True,
         )
 
         model_info = _get_model_info_helper(
@@ -2661,7 +2667,9 @@ def _is_explicitly_disabled_factory(
     """
     try:
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            suppress_debug_info=True,
         )
         model_info = _get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -2806,7 +2814,9 @@ def get_supported_regions(
     """
     try:
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            suppress_debug_info=True,
         )
 
         model_info = _get_model_info_helper(
