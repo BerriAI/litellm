@@ -1979,9 +1979,12 @@ class AmazonConverseConfig(BaseConfig):
                     message.content = None
                     returned_finish_reason = "tool_calls"
             except Exception:
-                tool_call = self._text_content_tool_call_transformation(
-                    message.content, tools
-                )
+                if message.content is not None:
+                    tool_call = self._text_content_tool_call_transformation(
+                        message.content, tools
+                    )
+                else:
+                    tool_call = None
                 if tool_call is not None:
                     message.tool_calls = [tool_call]
                     message.content = None
@@ -2280,7 +2283,7 @@ class AmazonConverseConfig(BaseConfig):
 
         text_tool_call_tools = optional_params.get("tools")
         if text_tool_call_tools is None:
-            request_data = data
+            request_data: Optional[Union[dict, str]] = data
             if isinstance(data, str):
                 try:
                     request_data = json.loads(data)

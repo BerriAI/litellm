@@ -1707,7 +1707,7 @@ class AWSEventStreamDecoder:
             if "trace" in chunk_data:
                 trace = chunk_data.get("trace")
                 model_response_provider_specific_fields["trace"] = trace
-            delta_content = text
+            delta_content: Optional[str] = text
             if tool_use is not None and delta_content == "":
                 delta_content = None
             elif (
