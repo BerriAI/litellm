@@ -682,6 +682,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: Optional[str] = None,
     litellm_params: Optional[dict] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -983,7 +984,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
-                        assistant_msg, model=model
+                        assistant_msg,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -1045,6 +1048,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     messages[msg_i],  # type: ignore
                     last_message_with_tool_calls,  # type: ignore
                     model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1069,16 +1073,14 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             contents.append(ContentType(role="user", parts=tool_call_responses))
 
         if len(contents) == 0:
-            verbose_logger.warning(
-                """
+            verbose_logger.warning("""
                 No contents in messages. Contents are required. See
                 https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#request-body.
                 If the original request did not comply to OpenAI API requirements it should have failed by now,
                 but LiteLLM does not check for missing messages.
                 Setting an empty content to prevent an 400 error.
                 Relevant Issue - https://github.com/BerriAI/litellm/issues/9733
-                """
-            )
+                """)
             contents.append(ContentType(role="user", parts=[PartType(text=" ")]))
         return contents
     except Exception as e:
