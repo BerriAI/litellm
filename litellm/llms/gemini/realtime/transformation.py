@@ -1042,7 +1042,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if temperature is not None:
             response_done_event["response"]["temperature"] = temperature
         if max_output_tokens is not None:
-            response_done_event["response"]["max_output_tokens"] = max_output_tokens
+            response_done_event["response"]["max_output_tokens"] = cast(
+                int, max_output_tokens
+            )
 
         return response_done_event
 
