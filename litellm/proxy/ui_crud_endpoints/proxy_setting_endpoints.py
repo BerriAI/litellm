@@ -160,6 +160,7 @@ class UISettings(BaseModel):
         default=False,
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
+
     user_banner_enabled: bool = Field(
         default=False,
         description="If true, shows the configured banner message to dashboard users",
@@ -174,7 +175,6 @@ class UISettings(BaseModel):
         default="info",
         description="Visual style of the banner alert",
     )
-
 
 
 class UISettingsResponse(SettingsResponse):
