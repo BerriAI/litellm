@@ -317,11 +317,15 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
 
         prompt_text: Optional[str] = None
-        is_text_completion = call_type in ("text_completion", "atext_completion")
-        messages: Optional[List] = data.get("messages")
-        if messages:
-            prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
-        elif is_text_completion:
+        if call_type in ("responses", "aresponses"):
+            # Route Responses API calls to the responses-specific extractor
+            # before the generic ``messages`` branch.  This mirrors
+            # ``async_logging_hook`` and ensures ``instructions`` (system
+            # prompt) content is included in the DLP scan, and prevents a
+            # crafted ``messages`` key in the request from being scanned in
+            # place of the actual ``input``.
+            prompt_text = self._responses_api_input_to_str(data, raise_on_failure=True)
+        elif call_type in ("text_completion", "atext_completion"):
             raw_prompt = data.get("prompt")
             prompt_text = self.completion_prompt_to_str(raw_prompt)
             if raw_prompt is not None and prompt_text is None:
@@ -334,8 +338,10 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                         ),
                     },
                 )
-        elif call_type in ("responses", "aresponses"):
-            prompt_text = self._responses_api_input_to_str(data, raise_on_failure=True)
+        else:
+            messages: Optional[List] = data.get("messages")
+            if messages:
+                prompt_text = self.get_prompt_text_for_dlp(cast(List[Any], messages))
 
         if not prompt_text:
             return data
