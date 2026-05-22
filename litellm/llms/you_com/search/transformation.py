@@ -66,6 +66,11 @@ class YouComSearchConfig(BaseSearchConfig):
         """
         api_key = api_key or get_secret_str("YOUCOM_API_KEY")
         headers["Content-Type"] = "application/json"
+        # Pin Accept-Encoding to identity: the keyless `api.you.com/v1/agents/search`
+        # endpoint advertises gzip content-encoding but returns body bytes the
+        # decoder rejects, which surfaces as httpx.DecodingError through litellm's
+        # http handler. Identity is harmless on the keyed endpoint.
+        headers.setdefault("Accept-Encoding", "identity")
         if api_key:
             headers["X-API-Key"] = api_key
         return headers

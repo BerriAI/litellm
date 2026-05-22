@@ -308,3 +308,23 @@ class TestYouComSearch:
         headers = config.validate_environment(headers={}, api_key=None)
         assert "X-API-Key" not in headers
         assert headers["Content-Type"] == "application/json"
+
+    def test_you_com_search_pins_identity_accept_encoding(self, monkeypatch):
+        """
+        The adapter pins Accept-Encoding: identity to work around the keyless
+        endpoint advertising gzip content-encoding while returning bytes httpx
+        can't decode. Without this, every keyless request raises DecodingError.
+        """
+        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
+
+        config = YouComSearchConfig()
+        headers = config.validate_environment(headers={}, api_key=None)
+        assert headers["Accept-Encoding"] == "identity"
+
+        # setdefault: a caller-supplied Accept-Encoding should win
+        headers = config.validate_environment(
+            headers={"Accept-Encoding": "gzip"}, api_key=None
+        )
+        assert headers["Accept-Encoding"] == "gzip"
