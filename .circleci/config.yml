@@ -2586,15 +2586,15 @@ jobs:
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
-              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+              -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+              -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
               -e AWS_REGION_NAME="us-east-1" \
-              -e VERTEXAI_CREDENTIALS=$VERTEXAI_CREDENTIALS \
-              -e VERTEXAI_PROJECT=$VERTEXAI_PROJECT \
-              -e VERTEXAI_LOCATION=$VERTEXAI_LOCATION \
-              -e AZURE_FOUNDRY_API_KEY=$AZURE_FOUNDRY_API_KEY \
-              -e AZURE_FOUNDRY_API_BASE=$AZURE_FOUNDRY_API_BASE \
+              -e VERTEXAI_CREDENTIALS="$VERTEXAI_CREDENTIALS" \
+              -e VERTEXAI_PROJECT="$VERTEXAI_PROJECT" \
+              -e VERTEXAI_LOCATION="$VERTEXAI_LOCATION" \
+              -e AZURE_FOUNDRY_API_KEY="$AZURE_FOUNDRY_API_KEY" \
+              -e AZURE_FOUNDRY_API_BASE="$AZURE_FOUNDRY_API_BASE" \
               -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
               --add-host host.docker.internal:host-gateway \
               --name compat-proxy \
