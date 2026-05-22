@@ -1,6 +1,7 @@
 """Tests for litellm.litellm_core_utils.fallback_utils."""
 
 import pytest
+import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -147,3 +148,22 @@ def test_process_response_headers_prefixes_x_litellm_from_raw_provider():
     assert "x-litellm-attempted-fallbacks" not in result
     assert result["llm_provider-x-litellm-attempted-fallbacks"] == 99
     assert result["llm_provider-x-stainless-arch"] == "arm64"
+
+
+def test_process_response_headers_ignores_preserve_flag_for_httpx_headers():
+    """
+    Some providers store raw httpx.Headers directly in _hidden_params["additional_headers"]
+    without a prior normalization pass. If preserve_litellm_internal_headers=True were
+    honored for httpx.Headers inputs, a provider returning x-litellm-attempted-fallbacks
+    could spoof it as a bare LiteLLM-internal marker and make the proxy skip
+    stamping the correct response model. The flag must be ignored for httpx.Headers.
+    """
+    raw = httpx.Headers(
+        {
+            "x-litellm-attempted-fallbacks": "1",
+            "content-type": "application/json",
+        }
+    )
+    result = process_response_headers(raw, preserve_litellm_internal_headers=True)
+    assert "x-litellm-attempted-fallbacks" not in result
+    assert result["llm_provider-x-litellm-attempted-fallbacks"] == "1"
