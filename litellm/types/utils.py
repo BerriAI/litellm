@@ -1542,6 +1542,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
     cost: Optional[float] = None
+    is_byok: Optional[bool] = None
+    cost_details: Optional[Dict[str, float]] = None
 
     completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
     """Breakdown of tokens used in a completion."""
@@ -1563,6 +1565,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
         cost: Optional[float] = None,
+        is_byok: Optional[bool] = None,
+        cost_details: Optional[Dict[str, float]] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -1671,6 +1675,16 @@ class Usage(SafeAttributeModel, CompletionUsage):
             self.cost = cost
         else:
             del self.cost
+
+        if is_byok is not None:
+            self.is_byok = is_byok
+        else:
+            del self.is_byok
+
+        if cost_details is not None:
+            self.cost_details = cost_details
+        else:
+            del self.cost_details
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
