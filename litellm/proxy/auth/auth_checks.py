@@ -491,6 +491,30 @@ async def check_tools_allowlist(
         )
 
 
+_VECTOR_STORE_MANAGEMENT_ROUTE_PREFIXES = (
+    "/v1/vector_stores",
+    "/vector_stores",
+)
+
+
+def _is_vector_store_management_route(route: str) -> bool:
+    """Returns True for vector store CRUD routes.
+
+    Vector store management routes (/v1/vector_stores/...) use their own
+    access-control gate (``assert_user_can_access_vector_store_id`` and
+    ``vector_store_access_check``).  The model embedded in a LiteLLM-managed
+    vector store ID is an internal routing detail — it must not be used to
+    enforce team model-access on these routes.
+
+    This is different from chat-completion routes (e.g. /chat/completions)
+    that *use* vector stores as tools: those routes carry an explicit ``model``
+    field and should still be subject to the normal model-access check.
+    """
+    return any(
+        route.startswith(prefix) for prefix in _VECTOR_STORE_MANAGEMENT_ROUTE_PREFIXES
+    )
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -541,7 +565,12 @@ async def common_checks(  # noqa: PLR0915
         )
 
     # 2. If team can call model (or key's access_group_ids grant it)
-    if _model and team_object:
+    # Skip for vector store management routes — access is controlled by vector
+    # store ownership (team_id / object_permission), not by model access.  The
+    # model embedded in a managed vector store ID is an internal routing detail
+    # and must not be used to gate CRUD operations on the vector store itself.
+    _skip_model_check = _is_vector_store_management_route(route)
+    if _model and team_object and not _skip_model_check:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
             try:
                 await can_team_access_model(
@@ -564,7 +593,13 @@ async def common_checks(  # noqa: PLR0915
                     raise
 
     # 2.2. If team member has per-member model scope, enforce it
-    if _model and team_object and valid_token and valid_token.user_id:
+    if (
+        _model
+        and team_object
+        and valid_token
+        and valid_token.user_id
+        and not _skip_model_check
+    ):
         with tracer.trace(
             "litellm.proxy.auth.common_checks.check_team_member_model_access"
         ):
@@ -1185,127 +1220,6 @@ async def get_end_user_object(
         if isinstance(e, litellm.BudgetExceededError):
             raise e
         return None
-
-
-_END_USER_VALIDATION_NEGATIVE_TTL = 60
-_END_USER_VALIDATION_POSITIVE_TTL = 300
-
-
-async def resolve_and_validate_end_user_id(
-    raw_end_user_id: Optional[str],
-    prisma_client: Optional[PrismaClient],
-    user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: Optional[Span] = None,
-    proxy_logging_obj: Optional[ProxyLogging] = None,
-    route: str = "",
-) -> Optional[str]:
-    """Optionally drop end-user ids that don't resolve to a known DB row.
-
-    Default: pass-through. LiteLLM's documented pattern is that the `user`
-    field is an arbitrary caller-supplied identifier, so validation is
-    opt-in behind ``litellm.validate_end_user_id_in_db`` to preserve
-    backwards compatibility.
-
-    When the flag is set: accept the id when it matches any of
-      - LiteLLM_EndUserTable.user_id
-      - LiteLLM_UserTable.user_id
-      - LiteLLM_UserTable.user_email (case-insensitive)
-
-    If the id doesn't match but ``litellm.max_end_user_budget_id`` is set,
-    we still preserve the id so the default end-user budget is applied
-    downstream; otherwise we return None.
-
-    DB lookups reuse ``get_end_user_object`` / ``get_user_object`` so they
-    share the same cache as the rest of the auth path instead of adding new
-    raw Prisma queries.
-    """
-    if raw_end_user_id is None:
-        return None
-    if not litellm.validate_end_user_id_in_db:
-        return raw_end_user_id
-    if prisma_client is None:
-        return raw_end_user_id
-
-    cache_key = f"end_user_validation:{raw_end_user_id}"
-    cached = await user_api_key_cache.async_get_cache(key=cache_key)
-    if cached == "valid":
-        return raw_end_user_id
-    if cached == "invalid":
-        return raw_end_user_id if litellm.max_end_user_budget_id else None
-
-    is_valid = await _end_user_id_exists_in_db(
-        end_user_id=raw_end_user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
-        route=route,
-    )
-
-    await user_api_key_cache.async_set_cache(
-        key=cache_key,
-        value="valid" if is_valid else "invalid",
-        ttl=(
-            _END_USER_VALIDATION_POSITIVE_TTL
-            if is_valid
-            else _END_USER_VALIDATION_NEGATIVE_TTL
-        ),
-    )
-
-    if is_valid:
-        return raw_end_user_id
-    # Preserve id so the caller can still apply litellm.max_end_user_budget_id.
-    if litellm.max_end_user_budget_id:
-        return raw_end_user_id
-    return None
-
-
-async def _end_user_id_exists_in_db(
-    end_user_id: str,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: Optional[Span] = None,
-    proxy_logging_obj: Optional[ProxyLogging] = None,
-    route: str = "",
-) -> bool:
-    """True when the id matches an EndUser, User, or user_email row."""
-    try:
-        end_user_obj = await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            route=route,
-        )
-        if end_user_obj is not None:
-            return True
-    except litellm.BudgetExceededError:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"end_user validation: get_end_user_object lookup failed: {e}"
-        )
-
-    try:
-        user_obj = await get_user_object(
-            user_id=end_user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            check_db_only=False,
-            user_email=end_user_id if "@" in end_user_id else None,
-        )
-        if user_obj is not None:
-            return True
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"end_user validation: get_user_object lookup failed: {e}"
-        )
-
-    return False
 
 
 @log_db_metrics
@@ -2353,9 +2267,7 @@ class ExperimentalUIJWTToken:
 
     @staticmethod
     def get_cli_jwt_auth_token(
-        user_info: LiteLLM_UserTable,
-        team_id: Optional[str] = None,
-        team_alias: Optional[str] = None,
+        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2366,7 +2278,6 @@ class ExperimentalUIJWTToken:
         Args:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
-            team_alias: Team alias for the selected team, if available
 
         Returns:
             Encrypted JWT token string
@@ -2400,7 +2311,6 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
-            team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),

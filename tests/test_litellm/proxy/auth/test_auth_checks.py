@@ -127,23 +127,6 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
-def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_values):
-    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-        valid_sso_user_defined_values,
-        team_id="team-123",
-        team_alias="test-team",
-    )
-
-    decrypted_token = decrypt_value_helper(
-        token, key="ui_hash_key", exception_type="debug"
-    )
-    assert decrypted_token is not None
-    token_data = json.loads(decrypted_token)
-
-    assert token_data["team_id"] == "team-123"
-    assert token_data["team_alias"] == "test-team"
-
-
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
@@ -3035,338 +3018,188 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
     assert exc_info.value.max_budget == 0.0
 
 
-# --- resolve_and_validate_end_user_id ---------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
+# LIT-3244  Vector store file routes must not be blocked by team model access
+# ────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
-def _validate_flag_on(monkeypatch):
-    """Enable opt-in DB validation for the duration of a test."""
-    import litellm
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        # Vector store management routes — must be True
+        ("/v1/vector_stores", True),
+        ("/v1/vector_stores/vs_abc123", True),
+        ("/v1/vector_stores/vs_abc123/files", True),
+        ("/v1/vector_stores/vs_abc123/files/file_xyz", True),
+        ("/v1/vector_stores/vs_abc123/search", True),
+        ("/vector_stores", True),
+        ("/vector_stores/vs_abc123", True),
+        ("/vector_stores/vs_abc123/files", True),
+        ("/vector_stores/vs_abc123/files/file_xyz", True),
+        # Other routes — must be False
+        ("/v1/chat/completions", False),
+        ("/chat/completions", False),
+        ("/v1/embeddings", False),
+        ("/v1/files", False),
+        ("/v1/batches", False),
+    ],
+)
+def test_is_vector_store_management_route(route: str, expected: bool):
+    """_is_vector_store_management_route must recognise all VS CRUD paths."""
+    from litellm.proxy.auth.auth_checks import _is_vector_store_management_route
 
-    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
-    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
-
-
-def _validation_cache():
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
-    return cache
-
-
-def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=None):
-    """Stub out the DB helpers resolve_and_validate_end_user_id delegates to."""
-    from litellm.proxy.auth import auth_checks
-
-    monkeypatch.setattr(
-        auth_checks, "get_end_user_object", AsyncMock(return_value=end_user)
-    )
-    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=user))
-    monkeypatch.setattr(
-        auth_checks, "_get_fuzzy_user_object", AsyncMock(return_value=fuzzy)
-    )
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_returns_none_for_none_input(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-    assert (
-        await resolve_and_validate_end_user_id(
-            raw_end_user_id=None,
-            prisma_client=MagicMock(),
-            user_api_key_cache=cache,
-        )
-        is None
-    )
+    assert _is_vector_store_management_route(route) is expected
 
 
 @pytest.mark.asyncio
-async def test_resolve_end_user_passes_through_when_flag_disabled(monkeypatch):
-    """Default behaviour: flag is off, arbitrary ids pass through untouched."""
-    import litellm
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+async def test_common_checks_skips_team_model_check_for_vector_store_routes():
+    """Regression test for LIT-3244.
 
-    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="codex-session-abc",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result == "codex-session-abc"
-    cache.async_set_cache.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_passes_through_when_no_prisma_client(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="alice@example.com",
-        prisma_client=None,
-        user_api_key_cache=cache,
-    )
-    assert result == "alice@example.com"
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkeypatch):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="customer-123",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result == "customer-123"
-    cache.async_set_cache.assert_awaited_once()
-    kwargs = cache.async_set_cache.await_args.kwargs
-    assert kwargs["key"] == "end_user_validation:customer-123"
-    assert kwargs["value"] == "valid"
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_matches_user_table_by_user_id(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch, user=MagicMock())
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="user-xyz",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result == "user-xyz"
-    # email fallback should not run for a non-email input
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_matches_user_table_by_email(
-    _validate_flag_on, monkeypatch
-):
-    """Email-shaped ids route through get_user_object with user_email set.
-
-    The fuzzy lookup must happen inside get_user_object so it shares the
-    _should_check_db throttle and user_api_key_cache — no direct raw
-    Prisma calls on the auth path.
+    A team with a restricted models list must NOT be blocked from accessing
+    vector store file endpoints just because a model name is embedded in the
+    managed vector store ID.  The model check is replaced by vector-store-level
+    access control (assert_user_can_access_vector_store_id).
     """
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from unittest.mock import AsyncMock, MagicMock, patch
 
-    _patch_validation_helpers(monkeypatch, user=MagicMock())
-    cache = _validation_cache()
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
 
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="Alice@Example.com",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
+    # Team that is restricted to a single model — e.g. "gpt-4o"
+    team_object = LiteLLM_TeamTable(
+        team_id="team-jwt-123",
+        models=["gpt-4o"],
     )
-    assert result == "Alice@Example.com"
-    auth_checks.get_user_object.assert_awaited_once()
-    user_kwargs = auth_checks.get_user_object.await_args.kwargs
-    assert user_kwargs["user_id"] == "Alice@Example.com"
-    assert user_kwargs["user_email"] == "Alice@Example.com"
-    # email branch must not bypass the cached helper with a raw fuzzy call
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
 
+    # The request_body contains a vector_store_id that, when decoded,
+    # yields a routing model name that is NOT in the team's allowed list.
+    request_body = {
+        "vector_store_id": "vs_provider_abc",
+        # Simulate a model extracted from the managed resource ID
+        # by having it directly in request_data (worst-case scenario).
+        # In production this comes from _extract_models_from_managed_resource_id.
+    }
 
-@pytest.mark.asyncio
-async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
-    _validate_flag_on, monkeypatch
-):
-    """Non-email ids skip the email fuzzy path to avoid a pointless DB hit."""
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch, user=MagicMock())
-    cache = _validation_cache()
-
-    await resolve_and_validate_end_user_id(
-        raw_end_user_id="user-xyz",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
+    valid_token = UserAPIKeyAuth(
+        token="jwt-user-token",
+        team_id="team-jwt-123",
     )
-    auth_checks.get_user_object.assert_awaited_once()
-    user_kwargs = auth_checks.get_user_object.await_args.kwargs
-    assert user_kwargs["user_email"] is None
 
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.query_params = {}
 
-@pytest.mark.asyncio
-async def test_resolve_end_user_drops_codex_opaque_identifier(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    mock_proxy_logging = MagicMock()
 
-    _patch_validation_helpers(monkeypatch)  # all helpers return None
-    cache = _validation_cache()
-
-    codex_id = (
-        "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
-        "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
-    )
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id=codex_id,
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result is None
-    cache.async_set_cache.assert_awaited_once()
-    kwargs = cache.async_set_cache.await_args.kwargs
-    assert kwargs["value"] == "invalid"
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_preserves_id_when_default_budget_configured(
-    _validate_flag_on, monkeypatch
-):
-    """Don't drop unregistered ids when litellm.max_end_user_budget_id is set.
-
-    The default end-user budget is applied downstream when the id is present
-    but not found in the db — dropping the id here would bypass those limits.
-    """
-    import litellm
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-budget")
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="new-customer",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result == "new-customer"
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="stranger@example.com",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_uses_cached_valid_result(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch)
-    cache = _validation_cache()
-    cache.async_get_cache = AsyncMock(return_value="valid")
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="alice@example.com",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result == "alice@example.com"
-    auth_checks.get_end_user_object.assert_not_awaited()
-    auth_checks.get_user_object.assert_not_awaited()
-    auth_checks._get_fuzzy_user_object.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_uses_cached_invalid_result(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
-    cache = _validation_cache()
-    cache.async_get_cache = AsyncMock(return_value="invalid")
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="bogus",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    assert result is None
-    # Despite a matching row configured, helpers aren't called — cache wins.
-    auth_checks.get_end_user_object.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_swallows_db_errors_and_returns_none(
-    _validate_flag_on, monkeypatch
-):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    monkeypatch.setattr(
-        auth_checks,
-        "get_end_user_object",
-        AsyncMock(side_effect=Exception("db down")),
-    )
-    monkeypatch.setattr(
-        auth_checks,
-        "get_user_object",
-        AsyncMock(side_effect=Exception("db down")),
-    )
-    cache = _validation_cache()
-
-    result = await resolve_and_validate_end_user_id(
-        raw_end_user_id="alice@example.com",
-        prisma_client=MagicMock(),
-        user_api_key_cache=cache,
-    )
-    # DB errors shouldn't raise through the auth path — treat as unknown.
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_end_user_reraises_budget_exceeded(
-    _validate_flag_on, monkeypatch
-):
-    """BudgetExceededError from get_end_user_object must bubble up so the
-    auth path enforces spend limits instead of silently dropping the id."""
-    import litellm
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
-
-    monkeypatch.setattr(
-        auth_checks,
-        "get_end_user_object",
-        AsyncMock(
-            side_effect=litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+    # Patch get_model_from_request so it returns a model that would normally
+    # fail the team model check — this simulates the model being decoded from
+    # the vector_store_id.
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_model_from_request",
+            return_value="azure-openai-private-deployment",
         ),
-    )
-    cache = _validation_cache()
-
-    with pytest.raises(litellm.BudgetExceededError):
-        await resolve_and_validate_end_user_id(
-            raw_end_user_id="customer-over-budget",
-            prisma_client=MagicMock(),
-            user_api_key_cache=cache,
+        # Stub out the budget/organisation/tag checks so only the model check matters
+        patch(
+            "litellm.proxy.auth.auth_checks._global_proxy_budget_check",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.vector_store_access_check",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.check_tools_allowlist",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        # This must NOT raise — the model check should be skipped for VS routes
+        result = await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/vector_stores/vs_provider_abc/files",
+            llm_router=None,
+            proxy_logging_obj=mock_proxy_logging,
+            valid_token=valid_token,
+            request=mock_request,
+            skip_budget_checks=True,
         )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_enforces_team_model_check_for_non_vector_store_routes():
+    """The team model check must still fire for non-VS routes (e.g. /chat/completions)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_TeamTable, ProxyErrorTypes, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-jwt-456",
+        models=["gpt-4o"],
+    )
+
+    request_body = {"model": "azure-openai-private-deployment"}
+
+    valid_token = UserAPIKeyAuth(
+        token="jwt-user-token",
+        team_id="team-jwt-456",
+    )
+
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.query_params = {}
+
+    mock_proxy_logging = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_model_from_request",
+            return_value="azure-openai-private-deployment",
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._key_access_group_grants_model",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.vector_store_access_check",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.check_tools_allowlist",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        # This MUST raise — the team can only access gpt-4o
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body=request_body,
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=mock_proxy_logging,
+                valid_token=valid_token,
+                request=mock_request,
+                skip_budget_checks=True,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
