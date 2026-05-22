@@ -206,6 +206,251 @@ def test_apply_tool_call_transformation_if_needed():
     )
 
 
+def test_apply_tool_call_transformation_if_needed_with_nexus_function_text():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='\n<function>\n<parameter name="name">read_file</parameter>\n<parameter name="path">README.md</parameter>\n</function>',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content is None
+    assert transformed_finish_reason == "tool_calls"
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
+def test_apply_tool_call_transformation_if_needed_with_nexus_tool_use_line_format():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='<tool_use>desktop-commander.read_file\n{"path":"README.md"}</tool_use>',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content is None
+    assert transformed_finish_reason == "tool_calls"
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
+def test_apply_tool_call_transformation_if_needed_with_nexus_tool_use_xml_format():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='<tool_use><server_name>desktop-commander</server_name><tool_name>read_file</tool_name><input>{"path":"README.md"}</input></tool_use>',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content is None
+    assert transformed_finish_reason == "tool_calls"
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
+def test_apply_tool_call_transformation_if_needed_ignores_unknown_nexus_tool_name():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='\n<function>\n<parameter name="name">read_file</parameter>\n<parameter name="path">README.md</parameter>\n</function>',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content == message.content
+    assert transformed_finish_reason == "stop"
+    assert transformed_message.tool_calls is None
+
+
+def test_transform_response_uses_logging_tools_when_optional_tools_missing():
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "text": '\n<function>\n<parameter name="name">read_file</parameter>\n<parameter name="path">README.md</parameter>\n</function>'
+                    }
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+        },
+    }
+    response = httpx.Response(200, json=response_json)
+    config = AmazonConverseConfig()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                        }
+                    },
+                },
+            }
+        ]
+    }
+
+    request_data = {
+        "toolConfig": {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": "read_file",
+                        "inputSchema": {
+                            "json": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string"},
+                                },
+                            }
+                        },
+                    }
+                }
+            ]
+        }
+    }
+
+    result = config._transform_response(
+        model="bedrock/converse/claude-opus-4.6",
+        response=response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=logging_obj,
+        optional_params={},
+        api_key=None,
+        data=json.dumps(request_data),
+        messages=[],
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "tool_calls"
+    assert result.choices[0].message.content is None
+    assert result.choices[0].message.tool_calls is not None
+    assert result.choices[0].message.tool_calls[0].function.name == "read_file"
+    assert result.choices[0].message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
 def test_transform_tool_call_with_cache_control():
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
