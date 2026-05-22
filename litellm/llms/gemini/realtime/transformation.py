@@ -349,6 +349,27 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             **new_overrides,
             "model": f"models/{model}",
         }
+        # Deep-merge nested config dicts so that a partial session.update
+        # (e.g. only ``modalities``) does not silently drop unrelated
+        # sub-keys (e.g. ``temperature``) from the original setup.
+        original_generation_config = original_setup.get("generationConfig")
+        new_generation_config = new_overrides.get("generationConfig")
+        if isinstance(original_generation_config, dict) and isinstance(
+            new_generation_config, dict
+        ):
+            follow_up_setup["generationConfig"] = {
+                **original_generation_config,
+                **new_generation_config,
+            }
+        original_realtime_input_config = original_setup.get("realtimeInputConfig")
+        new_realtime_input_config = new_overrides.get("realtimeInputConfig")
+        if isinstance(original_realtime_input_config, dict) and isinstance(
+            new_realtime_input_config, dict
+        ):
+            follow_up_setup["realtimeInputConfig"] = {
+                **original_realtime_input_config,
+                **new_realtime_input_config,
+            }
         verbose_logger.debug(
             "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
