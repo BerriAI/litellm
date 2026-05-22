@@ -381,8 +381,8 @@ class TestPostCallHook:
             mock_check.return_value = {"policyActions": []}
 
             result = await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
@@ -417,8 +417,8 @@ class TestPostCallHook:
 
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.async_post_call_success_hook(
-                    data={"metadata": {"user_id": "user-123"}},
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    data={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                     response=response,
                 )
 
@@ -471,8 +471,8 @@ class TestPostCallHook:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
@@ -522,8 +522,8 @@ class TestTextCompletionHooks:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
@@ -620,6 +620,53 @@ class TestResponsesAPIHooks:
             mock_check.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_pre_call_responses_string_input_includes_instructions(self):
+        """Benign string ``input`` must still scan ``instructions`` (system message)."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={
+                    "input": "benign user text",
+                    "instructions": "SYSTEM_SENSITIVE in instructions",
+                },
+                call_type="responses",
+            )
+
+            mock_check.assert_called_once()
+            sent = mock_check.call_args.kwargs["text"]
+            assert "benign user text" in sent
+            assert "SYSTEM_SENSITIVE in instructions" in sent
+
+    @pytest.mark.asyncio
+    async def test_pre_call_responses_instructions_only(self):
+        """Requests with only ``instructions`` (no ``input``) must still be scanned."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                cache=None,
+                data={"instructions": "policy text in instructions only"},
+                call_type="responses",
+            )
+
+            mock_check.assert_called_once()
+            assert "policy text in instructions only" in mock_check.call_args.kwargs[
+                "text"
+            ]
+
+    @pytest.mark.asyncio
     async def test_post_call_responses_api_output_text(self):
         """Post-call hook must scan text from ``ResponsesAPIResponse.output``."""
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -647,8 +694,8 @@ class TestResponsesAPIHooks:
             mock_check.return_value = {"policyActions": []}
 
             result = await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
@@ -673,8 +720,8 @@ class TestResponsesAPIHooks:
             guardrail, "_check_content", new_callable=AsyncMock
         ) as mock_check:
             await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
@@ -1658,16 +1705,51 @@ class TestCompletionResponseTextPartsToolCalls:
             mock_check.return_value = {"policyActions": []}
 
             await guardrail.async_post_call_success_hook(
-                data={"metadata": {"user_id": "user-123"}},
+                data={},
                 user_api_key_dict=__import__(
                     "litellm.proxy._types", fromlist=["UserAPIKeyAuth"]
-                ).UserAPIKeyAuth(api_key="test"),
+                ).UserAPIKeyAuth(api_key="test", user_id="user-123"),
                 response=response,
             )
 
             mock_check.assert_called_once()
             sent_text = mock_check.call_args.kwargs["text"]
             assert '{"credit_card": "4111-1111-1111-1111"}' in sent_text
+
+
+# ---------------------------------------------------------------
+# Graph user id path encoding
+# ---------------------------------------------------------------
+
+
+class TestGraphUserIdEncoding:
+    def test_encode_graph_user_id_percent_encodes_special_chars(self):
+        from urllib.parse import quote
+
+        raw = "user/with%special"
+        encoded = PurviewGuardrailBase._encode_graph_user_id(raw)
+        assert encoded == quote(raw, safe="")
+        assert "/" not in encoded
+
+    @pytest.mark.asyncio
+    async def test_compute_protection_scopes_uses_encoded_path(self):
+        guardrail = _make_guardrail()
+        guardrail._scope_cache.clear()
+
+        mock_resp = _mock_scope_response()
+
+        async def _capture_post(url, **kwargs):
+            assert "/users/" in url
+            assert "user%2Fwith%25special" in url
+            return mock_resp
+
+        guardrail.async_handler.post = AsyncMock(side_effect=_capture_post)
+
+        with patch.object(guardrail, "_get_access_token", new_callable=AsyncMock) as mock_token:
+            mock_token.return_value = "tok"
+            await guardrail._compute_protection_scopes("user/with%special")
+
+        guardrail.async_handler.post.assert_called_once()
 
 
 # ---------------------------------------------------------------
@@ -1766,16 +1848,14 @@ class TestResolveUserIdForBlocking:
         assert result == "trusted-111"
         assert "SECURITY" not in caplog.text
 
-    def test_caller_supplied_id_returns_with_security_warning(self, caplog):
-        import logging
-
+    def test_caller_supplied_id_raises_http_exception(self):
         guardrail = _make_guardrail()
         auth = UserAPIKeyAuth(api_key="test")
         data = {"metadata": {"user_id": "caller-supplied-999"}}
-        with caplog.at_level(logging.WARNING):
-            result = guardrail._resolve_user_id_for_blocking(data, auth)
-        assert result == "caller-supplied-999"
-        assert "SECURITY" in caplog.text
+        with pytest.raises(HTTPException) as exc_info:
+            guardrail._resolve_user_id_for_blocking(data, auth)
+        assert exc_info.value.status_code == 400
+        assert "proxy-authenticated" in str(exc_info.value.detail)
 
     def test_no_id_returns_none(self, caplog):
         import logging
@@ -1794,17 +1874,15 @@ class TestResolveUserIdForBlocking:
 
 class TestTokenIdPromptHandling:
     @pytest.mark.asyncio
-    async def test_token_id_prompt_passes_through_with_warning(self, caplog):
-        """Pure token-id prompts cannot be scanned; they should pass through."""
-        import logging
-
+    async def test_token_id_prompt_raises_in_blocking_mode(self):
+        """Pure token-id prompts must be rejected in blocking pre_call mode."""
         guardrail = _make_guardrail()
 
         with patch.object(
             guardrail, "_check_content", new_callable=AsyncMock
         ) as mock_check:
-            with caplog.at_level(logging.WARNING):
-                result = await guardrail.async_pre_call_hook(
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
                     cache=None,
                     data={"prompt": [1, 2, 3, 100, 200]},
@@ -1812,8 +1890,8 @@ class TestTokenIdPromptHandling:
                 )
 
             mock_check.assert_not_called()
-            assert result is not None
-            assert "token-id" in caplog.text.lower()
+            assert exc_info.value.status_code == 400
+            assert "Token-id" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_missing_prompt_skips_without_warning(self, caplog):

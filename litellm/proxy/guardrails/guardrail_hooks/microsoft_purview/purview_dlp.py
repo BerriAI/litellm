@@ -227,13 +227,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         )
 
         input_data = data.get("input")
-        if input_data is None:
+        if input_data is None and not data.get("instructions"):
             return None
-        if isinstance(input_data, str):
-            return input_data.strip() or None
         try:
+            # Always transform via messages so ``instructions`` become a system message
+            # (string ``input`` alone would skip instructions and bypass DLP).
             messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=input_data,
+                input=input_data if input_data is not None else "",
                 responses_api_request=data,
             )
             return self.get_prompt_text_for_dlp(cast(List[Any], messages))
@@ -255,31 +255,30 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     ) -> Optional[str]:
         """Resolve user ID for blocking (pre_call / post_call) DLP hooks.
 
-        Tries trusted sources first (``_resolve_trusted_user_id``).  When none
-        are available the method falls back to the full resolution (which
-        includes caller-supplied ``metadata[user_id_field]``) and logs a
-        **SECURITY WARNING** so operators know the DLP evaluation is tied to
-        an identity the caller could have forged.
+        Uses only trusted proxy-authenticated sources (``_resolve_trusted_user_id``).
+        Caller-supplied ``metadata[user_id_field]`` is rejected (fail closed) because
+        it can impersonate another Entra user's Purview policy.
 
-        Returns ``None`` (and logs a warning) when no identity at all can be
-        resolved — the calling hook should skip the DLP check in that case.
+        Returns ``None`` when no trusted identity exists — hooks skip the DLP check.
         """
         trusted_id = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted_id:
             return trusted_id
 
-        caller_id = self._resolve_user_id(data, user_api_key_dict)
-        if caller_id:
-            verbose_proxy_logger.warning(
-                "Purview DLP [SECURITY]: no proxy-authenticated user identity found; "
-                "using caller-supplied user_id=%r for blocking DLP evaluation. "
-                "Bind a user_id to the API key to prevent identity spoofing.",
-                caller_id,
+        if self._resolve_user_id(data, user_api_key_dict):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Microsoft Purview DLP: No proxy-authenticated user identity; "
+                        "bind user_id to the API key (caller-supplied metadata cannot "
+                        "be used for blocking DLP)"
+                    ),
+                },
             )
-            return caller_id
 
         verbose_proxy_logger.warning(
-            "Purview DLP: no user_id resolved; skipping DLP check"
+            "Purview DLP: no trusted user_id resolved; skipping DLP check"
         )
         return None
 
@@ -309,15 +308,15 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             raw_prompt = data.get("prompt")
             prompt_text = self.completion_prompt_to_str(raw_prompt)
             if raw_prompt is not None and prompt_text is None:
-                # Prompt was provided but resolved to None — the only case where
-                # completion_prompt_to_str returns None for non-empty input is a
-                # pure token-id array.  Token IDs cannot be scanned by Purview;
-                # pass through without DLP (content opaque at the text layer).
-                verbose_proxy_logger.warning(
-                    "Purview DLP: prompt is token-id array and cannot be scanned; "
-                    "request will proceed without DLP evaluation"
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            "Microsoft Purview DLP: Token-id completion prompts "
+                            "cannot be scanned for DLP in blocking mode"
+                        ),
+                    },
                 )
-                return data
         elif call_type in ("responses", "aresponses"):
             prompt_text = self._responses_api_input_to_str(data)
 

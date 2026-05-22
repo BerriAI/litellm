@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from collections import OrderedDict
@@ -5,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -66,6 +68,12 @@ class PurviewGuardrailBase:
             OrderedDict()
         )
         self._scope_cache_maxsize = 1000
+        self._cache_lock = asyncio.Lock()
+
+    @staticmethod
+    def _encode_graph_user_id(user_id: str) -> str:
+        """Percent-encode Entra user id for Graph ``/users/{id}/...`` path segments."""
+        return encode_url_path_segment(user_id, field_name="user_id")
 
     # ------------------------------------------------------------------
     # OAuth2 token management
@@ -74,8 +82,9 @@ class PurviewGuardrailBase:
     async def _get_access_token(self) -> str:
         """Acquire or return cached OAuth2 token via client_credentials grant."""
         now = time.time()
-        if self._token_cache and self._token_cache[1] > now + 60:
-            return self._token_cache[0]
+        async with self._cache_lock:
+            if self._token_cache and self._token_cache[1] > now + 60:
+                return self._token_cache[0]
 
         url = TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id)
         data = {
@@ -93,7 +102,8 @@ class PurviewGuardrailBase:
         token_data = response.json()
         access_token = token_data["access_token"]
         expires_in = int(token_data.get("expires_in", 3599))
-        self._token_cache = (access_token, now + expires_in)
+        async with self._cache_lock:
+            self._token_cache = (access_token, now + expires_in)
         verbose_proxy_logger.debug(
             "Purview: acquired new OAuth2 token (expires_in=%ds)", expires_in
         )
@@ -144,15 +154,17 @@ class PurviewGuardrailBase:
         Returns:
             Tuple of (etag, scope_response).
         """
-        cached = self._scope_cache.get(user_id)
+        encoded_user_id = self._encode_graph_user_id(user_id)
         now = time.time()
 
-        if cached and (now - cached[2]) < SCOPE_CACHE_TTL_SECONDS:
-            self._scope_cache.move_to_end(user_id)
-            return cached[0], cached[1]
+        async with self._cache_lock:
+            cached = self._scope_cache.get(user_id)
+            if cached and (now - cached[2]) < SCOPE_CACHE_TTL_SECONDS:
+                self._scope_cache.move_to_end(user_id)
+                return cached[0], cached[1]
 
         url = (
-            f"{GRAPH_API_BASE}/users/{user_id}"
+            f"{GRAPH_API_BASE}/users/{encoded_user_id}"
             "/dataSecurityAndGovernance/protectionScopes/compute"
         )
         body: Dict[str, Any] = {
@@ -168,14 +180,15 @@ class PurviewGuardrailBase:
         response_json, response_headers = await self._graph_post(url, body)
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
-        self._scope_cache[user_id] = (etag, response_json, now)
-        # Move refreshed entry to the end so it is treated as most-recently-used.
-        # OrderedDict.__setitem__ preserves existing insertion order for known
-        # keys, so an explicit move_to_end() call is required.
-        self._scope_cache.move_to_end(user_id)
-        # Evict least-recently-used entry when cache exceeds max size.
-        while len(self._scope_cache) > self._scope_cache_maxsize:
-            self._scope_cache.popitem(last=False)
+        async with self._cache_lock:
+            self._scope_cache[user_id] = (etag, response_json, now)
+            # Move refreshed entry to the end so it is treated as most-recently-used.
+            # OrderedDict.__setitem__ preserves existing insertion order for known
+            # keys, so an explicit move_to_end() call is required.
+            self._scope_cache.move_to_end(user_id)
+            # Evict least-recently-used entry when cache exceeds max size.
+            while len(self._scope_cache) > self._scope_cache_maxsize:
+                self._scope_cache.popitem(last=False)
         return etag, response_json
 
     # ------------------------------------------------------------------
@@ -199,8 +212,9 @@ class PurviewGuardrailBase:
             etag: Cached ETag from protectionScopes/compute.
             correlation_id: Optional conversation/thread ID.
         """
+        encoded_user_id = self._encode_graph_user_id(user_id)
         url = (
-            f"{GRAPH_API_BASE}/users/{user_id}"
+            f"{GRAPH_API_BASE}/users/{encoded_user_id}"
             "/dataSecurityAndGovernance/processContent"
         )
         body: Dict[str, Any] = {
@@ -244,7 +258,8 @@ class PurviewGuardrailBase:
 
         # If policies changed, invalidate scope cache so next call re-fetches.
         if response_json.get("protectionScopeState") == "modified":
-            self._scope_cache.pop(user_id, None)
+            async with self._cache_lock:
+                self._scope_cache.pop(user_id, None)
 
         return response_json
 
