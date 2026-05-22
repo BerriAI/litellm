@@ -348,6 +348,65 @@ def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
     assert transformed_message.tool_calls is None
 
 
+def test_transform_response_uses_bedrock_tool_config_for_text_tool_calls():
+    import httpx
+
+    config = AmazonConverseConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "text": (
+                                "\n<function>\n"
+                                '<parameter name="command">read_file</parameter>\n'
+                                '<parameter name="path">C:\\Projects\\redaigo\\scripts\\run_etf_v13.py</parameter>\n'
+                                '<parameter name="offset">0</parameter>\n'
+                                '<parameter name="length">3000</parameter>\n'
+                                "</function>"
+                            )
+                        }
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+    )
+
+    model_response = config._transform_response(
+        model="bedrock/converse/claude-opus-4.6",
+        response=raw_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=json.dumps(
+            {
+                "toolConfig": {
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": "read_file",
+                                "inputSchema": {"json": {}},
+                            }
+                        }
+                    ]
+                }
+            }
+        ),
+        messages=[],
+        encoding=None,
+    )
+
+    choice = model_response.choices[0]
+    _assert_read_file_tool_call(choice.message, choice.finish_reason)
+
+
 def test_transform_tool_call_with_cache_control():
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
@@ -566,6 +625,17 @@ def test_get_supported_openai_params():
     assert "tool_choice" in supported_params
     assert "thinking" in supported_params
     assert "reasoning_effort" in supported_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-opus-4.6", "claude-sonnet-4.6", "claude-haiku-4.5"],
+)
+def test_get_supported_openai_params_for_nexus_claude_aliases(model):
+    config = AmazonConverseConfig()
+    supported_params = config.get_supported_openai_params(model=model)
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
 
 
 def test_get_supported_openai_params_bedrock_converse():

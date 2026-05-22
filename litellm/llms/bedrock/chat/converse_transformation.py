@@ -527,8 +527,12 @@ class AmazonConverseConfig(BaseConfig):
         ## Filter out 'cross-region' from model name
         base_model = BedrockModelInfo.get_base_model(model)
 
+        is_anthropic_model = base_model.startswith("anthropic") or base_model.startswith(
+            "claude-"
+        )
+
         if (
-            base_model.startswith("anthropic")
+            is_anthropic_model
             or base_model.startswith("mistral")
             or base_model.startswith("cohere")
             or base_model.startswith("meta.llama3-1")
@@ -546,10 +550,14 @@ class AmazonConverseConfig(BaseConfig):
         if base_model.startswith("amazon.nova"):
             supported_params.append("web_search_options")
 
-        if litellm.utils.supports_tool_choice(
-            model=model, custom_llm_provider=self.custom_llm_provider
-        ) or litellm.utils.supports_tool_choice(
-            model=base_model, custom_llm_provider=self.custom_llm_provider
+        if (
+            is_anthropic_model
+            or litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+            or litellm.utils.supports_tool_choice(
+                model=base_model, custom_llm_provider=self.custom_llm_provider
+            )
         ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
@@ -1852,6 +1860,7 @@ class AmazonConverseConfig(BaseConfig):
         }
         tool_name = (
             params.pop("command", None)
+            or params.pop("tool_name", None)
             or params.pop("name", None)
             or params.pop("tool", None)
         )
@@ -2258,12 +2267,25 @@ class AmazonConverseConfig(BaseConfig):
         if json_mode and not filtered_tools and tools:
             initial_finish_reason = "stop"
 
+        text_tool_call_tools = optional_params.get("tools")
+        if text_tool_call_tools is None:
+            request_data = data
+            if isinstance(data, str):
+                try:
+                    request_data = json.loads(data)
+                except Exception:
+                    request_data = None
+            if isinstance(request_data, dict):
+                tool_config = request_data.get("toolConfig")
+                if isinstance(tool_config, dict):
+                    text_tool_call_tools = tool_config.get("tools")
+
         (
             returned_message,
             returned_finish_reason,
         ) = self.apply_tool_call_transformation_if_needed(
             message=_message,
-            tools=optional_params.get("tools"),
+            tools=text_tool_call_tools,
             initial_finish_reason=initial_finish_reason,
         )
         model_response.choices = [
