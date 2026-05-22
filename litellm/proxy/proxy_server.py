@@ -13986,7 +13986,12 @@ async def update_config(  # noqa: PLR0915
         # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
-            updates = config_info.general_settings.dict(exclude_none=True)
+            # Use exclude_unset=True (not exclude_none=True) so that Pydantic model
+            # defaults (e.g. health_check_interval=300, ui_access_mode="all") are NOT
+            # written to the DB when the caller only intended to save one specific field.
+            # exclude_none=True would include every non-None default and silently
+            # overwrite previously-saved values (e.g. ui_access_mode="admin_only").
+            updates = config_info.general_settings.model_dump(exclude_unset=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
                     if "alerting" not in existing:
@@ -14365,9 +14370,17 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
-                _field_value = general_settings.get(field_name, None)
-                if _field_value is None and field_name in db_general_settings_dict:
+                # Prefer the DB value as the source of truth for UI-managed settings.
+                # The in-memory general_settings dict is populated from the YAML file on
+                # startup and periodically refreshed by add_deployment; it can be stale
+                # or out-of-sync with the DB in multi-replica deployments or when a
+                # YAML default (e.g. False) masks a later UI-saved value (e.g. True).
+                # When the field has been stored in the DB, always return the DB value
+                # so the UI reflects what the user explicitly configured.
+                if field_name in db_general_settings_dict:
                     _field_value = db_general_settings_dict[field_name]
+                else:
+                    _field_value = general_settings.get(field_name, None)
 
                 _response_obj = ConfigList(
                     field_name=field_name,

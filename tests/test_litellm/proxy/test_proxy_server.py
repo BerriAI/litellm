@@ -6920,6 +6920,175 @@ def test_update_config_success_callback_normalizes_existing_mixed_case(
         restore()
 
 
+def test_update_config_does_not_write_pydantic_defaults(_update_config_setup):
+    """Saving only store_prompts_in_spend_logs must NOT write Pydantic model
+    defaults (health_check_interval=300, ui_access_mode='all', etc.) to DB.
+    Regression guard for the exclude_none=True → exclude_unset=True fix:
+    with exclude_none=True, ConfigGeneralSettings fields that have non-None
+    defaults (bool, int, str literals) were included in every write, silently
+    overwriting previously-set values such as ui_access_mode='admin_only'."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "general_settings": {
+                "ui_access_mode": "admin_only",
+                "max_parallel_requests": 5,
+            }
+        }
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"general_settings": {"store_prompts_in_spend_logs": True}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["general_settings"]
+        # The user only sent store_prompts_in_spend_logs — Pydantic defaults must
+        # NOT overwrite pre-existing values.
+        assert stored.get("store_prompts_in_spend_logs") is True
+        assert (
+            stored.get("ui_access_mode") == "admin_only"
+        ), "ui_access_mode was overwritten by the Pydantic default 'all'"
+        assert stored.get("max_parallel_requests") == 5
+        # Pydantic default keys (health_check_interval=300, etc.) must be absent
+        # because they were never explicitly sent.
+        assert "health_check_interval" not in stored
+        assert "health_check_skip_disabled_background_models" not in stored
+        assert "enable_public_model_hub" not in stored
+    finally:
+        restore()
+
+
+def test_update_config_false_value_is_persisted(_update_config_setup):
+    """Explicitly sending False for a boolean field must persist False to DB.
+    With exclude_unset=True, False (not None) is still included because the
+    field was explicitly provided in the request body."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"general_settings": {"store_prompts_in_spend_logs": True}}
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"general_settings": {"store_prompts_in_spend_logs": False}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["general_settings"]
+        assert stored.get("store_prompts_in_spend_logs") is False
+    finally:
+        restore()
+
+
+# ---------------------------------------------------------------------------
+# get_config_list: DB value takes precedence over in-memory general_settings
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _config_list_setup(monkeypatch):
+    """Install fakes for the /config/list endpoint tests."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
+
+    def _install(db_rows=None, in_memory_general_settings=None):
+        # Build a fake Prisma client that returns the given DB rows
+        db_general = db_rows or {}
+        fake_row = MagicMock()
+        fake_row.param_value = db_general
+
+        fake_litellm_config = MagicMock()
+        fake_litellm_config.find_first = AsyncMock(
+            return_value=fake_row if db_general else None
+        )
+
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_config = fake_litellm_config
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            dict(in_memory_general_settings or {}),
+        )
+
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[auth_dep] = lambda: UserAPIKeyAuth(
+            user_id="test_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+        )
+        client = TestClient(app)
+
+        def _restore():
+            app.dependency_overrides = original_overrides
+
+        return client, _restore
+
+    return _install
+
+
+def test_config_list_prefers_db_over_stale_in_memory(_config_list_setup):
+    """DB value must win over an in-memory general_settings value.
+
+    Scenario: store_prompts_in_spend_logs was set to True via the UI (DB=True)
+    but the in-memory dict still holds the YAML default (False) because the
+    periodic add_deployment refresh hasn't run yet, or this is a different
+    replica. The UI must display True (what the user explicitly saved) not
+    False (the stale in-memory value).
+    """
+    client, restore = _config_list_setup(
+        db_rows={"store_prompts_in_spend_logs": True},
+        in_memory_general_settings={"store_prompts_in_spend_logs": False},
+    )
+    try:
+        resp = client.get("/config/list?config_type=general_settings")
+        assert resp.status_code == 200
+        fields = {f["field_name"]: f for f in resp.json()}
+        field = fields.get("store_prompts_in_spend_logs")
+        assert field is not None
+        assert (
+            field["field_value"] is True
+        ), "DB value True must take precedence over stale in-memory False"
+        assert field["stored_in_db"] is True
+    finally:
+        restore()
+
+
+def test_config_list_uses_in_memory_when_not_in_db(_config_list_setup):
+    """When a field is not in DB (configured only via YAML), the in-memory
+    general_settings value must be returned and stored_in_db must be False."""
+    client, restore = _config_list_setup(
+        db_rows={},
+        in_memory_general_settings={"store_prompts_in_spend_logs": True},
+    )
+    try:
+        resp = client.get("/config/list?config_type=general_settings")
+        assert resp.status_code == 200
+        fields = {f["field_name"]: f for f in resp.json()}
+        field = fields.get("store_prompts_in_spend_logs")
+        assert field is not None
+        assert field["field_value"] is True
+        assert field["stored_in_db"] is False
+    finally:
+        restore()
+
+
+def test_config_list_db_false_is_not_masked_by_null_fallback(_config_list_setup):
+    """When DB has False (user explicitly disabled a setting), the endpoint
+    must return False — not silently fall through to an in-memory default."""
+    client, restore = _config_list_setup(
+        db_rows={"store_prompts_in_spend_logs": False},
+        in_memory_general_settings={},
+    )
+    try:
+        resp = client.get("/config/list?config_type=general_settings")
+        assert resp.status_code == 200
+        fields = {f["field_name"]: f for f in resp.json()}
+        field = fields.get("store_prompts_in_spend_logs")
+        assert field is not None
+        assert field["field_value"] is False
+        assert field["stored_in_db"] is True
+    finally:
+        restore()
+
+
 # ---------------------------------------------------------------------------
 # Lazy feature loading (LazyFeatureMiddleware) — verifies that optional
 # routers are NOT imported at module load and ARE imported on first request
