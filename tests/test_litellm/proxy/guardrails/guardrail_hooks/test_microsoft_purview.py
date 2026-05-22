@@ -1549,6 +1549,70 @@ class TestCheckContentApiErrorHandling:
 
         assert isinstance(result, dict)
 
+    @pytest.mark.asyncio
+    async def test_http_status_error_preserves_upstream_status_code(self):
+        """Upstream Graph 429 must surface as 429 with Retry-After (not a generic 400)."""
+        guardrail = _make_guardrail()
+        upstream_resp = httpx.Response(
+            status_code=429,
+            headers={"Retry-After": "30"},
+            request=httpx.Request("POST", "https://graph.microsoft.com/v1.0/x"),
+        )
+        upstream_err = httpx.HTTPStatusError(
+            "rate limited", request=upstream_resp.request, response=upstream_resp
+        )
+
+        with patch.object(
+            guardrail,
+            "_compute_protection_scopes",
+            new_callable=AsyncMock,
+            side_effect=upstream_err,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail._check_content(
+                    user_id="user-1",
+                    text="some content",
+                    activity="uploadText",
+                    request_data={},
+                    block_on_violation=True,
+                )
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.headers == {"Retry-After": "30"}
+        assert isinstance(exc_info.value.detail, dict)
+        assert exc_info.value.detail.get("upstream_status") == 429
+        assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+
+    @pytest.mark.asyncio
+    async def test_http_status_error_401_maps_to_502(self):
+        """Upstream 401/403 (proxy creds problem) should be exposed as 502, not 401/403."""
+        guardrail = _make_guardrail()
+        upstream_resp = httpx.Response(
+            status_code=401,
+            request=httpx.Request("POST", "https://graph.microsoft.com/v1.0/x"),
+        )
+        upstream_err = httpx.HTTPStatusError(
+            "unauthorized", request=upstream_resp.request, response=upstream_resp
+        )
+
+        with patch.object(
+            guardrail,
+            "_compute_protection_scopes",
+            new_callable=AsyncMock,
+            side_effect=upstream_err,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail._check_content(
+                    user_id="user-1",
+                    text="some content",
+                    activity="uploadText",
+                    request_data={},
+                    block_on_violation=True,
+                )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail.get("upstream_status") == 401
+
 
 # ---------------------------------------------------------------
 # async_logging_hook — independent prompt/response audit calls

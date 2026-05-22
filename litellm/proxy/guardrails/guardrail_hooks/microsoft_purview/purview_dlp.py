@@ -24,6 +24,7 @@ from typing import (
     cast,
 )
 
+import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -144,6 +145,37 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         except HTTPException:
             status = "guardrail_failed_to_respond"
             raise
+        except httpx.HTTPStatusError as exc:
+            # Preserve the upstream Graph API status code (e.g. 429, 503) so
+            # callers can distinguish a transient infrastructure error from a
+            # DLP policy block (signaled separately as HTTP 400 below) and can
+            # implement retry-after handling on rate limits.  401/403 upstream
+            # responses indicate a proxy-side credential / consent problem the
+            # caller can do nothing about, so they are mapped to 502.
+            status = "guardrail_failed_to_respond"
+            if block_on_violation:
+                upstream_status = exc.response.status_code
+                client_status = (
+                    502 if upstream_status in (401, 403) else upstream_status
+                )
+                headers: Optional[Dict[str, str]] = None
+                retry_after = exc.response.headers.get("retry-after")
+                if retry_after:
+                    headers = {"Retry-After": retry_after}
+                raise HTTPException(
+                    status_code=client_status,
+                    detail={
+                        "error": "Microsoft Purview DLP: upstream policy evaluation failed",
+                        "activity": activity,
+                        "upstream_status": upstream_status,
+                        "exception": str(exc),
+                    },
+                    headers=headers,
+                ) from exc
+            verbose_proxy_logger.warning(
+                "Purview DLP: API/network error in logging-only mode (not re-raised): %s",
+                exc,
+            )
         except Exception as exc:
             status = "guardrail_failed_to_respond"
             if block_on_violation:
@@ -605,7 +637,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         try:
             asyncio.get_running_loop()
             # Async context — let the framework's async success handler invoke
-            # async_logging_hook to avoid duplicate Purview API calls.
+            # async_logging_hook to avoid duplicate Purview API calls.  Log so
+            # the deferral is observable if the framework ever stops dispatching
+            # async_logging_hook on a given code path (otherwise audit silently
+            # drops).
+            verbose_proxy_logger.debug(
+                "Purview audit: deferring to async_logging_hook (running event loop detected)"
+            )
             return kwargs, result
         except RuntimeError:
             pass
