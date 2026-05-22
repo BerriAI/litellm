@@ -328,7 +328,15 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         elif call_type in ("text_completion", "atext_completion"):
             raw_prompt = data.get("prompt")
             prompt_text = self.completion_prompt_to_str(raw_prompt)
-            if raw_prompt is not None and prompt_text is None:
+            # Only reject true token-id prompts (list of ints with no plaintext
+            # for Purview to evaluate).  Empty/whitespace-only strings also yield
+            # ``prompt_text is None`` but contain no sensitive data and should
+            # pass through harmlessly.
+            if (
+                isinstance(raw_prompt, list)
+                and raw_prompt
+                and all(isinstance(x, int) for x in raw_prompt)
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={

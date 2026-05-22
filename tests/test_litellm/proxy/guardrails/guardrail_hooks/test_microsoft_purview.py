@@ -2042,6 +2042,27 @@ class TestTokenIdPromptHandling:
         mock_check.assert_called_once()
         assert mock_check.call_args.kwargs["text"] == "sensitive text"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_prompt", ["", "   ", "\n\t  "])
+    async def test_empty_or_whitespace_prompt_passes_through(self, empty_prompt):
+        """Empty/whitespace-only string prompts must not be flagged as token-id prompts."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            data = {"prompt": empty_prompt}
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
+                cache=None,
+                data=data,
+                call_type="text_completion",
+            )
+
+        mock_check.assert_not_called()
+        assert result is data
+        assert result["prompt"] == empty_prompt
+
 
 # ---------------------------------------------------------------
 # Streaming iterator hook
