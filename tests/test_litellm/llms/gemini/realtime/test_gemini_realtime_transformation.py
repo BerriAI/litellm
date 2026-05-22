@@ -1047,3 +1047,43 @@ def test_gemini_follow_up_session_update_preserves_response_modalities_on_partia
     assert follow_up["generationConfig"]["responseModalities"] == ["AUDIO"]
     assert follow_up["generationConfig"]["maxOutputTokens"] == 2048
     assert follow_up["generationConfig"]["temperature"] == 0.7
+
+
+def test_gemini_subsequent_session_update_preserves_automatic_activity_detection_subfields():
+    """A follow-up turn_detection update that only sets ``create_response``
+    (mapped to ``disabled``) must not drop ``silenceDurationMs`` /
+    ``prefixPaddingMs`` from the original ``automaticActivityDetection``
+    block."""
+    config = GeminiRealtimeConfig()
+
+    original_setup = {
+        "setup": {
+            "model": "models/gemini-2.5-flash-native-audio",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {
+                    "disabled": False,
+                    "silenceDurationMs": 500,
+                    "prefixPaddingMs": 100,
+                }
+            },
+        }
+    }
+
+    session_update = {
+        "type": "session.update",
+        "session": {"turn_detection": {"create_response": False}},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(original_setup),
+    )
+
+    automatic_activity_detection = json.loads(messages[0])["setup"][
+        "realtimeInputConfig"
+    ]["automaticActivityDetection"]
+    assert automatic_activity_detection["disabled"] is True
+    assert automatic_activity_detection["silenceDurationMs"] == 500
+    assert automatic_activity_detection["prefixPaddingMs"] == 100

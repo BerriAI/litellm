@@ -368,10 +368,29 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if isinstance(original_realtime_input_config, dict) and isinstance(
             new_realtime_input_config, dict
         ):
-            follow_up_setup["realtimeInputConfig"] = {
+            merged_realtime_input_config = {
                 **original_realtime_input_config,
                 **new_realtime_input_config,
             }
+            # Deep-merge ``automaticActivityDetection`` so a partial VAD
+            # update (e.g. the guardrail-injected ``disabled: True`` from
+            # ``create_response: False``) does not silently drop unrelated
+            # knobs like ``silenceDurationMs`` / ``prefixPaddingMs`` from
+            # the original setup.
+            original_automatic_activity_detection = original_realtime_input_config.get(
+                "automaticActivityDetection"
+            )
+            new_automatic_activity_detection = new_realtime_input_config.get(
+                "automaticActivityDetection"
+            )
+            if isinstance(original_automatic_activity_detection, dict) and isinstance(
+                new_automatic_activity_detection, dict
+            ):
+                merged_realtime_input_config["automaticActivityDetection"] = {
+                    **original_automatic_activity_detection,
+                    **new_automatic_activity_detection,
+                }
+            follow_up_setup["realtimeInputConfig"] = merged_realtime_input_config
         verbose_logger.debug(
             "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
