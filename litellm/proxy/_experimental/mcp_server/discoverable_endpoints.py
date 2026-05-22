@@ -715,14 +715,27 @@ def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    # Delegate-auth servers must advertise the upstream IdP as the
+    # authorization server — pointing PRM at LiteLLM would lead the
+    # client to LiteLLM's own auth-server metadata, defeating the
+    # delegate flow. ``_delegate_auth_authorization_server_response``
+    # already gates on ``auth_type == oauth2`` + cached upstream URLs;
+    # reuse the same check here so PRM and AS metadata stay in sync.
+    delegated_auth_server: Optional[str] = None
+    if mcp_server is not None and mcp_server.delegate_auth_to_upstream:
+        delegated_meta = _delegate_auth_authorization_server_response(mcp_server)
+        if delegated_meta is not None:
+            delegated_auth_server = delegated_meta["issuer"]
+
+    if delegated_auth_server is not None:
+        authorization_servers = [delegated_auth_server]
+    elif mcp_server_name:
+        authorization_servers = [f"{request_base_url}/{mcp_server_name}"]
+    else:
+        authorization_servers = [request_base_url]
+
     return {
-        "authorization_servers": [
-            (
-                f"{request_base_url}/{mcp_server_name}"
-                if mcp_server_name
-                else f"{request_base_url}"
-            )
-        ],
+        "authorization_servers": authorization_servers,
         "resource": resource_url,
         "scopes_supported": (
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
@@ -745,6 +758,26 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
     This endpoint is compliant with MCP specification and works with standard
     MCP clients like mcp-inspector and VSCode Copilot.
     """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=True,
+    )
+
+
+# Canonical resource path: /mcp/{server_name}/mcp (path == streamable-http
+# endpoint). RFC 9728 / MCP 2025-06-18+ clients construct PRM by inserting
+# /.well-known/oauth-protected-resource between host and the full resource
+# path — so the resource at /mcp/atlassian1/mcp is probed at
+# /.well-known/oauth-protected-resource/mcp/atlassian1/mcp. mcp-inspector
+# (>= 0.21) does this; without this route it 404s and falls back to root
+# PRM, which can't carry server-specific auth metadata.
+@router.get(
+    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}/mcp"
+)
+async def oauth_protected_resource_mcp_canonical(
+    request: Request, mcp_server_name: str
+):
     return _build_oauth_protected_resource_response(
         request=request,
         mcp_server_name=mcp_server_name,
@@ -787,6 +820,65 @@ async def oauth_protected_resource_mcp(
 """
 
 
+def _delegate_auth_authorization_server_response(
+    mcp_server: MCPServer,
+) -> Optional[dict]:
+    """
+    Build authorization-server metadata for an MCP server configured with
+    ``delegate_auth_to_upstream=True``.
+
+    In delegate-auth mode the end-user authenticates directly with the
+    upstream IdP (PKCE in their MCP client) and LiteLLM is just a network
+    relay. Advertising LiteLLM as the issuer would point the client at
+    LiteLLM's own ``/authorize`` and ``/token`` routes, which don't speak
+    OAuth — so the client either dead-ends or mints a token tied to the
+    wrong issuer. Re-advertise the upstream values that were resolved at
+    registration time (``MCPServer.authorization_url`` /
+    ``token_url`` / ``registration_url`` / ``scopes``) so spec-conforming
+    MCP clients (OpenWebUI, Cursor, mcp-inspector) can drive the flow
+    against the real authorization server.
+
+    Returns ``None`` when the upstream metadata wasn't resolved at
+    registration (network failure, server defined without ``auth_type``,
+    etc.) so the caller falls back to the LiteLLM-issuer response.
+    """
+    if not mcp_server.delegate_auth_to_upstream:
+        return None
+    if mcp_server.auth_type != MCPAuth.oauth2:
+        return None
+
+    authorization_endpoint = mcp_server.authorization_url
+    token_endpoint = mcp_server.token_url
+    if not authorization_endpoint or not token_endpoint:
+        verbose_logger.warning(
+            "MCP delegate-auth: server %s has no upstream authorization/token "
+            "URL stored; falling back to LiteLLM-issuer discovery, which the "
+            "upstream IdP cannot honor. Re-register the server so OAuth "
+            "discovery can populate these fields.",
+            mcp_server.name,
+        )
+        return None
+
+    # Issuer is the upstream authorization server's origin per RFC 8414.
+    parsed = urlparse(authorization_endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    issuer = f"{parsed.scheme}://{parsed.netloc}"
+
+    response: Dict[str, Any] = {
+        "issuer": issuer,
+        "authorization_endpoint": authorization_endpoint,
+        "token_endpoint": token_endpoint,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": mcp_server.scopes or [],
+    }
+    if mcp_server.registration_url:
+        response["registration_endpoint"] = mcp_server.registration_url
+    return response
+
+
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: Optional[str],
@@ -814,6 +906,17 @@ def _build_oauth_authorization_server_response(
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
+
+    if mcp_server is not None:
+        delegated = _delegate_auth_authorization_server_response(mcp_server)
+        if delegated is not None:
+            return delegated
+
     authorization_endpoint = (
         f"{request_base_url}/{mcp_server_name}/authorize"
         if mcp_server_name
@@ -824,12 +927,6 @@ def _build_oauth_authorization_server_response(
         if mcp_server_name
         else f"{request_base_url}/token"
     )
-
-    mcp_server: Optional[MCPServer] = None
-    if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-            mcp_server_name, client_ip=client_ip
-        )
 
     return {
         "issuer": request_base_url,  # point to your proxy

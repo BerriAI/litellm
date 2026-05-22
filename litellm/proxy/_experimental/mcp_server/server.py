@@ -56,7 +56,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -2989,6 +2989,27 @@ if MCP_AVAILABLE:
                     detail="Forbidden",
                 )
 
+    def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
+        """Convert a ``ProxyException`` raised in the auth/router stack into an
+        ``HTTPException`` so the ASGI MCP handlers can let Starlette emit a
+        well-formed response instead of collapsing to a generic 500.
+
+        ``ProxyException.code`` is normalised to ``str`` in its ``__init__`` and
+        may be ``"None"`` or non-numeric when the caller didn't pass a status,
+        so coerce defensively rather than letting ``int("None")`` rewrite the
+        error as a 500. ``headers`` is preserved so auth bootstrap hints
+        (e.g. ``WWW-Authenticate``) survive the conversion.
+        """
+        try:
+            status_code = int(exc.code)
+        except (TypeError, ValueError):
+            status_code = 500
+        return HTTPException(
+            status_code=status_code,
+            detail=exc.message,
+            headers=exc.headers or None,
+        )
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -3117,6 +3138,13 @@ if MCP_AVAILABLE:
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
+        except ProxyException as e:
+            # ProxyException carries the auth/router status code (e.g. 401)
+            # and any auth headers (e.g. ``WWW-Authenticate``). Re-raising as
+            # HTTPException preserves both — the previous catch-all 500 path
+            # collapsed the discovery hint that MCP clients depend on for
+            # OAuth bootstrap.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
@@ -3178,6 +3206,12 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            raise
+        except ProxyException as e:
+            # See handle_streamable_http_mcp: preserve status code and any
+            # auth headers (e.g. WWW-Authenticate) instead of collapsing to 500.
+            raise _proxy_exception_to_http_exception(e)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
