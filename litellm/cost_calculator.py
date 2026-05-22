@@ -1530,6 +1530,7 @@ def completion_cost(  # noqa: PLR0915
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
+                        data_residency=data_residency,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2451,6 +2452,7 @@ def handle_realtime_stream_cost_calculation(
     combined_usage_object: Usage,
     custom_llm_provider: str,
     litellm_model_name: str,
+    data_residency: Optional[str] = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2481,6 +2483,7 @@ def handle_realtime_stream_cost_calculation(
                 model=model_name,
                 usage=combined_usage_object,
                 custom_llm_provider=custom_llm_provider,
+                data_residency=data_residency,
             )
         except Exception:
             continue
