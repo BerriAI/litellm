@@ -182,8 +182,12 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
+        # Pass the resolved provider through to `responses()` so it doesn't
+        # re-run `get_llm_provider()` on the model string and strip a
+        # second provider prefix (see GitHub issue #28505).
         result = responses(
             **request_data,
+            custom_llm_provider=custom_llm_provider,
         )
 
         from litellm.types.utils import ModelResponse
@@ -268,9 +272,13 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
+        # Pass the resolved provider through to `aresponses()` so it doesn't
+        # re-run `get_llm_provider()` on the model string and strip a
+        # second provider prefix (see GitHub issue #28505).
         result = await aresponses(
             **request_data,
             aresponses=True,
+            custom_llm_provider=custom_llm_provider,
         )
 
         from litellm.types.utils import ModelResponse
