@@ -10,6 +10,7 @@ Translations handled by LiteLLM:
 
 from typing import TYPE_CHECKING, Any, Dict
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.utils import supports_reasoning
@@ -62,13 +63,19 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 
-        Drops temperature parameter if drop_params is True since O-series models
-        don't support temperature in the responses API.
+        Calls super() to inherit Azure unsupported-param dropping (stream_options,
+        context_management), then additionally drops temperature since O-series
+        models don't support it in the responses API.
         """
-        mapped_params = dict(response_api_optional_params)
+        # Delegate to parent to drop Azure-wide unsupported params (stream_options, etc.)
+        mapped_params = super().map_openai_params(
+            response_api_optional_params=response_api_optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
 
-        # If drop_params is enabled, remove temperature parameter for O-series models
-        if drop_params and "temperature" in mapped_params:
+        # O-series models additionally do not support temperature in the responses API
+        if (drop_params or litellm.drop_params) and "temperature" in mapped_params:
             verbose_logger.debug(
                 f"Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model {model}"
             )

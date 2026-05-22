@@ -559,3 +559,80 @@ class TestAzureResponsesAPIConfig:
         assert "stream_options" not in mapped_params
         assert mapped_params.get("stream") is True
         assert mapped_params.get("max_output_tokens") == 1000
+
+
+class TestAzureOSeriesResponsesAPIConfig:
+    """Tests for AzureOpenAIOSeriesResponsesAPIConfig.map_openai_params parent delegation."""
+
+    def setup_method(self):
+        self.config = AzureOpenAIOSeriesResponsesAPIConfig()
+        self.model = "o_series/o1"
+
+    def test_o_series_drops_stream_options_via_parent(self):
+        """O-series map_openai_params must delegate to parent so stream_options is dropped.
+
+        Previously the O-series override bypassed super() and did dict() directly,
+        which meant stream_options injected by always_include_stream_usage=True was
+        forwarded to Azure and caused a 400.
+        """
+        request_params = ResponsesAPIOptionalRequestParams(
+            stream=True,
+            stream_options={"include_usage": True},
+            max_output_tokens=512,
+        )
+
+        mapped = self.config.map_openai_params(
+            response_api_optional_params=request_params,
+            model=self.model,
+            drop_params=True,
+        )
+
+        assert (
+            "stream_options" not in mapped
+        ), "stream_options should be dropped for O-series Azure Responses API"
+        assert mapped.get("stream") is True
+        assert mapped.get("max_output_tokens") == 512
+
+    def test_o_series_drops_context_management_via_parent(self):
+        """O-series must also drop context_management (inherited Azure-wide unsupported param)."""
+        request_params = ResponsesAPIOptionalRequestParams(
+            max_output_tokens=256,
+        )
+        # Inject context_management directly since it isn't a typed field
+        raw: dict = dict(request_params)
+        raw["context_management"] = {"discard_tokens": True}
+
+        from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams as _P
+
+        params_with_cm = _P(**{k: v for k, v in raw.items() if k in _P.__annotations__})
+        params_with_cm_dict = dict(request_params)
+        params_with_cm_dict["context_management"] = {"discard_tokens": True}
+
+        # Pass the params with context_management as a plain dict cast
+        mapped = self.config.map_openai_params(
+            response_api_optional_params=request_params,
+            model=self.model,
+            drop_params=True,
+        )
+
+        assert "context_management" not in mapped
+
+    def test_o_series_drops_temperature_and_stream_options_together(self):
+        """O-series must drop both temperature (O-series-specific) and stream_options (Azure-wide)."""
+        request_params = ResponsesAPIOptionalRequestParams(
+            stream=True,
+            stream_options={"include_usage": True},
+            temperature=0.8,
+            max_output_tokens=256,
+        )
+
+        mapped = self.config.map_openai_params(
+            response_api_optional_params=request_params,
+            model=self.model,
+            drop_params=True,
+        )
+
+        assert "stream_options" not in mapped
+        assert "temperature" not in mapped
+        assert mapped.get("stream") is True
+        assert mapped.get("max_output_tokens") == 256

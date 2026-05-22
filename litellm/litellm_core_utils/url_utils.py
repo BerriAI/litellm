@@ -22,7 +22,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, List, Set, Tuple
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
 
@@ -272,3 +272,23 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         # relative Location headers keep the original hostname.
         url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
+
+
+def encode_url_path_segment(value: str, field_name: str = "segment") -> str:
+    """
+    Percent-encode a string for safe embedding as a single URL path segment.
+
+    Encodes all characters that are not unreserved (RFC 3986 §2.3) or
+    sub-delimiters permitted in path segments.  In practice this catches
+    '/', '?', '#', and other characters that would otherwise truncate or
+    corrupt the path.
+
+    Args:
+        value: The raw string to encode (e.g. a response_id that may
+               contain slashes or query characters).
+        field_name: Name used in error messages; has no effect on encoding.
+
+    Returns:
+        The percent-encoded path segment string.
+    """
+    return quote(value, safe="")
