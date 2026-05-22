@@ -40,9 +40,9 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
         model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-3.5-turbo", model_map_value=None
+            model_map_key="gpt-5-mini", model_map_value=None
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",
         api_base="https://api.openai.com",
@@ -586,3 +586,67 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
     assert "api_key" not in fallback_sanitized
     assert "secret_fields" not in fallback_sanitized
     assert fallback_sanitized["temperature"] == 0.5
+
+
+def test_langfuse_logger_holds_http_handler_reference():
+    """
+    LIT-3221: Langfuse trace sending fails with closed client.
+
+    LangFuseLogger used to extract http_client.client (the raw httpx.Client)
+    without keeping a reference to the HTTPHandler itself.  After the 1-hour
+    cache TTL, the HTTPHandler would be evicted and GC'd, triggering __del__
+    which closes the underlying httpx.Client while Langfuse's background flush
+    thread is still using it → RuntimeError: Cannot send a request, as the
+    client has been closed.
+
+    The fix stores self._http_handler so the HTTPHandler stays alive at least
+    as long as the LangFuseLogger instance.
+    """
+    import gc
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    with (
+        patch(
+            "litellm.integrations.langfuse.langfuse.should_use_langfuse_mock",
+            return_value=False,
+        ),
+        patch(
+            "litellm.integrations.langfuse.langfuse._get_httpx_client"
+        ) as mock_get_httpx_client,
+        patch(
+            "litellm.integrations.langfuse.langfuse.resolve_langfuse_credentials",
+            return_value=("pub-key", "secret-key", "https://cloud.langfuse.com"),
+        ),
+    ):
+        import httpx
+
+        # Create a real-ish HTTPHandler mock whose .client we can track
+        mock_handler = Mock(spec=HTTPHandler)
+        mock_handler.client = httpx.Client()
+        mock_get_httpx_client.return_value = mock_handler
+
+        mock_langfuse_cls = Mock()
+        mock_langfuse_instance = Mock()
+        mock_langfuse_cls.return_value = mock_langfuse_instance
+        mock_langfuse_instance.client = Mock()
+        mock_langfuse_instance.client.projects.get.return_value = Mock(
+            data=[Mock(id="proj-1")]
+        )
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse.Langfuse", mock_langfuse_cls
+        ):
+            logger = LangFuseLogger(
+                langfuse_public_key="pub-key",
+                langfuse_secret="secret-key",
+                langfuse_host="https://cloud.langfuse.com",
+            )
+
+        # The logger must hold a strong reference to the HTTPHandler so that
+        # eviction from LLMClientCache does not trigger __del__ / close().
+        assert logger._http_handler is mock_handler, (
+            "LangFuseLogger must store a reference to the HTTPHandler to "
+            "prevent premature GC and client closure after cache TTL expiry."
+        )
+        # The raw httpx client passed to Langfuse SDK must be the handler's client
+        assert logger.langfuse_client is mock_handler.client

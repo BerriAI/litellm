@@ -90,6 +90,29 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
     return cache_read_input_tokens
 
 
+def resolve_langfuse_credentials(
+    langfuse_public_key=None,
+    langfuse_secret=None,
+    langfuse_secret_key=None,
+    langfuse_host=None,
+    allow_env_credentials: bool = True,
+):
+    if allow_env_credentials is False and langfuse_host is not None:
+        secret_key = langfuse_secret or langfuse_secret_key
+        public_key = langfuse_public_key
+    else:
+        secret_key = (
+            langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
+        )
+        public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
+
+    resolved_host = langfuse_host or os.getenv(
+        "LANGFUSE_HOST", "https://cloud.langfuse.com"
+    )
+
+    return public_key, secret_key, resolved_host
+
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -98,6 +121,7 @@ class LangFuseLogger:
         langfuse_secret=None,
         langfuse_host=None,
         flush_interval=1,
+        allow_env_credentials: bool = True,
     ):
         try:
             import langfuse
@@ -106,11 +130,13 @@ class LangFuseLogger:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
             )
-        # Instance variables
-        self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
-        self.public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-        self.langfuse_host = langfuse_host or os.getenv(
-            "LANGFUSE_HOST", "https://cloud.langfuse.com"
+        self.public_key, self.secret_key, self.langfuse_host = (
+            resolve_langfuse_credentials(
+                langfuse_public_key=langfuse_public_key,
+                langfuse_secret=langfuse_secret,
+                langfuse_host=langfuse_host,
+                allow_env_credentials=allow_env_credentials,
+            )
         )
         if not (
             self.langfuse_host.startswith("http://")
@@ -126,10 +152,19 @@ class LangFuseLogger:
 
         if should_use_langfuse_mock():
             self.langfuse_client = create_mock_langfuse_client()
+            self._http_handler: Optional[Any] = None
             self.is_mock_mode = True
         else:
-            http_client = _get_httpx_client()
-            self.langfuse_client = http_client.client
+            # Store a reference to the HTTPHandler to prevent premature garbage
+            # collection.  _get_httpx_client() returns a cached handler with a
+            # 1-hour TTL.  When the cache evicts it and nothing else holds a
+            # reference, __del__ closes the underlying httpx.Client — while the
+            # Langfuse SDK's background flush thread is still using it, causing
+            # "RuntimeError: Cannot send a request, as the client has been
+            # closed."  Keeping self._http_handler alive ensures the handler
+            # (and its httpx.Client) live at least as long as this logger.
+            self._http_handler = _get_httpx_client()
+            self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
         parameters = {
@@ -160,9 +195,10 @@ class LangFuseLogger:
                 project_id = None
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
+            upstream_langfuse_debug_env = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
             upstream_langfuse_debug = (
-                str_to_bool(self.upstream_langfuse_debug)
-                if self.upstream_langfuse_debug is not None
+                str_to_bool(upstream_langfuse_debug_env)
+                if upstream_langfuse_debug_env is not None
                 else None
             )
             self.upstream_langfuse_secret_key = os.getenv(
@@ -173,7 +209,7 @@ class LangFuseLogger:
             )
             self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
             self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
-            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
+            self.upstream_langfuse_debug = upstream_langfuse_debug_env
             self.upstream_langfuse = Langfuse(
                 public_key=self.upstream_langfuse_public_key,
                 secret_key=self.upstream_langfuse_secret_key,
