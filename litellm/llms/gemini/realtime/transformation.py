@@ -267,7 +267,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """
         session_payload = json_message.get("session") or {}
         if session_configuration_request is None:
-            # First session.update - send the setup with all configuration
+            # First session.update - send the setup with all configuration.
+            # Normalize ``turn_detection`` to the top level so map_openai_params
+            # picks it up whether the client used the flat beta shape or the
+            # GA nested shape (session.audio.input.turn_detection). Without
+            # this, guardrail-injected ``create_response: False`` would be
+            # silently dropped for GA clients because map_openai_params only
+            # looks at top-level keys.
+            extracted_turn_detection = self._extract_turn_detection(session_payload)
+            if (
+                extracted_turn_detection is not None
+                and "turn_detection" not in session_payload
+            ):
+                session_payload = {
+                    **session_payload,
+                    "turn_detection": extracted_turn_detection,
+                }
             client_session_configuration_request = self.map_openai_params(
                 optional_params={}, non_default_params=session_payload
             )
