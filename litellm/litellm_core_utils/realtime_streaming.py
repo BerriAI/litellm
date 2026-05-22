@@ -842,7 +842,7 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):
+    async def client_ack_messages(self):  # noqa: PLR0915
         try:
             while True:
                 message = await self.websocket.receive_text()
