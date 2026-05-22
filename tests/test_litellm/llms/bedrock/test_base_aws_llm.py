@@ -2122,6 +2122,7 @@ def test_is_already_running_as_role_ssl_verify_passed():
 # error.  0x223a7b22 == ':{\"' — the start of a JSON object.
 # ---------------------------------------------------------------------------
 
+
 class TestGetBedrockModelIdArnHandling:
     """Unit tests for get_bedrock_model_id with inference-profile ARNs."""
 
@@ -2140,14 +2141,16 @@ class TestGetBedrockModelIdArnHandling:
     def test_arn_with_bedrock_prefix_is_stripped_and_encoded(self):
         """bedrock/arn:... must not appear verbatim in the model_id."""
         model_id = self._call(f"bedrock/{self.ARN}")
-        assert "bedrock/arn" not in model_id, (
-            f"'bedrock/' prefix not stripped; got: {model_id}"
-        )
+        assert (
+            "bedrock/arn" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
         # Must be URL-encoded (colons → %3A)
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
-    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(self):
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(
+        self,
+    ):
         """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
 
         The old fix used ``break`` after the first matched prefix, so
@@ -2159,12 +2162,12 @@ class TestGetBedrockModelIdArnHandling:
         strip_bedrock_routing_prefix() has no break and handles this correctly.
         """
         model_id = self._call(f"bedrock/invoke/{self.ARN}")
-        assert "invoke/" not in model_id, (
-            f"'invoke/' prefix not stripped; got: {model_id}"
-        )
-        assert "bedrock/" not in model_id, (
-            f"'bedrock/' prefix not stripped; got: {model_id}"
-        )
+        assert (
+            "invoke/" not in model_id
+        ), f"'invoke/' prefix not stripped; got: {model_id}"
+        assert (
+            "bedrock/" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
@@ -2195,7 +2198,9 @@ class TestGetBedrockModelIdArnHandling:
             f"https://bedrock-runtime.us-east-1.amazonaws.com"
             f"/model/{encoded_arn}/invoke-with-response-stream"
         )
-        assert url == expected, f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+        assert (
+            url == expected
+        ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
 
     def test_regular_model_id_unaffected(self):
         """Non-ARN model IDs must continue to work as before."""

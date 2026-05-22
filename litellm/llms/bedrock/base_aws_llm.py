@@ -462,6 +462,7 @@ class BaseAWSLLM:
             # Use strip_bedrock_routing_prefix (no break) so compound prefixes
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
             from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+
             model_id = strip_bedrock_routing_prefix(model_id)
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
