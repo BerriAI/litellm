@@ -1080,3 +1080,40 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     sent_update = json.loads(streaming._send_to_backend.await_args_list[0].args[0])
     assert sent_update["type"] == "session.update"
     assert sent_update["session"]["turn_detection"]["create_response"] is False
+
+
+@pytest.mark.asyncio
+async def test_guardrail_update_respects_idempotency_flag():
+    """Verify guardrail turn-detection update uses idempotency flag correctly."""
+    client_ws = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(
+        side_effect=lambda msg, model, session_config: [msg]
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    
+    # First call should send the update
+    assert streaming._guardrail_turn_detection_update_sent is False
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert streaming._guardrail_turn_detection_update_sent is True
+    assert backend_ws.send.await_count == 1
+    
+    # Second call should be a no-op (idempotent)
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert backend_ws.send.await_count == 1  # Still 1, not 2
