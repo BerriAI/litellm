@@ -445,9 +445,44 @@ def test_gemini_requires_session_configuration_feature_flag(monkeypatch):
 
 
 def test_gemini_realtime_function_call_output_transformation():
-    """Test transformation of OpenAI function_call_output to Gemini toolResponse format."""
+    """Test transformation of OpenAI function_call_output to Gemini toolResponse format.
+
+    Exercises the full production round-trip: a Gemini toolCall arrives first
+    and populates the call_id -> name mapping, then the OpenAI
+    function_call_output is transformed and must carry the function name back
+    to Gemini in functionResponses.
+    """
     config = GeminiRealtimeConfig()
-    
+
+    # Receive a toolCall from Gemini first to populate the call_id -> name mapping.
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_func_output"
+    config.transform_realtime_response(
+        json.dumps({
+            "toolCall": {
+                "functionCalls": [
+                    {
+                        "id": "call_123",
+                        "name": "get_weather",
+                        "args": {"location": "San Francisco"},
+                    }
+                ]
+            }
+        }),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+    assert config._tool_call_id_to_name.get("call_123") == "get_weather"
+
     # OpenAI format function call output
     function_output = {
         "type": "conversation.item.create",
@@ -479,6 +514,7 @@ def test_gemini_realtime_function_call_output_transformation():
     
     func_response = tool_response["functionResponses"][0]
     assert func_response["id"] == "call_123"
+    assert func_response["name"] == "get_weather"
     assert "response" in func_response
     assert func_response["response"]["temperature"] == 72
     assert func_response["response"]["conditions"] == "sunny"
