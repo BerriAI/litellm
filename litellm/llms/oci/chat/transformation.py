@@ -723,12 +723,12 @@ class OCIStreamWrapper(CustomStreamWrapper):
             )
             if not self._cohere_tool_calls_emitted:
                 for choice in result.choices:
-                    if getattr(choice.delta, "tool_calls", None):
+                    if getattr(choice.delta, "tool_calls", None) is not None:
                         self._cohere_tool_calls_emitted = True
                         break
             if not self._cohere_text_emitted:
                 for choice in result.choices:
-                    if getattr(choice.delta, "content", None):
+                    if getattr(choice.delta, "content", None) is not None:
                         self._cohere_text_emitted = True
                         break
             return result

@@ -168,6 +168,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             api_base=api_base,
             api_key=api_key,
             model=model,
+            stream=stream,
+            fake_stream=fake_stream,
         )
 
     def transform_embedding_request(
