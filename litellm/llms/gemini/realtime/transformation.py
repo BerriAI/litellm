@@ -71,6 +71,14 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[
     "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
+# Top-level keys in a Gemini realtime message that map_openai_event knows how
+# to handle. Other keys (e.g. ``usageMetadata``) can appear alongside these as
+# siblings and must be skipped by the main transform loop — otherwise
+# map_openai_event raises ``ValueError`` and the WebSocket session terminates.
+_KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
+    map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
+}
+
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     # Cap the LRU of in-flight tool calls so long sessions with many tool
@@ -1259,6 +1267,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 }
 
         for key, value in json_message.items():
+            # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
+            # accompany a primary payload like ``toolCall`` or ``serverContent``.
+            # ``map_openai_event`` raises ValueError on unknown keys, which
+            # would otherwise terminate the WebSocket session.
+            if key not in _KNOWN_GEMINI_TOP_LEVEL_KEYS:
+                continue
             # Check if this key or any nested key matches our mapping
             openai_event = self.map_openai_event(
                 key=key,
