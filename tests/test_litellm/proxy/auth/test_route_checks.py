@@ -1311,6 +1311,8 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     # Main paginated log list — uiSpendLogsCall in log_filter_logic.tsx & index.tsx
     "/spend/logs/ui",
+    # Public paginated API (v2) — the documented replacement for /spend/logs
+    "/spend/logs/v2",
     # Single-log detail drawer — fetched on row click in LogDetailsDrawer
     "/spend/logs/ui/abc-request-id",
     # Multi-call session drawer — sessionSpendLogsCall in LogDetailsDrawer
@@ -1403,6 +1405,63 @@ def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
             request_data={},
         )
     assert "Only proxy admin" in str(exc_info.value)
+
+
+# ── /spend/logs/v2 access for non-admin roles ────────────────────────────────
+#
+# /spend/logs/v2 is the public documented paginated replacement for /spend/logs.
+# It must be accessible to INTERNAL_USER, INTERNAL_USER_VIEW_ONLY, and
+# PROXY_ADMIN_VIEW_ONLY — all of which have spend_tracking_routes in their
+# allowed route set. Without this, virtual keys created with those roles receive
+# 401 "Unauthorized" when calling the v2 endpoint.
+#
+# Regression test for LIT-3271.
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ],
+)
+def test_spend_logs_v2_accessible_to_spend_tracking_roles(role):
+    """
+    /spend/logs/v2 must not return 401 for users with spend-tracking access.
+    The endpoint handler already enforces per-user filtering; the route-check
+    layer must simply let the request through.
+
+    Regression test for LIT-3271: /spend/logs/v2 was missing from
+    spend_tracking_routes, causing unauthorized errors for virtual key types
+    that include those routes (INTERNAL_USER, INTERNAL_USER_VIEW_ONLY,
+    PROXY_ADMIN_VIEW_ONLY).
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user_id",
+        user_email="user@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user_id",
+        user_role=role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role,
+            route="/spend/logs/v2",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"Role {role!r} should be able to access /spend/logs/v2. Got error: {e}"
+        )
 
 
 # ── Admin Viewer parity: Settings/observability read endpoints ────────────────
