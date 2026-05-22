@@ -327,6 +327,27 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             result["summary"] = "detailed"
         return result
 
+    @staticmethod
+    def _apply_reasoning_replay_settings(responses_kwargs: Dict[str, Any]) -> None:
+        """Force ``store=False`` and append ``reasoning.encrypted_content`` to
+        ``include`` so the upstream returns the encrypted reasoning blob and
+        we can replay it verbatim on the next turn. Only kicks in when
+        reasoning is actually in play — either the client requested thinking,
+        or the inbound history carries a reasoning item from a prior turn —
+        so non-reasoning callers are not silently affected.
+        """
+        has_reasoning_request = isinstance(responses_kwargs.get("reasoning"), dict)
+        has_reasoning_input = any(
+            isinstance(it, dict) and it.get("type") == "reasoning"
+            for it in responses_kwargs.get("input", [])
+        )
+        if not (has_reasoning_request or has_reasoning_input):
+            return
+        responses_kwargs["store"] = False
+        responses_kwargs.setdefault("include", [])
+        if "reasoning.encrypted_content" not in responses_kwargs["include"]:
+            responses_kwargs["include"].append("reasoning.encrypted_content")
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -438,12 +459,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
-        # Force stateless reasoning round-trip: we don't rely on
-        # previous_response_id; instead we replay encrypted_content verbatim.
-        responses_kwargs["store"] = False
-        responses_kwargs.setdefault("include", [])
-        if "reasoning.encrypted_content" not in responses_kwargs["include"]:
-            responses_kwargs["include"].append("reasoning.encrypted_content")
+        self._apply_reasoning_replay_settings(responses_kwargs)
 
         return responses_kwargs
 

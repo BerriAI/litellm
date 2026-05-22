@@ -856,6 +856,63 @@ class TestTranslateRequestBroaderCoverage:
         ):
             assert key not in kwargs, f"unexpected key: {key}"
 
+    def test_no_reasoning_does_not_force_store_or_include(self):
+        """When reasoning is not in play, translate_request must NOT touch
+        `store` or inject `reasoning.encrypted_content` into `include` — that
+        would be a backwards-incompatible silent change for non-reasoning
+        callers."""
+        req = _make_request()
+        kwargs = _ADAPTER.translate_request(req)
+        assert "store" not in kwargs
+        assert "include" not in kwargs
+
+    def test_thinking_request_forces_store_false_and_include(self):
+        """When the client requests thinking, force stateless replay so the
+        encrypted_content is returned and can be round-tripped."""
+        req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["store"] is False
+        assert "reasoning.encrypted_content" in kwargs["include"]
+
+    def test_reasoning_input_history_forces_store_false_and_include(self):
+        """When the inbound history carries a reasoning item from a prior
+        turn (unpacked from a packed signature), force stateless replay even
+        if the current turn doesn't request thinking again."""
+        import base64
+        import json as _json
+
+        packed = (
+            "lllm-rsenc-v1:"
+            + base64.b64encode(
+                _json.dumps({"id": "rs_prev", "ec": "ENC"}).encode()
+            ).decode()
+        )
+        req = _make_request(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": packed,
+                        }
+                    ],
+                },
+                {"role": "user", "content": "follow up"},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["store"] is False
+        assert "reasoning.encrypted_content" in kwargs["include"]
+
+    def test_disabled_thinking_does_not_force_store_or_include(self):
+        """`thinking: {type: disabled}` must NOT trigger reasoning side-effects."""
+        req = _make_request(thinking={"type": "disabled"})
+        kwargs = _ADAPTER.translate_request(req)
+        assert "store" not in kwargs
+        assert "include" not in kwargs
+
 
 # ---------------------------------------------------------------------------
 # translate_response
@@ -1069,6 +1126,132 @@ class TestTranslateResponse:
         assert result["content"][0]["name"] == "search"
         assert result["content"][0]["input"] == {"query": "cats"}
         assert result["stop_reason"] == "tool_use"
+
+    def test_dict_message_with_string_content(self):
+        """Dict-shaped message where `content` is a plain string."""
+        output_item = {"type": "message", "content": "Plain string body"}
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Plain string body"
+
+    def test_dict_message_with_empty_string_content_skipped(self):
+        """Dict-shaped message where `content` is an empty string emits no
+        text block (avoids leaking empty `text: ""` to clients)."""
+        output_item = {"type": "message", "content": ""}
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == []
+
+    def test_dict_message_with_string_part_in_content_list(self):
+        """Dict-shaped message whose content list contains a raw string."""
+        output_item = {"type": "message", "content": ["raw piece"]}
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "raw piece"
+
+    def test_dict_message_summary_text_part_recognized(self):
+        """`summary_text` is in the accepted text-part-type set."""
+        output_item = {
+            "type": "message",
+            "content": [{"type": "summary_text", "text": "summary body"}],
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["text"] == "summary body"
+
+    def test_dict_reasoning_with_summary_packs_signature(self):
+        """Dict-shaped reasoning item with id + encrypted_content emits a
+        thinking block carrying the packed signature."""
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+            _unpack_signature,
+        )
+
+        output_item = {
+            "type": "reasoning",
+            "id": "rs_dict_1",
+            "encrypted_content": "ENC-DICT",
+            "summary": [{"type": "summary_text", "text": "deliberating"}],
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        block = result["content"][0]
+        assert block["type"] == "thinking"
+        assert block["thinking"] == "deliberating"
+        rs_id, enc = _unpack_signature(block["signature"])
+        assert rs_id == "rs_dict_1"
+        assert enc == "ENC-DICT"
+
+    def test_dict_reasoning_without_summary_emits_signature_only_block(self):
+        """When upstream sends reasoning with encrypted_content but no
+        summary text, emit an empty-thinking block carrying the signature so
+        the next turn can resume."""
+        output_item = {
+            "type": "reasoning",
+            "id": "rs_dict_2",
+            "encrypted_content": "ENC-NOSUM",
+            "summary": [],
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "thinking"
+        assert result["content"][0]["thinking"] == ""
+        assert result["content"][0]["signature"].startswith("lllm-rsenc-v1:")
+
+    def test_dict_reasoning_without_encrypted_content_dropped(self):
+        """Reasoning with neither summary text nor encrypted_content emits
+        nothing — no useless empty thinking block."""
+        output_item = {"type": "reasoning", "id": "rs_dict_3", "summary": []}
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == []
+
+    def test_dict_function_call_with_invalid_json_arguments(self):
+        """Dict-shaped function_call with bad JSON args falls back to empty
+        input dict (mirrors the typed-item branch)."""
+        output_item = {
+            "type": "function_call",
+            "call_id": "call_bad_dict",
+            "name": "broken",
+            "arguments": "{not json",
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["type"] == "tool_use"
+        assert result["content"][0]["input"] == {}
+        assert result["stop_reason"] == "tool_use"
+
+    def test_typed_reasoning_item_with_encrypted_content_packs_signature(self):
+        """Typed ResponseReasoningItem with encrypted_content packs (id, ec)
+        into signature on the emitted thinking block."""
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+            _unpack_signature,
+        )
+
+        item = _make_reasoning_item(["weighing options"])
+        item.id = "rs_typed_1"
+        item.encrypted_content = "ENC-TYPED"
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        block = result["content"][0]
+        assert block["type"] == "thinking"
+        rs_id, enc = _unpack_signature(block["signature"])
+        assert rs_id == "rs_typed_1"
+        assert enc == "ENC-TYPED"
+
+    def test_typed_reasoning_with_encrypted_no_summary_emits_signature_only(self):
+        """Typed reasoning item with encrypted_content but empty summary
+        still emits a signature-only thinking block."""
+        item = _make_reasoning_item([])
+        item.id = "rs_typed_2"
+        item.encrypted_content = "ENC-EMPTY"
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["thinking"] == ""
+        assert result["content"][0]["signature"].startswith("lllm-rsenc-v1:")
 
     def test_mixed_reasoning_text_and_tool_use(self):
         """Reasoning + text + tool_use in one response all convert correctly."""

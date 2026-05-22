@@ -252,20 +252,26 @@ async def anthropic_messages(
     # Code's clear_thinking edit clears it), so the cleanest fix is to drop
     # them entirely.
     if custom_llm_provider == "anthropic" and isinstance(messages, list):
-        for _m in messages:
-            _content = _m.get("content") if isinstance(_m, dict) else None
-            if not isinstance(_content, list):
-                continue
-            _m["content"] = [
-                _c
-                for _c in _content
-                if not (
-                    isinstance(_c, dict)
-                    and _c.get("type") == "thinking"
-                    and isinstance(_c.get("signature"), str)
-                    and _c["signature"].startswith(_SIG_PREFIX)
-                )
-            ]
+        messages = [
+            (
+                {
+                    **_m,
+                    "content": [
+                        _c
+                        for _c in _m["content"]
+                        if not (
+                            isinstance(_c, dict)
+                            and _c.get("type") == "thinking"
+                            and isinstance(_c.get("signature"), str)
+                            and _c["signature"].startswith(_SIG_PREFIX)
+                        )
+                    ],
+                }
+                if isinstance(_m, dict) and isinstance(_m.get("content"), list)
+                else _m
+            )
+            for _m in messages
+        ]
 
     # Short-circuit web-search-only requests: detect the pattern, execute
     # search directly via Tavily/Perplexity, and return a synthetic response

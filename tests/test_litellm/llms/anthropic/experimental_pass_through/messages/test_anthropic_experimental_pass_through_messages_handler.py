@@ -668,3 +668,29 @@ class TestStripForeignSignatures:
         # adapter will unpack the signature into a top-level reasoning item.
         assert len(forwarded) == 1
         assert forwarded[0]["signature"] == packed
+
+    @pytest.mark.asyncio
+    async def test_strip_does_not_mutate_caller_messages(self):
+        """The caller's `messages` list (and its inner dicts) must not be
+        mutated. A copy is built for the downstream handler instead."""
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        packed = self._packed_sig()
+        original_assistant_content = [
+            {"type": "thinking", "thinking": "", "signature": packed},
+            {"type": "text", "text": "answer"},
+        ]
+        assistant_msg = {"role": "assistant", "content": original_assistant_content}
+        messages = [{"role": "user", "content": "first"}, assistant_msg]
+
+        with patch.object(handler, "anthropic_messages_handler", return_value="ok"):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="anthropic/claude-opus-4-7",
+                custom_llm_provider="anthropic",
+            )
+        # Caller still sees the original 2 blocks on the same dict.
+        assert assistant_msg["content"] is original_assistant_content
+        assert len(original_assistant_content) == 2
+        assert original_assistant_content[0]["type"] == "thinking"
