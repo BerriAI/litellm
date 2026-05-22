@@ -13,7 +13,10 @@ from typing import Any, Dict, List, Optional
 import httpx
 from pydantic import ValidationError
 
-from litellm.llms.oci.chat.generic import _synthesize_oci_tool_call_id
+from litellm.llms.oci.chat.generic import (
+    _normalize_oci_finish_reason,
+    _synthesize_oci_tool_call_id,
+)
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
     OCIError,
@@ -144,16 +147,19 @@ def adapt_messages_to_cohere_standard(
             cohere_call = tool_call_lookup.get(
                 tool_call_id, CohereToolCall(name="", parameters={})
             )
-            chat_history.append(
-                CohereToolMessage(
-                    toolResults=[
-                        CohereToolResult(
-                            call=cohere_call,
-                            outputs=[{"output": content}],
-                        )
-                    ]
-                )
+            tool_result = CohereToolResult(
+                call=cohere_call,
+                outputs=[{"output": content}],
             )
+            # OpenAI emits one tool-role message per parallel tool call, but
+            # the OCI Cohere API expects all results from a single assistant
+            # turn to share one TOOL history entry with multiple toolResults.
+            # Merge consecutive tool messages so the model sees the parallel
+            # call/result pairing correctly during agentic loops.
+            if chat_history and isinstance(chat_history[-1], CohereToolMessage):
+                chat_history[-1].toolResults.append(tool_result)
+            else:
+                chat_history.append(CohereToolMessage(toolResults=[tool_result]))
 
     return chat_history
 
@@ -221,23 +227,9 @@ def handle_cohere_response(
     model_response.created = int(datetime.datetime.now().timestamp())
 
     response_text = cohere_response.chatResponse.text
-    oci_finish_reason = cohere_response.chatResponse.finishReason
-
-    if oci_finish_reason == "COMPLETE":
-        finish_reason = "stop"
-    elif oci_finish_reason == "MAX_TOKENS":
-        finish_reason = "length"
-    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
-        finish_reason = "tool_calls"
-    elif oci_finish_reason is not None:
-        # OCI Cohere can emit error/cancel finish reasons (e.g. ``ERROR``,
-        # ``ERROR_TOXIC``, ``ERROR_LIMIT``, ``USER_CANCEL``) that aren't part
-        # of OpenAI's standard set. Normalize them to ``"stop"`` so downstream
-        # consumers switching on ``finish_reason`` keep working — matches the
-        # streaming handler below.
-        finish_reason = "stop"
-    else:
-        finish_reason = None
+    finish_reason = _normalize_oci_finish_reason(
+        cohere_response.chatResponse.finishReason
+    )
 
     tool_calls: Optional[List[Dict[str, Any]]] = None
     if cohere_response.chatResponse.toolCalls:
@@ -375,19 +367,7 @@ def handle_cohere_stream_chunk(
             for i, tc in enumerate(cohere_tool_calls)
         ]
 
-    finish_reason = typed_chunk.finishReason
-    if finish_reason == "COMPLETE":
-        finish_reason = "stop"
-    elif finish_reason == "MAX_TOKENS":
-        finish_reason = "length"
-    elif finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
-        finish_reason = "tool_calls"
-    elif finish_reason is not None:
-        # OCI Cohere can emit error/cancel finish reasons (e.g. ``ERROR``,
-        # ``ERROR_TOXIC``, ``ERROR_LIMIT``, ``USER_CANCEL``) that aren't part
-        # of OpenAI's standard set. Normalize them to ``"stop"`` so downstream
-        # consumers switching on ``finish_reason`` keep working.
-        finish_reason = "stop"
+    finish_reason = _normalize_oci_finish_reason(typed_chunk.finishReason)
 
     return ModelResponseStream(
         choices=[

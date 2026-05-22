@@ -271,6 +271,27 @@ def adapt_tool_definition_to_oci_standard(
     return new_tools
 
 
+def _normalize_oci_finish_reason(raw: Optional[str]) -> Optional[str]:
+    """Map an OCI-specific finish reason to its OpenAI-standard equivalent.
+
+    OCI emits ``COMPLETE`` / ``MAX_TOKENS`` / ``TOOL_CALL(S)`` plus a long tail
+    of error/cancel reasons (``ERROR``, ``ERROR_TOXIC``, ``ERROR_LIMIT``,
+    ``USER_CANCEL``, ``CONTENT_FILTERED``, ``CANCELLED``, ...). The OpenAI
+    spec only defines ``stop`` / ``length`` / ``tool_calls`` / ... — anything
+    else is collapsed to ``"stop"`` so downstream consumers switching on
+    ``finish_reason`` keep working. A ``None`` input passes through unchanged.
+    """
+    if raw is None:
+        return None
+    if raw == "COMPLETE":
+        return "stop"
+    if raw == "MAX_TOKENS":
+        return "length"
+    if raw in ("TOOL_CALL", "TOOL_CALLS"):
+        return "tool_calls"
+    return "stop"
+
+
 def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> str:
     """Deterministic synthetic tool-call id derived from chunk content.
 
@@ -353,23 +374,9 @@ def handle_generic_response(
                 response_message.toolCalls
             )
 
-    oci_finish_reason = response_choice.finishReason
-    if oci_finish_reason == "COMPLETE":
-        model_response.choices[0].finish_reason = "stop"  # type: ignore[union-attr]
-    elif oci_finish_reason == "MAX_TOKENS":
-        model_response.choices[0].finish_reason = "length"  # type: ignore[union-attr]
-    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
-        model_response.choices[0].finish_reason = "tool_calls"  # type: ignore[union-attr]
-    elif oci_finish_reason is not None:
-        # OCI GENERIC can emit non-OpenAI finish reasons (e.g. ``ERROR``,
-        # ``CONTENT_FILTERED``, ``CANCELLED``). Normalize to ``"stop"`` so
-        # downstream consumers switching on ``finish_reason`` keep working —
-        # matches the streaming handler.
-        model_response.choices[0].finish_reason = "stop"  # type: ignore[union-attr]
-    else:
-        # Explicitly clear the default so a missing OCI ``finishReason`` doesn't
-        # masquerade as ``"stop"`` — matches the other three OCI handlers.
-        model_response.choices[0].finish_reason = None  # type: ignore[union-attr,assignment]
+    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(  # type: ignore[union-attr,assignment]
+        response_choice.finishReason
+    )
 
     oci_usage = completion_response.chatResponse.usage
     reasoning_tokens: Optional[int] = None
@@ -432,22 +439,9 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     if typed_chunk.message and typed_chunk.message.toolCalls:
         tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
 
-    oci_finish_reason = typed_chunk.finishReason
-    if oci_finish_reason == "COMPLETE":
-        finish_reason: Optional[str] = "stop"
-    elif oci_finish_reason == "MAX_TOKENS":
-        finish_reason = "length"
-    elif oci_finish_reason in ("TOOL_CALL", "TOOL_CALLS"):
-        finish_reason = "tool_calls"
-    elif oci_finish_reason is not None:
-        # OCI can emit error/cancel finish reasons (e.g. ``ERROR``,
-        # ``ERROR_TOXIC``, ``ERROR_LIMIT``, ``USER_CANCEL``) that aren't part
-        # of OpenAI's standard set. Normalize them to ``"stop"`` so downstream
-        # consumers switching on ``finish_reason`` keep working — matches the
-        # Cohere stream handler's behaviour.
-        finish_reason = "stop"
-    else:
-        finish_reason = None
+    finish_reason: Optional[str] = _normalize_oci_finish_reason(
+        typed_chunk.finishReason
+    )
 
     return ModelResponseStream(
         choices=[
