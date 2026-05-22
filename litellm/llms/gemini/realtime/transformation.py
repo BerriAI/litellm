@@ -252,7 +252,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 {"setup": client_session_configuration_request}
             )
             verbose_logger.debug(
-                f"Gemini Realtime: Sending initial setup with tools to backend"
+                "Gemini Realtime: Sending initial setup with tools to backend"
             )
             return [gemini_setup_msg]
         else:
