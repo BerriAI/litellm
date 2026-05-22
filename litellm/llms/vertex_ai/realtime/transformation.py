@@ -12,15 +12,10 @@ Auth: OAuth2 Bearer token (not an API key).
 """
 
 import json
-from typing import List, Optional, cast
+from typing import List, Optional
 
 from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.types.llms.gemini import (
-    BidiGenerateContentRealtimeInputConfig,
-    BidiGenerateContentSetup,
-)
-from litellm.types.llms.openai import OpenAIRealtimeTurnDetection
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -209,15 +204,17 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """
         Translate OpenAI realtime client messages to Vertex AI format.
 
-        Handles session.update by sending setup with proper Vertex AI model path.
+        On the first ``session.update`` (when no setup has been sent yet) the
+        full ``BidiGenerateContentSetup`` is built with Vertex AI's model path
+        and forwarded. Any later ``session.update`` is dropped: Vertex AI
+        documents ``setup`` as the first-and-only client message, and a second
+        ``setup`` closes the connection with a 1007 policy error.
         """
         json_message = json.loads(message)
         msg_type = json_message.get("type")
 
-        # Handle session.update with Vertex AI specific model path
         if msg_type == "session.update":
             if session_configuration_request is None:
-                # First session.update - send the setup with Vertex AI configuration
                 setup_config = self._build_vertex_ai_setup_config(
                     model, json_message.get("session") or {}
                 )
@@ -228,34 +225,11 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                 )
                 return [gemini_setup_msg]
 
-            # Subsequent session.update: forward turn_detection-only updates
-            # (e.g. guardrail-injected disable of VAD auto-response) as a
-            # follow-up setup. Other fields are dropped because Vertex AI
-            # doesn't support dynamic updates.
-            session_payload = json_message.get("session") or {}
-            turn_detection = self._extract_turn_detection(session_payload)
-            if turn_detection is not None:
-                transformed_audio_activity_config = self.map_automatic_turn_detection(
-                    cast(OpenAIRealtimeTurnDetection, turn_detection)
-                )
-                if len(transformed_audio_activity_config) > 0:
-                    follow_up_setup: BidiGenerateContentSetup = {
-                        "model": self._vertex_model_path(model),
-                        "realtimeInputConfig": BidiGenerateContentRealtimeInputConfig(
-                            automaticActivityDetection=transformed_audio_activity_config
-                        ),
-                    }
-                    verbose_logger.debug(
-                        "Vertex AI Realtime: Forwarding turn_detection-only session.update as setup"
-                    )
-                    return [json.dumps({"setup": follow_up_setup})]
-
             verbose_logger.debug(
                 "Vertex AI Realtime: Ignoring session.update (setup already sent)"
             )
             return []
 
-        # For other message types, use parent's logic
         return super().transform_realtime_request(
             message, model, session_configuration_request
         )
