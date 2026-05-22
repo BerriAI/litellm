@@ -2061,6 +2061,17 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     type: Literal["response.content_part.done"]
 
 
+class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
+    type: Literal["response.function_call_arguments.done"]
+    event_id: str
+    response_id: str
+    item_id: str
+    output_index: int
+    call_id: str
+    name: str
+    arguments: str
+
+
 class OpenAIRealtimeOutputItemDone(TypedDict):
     event_id: str
     item: OpenAIRealtimeStreamResponseOutputItem
@@ -2126,6 +2137,7 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeDoneEvent,
 ]
 

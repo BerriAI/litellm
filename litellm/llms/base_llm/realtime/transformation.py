@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
+from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
@@ -74,7 +75,7 @@ class BaseRealtimeConfig(ABC):
         model: str,
         logging_session_id: str,
         session_configuration_request: Optional[str] = None,
-    ) -> Optional[dict]:
+    ) -> Optional[Union[dict, OpenAIRealtimeStreamSessionEvents]]:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 

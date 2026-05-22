@@ -30,6 +30,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
     OpenAIRealtimeEventTypes,
+    OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeResponseContentPartAdded,
@@ -37,6 +38,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeResponseDoneObject,
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamResponseOutputItem,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
@@ -741,7 +743,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         tool_call_message: dict,
         response_id: Optional[str] = None,
         output_item_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[OpenAIRealtimeFunctionCallArgumentsDone]:
         """
         Transform Gemini toolCall message to OpenAI function call events.
 
@@ -756,7 +758,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
         )
 
-        events = []
+        events: List[OpenAIRealtimeFunctionCallArgumentsDone] = []
         for idx, fc in enumerate(function_calls):
             call_id = fc.get("id", "")
             name = fc.get("name", "")
@@ -766,16 +768,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 self._tool_call_id_to_name[call_id] = name
 
             events.append(
-                {
-                    "type": "response.function_call_arguments.done",
-                    "event_id": f"event_{uuid.uuid4()}",
-                    "response_id": resolved_response_id,
-                    "item_id": f"{resolved_output_item_id}_tool_{idx}",
-                    "output_index": idx,
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": json.dumps(fc.get("args", {})),
-                }
+                OpenAIRealtimeFunctionCallArgumentsDone(
+                    type="response.function_call_arguments.done",
+                    event_id=f"event_{uuid.uuid4()}",
+                    response_id=resolved_response_id,
+                    item_id=f"{resolved_output_item_id}_tool_{idx}",
+                    output_index=idx,
+                    call_id=call_id,
+                    name=name,
+                    arguments=json.dumps(fc.get("args", {})),
+                )
             )
 
         return events
@@ -1193,71 +1195,59 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 # Emit output_item.added and conversation.item.created for each function call
                 for idx, tool_call in enumerate(tool_call_events):
                     item_id = tool_call["item_id"]
+                    function_call_item: OpenAIRealtimeStreamResponseOutputItem = {
+                        "id": item_id,
+                        "object": "realtime.item",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": tool_call["call_id"],
+                        "name": tool_call["name"],
+                        "arguments": tool_call["arguments"],
+                    }
                     # response.output_item.added
                     returned_message.append(
-                        {
-                            "type": "response.output_item.added",
-                            "event_id": f"event_{uuid.uuid4()}",
-                            "response_id": current_response_id,
-                            "output_index": idx,
-                            "item": {
-                                "id": item_id,
-                                "object": "realtime.item",
-                                "type": "function_call",
+                        OpenAIRealtimeStreamResponseOutputItemAdded(
+                            type="response.output_item.added",
+                            response_id=current_response_id,
+                            output_index=idx,
+                            item={
+                                **function_call_item,
                                 "status": "in_progress",
-                                "call_id": tool_call["call_id"],
-                                "name": tool_call["name"],
                                 "arguments": "",
                             },
-                        }
+                        )
                     )
                     # response.function_call_arguments.done
                     returned_message.append(tool_call)
                     # response.output_item.done
                     returned_message.append(
-                        {
-                            "type": "response.output_item.done",
-                            "event_id": f"event_{uuid.uuid4()}",
-                            "response_id": current_response_id,
-                            "output_index": idx,
-                            "item": {
-                                "id": item_id,
-                                "object": "realtime.item",
-                                "type": "function_call",
-                                "status": "completed",
-                                "call_id": tool_call["call_id"],
-                                "name": tool_call["name"],
-                                "arguments": tool_call["arguments"],
-                            },
-                        }
+                        OpenAIRealtimeOutputItemDone(
+                            type="response.output_item.done",
+                            event_id=f"event_{uuid.uuid4()}",
+                            response_id=current_response_id,
+                            output_index=idx,
+                            item=function_call_item,
+                        )
                     )
                     # conversation.item.created
                     returned_message.append(
-                        {
-                            "type": "conversation.item.created",
-                            "event_id": f"event_{uuid.uuid4()}",
-                            "item": {
-                                "id": item_id,
-                                "object": "realtime.item",
-                                "type": "function_call",
-                                "status": "completed",
-                                "call_id": tool_call["call_id"],
-                                "name": tool_call["name"],
-                                "arguments": tool_call["arguments"],
-                            },
-                        }
+                        OpenAIRealtimeConversationItemCreated(
+                            type="conversation.item.created",
+                            event_id=f"event_{uuid.uuid4()}",
+                            item=function_call_item,
+                        )
                     )
 
                 # response.done - close the response so clients can submit tool results
                 returned_message.append(
-                    {
-                        "type": "response.done",
-                        "event_id": f"event_{uuid.uuid4()}",
-                        "response": {
-                            "id": current_response_id,
-                            "object": "realtime.response",
-                            "status": "completed",
-                            "output": [
+                    OpenAIRealtimeDoneEvent(
+                        type="response.done",
+                        event_id=f"event_{uuid.uuid4()}",
+                        response=OpenAIRealtimeResponseDoneObject(
+                            id=current_response_id,
+                            object="realtime.response",
+                            status="completed",
+                            output=[
                                 {
                                     "id": te["item_id"],
                                     "object": "realtime.item",
@@ -1269,9 +1259,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 }
                                 for te in tool_call_events
                             ],
-                            "usage": None,
-                        },
-                    }
+                        ),
+                    )
                 )
                 # Reset IDs so the next model turn (after tool results) starts a
                 # fresh response with its own response.created preamble.
