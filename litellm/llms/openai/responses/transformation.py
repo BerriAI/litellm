@@ -648,6 +648,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         url = str(parsed_url.copy_with(path=compact_path))
 
         input = self._validate_input_param(input)
+        tools = response_api_optional_request_params.get("tools")
+        input, tools = self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=input, tools=tools
+        )
+        if tools is not None:
+            response_api_optional_request_params["tools"] = tools
         data = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
