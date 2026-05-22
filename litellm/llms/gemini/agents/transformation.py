@@ -23,7 +23,6 @@ from litellm.types.agents import (
     AgentVersionsResponse,
 )
 
-
 # Keys inside litellm_params that should be forwarded to the Gemini
 # create-agent body verbatim.
 _GEMINI_AGENT_BODY_KEYS = ("base_agent", "instructions", "base_environment")
