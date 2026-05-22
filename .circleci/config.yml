@@ -2477,10 +2477,15 @@ jobs:
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
             PROXY_LOGOUT_URL: ""
+          # LITELLM_LICENSE is forwarded from the project env so premium-gated
+          # UI flows can be exercised. license.spec.ts asserts the resulting
+          # JWT carries premium_user=true; if it ever stops being passed, that
+          # test fails loudly rather than silently regressing premium coverage.
           command: |
-            uv run --no-sync python -m litellm.proxy.proxy_cli \
-              --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
-              --port 4000
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              uv run --no-sync python -m litellm.proxy.proxy_cli \
+                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --port 4000
           background: true
       - run:
           name: Wait for proxy to be ready
@@ -2497,9 +2502,12 @@ jobs:
             exit 1
       - run:
           name: Run Playwright E2E tests
+          # Forward LITELLM_LICENSE so license.spec.ts can detect that the
+          # proxy was launched with a license and assert premium_user=true.
           command: |
             cd ui/litellm-dashboard
-            npx playwright test --config e2e_tests/playwright.config.ts
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              npx playwright test --config e2e_tests/playwright.config.ts
           no_output_timeout: 10m
       - store_artifacts:
           path: ui/litellm-dashboard/test-results
