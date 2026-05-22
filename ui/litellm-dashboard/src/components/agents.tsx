@@ -33,6 +33,37 @@ interface AgentsResponse {
   agents: Agent[];
 }
 
+interface AgentKeyRecord {
+  agent_id?: string;
+  key_alias?: string;
+  token?: string;
+}
+
+interface KeyListResponse {
+  keys?: AgentKeyRecord[];
+  total_pages?: number;
+}
+
+const KEY_LIST_PAGE_SIZE = 100;
+
+const addAgentKeysToMap = (
+  keys: AgentKeyRecord[],
+  keyInfoMap: Record<string, AgentKeyInfo>,
+  missingAgentIds: Set<string>,
+) => {
+  for (const key of keys) {
+    const agentId = key.agent_id;
+    if (agentId && missingAgentIds.has(agentId)) {
+      keyInfoMap[agentId] = {
+        has_key: true,
+        key_alias: key.key_alias,
+        token_prefix: key.token ? `${key.token.slice(0, 8)}…` : undefined,
+      };
+      missingAgentIds.delete(agentId);
+    }
+  }
+};
+
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
@@ -64,29 +95,27 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   const fetchKeysForAgents = async () => {
     if (!accessToken) return;
     try {
-      const { keys = [] } = await keyListCall(
-        accessToken,
-        null,
-        null,
-        null,
-        null,
-        null,
-        1,
-        500
-      );
       const map: Record<string, AgentKeyInfo> = {};
-      for (const key of keys) {
-        const agentId = (key as { agent_id?: string }).agent_id;
-        if (agentId && !map[agentId]) {
-          map[agentId] = {
-            has_key: true,
-            key_alias: (key as { key_alias?: string }).key_alias,
-            token_prefix: (key as { token?: string }).token
-              ? `${(key as { token: string }).token.slice(0, 8)}…`
-              : undefined,
-          };
-        }
+      const missingAgentIds = new Set(agentsList.map((agent) => agent.agent_id));
+      let page = 1;
+      let totalPages = 1;
+
+      while (page <= totalPages && missingAgentIds.size > 0) {
+        const { keys = [], total_pages = 1 }: KeyListResponse = await keyListCall(
+          accessToken,
+          null,
+          null,
+          null,
+          null,
+          null,
+          page,
+          KEY_LIST_PAGE_SIZE
+        );
+        addAgentKeysToMap(keys, map, missingAgentIds);
+        totalPages = total_pages;
+        page += 1;
       }
+
       setKeyInfoMap(map);
     } catch (error) {
       console.error("Error fetching keys for agents:", error);

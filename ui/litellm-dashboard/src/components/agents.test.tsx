@@ -89,6 +89,68 @@ describe("AgentsPanel", () => {
     });
   });
 
+  it("should fetch agent keys with the key list API max page size", async () => {
+    vi.mocked(networking.getAgentsList).mockResolvedValueOnce({
+      agents: [
+        {
+          agent_id: "agent-1",
+          agent_name: "Test Agent",
+          litellm_params: { model: "gpt-4o" },
+        },
+      ],
+    });
+
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+
+    await waitFor(() => {
+      expect(networking.keyListCall).toHaveBeenCalledWith(
+        "test-token",
+        null,
+        null,
+        null,
+        null,
+        null,
+        1,
+        100,
+      );
+    });
+  });
+
+  it("should keep fetching key list pages until visible agent keys are found", async () => {
+    vi.mocked(networking.getAgentsList).mockResolvedValueOnce({
+      agents: [
+        {
+          agent_id: "agent-1",
+          agent_name: "Test Agent",
+          litellm_params: { model: "gpt-4o" },
+        },
+      ],
+    });
+    vi.mocked(networking.keyListCall)
+      .mockResolvedValueOnce({ keys: [], total_pages: 2 })
+      .mockResolvedValueOnce({
+        keys: [{ agent_id: "agent-1", key_alias: "agent-key", token: "1234567890" }],
+        total_pages: 2,
+      });
+
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+
+    await waitFor(() => {
+      expect(networking.keyListCall).toHaveBeenCalledTimes(2);
+      expect(networking.keyListCall).toHaveBeenLastCalledWith(
+        "test-token",
+        null,
+        null,
+        null,
+        null,
+        null,
+        2,
+        100,
+      );
+      expect(screen.getByText("Active")).toBeInTheDocument();
+    });
+  });
+
   it("should call getAgentsList with health_check=true when toggle is enabled", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
