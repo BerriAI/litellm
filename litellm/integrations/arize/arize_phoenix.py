@@ -148,12 +148,20 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         project_resource = Resource.create(project_attributes)  # type: ignore[arg-type]
         return env_resource.merge(project_resource)
 
+    def _build_tracer_provider_for_project(self, project_name: str) -> TracerProvider:
+        """Create a TracerProvider for *project_name* (caller holds no cache lock)."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        provider = TracerProvider(
+            resource=self._get_litellm_resource_for_project(project_name)
+        )
+        provider.add_span_processor(self._shared_span_processor)
+        return provider
+
     def _get_tracer_for(self, project_name: str) -> Tracer:
         """Return a tracer for *project_name*, creating/caching a provider on miss."""
         if getattr(self, "_use_injected_tracer_provider", False):
             return self.tracer
-
-        from opentelemetry.sdk.trace import TracerProvider
 
         with self._project_providers_lock:
             if project_name in self._project_providers:
@@ -162,16 +170,22 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
                     LITELLM_TRACER_NAME
                 )
 
-            provider = TracerProvider(
-                resource=self._get_litellm_resource_for_project(project_name)
-            )
-            provider.add_span_processor(self._shared_span_processor)
+        # OTELResourceDetector().detect() is synchronous; build outside the lock so
+        # concurrent requests for other projects are not blocked on cache misses.
+        new_provider = self._build_tracer_provider_for_project(project_name)
+
+        with self._project_providers_lock:
+            if project_name in self._project_providers:
+                self._project_providers.move_to_end(project_name)
+                return self._project_providers[project_name].get_tracer(
+                    LITELLM_TRACER_NAME
+                )
 
             if len(self._project_providers) >= _MAX_PROJECT_PROVIDERS:
                 self._project_providers.popitem(last=False)
 
-            self._project_providers[project_name] = provider
-            return provider.get_tracer(LITELLM_TRACER_NAME)
+            self._project_providers[project_name] = new_provider
+            return new_provider.get_tracer(LITELLM_TRACER_NAME)
 
     def _resolve_tracer_for_kwargs(self, kwargs: dict) -> Tuple[str, Tracer]:
         """Resolve project name once and return the matching tracer."""

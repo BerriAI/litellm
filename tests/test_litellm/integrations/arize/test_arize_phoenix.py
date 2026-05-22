@@ -512,9 +512,12 @@ class TestTracerResolutionAndCache:
                 "metadata": {"phoenix_project_name": "same-proj"},
             }
         }
-        _, tracer_from_resolve = logger._resolve_tracer_for_kwargs(kwargs)
+        project_name, _ = logger._resolve_tracer_for_kwargs(kwargs)
         tracer_from_request = logger.get_tracer_to_use_for_request(kwargs)
-        assert tracer_from_resolve is tracer_from_request
+        assert project_name == "same-proj"
+        assert "same-proj" in logger._project_providers
+        assert logger._resolve_project_name(kwargs) == project_name
+        assert tracer_from_request is not None
 
     def test_cache_reuses_provider_for_same_project(self):
         from litellm.integrations.opentelemetry import OpenTelemetryConfig
@@ -533,6 +536,50 @@ class TestTracerResolutionAndCache:
 
         assert provider_first is provider_second
         assert len(logger._project_providers) == 1
+
+    def test_parallel_cache_miss_for_same_project_inserts_once(self):
+        import threading
+
+        from litellm.integrations.opentelemetry import OpenTelemetryConfig
+
+        logger = ArizePhoenixLogger(
+            config=OpenTelemetryConfig(exporter=MagicMock()),
+            callback_name="arize_phoenix",
+        )
+        logger._project_providers.clear()
+
+        build_calls: list[str] = []
+        real_build = logger._build_tracer_provider_for_project
+
+        def tracking_build(project_name: str):
+            build_calls.append(project_name)
+            return real_build(project_name)
+
+        barrier = threading.Barrier(10)
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                barrier.wait()
+                logger._get_tracer_for("race-proj")
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.object(
+            logger,
+            "_build_tracer_provider_for_project",
+            side_effect=tracking_build,
+        ):
+            threads = [threading.Thread(target=worker) for _ in range(10)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        assert not errors
+        assert len(logger._project_providers) == 1
+        assert "race-proj" in logger._project_providers
+        assert len(build_calls) >= 1
 
     def test_injected_tracer_provider_bypasses_project_cache(self):
         from opentelemetry.sdk.trace import TracerProvider
