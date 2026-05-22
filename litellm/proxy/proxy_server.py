@@ -10773,8 +10773,18 @@ def get_direct_access_models(
     llm_router: Router,
 ) -> List[str]:
     """
-    Get all models that user has direct access to
+    Get all models that user has direct access to.
+
+    If user.models is empty or contains the "all-proxy-models" sentinel,
+    return all non-team model IDs — same semantic as the PROXY_ADMIN branch
+    in get_all_team_and_direct_access_models and the "all model access"
+    handling in auth_checks._check_model_access_helper.
     """
+    if (
+        not user_db_object.models
+        or SpecialModelNames.all_proxy_models.value in user_db_object.models
+    ):
+        return llm_router.get_model_ids(exclude_team_models=True)
 
     direct_access_models: List[str] = []
     for model in user_db_object.models:
