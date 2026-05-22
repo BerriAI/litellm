@@ -33,11 +33,18 @@ def _source_routes() -> set:
 
 
 def _route_to_regex(route: str) -> re.Pattern:
-    # Path-param segments — {key:path}, {team_id}, ... — match any run of
-    # non-query characters, so `/team/{team_id}/members/me` is hit by a test
-    # URL like `/team/<some-id>/members/me`.
-    parts = re.split(r"\{[^}]+\}", route)
-    return re.compile("^" + "[^?]+".join(re.escape(p) for p in parts) + "$")
+    # A plain path param ({team_id}) matches a single path segment; a Starlette
+    # ':path' param ({key:path}) matches across '/'. Keeping plain params
+    # slash-bounded stops a loose regex from falsely reporting a future
+    # multi-segment route as already covered.
+    pattern = ["^"]
+    pos = 0
+    for match in re.finditer(r"\{([^}]+)\}", route):
+        pattern.append(re.escape(route[pos : match.start()]))
+        pattern.append("[^?]+" if match.group(1).endswith(":path") else "[^/?]+")
+        pos = match.end()
+    pattern.append(re.escape(route[pos:]) + "$")
+    return re.compile("".join(pattern))
 
 
 def _test_urls() -> set:
