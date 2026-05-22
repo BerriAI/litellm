@@ -1241,13 +1241,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if not value.get("functionCalls"):
                     continue
 
+                if current_conversation_id is None:
+                    current_conversation_id = f"conv_{uuid.uuid4()}"
+
                 # Emit response.created preamble if this is the first event in the response
                 if current_response_id is None:
                     current_response_id = f"resp_{uuid.uuid4()}"
                     current_output_item_id = f"item_{uuid.uuid4()}"
-                    current_conversation_id = (
-                        current_conversation_id or f"conv_{uuid.uuid4()}"
-                    )
 
                     # Emit response.created
                     returned_message.append(
