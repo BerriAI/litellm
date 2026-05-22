@@ -735,7 +735,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
                         break
             if not self._cohere_text_emitted:
                 for choice in result.choices:
-                    if getattr(choice.delta, "content", None) is not None:
+                    if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
             return result

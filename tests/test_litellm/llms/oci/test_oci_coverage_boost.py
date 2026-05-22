@@ -1062,6 +1062,29 @@ class TestOCIStreamWrapperChunkCreator:
         with pytest.raises(ValueError, match="not a string"):
             wrapper.chunk_creator({"bad": "type"})
 
+    def test_empty_string_content_does_not_mark_text_emitted(self):
+        # An intermediate Cohere chunk carrying `text=""` must not flip the
+        # _cohere_text_emitted flag — otherwise a subsequent terminal
+        # consolidation chunk would have its real text suppressed as a
+        # "duplicate" and the response would be lost.
+        wrapper = self._make_wrapper(_COHERE_MODEL)
+        empty_payload = json.dumps(
+            {"apiFormat": "COHERE", "text": "", "finishReason": None}
+        )
+        wrapper.chunk_creator(f"data:{empty_payload}")
+        assert wrapper._cohere_text_emitted is False
+
+        terminal_payload = json.dumps(
+            {
+                "apiFormat": "COHERE",
+                "text": "Hello world",
+                "finishReason": "COMPLETE",
+                "chatHistory": [{"role": "CHATBOT", "message": "Hello world"}],
+            }
+        )
+        result = wrapper.chunk_creator(f"data:{terminal_payload}")
+        assert result.choices[0].delta.content == "Hello world"
+
 
 # ===========================================================================
 # transformation.py — get_sync_custom_stream_wrapper
