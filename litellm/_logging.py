@@ -449,13 +449,29 @@ _SECRET_KEY_NAME_RE = re.compile(
     r"redis[_\-]?password|client[_\-]?secret|aws[_\-]?secret|"
     r"gcp[_\-]?key|litellm[_\-]?key)$"
 )
-_REDACTED = "[REDACTED]"
+_REDACTED = "REDACTED"
 
 
 def _scrub_secrets(text: str) -> str:
-    """Replace secret values in log text with [REDACTED]."""
+    """Replace secret values in log text with REDACTED."""
     text = _redact_string(text)
     return _SECRET_KEY_RE.sub(lambda m: m.group(1) + m.group(2) + _REDACTED, text)
+
+
+def _scrub_arg(a: object) -> object:
+    """Scrub a single log arg, preserving the original type when no secret is found.
+
+    Returns the original object unchanged if its string representation contains
+    no recognised secret patterns — this prevents type-coercion side-effects such
+    as breaking %d/%f format specifiers for Decimal or numpy integer args.
+    """
+    if isinstance(a, (bool, int, float, type(None))):
+        return a
+    if isinstance(a, str):
+        return _scrub_secrets(a)
+    s = str(a)
+    scrubbed = _scrub_secrets(s)
+    return scrubbed if scrubbed != s else a
 
 
 class CredentialScrubberFilter(logging.Filter):
@@ -466,8 +482,11 @@ class CredentialScrubberFilter(logging.Filter):
 
     Opt-out: set LITELLM_DISABLE_REDACT_SECRETS=true to disable all redaction.
     Dict args: keys matching _SECRET_KEY_NAME_RE are redacted regardless of
-    value type; other keys have their string values pattern-scrubbed.
+    value type; other keys are passed through _scrub_arg which handles nested
+    containers and preserves original types when no secret is found.
     """
+
+    _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
         # Honour the LITELLM_DISABLE_REDACT_SECRETS opt-out env var.
@@ -480,24 +499,20 @@ class CredentialScrubberFilter(logging.Filter):
                 record.args = {
                     k: (
                         _REDACTED
-                        if _SECRET_KEY_NAME_RE.match(k)
-                        else (_scrub_secrets(str(v)) if isinstance(v, str) else v)
+                        if isinstance(k, str) and _SECRET_KEY_NAME_RE.match(k)
+                        else _scrub_arg(v)
                     )
                     for k, v in record.args.items()
                 }
             elif isinstance(record.args, tuple):
-                record.args = tuple(
-                    (
-                        _scrub_secrets(str(a))
-                        if not isinstance(a, (bool, int, float, type(None)))
-                        else a
-                    )
-                    for a in record.args
-                )
+                record.args = tuple(_scrub_arg(a) for a in record.args)
+            else:
+                # Single non-tuple arg (e.g. verbose_logger.error("msg", exc_obj))
+                record.args = (_scrub_arg(record.args),)
         if record.exc_info and record.exc_info[1] is not None:
             try:
                 record.exc_text = _scrub_secrets(
-                    logging.Formatter().formatException(record.exc_info)
+                    self._formatter.formatException(record.exc_info)
                 )
             except Exception:
                 pass
