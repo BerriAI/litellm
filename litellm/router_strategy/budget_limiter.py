@@ -29,6 +29,9 @@ from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
@@ -100,9 +103,9 @@ class RouterBudgetLimiting(CustomLogger):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-        self.provider_budget_config: Optional[
-            GenericBudgetConfigType
-        ] = provider_budget_config
+        self.provider_budget_config: Optional[GenericBudgetConfigType] = (
+            provider_budget_config
+        )
         self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
         self.tag_budget_config: Optional[GenericBudgetConfigType] = None
         self._init_provider_budgets()
@@ -175,7 +178,10 @@ class RouterBudgetLimiting(CustomLogger):
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
                 request_tags=_get_tags_from_request_kwargs(
-                    request_kwargs=request_kwargs
+                    request_kwargs=request_kwargs,
+                    metadata_variable_name=get_metadata_variable_name_from_kwargs(
+                        request_kwargs or {}
+                    ),
                 ),
             )
 
@@ -304,6 +310,16 @@ class RouterBudgetLimiting(CustomLogger):
         deployment_configs: Dict[str, GenericBudgetInfo] = {}
         deployment_providers: List[Optional[str]] = []
 
+        # Resolve tags once before the loop (loop-invariant)
+        _request_tags: List[str] = []
+        if self.tag_budget_config:
+            _request_tags = _get_tags_from_request_kwargs(
+                request_kwargs=request_kwargs,
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(
+                    request_kwargs or {}
+                ),
+            )
+
         for deployment in healthy_deployments:
             # Check provider budgets
             if self.provider_budget_config:
@@ -330,17 +346,14 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"deployment_spend:{model_id}:{budget_config.budget_duration}"
                         )
-            # Check tag budgets
-            if self.tag_budget_config:
-                request_tags = _get_tags_from_request_kwargs(
-                    request_kwargs=request_kwargs
+
+        # Check tag budgets (outside loop — tags are per-request, not per-deployment)
+        for _tag in _request_tags:
+            _tag_budget_config = self._get_budget_config_for_tag(_tag)
+            if _tag_budget_config:
+                cache_keys.append(
+                    f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
                 )
-                for _tag in request_tags:
-                    _tag_budget_config = self._get_budget_config_for_tag(_tag)
-                    if _tag_budget_config:
-                        cache_keys.append(
-                            f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
-                        )
         return (
             cache_keys,
             provider_configs,
@@ -459,7 +472,10 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
             )
 
-        request_tags = _get_tags_from_request_kwargs(kwargs)
+        request_tags = _get_tags_from_request_kwargs(
+            kwargs,
+            metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
+        )
         if len(request_tags) > 0:
             for _tag in request_tags:
                 _tag_budget_config = self._get_budget_config_for_tag(_tag)

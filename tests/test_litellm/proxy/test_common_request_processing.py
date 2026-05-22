@@ -3,8 +3,9 @@ import datetime
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -26,6 +27,48 @@ from litellm.proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
+        self, monkeypatch
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def fake_base_process_llm_request(**kwargs):
+            passthrough_response = kwargs["fastapi_response"]
+            passthrough_response.headers["x-litellm-call-id"] = "test-call-id"
+            passthrough_response.headers["x-litellm-version"] = "test-version"
+            return httpx.Response(
+                status_code=200,
+                content=b'{"ok":true}',
+                headers={
+                    "content-type": "application/json",
+                    "x-amzn-requestid": "bedrock-request-id",
+                },
+            )
+
+        monkeypatch.setattr(
+            processing_obj,
+            "base_process_llm_request",
+            fake_base_process_llm_request,
+        )
+
+        result = await processing_obj.base_passthrough_process_llm_request(
+            request=MagicMock(spec=Request),
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            model="bedrock-test-model",
+        )
+
+        assert result.status_code == 200
+        assert result.body == b'{"ok":true}'
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        assert result.headers["x-litellm-version"] == "test-version"
+
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
         self, monkeypatch
@@ -82,7 +125,9 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
-    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(
+        self, monkeypatch
+    ):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
 
@@ -215,6 +260,141 @@ class TestProxyBaseLLMRequestProcessing:
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
                 headers_with_invalid
             )
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_from_llm_response(self):
+        """
+        Google native :generateContent uses this helper instead of base_process_llm_request;
+        ensure x-litellm-* headers and callback hooks merge like the main proxy path.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        class _FakeGenaiResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "cache_key": "ck-test",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "response_cost": 0.001,
+                "additional_headers": {"llm_provider-ratelimit-requests": "1000"},
+            }
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-test"
+
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-ratelimit-remaining-requests": "999"}
+        )
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeGenaiResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-call-id"] == "call-id-test"
+        assert headers["x-litellm-model-id"] == "deployment-model-id"
+        assert headers["x-litellm-version"] == "9.9.9"
+        assert headers["llm_provider-ratelimit-requests"] == "1000"
+        assert headers["x-ratelimit-remaining-requests"] == "999"
+        proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
+        """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
+
+        class _FakeStreamLike:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            _hidden_params = {
+                "model_id": "stream-model-id",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "cache_key": "",
+                "response_cost": "",
+                "additional_headers": {"llm_provider-x": "y"},
+            }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-stream"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeStreamLike(),
+            request_data={"model": "gemini/gemini-2.0-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "stream-model-id"
+        assert headers["x-litellm-model-api-base"] == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+        assert headers["llm_provider-x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_no_hidden_params_metadata_fallback(
+        self,
+    ):
+        """When response has no _hidden_params, model_id can still come from litellm_metadata."""
+
+        class _BareResponse:
+            pass
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-meta"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_BareResponse(),
+            request_data={
+                "model": "gemini/gemini-1.5-flash",
+                "litellm_metadata": {"model_info": {"id": "meta-model-id"}},
+            },
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "meta-model-id"
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
@@ -886,14 +1066,17 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(mock_gen, "text/event-stream", {})
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         content = await self.consume_stream(response)
+        # Streaming SSE error frame now mirrors ProxyException.to_dict() shape
+        # so streaming and non-streaming surfaces emit byte-identical errors.
         expected_error_data = {
             "error": {
                 "message": "Error processing stream start",
-                "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "type": "None",
+                "param": "None",
+                "code": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
             }
         }
         assert len(content) == 2
-        # Use json.dumps to match the formatting in create_streaming_response's exception handler
         import json
 
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
@@ -919,12 +1102,129 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Content blocked by guardrail",
-                "code": 400,
+                "type": "None",
+                "param": "None",
+                "code": "400",
             }
         }
         assert len(content) == 2
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
         assert content[1] == "data: [DONE]\n\n"
+
+    async def test_create_streaming_response_http_exception_dict_detail_bedrock_shape(
+        self,
+    ):
+        """
+        Bedrock-style dict detail (with the post-L3 shape) must be preserved as
+        structured `provider_specific_fields` in the SSE error frame, not stringified
+        into a Python-repr blob inside `error.message`. Regression for case
+        2026-04-10-internal-bedrock-guardrail-streaming-error.
+        """
+        import json
+
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "Sorry, the model cannot answer this question. Prompt is blocked",
+                "guardrailIdentifier": "amgllac6xf3r",
+                "guardrailVersion": "1",
+                "assessments": [
+                    {
+                        "policy": "sensitiveInformationPolicy",
+                        "matches": [
+                            {
+                                "category": "piiEntities",
+                                "type": "NAME",
+                                "action": "BLOCKED",
+                                "match": "Jack",
+                            }
+                        ],
+                    }
+                ],
+                "guardrail_name": "bedrock-pii-guard",
+                "guardrail_mode": "post_call",
+            },
+        )
+
+        response = await create_response(mock_gen, "text/event-stream", {})
+        assert response.status_code == 400
+        content = await self.consume_stream(response)
+        assert len(content) == 2
+        assert content[1] == "data: [DONE]\n\n"
+
+        payload = json.loads(content[0][len("data: ") :].strip())
+        assert payload["error"]["message"] == "Violated guardrail policy"
+        assert payload["error"]["code"] == "400"
+        psf = payload["error"]["provider_specific_fields"]
+        assert psf["guardrail_name"] == "bedrock-pii-guard"
+        assert psf["guardrail_mode"] == "post_call"
+        assert psf["guardrailIdentifier"] == "amgllac6xf3r"
+        assert psf["assessments"][0]["policy"] == "sensitiveInformationPolicy"
+        assert psf["assessments"][0]["matches"][0]["type"] == "NAME"
+
+    async def test_create_streaming_response_http_exception_dict_detail_nested_error_shape(
+        self,
+    ):
+        """PANW Prisma AIRS-style nested `{"error": {"message": ...}}` detail must
+        extract `error.message` as the human-readable summary while preserving the
+        full payload."""
+        import json
+
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "MCP request blocked: no rewritable argument field present",
+                    "type": "guardrail_violation",
+                    "code": "panw_prisma_airs_blocked",
+                }
+            },
+        )
+        response = await create_response(mock_gen, "text/event-stream", {})
+        content = await self.consume_stream(response)
+        payload = json.loads(content[0][len("data: ") :].strip())
+        assert (
+            payload["error"]["message"]
+            == "MCP request blocked: no rewritable argument field present"
+        )
+        assert (
+            payload["error"]["provider_specific_fields"]["error"]["code"]
+            == "panw_prisma_airs_blocked"
+        )
+
+    async def test_serialize_http_exception_detail_helper(self):
+        """Direct unit coverage for the L1 helper across all branches."""
+        from litellm.proxy.common_request_processing import (
+            _serialize_http_exception_detail,
+        )
+        import json as _json
+
+        assert _serialize_http_exception_detail("plain") == ("plain", None)
+
+        msg, fields = _serialize_http_exception_detail(
+            {"error": "Violated", "extra": "x"}
+        )
+        assert msg == "Violated"
+        assert fields == {"error": "Violated", "extra": "x"}
+
+        msg, fields = _serialize_http_exception_detail(
+            {"error": {"message": "blocked", "code": "x"}}
+        )
+        assert msg == "blocked"
+        assert fields == {"error": {"message": "blocked", "code": "x"}}
+
+        msg, fields = _serialize_http_exception_detail({"message": "top-level"})
+        assert msg == "top-level"
+        assert fields == {"message": "top-level"}
+
+        msg, fields = _serialize_http_exception_detail({"weird": ["a", "b"]})
+        assert msg == _json.dumps({"weird": ["a", "b"]})
+        assert fields == {"weird": ["a", "b"]}
+
+        assert _serialize_http_exception_detail(42) == ("42", None)
 
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
@@ -1036,13 +1336,6 @@ class TestCommonRequestProcessingHelpers:
             assert mock_tracer.trace.call_count == 4
 
             # Verify that each call was made with the correct operation name
-            expected_calls = [
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-            ]
-
             actual_calls = mock_tracer.trace.call_args_list
             assert len(actual_calls) == 4
 
@@ -1541,7 +1834,10 @@ class TestIsAzureModelRouterRequest:
 
     def test_detects_model_router_with_underscore(self):
         assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+        assert (
+            _is_azure_model_router_request("azure_ai/model_router/my-deployment")
+            is True
+        )
 
     def test_detects_model_router_with_hyphen(self):
         assert _is_azure_model_router_request("azure_ai/model-router") is True
@@ -1765,11 +2061,11 @@ class TestDDSpanTaggerTagRequest:
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
-        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+        user_key = self._make_user_api_key_dict(
+            key_alias="my-prod-key", token="hashed123"
+        )
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
@@ -1783,9 +2079,7 @@ class TestDDSpanTaggerTagRequest:
         """No key tags are set when key_alias and token are None (e.g. 401 path)."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
@@ -1797,15 +2091,15 @@ class TestDDSpanTaggerTagRequest:
         """requested_model is tagged even when there's no key info."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="claude-3-5-sonnet",
             )
 
-        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+        mock_set_tag.assert_called_once_with(
+            "litellm.requested_model", "claude-3-5-sonnet"
+        )
 
 
 class TestHasAttributeErrorInChain:
@@ -1853,3 +2147,55 @@ class TestHasAttributeErrorInChain:
         exc_a.__context__ = exc_b
         exc_b.__context__ = exc_a  # circular
         assert _has_attribute_error_in_chain(exc_a) is False
+
+
+@pytest.mark.asyncio
+class TestHandleLLMApiExceptionDictDetail:
+    """
+    Coverage for `_handle_llm_api_exception` HTTPException branch (Site 2).
+    Regression for case 2026-04-10-internal-bedrock-guardrail-streaming-error:
+    dict-detail HTTPExceptions raised by guardrails must round-trip cleanly
+    through ProxyException instead of being str()-mangled into a Python repr.
+    """
+
+    async def _invoke(self, exc: Exception):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_dict_detail_bedrock_shape_preserved(self):
+        exc = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "...",
+                "guardrail_name": "bedrock-pii-guard",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.message == "Violated guardrail policy"
+        assert (
+            proxy_exc.provider_specific_fields["guardrail_name"] == "bedrock-pii-guard"
+        )
+        # No Python repr leakage of the dict into the message field.
+        assert "{'error':" not in proxy_exc.message
+
+    async def test_string_detail_unchanged(self):
+        exc = HTTPException(status_code=400, detail="Content blocked by guardrail")
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.message == "Content blocked by guardrail"
+        assert proxy_exc.provider_specific_fields is None

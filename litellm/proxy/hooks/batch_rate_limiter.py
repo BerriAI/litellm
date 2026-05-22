@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
     _get_batch_job_input_file_usage,
     _get_file_content_as_dictionary,
+    _get_models_from_batch_input_file_content,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -164,13 +165,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         batch_usage: BatchFileUsage,
     ) -> None:
         """
-        Check rate limits and increment counters by the batch amounts.
+        Atomically check + increment rate-limit counters by the batch amounts.
 
-        Raises HTTPException if any limit would be exceeded.
+        Raises HTTPException if any descriptor would exceed its limit; in that
+        case no counter is modified. Backed by `atomic_check_and_increment_by_n`
+        which uses a Redis Lua script when available (multi-process atomic) and
+        falls back to a per-process asyncio.Lock + in-memory operation.
         """
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
-        # Create descriptors and check if batch would exceed limits
         descriptors = self.parallel_request_limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
@@ -179,75 +180,31 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             model_has_failures=False,
         )
 
-        # Check current usage without incrementing
-        rate_limit_response = await self.parallel_request_limiter.should_rate_limit(
-            descriptors=descriptors,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            read_only=True,
-        )
+        increment: Dict[Literal["requests", "tokens"], int] = {
+            "requests": batch_usage.request_count,
+            "tokens": batch_usage.total_tokens,
+        }
+        increments: List[Dict[Literal["requests", "tokens"], int]] = [
+            increment for _ in descriptors
+        ]
 
-        # Verify batch won't exceed any limits
-        for status in rate_limit_response["statuses"]:
-            rate_limit_type = status["rate_limit_type"]
-            limit_remaining = status["limit_remaining"]
-
-            required_capacity = (
-                batch_usage.request_count
-                if rate_limit_type == "requests"
-                else batch_usage.total_tokens
-                if rate_limit_type == "tokens"
-                else 0
-            )
-
-            if required_capacity > limit_remaining:
-                self._raise_rate_limit_error(
-                    status, descriptors, batch_usage, rate_limit_type
-                )
-
-        # Build pipeline operations for batch increments
-        # Reuse the same keys that descriptors check
-        pipeline_operations: List[RedisPipelineIncrementOperation] = []
-
-        for descriptor in descriptors:
-            key = descriptor["key"]
-            value = descriptor["value"]
-            rate_limit = descriptor.get("rate_limit")
-
-            if rate_limit is None:
-                continue
-
-            # Add RPM increment if limit is set
-            if rate_limit.get("requests_per_unit") is not None:
-                rpm_key = self.parallel_request_limiter.create_rate_limit_keys(
-                    key=key, value=value, rate_limit_type="requests"
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=rpm_key,
-                        increment_value=batch_usage.request_count,
-                        ttl=self.parallel_request_limiter.window_size,
-                    )
-                )
-
-            # Add TPM increment if limit is set
-            if rate_limit.get("tokens_per_unit") is not None:
-                tpm_key = self.parallel_request_limiter.create_rate_limit_keys(
-                    key=key, value=value, rate_limit_type="tokens"
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=tpm_key,
-                        increment_value=batch_usage.total_tokens,
-                        ttl=self.parallel_request_limiter.window_size,
-                    )
-                )
-
-        # Execute increments
-        if pipeline_operations:
-            await self.parallel_request_limiter.async_increment_tokens_with_ttl_preservation(
-                pipeline_operations=pipeline_operations,
+        rate_limit_response = (
+            await self.parallel_request_limiter.atomic_check_and_increment_by_n(
+                descriptors=descriptors,
+                increments=increments,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
             )
+        )
+
+        if rate_limit_response["overall_code"] == "OVER_LIMIT":
+            for status in rate_limit_response["statuses"]:
+                if status["code"] == "OVER_LIMIT":
+                    self._raise_rate_limit_error(
+                        status,
+                        descriptors,
+                        batch_usage,
+                        status["rate_limit_type"],
+                    )
 
     async def count_input_file_usage(
         self,
@@ -290,6 +247,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
             file_content_as_dict = _get_file_content_as_dictionary(file_content.content)
 
+            # Validate every model named in the batch JSONL against the
+            # caller's per-key model allowlist. Without this, a caller
+            # could smuggle restricted/expensive models inside the file
+            # and the upstream provider would execute the batch under
+            # the proxy's shared API key.
+            if user_api_key_dict is not None:
+                await self._enforce_batch_file_model_access(
+                    user_api_key_dict=user_api_key_dict,
+                    file_content_as_dict=file_content_as_dict,
+                )
+
             input_file_usage = _get_batch_job_input_file_usage(
                 file_content_dictionary=file_content_as_dict,
                 custom_llm_provider=custom_llm_provider,
@@ -300,11 +268,68 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 request_count=request_count,
             )
 
+        except HTTPException as e:
+            # Distinguish intentional 403s from `_enforce_batch_file_model_access`
+            # from genuine I/O failures so security-relevant rejections show up
+            # in the access log instead of getting buried in error noise.
+            if e.status_code == 403:
+                verbose_proxy_logger.warning(
+                    f"Batch rejected: caller not authorized for a model named in {file_id}: {e.detail}"
+                )
+            else:
+                verbose_proxy_logger.error(
+                    f"Batch input file rejected for {file_id}: status={e.status_code} detail={e.detail}"
+                )
+            raise
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error counting input file usage for {file_id}: {str(e)}"
             )
             raise
+
+    async def _enforce_batch_file_model_access(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        file_content_as_dict: List[dict],
+    ) -> None:
+        """Reject the batch if the caller is not authorized for every
+        ``body.model`` named inside the JSONL.
+
+        Reuses ``can_key_call_model`` so the same allowlist semantics
+        (wildcards, access groups, ``all-proxy-models``, team aliases)
+        the proxy enforces on `/chat/completions` apply here.
+        """
+        from litellm.proxy.auth.auth_checks import can_key_call_model
+        from litellm.proxy.proxy_server import llm_router
+
+        models = _get_models_from_batch_input_file_content(file_content_as_dict)
+        if not models:
+            return
+
+        llm_model_list = llm_router.model_list if llm_router is not None else None
+        for model in models:
+            try:
+                await can_key_call_model(
+                    model=model,
+                    llm_model_list=llm_model_list,
+                    valid_token=user_api_key_dict,
+                    llm_router=llm_router,
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                # `can_key_call_model` raises ProxyException on denial;
+                # re-shape to a 403 so the batch endpoint returns a
+                # consistent rejection without leaking internal types.
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            "Batch input file references a model the caller is "
+                            f"not authorized to use: model={model}, reason={str(e)}"
+                        )
+                    },
+                )
 
     async def _fetch_managed_file_content(
         self,

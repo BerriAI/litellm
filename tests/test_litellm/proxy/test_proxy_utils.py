@@ -190,3 +190,134 @@ def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
     projected_spend, projected_exceeded_date = result
     assert projected_spend == 290.0
     assert projected_exceeded_date == real_datetime.date(2026, 4, 21)
+
+
+# ---------------------------------------------------------------------------
+# L2: _enrich_http_exception_with_guardrail_context
+# Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_http_exception_with_guardrail_context_dict_detail():
+    """L2: dict-detail HTTPException is enriched with guardrail_name and mode."""
+    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+
+    class StubCallback:
+        guardrail_name = "bedrock-pii-guard"
+        event_hook = "post_call"
+
+    exc = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    assert exc.detail["guardrail_name"] == "bedrock-pii-guard"
+    assert exc.detail["guardrail_mode"] == "post_call"
+
+
+def test_enrich_http_exception_string_detail_noop():
+    """L2: string-detail HTTPException is not mutated (can't add fields to a str)."""
+    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+
+    class StubCallback:
+        guardrail_name = "x"
+        event_hook = "pre_call"
+
+    exc = HTTPException(status_code=400, detail="Content blocked")
+    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    assert exc.detail == "Content blocked"
+
+
+def test_enrich_http_exception_setdefault_does_not_overwrite():
+    """L2: a guardrail that already populates guardrail_name explicitly wins."""
+    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+
+    class StubCallback:
+        guardrail_name = "inferred-name"
+        event_hook = "pre_call"
+
+    exc = HTTPException(
+        status_code=400,
+        detail={"error": "x", "guardrail_name": "explicit-name"},
+    )
+    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    assert exc.detail["guardrail_name"] == "explicit-name"
+
+
+def test_enrich_http_exception_non_http_exception_noop():
+    """L2: non-HTTPException is left alone and the helper does not raise."""
+    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+
+    class StubCallback:
+        guardrail_name = "x"
+        event_hook = "pre_call"
+
+    exc = ValueError("not an HTTPException")
+    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    assert str(exc) == "not an HTTPException"
+
+
+def test_enrich_http_exception_callback_without_guardrail_name_noop():
+    """L2: callback without guardrail_name attribute leaves detail alone."""
+    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+
+    class StubCallback:
+        pass
+
+    exc = HTTPException(status_code=400, detail={"error": "x"})
+    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    assert exc.detail == {"error": "x"}
+
+
+class TestPostCallFailureHookLiftsFirstApiCallStartTime:
+    """post_call_failure_hook lifts first_api_call_start_time off the
+    logging object into request_data (an internal top-level key) before
+    the non-serialisable logging object is popped, so failure-path
+    callbacks (OTel preprocessing latency) can still read it. It must
+    never land in request_data["metadata"] (user request metadata,
+    echoed downstream and typed Dict[str, str] in batch objects).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []  # skip alerting branch
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_to_top_level_and_pops_logging_obj(self):
+        handoff = real_datetime.datetime(2026, 1, 1, 0, 0, 0)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"first_api_call_start_time": handoff}
+        user_meta = {}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "metadata": user_meta,
+        }
+        await self._run(request_data)
+
+        assert request_data["first_api_call_start_time"] == handoff
+        assert "litellm_logging_obj" not in request_data
+        # user metadata is never touched
+        assert user_meta == {}
+        assert "first_api_call_start_time" not in request_data["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_no_logging_obj_is_noop(self):
+        request_data = {"metadata": {}}
+        await self._run(request_data)
+        assert "first_api_call_start_time" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_without_anchor_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj}
+        await self._run(request_data)
+        assert "first_api_call_start_time" not in request_data
+        assert "litellm_logging_obj" not in request_data

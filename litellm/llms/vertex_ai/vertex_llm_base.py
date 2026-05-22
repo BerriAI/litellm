@@ -136,6 +136,14 @@ class VertexBase:
                             json_obj,
                             scopes=["https://www.googleapis.com/auth/cloud-platform"],
                         )
+                elif (
+                    isinstance(credential_source, dict)
+                    and "executable" in credential_source
+                ):
+                    creds = self._credentials_from_pluggable(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
@@ -186,6 +194,17 @@ class VertexBase:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
+
+    def _credentials_from_pluggable(self, json_obj, scopes):
+        try:
+            from google.auth import pluggable
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+
+        creds = pluggable.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
             creds = creds.with_scopes(scopes)
         return creds
@@ -396,7 +415,7 @@ class VertexBase:
                 url = "{}/models/{}:{}".format(api_base, model, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
-                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                        "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
@@ -453,13 +472,16 @@ class VertexBase:
         """
         version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
+            if not gemini_api_key:
+                raise ValueError(
+                    "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
+                )
             url, endpoint = _get_gemini_url(
                 mode=mode,
                 model=model,
                 stream=stream,
-                gemini_api_key=gemini_api_key,
             )
-            auth_header = None  # this field is not used for gemin
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,

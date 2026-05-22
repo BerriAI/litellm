@@ -58,9 +58,10 @@ from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    _video_output_cost_per_second,
     cost_per_second as openai_cost_per_second,
+    cost_per_token as openai_cost_per_token,
 )
-from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -172,17 +173,45 @@ def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
     response_time_ms: Optional[float] = 0.0,
+    cached_tokens: float = 0,
+    cache_creation_tokens: float = 0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
 ) -> Optional[Tuple[float, float]]:
-    """Internal helper function for calculating cost, if custom pricing given"""
+    """Internal helper function for calculating cost, if custom pricing given.
+
+    prompt_tokens is assumed to include both cached_tokens and cache_creation_tokens
+    (OpenAI-compatible convention). Anthropic-style usage where prompt_tokens excludes
+    cache tokens is handled at the caller (cost_per_token) before invoking this helper.
+    """
     if custom_cost_per_token is None and custom_cost_per_second is None:
         return None
 
     if custom_cost_per_token is not None:
-        input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
-        output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
+        input_cost_per_token = custom_cost_per_token["input_cost_per_token"]
+        output_cost_per_token = custom_cost_per_token["output_cost_per_token"]
+
+        cache_read_input_token_cost = custom_cost_per_token.get(
+            "cache_read_input_token_cost",
+            input_cost_per_token,
+        )
+        cache_creation_input_token_cost = custom_cost_per_token.get(
+            "cache_creation_input_token_cost",
+            input_cost_per_token,
+        )
+
+        regular_prompt_tokens = max(
+            prompt_tokens - cached_tokens - cache_creation_tokens,
+            0,
+        )
+
+        input_cost = (
+            regular_prompt_tokens * input_cost_per_token
+            + cached_tokens * cache_read_input_token_cost
+            + cache_creation_tokens * cache_creation_input_token_cost
+        )
+        output_cost = completion_tokens * output_cost_per_token
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
         output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
@@ -322,10 +351,56 @@ def cost_per_token(  # noqa: PLR0915
         )
 
     ## CUSTOM PRICING ##
+    # Normalize cache token counts across providers:
+    #   - OpenAI-compatible: usage.prompt_tokens_details.cached_tokens
+    #     (prompt_tokens already INCLUDES cached_tokens)
+    #   - Anthropic: usage.cache_read_input_tokens / cache_creation_input_tokens
+    #     (prompt_tokens does NOT include these — adjust before calling helper)
+    _cache_read_tokens: float = 0
+    _cache_creation_tokens: float = 0
+    _is_anthropic_style = False
+
+    if usage_object is not None:
+        _pt_details = getattr(usage_object, "prompt_tokens_details", None)
+        if _pt_details is not None:
+            _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
+            # OpenAI-compatible providers report cache-write tokens under
+            # either `cache_write_tokens` (kimi-k2) or `cache_creation_tokens`.
+            # Mirror db_spend_update_writer to stay symmetric.
+            _cache_creation_tokens = float(
+                getattr(_pt_details, "cache_write_tokens", 0)
+                or getattr(_pt_details, "cache_creation_tokens", 0)
+                or 0
+            )
+
+        _anthropic_read = getattr(usage_object, "cache_read_input_tokens", None)
+        _anthropic_create = getattr(usage_object, "cache_creation_input_tokens", None)
+        if _anthropic_read is not None or _anthropic_create is not None:
+            _is_anthropic_style = True
+            if _anthropic_read is not None:
+                _cache_read_tokens = float(_anthropic_read)
+            if _anthropic_create is not None:
+                _cache_creation_tokens = float(_anthropic_create)
+
+    if not _cache_read_tokens and cache_read_input_tokens:
+        _cache_read_tokens = float(cache_read_input_tokens)
+        _is_anthropic_style = True
+    if not _cache_creation_tokens and cache_creation_input_tokens:
+        _cache_creation_tokens = float(cache_creation_input_tokens)
+        _is_anthropic_style = True
+
+    # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
+    # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
+    _normalized_prompt_tokens = float(prompt_tokens)
+    if _is_anthropic_style:
+        _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
+
     response_cost = _cost_per_token_custom_pricing_helper(
-        prompt_tokens=prompt_tokens,
+        prompt_tokens=_normalized_prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
+        cached_tokens=_cache_read_tokens,
+        cache_creation_tokens=_cache_creation_tokens,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
     )
@@ -512,7 +587,10 @@ def cost_per_token(  # noqa: PLR0915
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
         return azure_openai_cost_per_token(
-            model=model, usage=usage_block, response_time_ms=response_time_ms
+            model=model,
+            usage=usage_block,
+            response_time_ms=response_time_ms,
+            service_tier=service_tier,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(
@@ -538,16 +616,16 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block,
             response_time_ms=response_time_ms,
             request_model=request_model,
+            service_tier=service_tier,
         )
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-        ):
+        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
+            model_info.get("output_cost_per_token") or 0.0
+        ) > 0:
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -965,6 +1043,8 @@ def _store_cost_breakdown_in_logging_obj(
     margin_percent: Optional[float] = None,
     margin_fixed_amount: Optional[float] = None,
     margin_total_amount: Optional[float] = None,
+    cache_read_cost: Optional[float] = None,
+    cache_creation_cost: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1000,6 +1080,8 @@ def _store_cost_breakdown_in_logging_obj(
             margin_percent=margin_percent,
             margin_fixed_amount=margin_fixed_amount,
             margin_total_amount=margin_total_amount,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
         )
 
     except Exception as breakdown_error:
@@ -1136,23 +1218,24 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
                         usage_obj=usage_obj
                     ):
+                        _usage_for_dump = cast(BaseModel, usage_obj)
                         setattr(
                             completion_response,
                             "usage",
-                            litellm.Usage(**usage_obj.model_dump()),
+                            litellm.Usage(**_usage_for_dump.model_dump()),
                         )
                     if usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
-                        _usage = usage_obj.model_dump()
+                        _usage = cast(BaseModel, usage_obj).model_dump()
                     else:
                         _usage = usage_obj
 
@@ -1279,14 +1362,20 @@ def completion_cost(  # noqa: PLR0915
                             _video_model_info = _metadata.get("model_info", None)
 
                     usage_obj = getattr(completion_response, "usage", None)
+                    duration_seconds: Optional[float] = None
+                    video_resolution: Optional[str] = None
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
                             duration_seconds = usage_obj.get("duration_seconds", None)
+                            _vr = usage_obj.get("video_resolution", None)
                         else:
                             duration_seconds = getattr(
                                 usage_obj, "duration_seconds", None
                             )
+                            _vr = getattr(usage_obj, "video_resolution", None)
+                        if _vr is not None:
+                            video_resolution = str(_vr).strip().lower()
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation
@@ -1299,6 +1388,7 @@ def completion_cost(  # noqa: PLR0915
                                 duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
+                                video_resolution=video_resolution,
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -1306,6 +1396,7 @@ def completion_cost(  # noqa: PLR0915
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
+                        video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
@@ -1589,6 +1680,34 @@ def completion_cost(  # noqa: PLR0915
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
+                    _cache_read_cost: Optional[float] = None
+                    _cache_creation_cost: Optional[float] = None
+                    if cost_per_token_usage_object is not None:
+                        _cr = getattr(
+                            cost_per_token_usage_object, "cache_read_input_tokens", None
+                        ) or (cost_per_token_usage_object.model_extra or {}).get(
+                            "cache_read_input_tokens"
+                        )
+                        _cc = getattr(
+                            cost_per_token_usage_object,
+                            "cache_creation_input_tokens",
+                            None,
+                        ) or (cost_per_token_usage_object.model_extra or {}).get(
+                            "cache_creation_input_tokens"
+                        )
+                        if (_cr or _cc) and model:
+                            try:
+                                _mi = litellm.get_model_info(
+                                    model=model, custom_llm_provider=custom_llm_provider
+                                )
+                                _cr_rate = _mi.get("cache_read_input_token_cost")
+                                if _cr and _cr_rate is not None:
+                                    _cache_read_cost = float(_cr) * float(_cr_rate)
+                                _cc_rate = _mi.get("cache_creation_input_token_cost")
+                                if _cc and _cc_rate is not None:
+                                    _cache_creation_cost = float(_cc) * float(_cc_rate)
+                            except Exception:
+                                pass
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1602,6 +1721,8 @@ def completion_cost(  # noqa: PLR0915
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
+                        cache_read_cost=_cache_read_cost,
+                        cache_creation_cost=_cache_creation_cost,
                     )
 
                 return _final_cost
@@ -1626,7 +1747,7 @@ def get_response_cost_from_hidden_params(
     hidden_params: Union[dict, BaseModel],
 ) -> Optional[float]:
     if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = hidden_params.model_dump()
+        _hidden_params_dict = cast(BaseModel, hidden_params).model_dump()
     else:
         _hidden_params_dict = hidden_params
 
@@ -1963,6 +2084,7 @@ def default_video_cost_calculator(
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
+    video_resolution: Optional[str] = None,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -1974,6 +2096,7 @@ def default_video_cost_calculator(
         model_info (Optional[ModelInfo]): Deployment-level model info containing
             custom video pricing. When provided, used before falling back to
             the global litellm.model_cost lookup.
+        video_resolution (Optional[str]): From usage (e.g. ``720p``, ``1080p``) for tiered per-second pricing.
 
     Returns:
         float: Cost in USD for the video generation
@@ -2027,8 +2150,7 @@ def default_video_cost_calculator(
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
 
-    # Fallback to general output cost per second
-    output_cost_per_second = cost_info.get("output_cost_per_second")
+    output_cost_per_second = _video_output_cost_per_second(cost_info, video_resolution)
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
 
@@ -2072,6 +2194,26 @@ def batch_cost_calculator(
             )
         except Exception:
             model_info = None
+    elif not any(
+        model_info.get(k) is not None
+        for k in (
+            "input_cost_per_token_batches",
+            "input_cost_per_token",
+            "output_cost_per_token_batches",
+            "output_cost_per_token",
+        )
+    ):
+        # model_info was provided (e.g. deployment metadata with only id/db_model)
+        # but carries no pricing fields. Fall back to the global pricing table so
+        # that standard model pricing is used instead of silently returning $0.
+        try:
+            global_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            if global_info:
+                model_info = global_info
+        except Exception:
+            pass
 
     if not model_info:
         return 0.0, 0.0

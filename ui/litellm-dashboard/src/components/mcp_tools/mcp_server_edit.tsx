@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, Tooltip, Input } from "antd";
+import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
-import { updateMCPServer, testMCPToolsListRequest } from "../networking";
+import { updateMCPServer, listMCPTools } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -12,6 +12,7 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -36,6 +37,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [toolsError, setToolsError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
@@ -73,8 +75,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      // codeql[js/clear-text-storage-of-sensitive-data]
-      window.sessionStorage.setItem(
+      setSecureItem(
         EDIT_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           serverId: mcpServer.server_id,
@@ -189,7 +190,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ...mcpServer,
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
+      extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      token_validation_json: mcpServer.token_validation
+        ? JSON.stringify(mcpServer.token_validation, null, 2)
+        : undefined,
     }),
     [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson],
   );
@@ -214,7 +219,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+    const storedState = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
@@ -268,57 +273,36 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts or when OAuth token is received
-  // But only if the server has been properly saved (has a permanent server_id)
+  // Fetch tools when component mounts for a saved server
   useEffect(() => {
-    // Don't fetch if server hasn't been saved yet (no permanent server_id)
     if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
       return;
     }
     fetchTools();
-  }, [mcpServer, accessToken, oauthAccessToken]);
+  }, [mcpServer, accessToken]);
 
   const fetchTools = async () => {
-    if (!accessToken) return;
-
-    // HTTP/SSE requires a URL (unless spec_path is set); stdio does not.
-    if (mcpServer.transport !== "stdio" && !mcpServer.url && !mcpServer.spec_path) return;
-
-    const isM2M = mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !!mcpServer.token_url;
-    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !isM2M && !oauthAccessToken) {
-      return;
-    }
+    if (!accessToken || !mcpServer.server_id) return;
 
     setIsLoadingTools(true);
+    setToolsError(null);
 
     try {
-      // Prepare the MCP server config from existing server data
-      const mcpServerConfig = {
-        server_id: mcpServer.server_id,
-        server_name: mcpServer.server_name,
-        url: mcpServer.url,
-        transport: mcpServer.transport,
-        auth_type: mcpServer.auth_type,
-        mcp_info: mcpServer.mcp_info,
-        authorization_url: mcpServer.authorization_url,
-        token_url: mcpServer.token_url,
-        registration_url: mcpServer.registration_url,
-        command: mcpServer.command,
-        args: mcpServer.args,
-        env: mcpServer.env,
-      };
-
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
+      // Use the GET endpoint which looks up stored credentials by server_id,
+      // rather than POST /test/tools/list which requires inline credentials.
+      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
         console.error("Failed to fetch tools:", toolsResponse.message);
         setTools([]);
+        setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setTools([]);
+      setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
       setIsLoadingTools(false);
     }
@@ -400,6 +384,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         args: rawArgs,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
+        delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
+        token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
 
@@ -522,6 +508,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         restValues.transport = "http";
       }
 
+      // Parse token_validation JSON if provided
+      let tokenValidation: Record<string, any> | null = null;
+      if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
+        try {
+          tokenValidation = JSON.parse(rawTokenValidationJson);
+        } catch {
+          NotificationsManager.fromBackend("Invalid JSON in Token Validation Rules");
+          return;
+        }
+      }
+
       // Prepare the payload with cost configuration and permission fields
       const mcpInfoServerName =
         restValues.server_name ||
@@ -556,6 +553,19 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
+        // ``delegate_auth_to_upstream`` is only honored server-side for
+        // ``auth_type=oauth2``. The Form.Item is conditionally rendered so the
+        // value drops out of the form on auth_type change; force false for any
+        // non-oauth2 server to avoid persisting a stale ``true`` that would
+        // silently re-activate if auth_type is later switched back to oauth2.
+        delegate_auth_to_upstream:
+          restValues.auth_type === AUTH_TYPE.OAUTH2
+            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
+            : false,
+        // Include token_validation when it is set (non-null) or when clearing an existing value
+        ...(tokenValidation !== null || mcpServer.token_validation
+          ? { token_validation: tokenValidation }
+          : {}),
       };
 
       const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
@@ -863,6 +873,58 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
+                {!isM2MFlow && (
+                  <>
+                    <Form.Item
+                      label={
+                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                          Token Validation Rules (optional)
+                          <Tooltip title='JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {"organization": "my-org", "team.id": "123"}). Tokens that fail validation are rejected with HTTP 403.'>
+                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="token_validation_json"
+                      rules={[
+                        {
+                          validator: (_: any, value: string) => {
+                            if (!value || value.trim() === "") return Promise.resolve();
+                            try {
+                              JSON.parse(value);
+                              return Promise.resolve();
+                            } catch {
+                              return Promise.reject(new Error("Must be valid JSON"));
+                            }
+                          },
+                        },
+                      ]}
+                    >
+                      <Input.TextArea
+                        placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
+                        rows={4}
+                        className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label={
+                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                          Token Storage TTL (seconds, optional)
+                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
+                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="token_storage_ttl_seconds"
+                    >
+                      <InputNumber
+                        min={1}
+                        placeholder="e.g. 3600"
+                        style={{ width: "100%" }}
+                        className="rounded-lg"
+                      />
+                    </Form.Item>
+                  </>
+                )}
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
                   <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
                   <Button

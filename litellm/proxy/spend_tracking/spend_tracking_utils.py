@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
@@ -25,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
     CostBreakdown,
@@ -32,6 +34,7 @@ from litellm.types.utils import (
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
 )
@@ -53,20 +56,13 @@ def _get_max_string_length_prompt_in_db() -> int:
 
 
 def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    """
+    Raw-only constant-time master-key comparison. The hashed form is never
+    considered equivalent — only the raw master-key string matches.
+    """
     if _master_key is None or api_key is None:
         return False
-
-    ## string comparison
-    is_master_key = secrets.compare_digest(api_key, _master_key)
-    if is_master_key:
-        return True
-
-    ## hash comparison
-    is_master_key = secrets.compare_digest(api_key, hash_token(_master_key))
-    if is_master_key:
-        return True
-
-    return False
+    return secrets.compare_digest(api_key, _master_key)
 
 
 def _get_spend_logs_metadata(
@@ -107,6 +103,7 @@ def _get_spend_logs_metadata(
             model_map_information=None,
             usage_object=None,
             guardrail_information=None,
+            eval_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
             attempted_retries=None,
@@ -127,9 +124,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -234,8 +231,6 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
-    from litellm.proxy.proxy_server import general_settings, master_key
-
     if kwargs is None:
         kwargs = {}
 
@@ -294,11 +289,6 @@ def get_logging_payload(  # noqa: PLR0915
         if api_key.startswith("sk-"):
             # hash the api_key
             api_key = hash_token(api_key)
-        if (
-            _is_master_key(api_key=api_key, _master_key=master_key)
-            and general_settings.get("disable_adding_master_key_hash_to_db") is True
-        ):
-            api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
     if (
         standard_logging_payload is not None
@@ -323,11 +313,6 @@ def get_logging_payload(  # noqa: PLR0915
         and standard_logging_payload.get("request_tags") is not None
     ):  # use 'tags' from standard logging payload instead
         request_tags = json.dumps(standard_logging_payload["request_tags"])
-    if (
-        _is_master_key(api_key=api_key, _master_key=master_key)
-        and general_settings.get("disable_adding_master_key_hash_to_db") is True
-    ):
-        api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
@@ -489,9 +474,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         return payload
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error creating spendlogs object - {}".format(str(e))
-        )
+        spend_log_error("Error creating spendlogs object - %s", str(e), exc=e)
         raise e
 
 
@@ -559,7 +542,8 @@ async def get_spend_by_team_and_customer(
         ON 
             sl.team_id = tt.team_id
         WHERE
-            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
+            sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND sl.team_id = $3
             AND sl.end_user = $4
         GROUP BY
@@ -628,6 +612,9 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
+_SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields"})
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
@@ -636,6 +623,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
+
+    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
+    which contains raw HTTP headers including Authorization tokens).
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -694,7 +684,188 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items()}
+    return {
+        k: _sanitize_value(v)
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
+
+
+# Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
+# ``:``. Covers JSON bodies and Python dict-reprs in provider error strings.
+# ``prompt`` is included for ``/v1/completions``-style payloads where the user
+# input lives under a top-level ``prompt`` key rather than ``messages``.
+_ERROR_MESSAGE_PROMPT_LEAK_KEYS = ("input", "messages", "prompt")
+
+
+# Assignment-style keys: Pydantic v2 validation errors render the offending
+# value as ``input_value=<repr>`` inside ``[type=..., input_value=...,
+# input_type=...]``. The same prompt body that would appear under an
+# ``"input"`` JSON key is echoed here as a Python repr, so we redact it
+# under the same store_prompts_in_spend_logs gate.
+_ERROR_MESSAGE_ASSIGN_LEAK_KEYS = ("input_value",)
+
+
+_SENSITIVE_KEY_START_PATTERN = re.compile(
+    r"(?:"
+    r"['\"](?:" + "|".join(_ERROR_MESSAGE_PROMPT_LEAK_KEYS) + r")['\"]\s*:\s*"
+    r"|"
+    r"\b(?:" + "|".join(_ERROR_MESSAGE_ASSIGN_LEAK_KEYS) + r")\s*=\s*"
+    r")"
+)
+
+
+def _scan_quoted_string_end(text: str, start: int, quote: str) -> int:
+    """
+    Given ``text[start] == quote`` (``'`` or ``"``), return the index just
+    past the matching close quote, honoring backslash escapes. Returns
+    ``-1`` if unterminated.
+    """
+    n = len(text)
+    i = start + 1
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == quote:
+            return i + 1
+        i += 1
+    return -1
+
+
+def _scan_balanced_value_end(text: str, start: int) -> int:
+    """
+    Given ``text[start]`` is ``[``, ``{``, ``'`` or ``"``, return the index
+    just past the matching close, accounting for nested brackets and
+    quoted strings (with escape sequences). Returns ``-1`` if the
+    structure is unterminated.
+
+    Implemented iteratively (no self-recursion): the bracket scanner
+    inlines a quote-skip helper rather than re-entering itself, since
+    JSON-style values cannot contain another bracket *as a first char*
+    inside a quoted string — only the quote-skip case can occur.
+    """
+    n = len(text)
+    if start >= n:
+        return -1
+    first = text[start]
+    if first in ("'", '"'):
+        return _scan_quoted_string_end(text, start, first)
+    if first == "[":
+        close = "]"
+    elif first == "{":
+        close = "}"
+    else:
+        return -1
+    depth = 0
+    i = start
+    while i < n:
+        c = text[i]
+        if c in ("'", '"'):
+            end = _scan_quoted_string_end(text, i, c)
+            if end == -1:
+                return -1
+            i = end
+            continue
+        if c == first:
+            depth += 1
+        elif c == close:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def _redact_prompt_leaks_in_error_string(text: str) -> str:
+    """
+    Strip echoed request input from provider error strings.
+
+    Provider validation errors (e.g. OpenAI ``RateLimitError`` carrying 178
+    pydantic validation errors, each with its own ``'input': [...]`` field)
+    embed the full request body in their message. When prompts must not be
+    stored in spend logs, that echo is a back-door leak.
+
+    Two leak shapes are handled:
+
+    - Quoted-key form — ``"<key>": <value>`` where ``key`` is ``input``,
+      ``messages`` or ``prompt`` (covers JSON bodies, Python dict-reprs,
+      and ``/v1/completions`` payloads).
+    - Assignment form — ``input_value=<value>`` from Pydantic v2 validation
+      errors, which render the offending value as a Python repr inside
+      ``[type=..., input_value=..., input_type=...]``.
+
+    The value scan understands nested ``[]`` / ``{}`` and quoted strings,
+    so multi-modal payloads (``'messages': [{'content': [{...}]}]``) and
+    user text containing brackets (``"secret[123"``) are handled correctly.
+    """
+    if not text:
+        return text
+    redaction = f'"{REDACTED_BY_LITELM_STRING}"'
+    out: List[str] = []
+    n = len(text)
+    pos = 0
+    while pos < n:
+        m = _SENSITIVE_KEY_START_PATTERN.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        out.append(text[pos : m.end()])
+        v_start = m.end()
+        if v_start >= n:
+            break
+        first = text[v_start]
+        if first in ("[", "{", "'", '"'):
+            v_end = _scan_balanced_value_end(text, v_start)
+            if v_end == -1:
+                # Unterminated value — redact through the rest of the string
+                # so a malformed leak can't slip past.
+                out.append(redaction)
+                pos = n
+                break
+            out.append(redaction)
+            pos = v_end
+        else:
+            # Unquoted scalar (number, null, bare identifier) — not a leak
+            # carrier, leave intact and resume after the key match.
+            pos = v_start
+    return "".join(out)
+
+
+def _sanitize_error_information_for_spend_logs(
+    error_information: Optional[StandardLoggingPayloadErrorInformation],
+) -> Optional[StandardLoggingPayloadErrorInformation]:
+    """
+    Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
+
+    Provider errors are stored verbatim via ``str(original_exception)``; those
+    strings can echo the full request body, producing multi-megabyte spend-log
+    rows.
+
+    - Always: cap ``error_message`` and ``traceback`` with the existing
+      ``MAX_STRING_LENGTH_PROMPT_IN_DB`` DB-storage safeguard.
+    - When ``store_prompts_in_spend_logs`` is False: additionally redact
+      ``'input'`` / ``'messages'`` / ``'prompt'`` values *and* Pydantic v2
+      ``input_value=...`` assignments inside both ``error_message`` and
+      ``traceback`` so prompts cannot leak through either field.
+
+    Scoped to the spend-log path — OTEL/Datadog/etc. callbacks still receive
+    the untruncated error per ``LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE``.
+    """
+    if error_information is None:
+        return None
+
+    sanitized = cast(dict, {**error_information})
+
+    if not _should_store_prompts_and_responses_in_spend_logs():
+        for field in ("error_message", "traceback"):
+            value = sanitized.get(field)
+            if isinstance(value, str):
+                sanitized[field] = _redact_prompt_leaks_in_error_string(value)
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
+    return cast(StandardLoggingPayloadErrorInformation, sanitized)
 
 
 def _convert_to_json_serializable_dict(

@@ -39,6 +39,23 @@ def test_routes_on_litellm_proxy():
 
     this prevents accidentelly deleting /threads, or /batches etc
     """
+    # Force-load lazy features so the test sees the full route set. Continue
+    # on per-feature import failure — the assertion below still catches
+    # missing-route regressions.
+    import importlib
+
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    registered_paths = [getattr(r, "path", "") for r in app.routes]
+    for feat in LAZY_FEATURES:
+        if any(rp.startswith(p) for p in feat.path_prefixes for rp in registered_paths):
+            continue
+        try:
+            module = importlib.import_module(feat.module_path)
+            feat.register_fn(app, module)
+        except Exception as exc:
+            print(f"warning: failed to force-load {feat.name}: {exc}")
+
     _all_routes = []
     for route in app.routes:
 
@@ -59,9 +76,13 @@ def test_routes_on_litellm_proxy():
         # wildcard patterns like /containers/* - check that base path exists
         elif RouteChecks._is_wildcard_pattern(pattern=route):
             # For wildcard patterns, check that the base path (without * and trailing /) exists
-            base_path = route[:-1].rstrip("/")  # Remove the trailing * and any trailing /
+            base_path = route[:-1].rstrip(
+                "/"
+            )  # Remove the trailing * and any trailing /
             # Check if base path exists (e.g., /containers or /v1/containers)
-            assert base_path in _all_routes, f"Wildcard pattern {route} requires base path {base_path} to exist"
+            assert (
+                base_path in _all_routes
+            ), f"Wildcard pattern {route} requires base path {base_path} to exist"
         else:
             assert route in _all_routes
 
@@ -168,3 +189,37 @@ def test_get_request_route_with_base_url_not_at_start():
     request = create_request("/api/genai/test")
     result = get_request_route(request)
     assert result == "/api/genai/test"
+
+
+def _create_request_with_host_header(path: str, host_header: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "path": path,
+            "query_string": b"",
+            "headers": [(b"host", host_header.encode())],
+            "client": ("127.0.0.1", 50000),
+            "root_path": "",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        "localhost/?x=1",
+        "localhost:4000/?x=1",
+        "localhost/#test",
+        "localhost:4000/#test",
+    ],
+)
+def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
+    for protected_path in ["/health", "/user/new", "/key/generate", "/get/internal_user_settings"]:
+        request = _create_request_with_host_header(path=protected_path, host_header=host_header)
+        result = get_request_route(request)
+        assert result == protected_path, (
+            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+        )

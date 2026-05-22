@@ -101,7 +101,11 @@ def test_mistral_audio_transcription_request_transform():
     config = MistralAudioTranscriptionConfig()
 
     wav_path = os.path.join(
-        os.path.dirname(__file__), "../../../../..", "tests", "llm_translation", "gettysburg.wav"
+        os.path.dirname(__file__),
+        "../../../../..",
+        "tests",
+        "llm_translation",
+        "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")
 
@@ -127,7 +131,11 @@ def test_mistral_audio_transcription_request_with_diarize():
     config = MistralAudioTranscriptionConfig()
 
     wav_path = os.path.join(
-        os.path.dirname(__file__), "../../../../..", "tests", "llm_translation", "gettysburg.wav"
+        os.path.dirname(__file__),
+        "../../../../..",
+        "tests",
+        "llm_translation",
+        "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")
 
@@ -148,9 +156,7 @@ def test_mistral_audio_transcription_response_transform():
     config = MistralAudioTranscriptionConfig()
 
     mock_response = MagicMock(spec=httpx.Response)
-    mock_response.json.return_value = {
-        "text": "Four score and seven years ago..."
-    }
+    mock_response.json.return_value = {"text": "Four score and seven years ago..."}
 
     response = config.transform_audio_transcription_response(mock_response)
 

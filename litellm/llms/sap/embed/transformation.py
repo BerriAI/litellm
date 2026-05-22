@@ -5,6 +5,7 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 from typing import Optional, List, Dict, Literal, Union
 from pydantic import BaseModel, Field
 from functools import cached_property
+from litellm.llms.sap.chat.models import MaskingModuleConfig
 
 import httpx
 
@@ -47,25 +48,36 @@ class EmbeddingsResponse(BaseModel):
 class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
-    params: dict = Field(default_factory=dict, validation_alias="parameters")
+    params: dict = Field(default_factory=dict)
+    timeout: Optional[int] = Field(default=None, ge=1, le=600)
+    max_retries: Optional[int] = Field(default=None, ge=0, le=5)
+
+
+class EmbeddingsModelConfig(BaseModel):
+    model: EmbeddingModel
 
 
 class EmbeddingsModules(BaseModel):
-    embeddings: EmbeddingModel
+    embeddings: EmbeddingsModelConfig
+    masking: Optional[MaskingModuleConfig] = None
 
 
 class EmbeddingInput(BaseModel):
     text: Union[str, List[str]]
-    type: Literal["text", "document", "query"] = "text"
+    type: Optional[Literal["text", "document", "query"]] = None
+
+
+class EmbeddingConfig(BaseModel):
+    modules: EmbeddingsModules
 
 
 class EmbeddingRequest(BaseModel):
-    config: EmbeddingsModules
+    config: EmbeddingConfig
     input: EmbeddingInput
 
 
 def validate_dict(data: dict, model) -> dict:
-    return model(**data).model_dump()
+    return model(**data).model_dump(exclude_unset=True, by_alias=True)
 
 
 class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
@@ -152,15 +164,23 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
+        timeout = optional_params.get("timeout", None)
+        if timeout is not None:
+            model_dict["timeout"] = timeout
+        max_retries = optional_params.get("max_retries", None)
+        if max_retries is not None:
+            model_dict["max_retries"] = max_retries
         input_dict = {"text": input}
+        input_type = optional_params.get("type")
+        if input_type is not None:
+            input_dict["type"] = input_type
+        masking = optional_params.get("masking")
+        masking = {"masking": masking} if masking is not None else {}
         body = {
-            "config": {
-                "modules": {
-                    "embeddings": {"model": validate_dict(model_dict, EmbeddingModel)}
-                }
-            },
-            "input": validate_dict(input_dict, EmbeddingInput),
+            "config": {"modules": {"embeddings": {"model": model_dict}, **masking}},
+            "input": input_dict,
         }
+        body = validate_dict(body, EmbeddingRequest)
         return body
 
     def transform_embedding_response(

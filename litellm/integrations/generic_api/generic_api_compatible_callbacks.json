@@ -33,5 +33,14 @@
       "X-Qualifire-API-Key": "{{environment_variables.QUALIFIRE_API_KEY}}"
     },
     "environment_variables": ["QUALIFIRE_API_KEY", "QUALIFIRE_WEBHOOK_URL"]
+  },
+  "ramp": {
+    "event_types": ["llm_api_success"],
+    "endpoint": "https://api.ramp.com/developer/v1/ai-usage/litellm",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.RAMP_API_KEY}}"
+    },
+    "environment_variables": ["RAMP_API_KEY"]
   }
 }

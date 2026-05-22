@@ -63,9 +63,9 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if provider_options is not None:
             extra_body["providerOptions"] = provider_options
 
-        mapped_openai_params[
-            "extra_body"
-        ] = extra_body  # openai client supports `extra_body` param
+        mapped_openai_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
         return mapped_openai_params
 
     def transform_request(

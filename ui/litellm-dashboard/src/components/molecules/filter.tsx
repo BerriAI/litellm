@@ -141,6 +141,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Error Message",
     "Key Hash",
     "Model",
+    "Public model / search tool",
   ];
 
   return (

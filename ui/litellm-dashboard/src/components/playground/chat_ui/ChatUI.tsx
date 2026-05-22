@@ -49,6 +49,7 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import { makeInteractionsRequest } from "../llm_calls/interactions_api";
 import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
@@ -75,6 +76,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 import { useChatHistory } from "./useChatHistory";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -167,7 +169,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   } = useChatHistory({ simplified });
   // codeql[js/clear-text-storage-of-sensitive-data]
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
-    const saved = sessionStorage.getItem("apiKeySource");
+    const saved = getSecureItem("apiKeySource");
     if (saved) {
       try {
         return JSON.parse(saved) as "session" | "custom";
@@ -177,8 +179,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
-  // codeql[js/clear-text-storage-of-sensitive-data]
-  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
+  const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -348,10 +349,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    sessionStorage.setItem("apiKey", apiKey);
+    try {
+      setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
+      setSecureItem("apiKey", apiKey);
+    } catch {
+      // Storage full or unavailable — non-critical, skip persisting.
+    }
     sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
@@ -502,7 +505,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleImageUpload = (file: File) => {
     setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
+    const rawPreviewUrl = URL.createObjectURL(file);
+    // Sanitize: only allow blob: URLs to prevent XSS via img src injection.
+    const previewUrl = rawPreviewUrl.startsWith("blob:") ? rawPreviewUrl : "";
     setImagePreviewUrls((prev) => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
@@ -645,6 +650,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       EndpointType.ANTHROPIC_MESSAGES,
       EndpointType.EMBEDDINGS,
       EndpointType.TRANSCRIPTION,
+      EndpointType.INTERACTIONS,
     ];
 
     if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
@@ -910,6 +916,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
               customProxyBaseUrl || undefined,
             );
           }
+        } else if (endpointType === EndpointType.INTERACTIONS) {
+          await makeInteractionsRequest(
+            inputMessage,
+            (text, model) => updateTextUI("assistant", text, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            customProxyBaseUrl || undefined,
+          );
         }
       }
 
@@ -1237,10 +1253,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 return true;
                               }
                               const optionEndpoint = getEndpointType(option.mode);
-                              // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                              // Show chat models for responses/anthropic_messages/interactions endpoints as they are compatible
                               if (
                                 endpointType === EndpointType.RESPONSES ||
-                                endpointType === EndpointType.ANTHROPIC_MESSAGES
+                                endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+                                endpointType === EndpointType.INTERACTIONS
                               ) {
                                 return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
                               }
@@ -1827,7 +1844,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {uploadedImages.map((file, index) => (
                         <div key={index} className="relative inline-block">
                           <img
-                            src={imagePreviewUrls[index] || ""}
+                            src={(() => {
+                              const url = imagePreviewUrls[index];
+                              if (!url) return "";
+                              try {
+                                const parsed = new URL(url);
+                                return parsed.protocol === "blob:" ? parsed.href : "";
+                              } catch {
+                                return "";
+                              }
+                            })()}
                             alt={`Upload preview ${index + 1}`}
                             className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
                           />
@@ -2076,7 +2102,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         endpointType === EndpointType.CHAT ||
                         endpointType === EndpointType.EMBEDDINGS ||
                         endpointType === EndpointType.RESPONSES ||
-                        endpointType === EndpointType.ANTHROPIC_MESSAGES
+                        endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+                        endpointType === EndpointType.INTERACTIONS
                           ? "Type your message... (Shift+Enter for new line)"
                           : endpointType === EndpointType.A2A_AGENTS
                             ? "Send a message to the A2A agent..."

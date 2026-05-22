@@ -8,11 +8,17 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.containers.utils import ContainerRequestUtils
+from litellm.containers.utils import (
+    ContainerRequestUtils,
+    decode_managed_container_id_for_request,
+)
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
-    ContainerListOptionalRequestParams
+    ContainerListOptionalRequestParams,
+    DeleteContainerFileResponse,
 )
 
 
@@ -26,7 +32,7 @@ class TestContainerRequestUtils:
         optional_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 30},
-                "file_ids": ["file_123", "file_456"]
+                "file_ids": ["file_123", "file_456"],
             }
         )
 
@@ -47,13 +53,13 @@ class TestContainerRequestUtils:
         """Test that unsupported parameters are filtered out by ContainerCreateOptionalRequestParams."""
         # Setup
         config = OpenAIContainerConfig()
-        
+
         # ContainerCreateOptionalRequestParams will only accept valid parameters
         # so this test verifies the type validation works correctly
         valid_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 30},
-                "file_ids": ["file_123"]
+                "file_ids": ["file_123"],
             }
         )
 
@@ -138,10 +144,7 @@ class TestContainerRequestUtils:
         # Setup
         config = OpenAIContainerConfig()
         optional_params = ContainerCreateOptionalRequestParams(
-            {
-                "expires_after": None,
-                "file_ids": None
-            }
+            {"expires_after": None, "file_ids": None}
         )
 
         # Execute
@@ -185,10 +188,10 @@ class TestContainerRequestUtils:
         valid_params = ContainerCreateOptionalRequestParams(
             {
                 "expires_after": {"anchor": "last_active_at", "minutes": 20},
-                "file_ids": ["file_1", "file_2"]
+                "file_ids": ["file_1", "file_2"],
             }
         )
-        
+
         assert valid_params["expires_after"]["anchor"] == "last_active_at"
         assert valid_params["expires_after"]["minutes"] == 20
         assert valid_params["file_ids"] == ["file_1", "file_2"]
@@ -197,13 +200,9 @@ class TestContainerRequestUtils:
         """Test that ContainerListOptionalRequestParams validates types correctly."""
         # Test with valid parameters
         valid_params = ContainerListOptionalRequestParams(
-            {
-                "after": "cntr_123",
-                "limit": 10,
-                "order": "desc"
-            }
+            {"after": "cntr_123", "limit": 10, "order": "desc"}
         )
-        
+
         assert valid_params["after"] == "cntr_123"
         assert valid_params["limit"] == 10
         assert valid_params["order"] == "desc"
@@ -212,13 +211,13 @@ class TestContainerRequestUtils:
         """Test that only supported parameters are accepted."""
         # Setup
         config = OpenAIContainerConfig()
-        
+
         # Get supported params to understand what should be allowed
         supported_params = config.get_supported_openai_params()
-        
+
         # Create params with only valid parameters
         test_params = {"expires_after": {"anchor": "last_active_at", "minutes": 15}}
-        
+
         optional_params = ContainerCreateOptionalRequestParams(test_params)
 
         # Execute - should work fine with supported params
@@ -226,5 +225,42 @@ class TestContainerRequestUtils:
             container_provider_config=config,
             container_create_optional_params=optional_params,
         )
-        
+
         assert result["expires_after"]["minutes"] == 15
+
+    def test_decode_managed_container_id_returns_provider_container_id(self):
+        """Managed IDs must decode to the short ID sent on upstream requests."""
+        inner = "cntr_69d4ff00deadbeef"
+        managed = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="openai",
+            model_id=None,
+            container_id=inner,
+        )
+        assert len(managed) > len(inner)
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams()
+        original_id, provider, updated = decode_managed_container_id_for_request(
+            managed, "openai", litellm_params
+        )
+        assert original_id == inner
+        assert provider == "openai"
+        assert updated is litellm_params
+
+
+class TestDeleteContainerFileResponseWireFormat:
+    """OpenAI / Azure return ``container.file.deleted`` on DELETE file."""
+
+    def test_accepts_openai_dot_notation(self):
+        m = DeleteContainerFileResponse(
+            id="cfile_abc",
+            object="container.file.deleted",
+            deleted=True,
+        )
+        assert m.object == "container.file.deleted"
+
+    def test_accepts_legacy_underscore(self):
+        m = DeleteContainerFileResponse(
+            id="cfile_abc",
+            object="container_file.deleted",
+            deleted=True,
+        )
+        assert m.object == "container_file.deleted"

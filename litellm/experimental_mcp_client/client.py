@@ -221,6 +221,7 @@ class MCPClient:
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
+        self._last_initialize_instructions: Optional[str] = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -296,7 +297,12 @@ class MCPClient:
             session_ctx = ClientSession(read_stream, write_stream)
             session = await session_ctx.__aenter__()
             try:
-                await session.initialize()
+                init_result = await session.initialize()
+                self._last_initialize_instructions = None
+                if init_result is not None:
+                    ins = getattr(init_result, "instructions", None)
+                    if isinstance(ins, str) and ins.strip():
+                        self._last_initialize_instructions = ins.strip()
                 return await operation(session)
             finally:
                 try:
@@ -315,6 +321,7 @@ class MCPClient:
         """Open a session, run the provided coroutine, and clean up."""
         http_client: Optional[httpx.AsyncClient] = None
         try:
+            self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
@@ -359,6 +366,8 @@ class MCPClient:
                     headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.token:
                     headers["Authorization"] = f"token {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.oauth2_token_exchange:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request

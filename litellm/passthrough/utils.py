@@ -3,7 +3,25 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
+
+# Headers that must not be overwritten via the x-pass- forwarding mechanism.
+# Includes standard credential/auth headers and protocol-level headers that
+# affect routing or message framing.
+_PASS_THROUGH_PROTECTED_HEADERS: frozenset = frozenset(
+    {
+        "authorization",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "host",
+        "content-length",
+    }
+)
+
+# Header name prefix used to block AWS SigV4 signing headers from being overridden.
+_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: tuple = ("x-amz-",)
 
 
 class BasePassthroughUtils:
@@ -56,11 +74,23 @@ class BasePassthroughUtils:
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
-        # Always process x-pass- prefixed headers (strip prefix and forward)
+        # Process x-pass- prefixed headers (strip prefix and forward)
+        # Credential and protocol-level headers are excluded from this mechanism.
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
-                # Strip the 'x-pass-' prefix to get the actual header name
-                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :]
+                # Strip the 'x-pass-' prefix and normalize to lowercase
+                actual_header_name = header_name[
+                    len(PASS_THROUGH_HEADER_PREFIX) :
+                ].lower()
+                if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
+                    actual_header_name.startswith(p)
+                    for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+                ):
+                    verbose_logger.debug(
+                        "x-pass- header %s maps to a protected header name; skipping",
+                        header_name,
+                    )
+                    continue
                 headers[actual_header_name] = header_value
 
         return headers

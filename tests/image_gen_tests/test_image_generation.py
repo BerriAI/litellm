@@ -163,11 +163,6 @@ class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
         }
 
 
-class TestOpenAIDalle3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "dall-e-3"}
-
-
 class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
@@ -199,12 +194,15 @@ class TestAimlImageGeneration(BaseImageGenTest):
         mock_response.text = json.dumps(mock_aiml_response)
         mock_response.headers = {}
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_async_post, patch(
-            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
-        ) as mock_sync_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_async_post,
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            ) as mock_sync_post,
+        ):
             mock_async_post.return_value = mock_response
             mock_sync_post.return_value = mock_response
 
@@ -390,6 +388,7 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
 @pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
+    """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
 
     test_dir = os.path.dirname(__file__)

@@ -4,9 +4,10 @@ from __future__ import annotations
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import functools
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -68,6 +70,88 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     for tool in tools:
         if isinstance(tool, dict):
             tool.pop("custom", None)
+
+
+def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+    """
+    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
+
+    Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
+    Bedrock Converse only accept standard JSON Schema type strings.
+
+    Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
+    """
+    stack: List[Any] = [schema]
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        if node.get("type") == "custom":
+            node["type"] = "object"
+        items = node.get("items")
+        if isinstance(items, dict):
+            stack.append(items)
+        addl = node.get("additionalProperties")
+        if isinstance(addl, dict):
+            stack.append(addl)
+        props = node.get("properties")
+        if isinstance(props, dict):
+            for sub in props.values():
+                if isinstance(sub, dict):
+                    stack.append(sub)
+        for combiner in ("allOf", "anyOf", "oneOf"):
+            arr = node.get(combiner)
+            if isinstance(arr, list):
+                for sub in arr:
+                    if isinstance(sub, dict):
+                        stack.append(sub)
+
+
+def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
+    Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
+    rejects it with: ``tools.0.custom.input_schema.type: Input should be 'object'``.
+
+    Normalizes ``type: \"custom\"`` to ``\"object\"`` throughout each tool's
+    ``input_schema`` (recursive for nested properties, items, combinators).
+
+    Args:
+        request_body: Request dictionary to modify in-place.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        input_schema = tool.get("input_schema")
+        if isinstance(input_schema, dict):
+            normalize_json_schema_custom_types_to_object(input_schema)
+
+
+def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Some clients send only ``input_schema``; Bedrock then errors with
+    ``tools.0.custom.name: Field required``.
+
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for i, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if name is None or (isinstance(name, str) and not name.strip()):
+            tool["name"] = f"litellm_unnamed_tool_{i}"
 
 
 class AmazonBedrockGlobalConfig:
@@ -432,12 +516,16 @@ def strip_bedrock_routing_prefix(model: str) -> str:
 
 
 def strip_bedrock_throughput_suffix(model: str) -> str:
-    """Strip throughput tier suffixes from Bedrock model names."""
+    """Strip throughput tier suffixes and context window suffixes from Bedrock model names."""
     import re
 
     # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
     # Keep the model:version part, strip the :throughput suffix
-    return re.sub(r"(:\d+):\d+k$", r"\1", model)
+    model = re.sub(r"(:\d+):\d+k$", r"\1", model)
+    # Strip context window suffixes like [1m], [200k], etc.
+    # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
+    model = re.sub(r"\[\w+\]$", "", model)
+    return model
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -507,6 +595,10 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         "opus_4.6",
         "opus-4-6",
         "opus_4_6",
+        "opus-4.7",
+        "opus_4.7",
+        "opus-4-7",
+        "opus_4_7",
     ]
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
@@ -601,11 +693,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> Literal[
         "converse",
         "invoke",
+        "claude_platform",
         "converse_like",
         "agent",
         "agentcore",
         "async_invoke",
         "openai",
+        "mantle",
     ]:
         """
         Get the bedrock route for the given model.
@@ -614,21 +708,25 @@ class BedrockModelInfo(BaseLLMModelInfo):
             str,
             Literal[
                 "invoke",
+                "claude_platform",
                 "converse_like",
                 "converse",
                 "agent",
                 "agentcore",
                 "async_invoke",
                 "openai",
+                "mantle",
             ],
         ] = {
             "invoke/": "invoke",
+            "claude_platform/": "claude_platform",
             "converse_like/": "converse_like",
             "converse/": "converse",
             "agent/": "agent",
             "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
             "openai/": "openai",
+            "mantle/": "mantle",
         }
 
         # Check explicit routes first
@@ -660,6 +758,36 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return "converse/" in model
 
     @staticmethod
+    def _explicit_claude_platform_route(model: str) -> bool:
+        """
+        Check if the model is an explicit Claude Platform on AWS route.
+        """
+        return "claude_platform/" in model
+
+    @staticmethod
+    def get_claude_platform_model(model: str) -> str:
+        """
+        Strip the Claude Platform route prefix from a Bedrock model name.
+        """
+        return model.replace("claude_platform/", "", 1)
+
+    @staticmethod
+    def map_claude_platform_auth_params(
+        passed_params: dict, optional_params: dict
+    ) -> dict:
+        """
+        Map Claude Platform route auth params that are not OpenAI request params.
+        """
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic_workspace_id",
+        ):
+            if key in passed_params:
+                optional_params[key] = passed_params[key]
+        return optional_params
+
+    @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit invoke route.
@@ -679,6 +807,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit agentcore route.
         """
         return "agentcore/" in model
+
+    @staticmethod
+    def _explicit_mantle_route(model: str) -> bool:
+        """
+        Check if the model is an explicit mantle route (bedrock-mantle endpoint).
+        """
+        return "mantle/" in model
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
@@ -715,9 +850,25 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
 
         #########################################################
+        # Claude Platform route uses Anthropic Messages API via the AWS gateway.
+        #########################################################
+        if BedrockModelInfo._explicit_claude_platform_route(model):
+            return litellm.BedrockClaudePlatformMessagesConfig()
+
+        #########################################################
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
+
+        #########################################################
+        # Mantle route uses the bedrock-mantle endpoint (not bedrock-runtime)
+        #########################################################
+        if BedrockModelInfo._explicit_mantle_route(model):
+            from litellm.llms.bedrock.messages.mantle_transformation import (
+                AmazonMantleMessagesConfig,
+            )
+
+            return AmazonMantleMessagesConfig()
 
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
@@ -749,7 +900,9 @@ def get_bedrock_chat_config(model: str):
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
-    if bedrock_route == "converse" or bedrock_route == "converse_like":
+    if bedrock_route == "claude_platform":
+        return litellm.BedrockClaudePlatformConfig()
+    elif bedrock_route == "converse" or bedrock_route == "converse_like":
         return litellm.AmazonConverseConfig()
     elif bedrock_route == "openai":
         return litellm.AmazonBedrockOpenAIConfig()
@@ -765,6 +918,12 @@ def get_bedrock_chat_config(model: str):
         )
 
         return AmazonAgentCoreConfig()
+    elif bedrock_route == "mantle":
+        from litellm.llms.bedrock.chat.mantle.transformation import (
+            AmazonMantleConfig,
+        )
+
+        return AmazonMantleConfig()
 
     # Handle provider-specific configs
     if bedrock_invoke_provider == "amazon":
@@ -801,39 +960,62 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+def _load_bedrock_response_stream_shape():
+    """
+    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+
+    Returns ``None`` if botocore is unavailable or the service model cannot be
+    loaded.
+    """
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        loader = Loader()
+        service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        return ServiceModel(service_dict).shape_for("ResponseStream")
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not load bedrock-runtime response stream shape "
+            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            e,
+        )
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_response_stream_shape():
+    """
+    Lazily load and cache the bedrock-runtime ResponseStream shape for the process.
+
+    Avoids importing botocore (and logging warnings) unless Bedrock event-stream
+    decoding is actually needed.
+    """
+    return _load_bedrock_response_stream_shape()
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
     """
-
-    _response_stream_shape_cache = None
 
     def __init__(self):
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
 
-    def get_response_stream_shape(self):
-        if self._response_stream_shape_cache is None:
-            from botocore.loaders import Loader
-            from botocore.model import ServiceModel
-
-            loader = Loader()
-            bedrock_service_dict = loader.load_service_model(
-                "bedrock-runtime", "service-2"
-            )
-            bedrock_service_model = ServiceModel(bedrock_service_dict)
-            self._response_stream_shape_cache = bedrock_service_model.shape_for(
-                "ResponseStream"
-            )
-
-        return self._response_stream_shape_cache
-
     def _parse_message_from_event(self, event) -> Optional[str]:
+        response_stream_shape = get_bedrock_response_stream_shape()
+        if response_stream_shape is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(
-            response_dict, self.get_response_stream_shape()
-        )
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()
@@ -1062,9 +1244,11 @@ class CommonBatchFilesUtils:
 
         return (
             dict(prepped.headers),
-            request_data.encode("utf-8")
-            if isinstance(request_data, str)
-            else request_data,
+            (
+                request_data.encode("utf-8")
+                if isinstance(request_data, str)
+                else request_data
+            ),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:

@@ -4,6 +4,7 @@ Cost calculation for Lemonade LLM provider.
 Since Lemonade is a local/self-hosted service, all costs default to 0.
 This prevents cost calculation errors when using models not in model_prices_and_context_window.json
 """
+
 from typing import Tuple
 
 from litellm.types.utils import Usage

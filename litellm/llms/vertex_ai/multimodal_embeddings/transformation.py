@@ -201,6 +201,11 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             request_data["instances"] = [vertex_request_instance]
 
+        if "outputDimensionality" in optional_params:
+            request_data["parameters"] = {
+                "dimension": optional_params["outputDimensionality"]
+            }
+
         return cast(dict, request_data)
 
     def transform_embedding_response(

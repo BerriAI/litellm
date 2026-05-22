@@ -126,6 +126,19 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     input_examples: Optional[List[Dict[str, Any]]]
 
 
+ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
+
+
+class AnthropicAdvisorTool(TypedDict, total=False):
+    """Advisor tool — pairs a fast executor model with a high-intelligence advisor model."""
+
+    type: Required[Literal["advisor_20260301"]]
+    name: Required[Literal["advisor"]]
+    model: Required[str]
+    max_uses: Optional[int]
+    caching: Optional[dict]
+
+
 class ToolReference(TypedDict, total=False):
     """Reference to a tool that should be expanded from deferred tools."""
 
@@ -165,6 +178,7 @@ AllAnthropicToolsValues = Union[
     AnthropicMemoryTool,
     AnthropicToolSearchToolRegex,
     AnthropicToolSearchToolBM25,
+    AnthropicAdvisorTool,
 ]
 
 
@@ -316,7 +330,11 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     content: Union[
         str,
         Iterable[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ],
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -375,6 +393,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
         AnthropicOutputConfig
     ]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
+    reasoning_effort: Optional[str]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -654,6 +673,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
+    ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

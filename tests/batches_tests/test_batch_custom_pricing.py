@@ -8,6 +8,7 @@ are ignored by the batch cost pipeline because they are never threaded
 through to `batch_cost_calculator`.
 """
 
+import litellm
 import pytest
 
 from litellm.batches.batch_utils import (
@@ -20,6 +21,7 @@ from litellm.types.utils import Usage
 
 
 # --- helpers ---
+
 
 def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5):
     """Return a single successful batch output line (OpenAI JSONL format)."""
@@ -59,6 +61,37 @@ CUSTOM_MODEL_INFO = {
 # --- tests ---
 
 
+def test_batch_cost_calculator_explicit_zero_pricing_not_overridden_by_global(
+    monkeypatch,
+):
+    """
+    Explicit ``0`` / ``0.0`` pricing must count as present so we do not fall back
+    to the global pricing table (truthiness would treat zero as missing).
+    """
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    def fake_get_model_info(*args, **kwargs):
+        return {
+            "input_cost_per_token_batches": 1e-3,
+            "output_cost_per_token_batches": 2e-3,
+        }
+
+    monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model="any-model",
+        custom_llm_provider="openai",
+        model_info={
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+        },
+    )
+
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+
 def test_batch_cost_calculator_uses_custom_model_info():
     """batch_cost_calculator should use model_info override when provided."""
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -72,12 +105,12 @@ def test_batch_cost_calculator_uses_custom_model_info():
 
     expected_prompt = 10 * 0.00125
     expected_completion = 5 * 0.005
-    assert prompt_cost == pytest.approx(expected_prompt), (
-        f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
-    )
-    assert completion_cost == pytest.approx(expected_completion), (
-        f"Expected completion cost {expected_completion}, got {completion_cost}"
-    )
+    assert prompt_cost == pytest.approx(
+        expected_prompt
+    ), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
+    assert completion_cost == pytest.approx(
+        expected_completion
+    ), f"Expected completion cost {expected_completion}, got {completion_cost}"
 
 
 def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
@@ -91,9 +124,9 @@ def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {cost}"
-    )
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
 
 
 def test_batch_cost_calculator_func_uses_custom_model_info():
@@ -107,9 +140,9 @@ def test_batch_cost_calculator_func_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {cost}"
-    )
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
 
 
 @pytest.mark.asyncio
@@ -124,8 +157,8 @@ async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert batch_cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {batch_cost}"
-    )
+    assert batch_cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {batch_cost}"
     assert batch_usage.prompt_tokens == 10
     assert batch_usage.completion_tokens == 5

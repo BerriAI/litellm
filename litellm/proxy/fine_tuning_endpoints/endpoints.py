@@ -306,9 +306,9 @@ async def retrieve_fine_tuning_job(
                     **data,
                 ),
             )
-            response._hidden_params[
-                "unified_finetuning_job_id"
-            ] = unified_finetuning_job_id
+            response._hidden_params["unified_finetuning_job_id"] = (
+                unified_finetuning_job_id
+            )
         elif custom_llm_provider:
             # get configs for custom_llm_provider
             llm_provider_config = get_fine_tuning_provider_config(
@@ -595,9 +595,9 @@ async def cancel_fine_tuning_job(
                     **data,
                 ),
             )
-            response._hidden_params[
-                "unified_finetuning_job_id"
-            ] = unified_finetuning_job_id
+            response._hidden_params["unified_finetuning_job_id"] = (
+                unified_finetuning_job_id
+            )
         else:
             # get configs for custom_llm_provider
             llm_provider_config = get_fine_tuning_provider_config(

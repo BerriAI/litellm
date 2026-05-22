@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import List, Optional, cast
 
@@ -15,6 +16,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
 from litellm.integrations.s3 import get_s3_object_key
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -52,15 +54,25 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        s3_callback_params_override: Optional[dict] = None,
         **kwargs,
     ):
         try:
-            verbose_logger.debug(
-                f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
-            )
+            _masker = SensitiveDataMasker()
+            if s3_callback_params_override is not None:
+                verbose_logger.debug(
+                    f"in init s3 logger (audit override) - "
+                    f"{_masker.mask_dict(dict(s3_callback_params_override))}"
+                )
+            else:
+                verbose_logger.debug(
+                    f"in init s3 logger - s3_callback_params "
+                    f"{_masker.mask_dict(dict(litellm.s3_callback_params or {}))}"
+                )
 
             # Initialize S3 params first to get the correct s3_verify value
             self._init_s3_params(
+                params_source=s3_callback_params_override,
                 s3_bucket_name=s3_bucket_name,
                 s3_region_name=s3_region_name,
                 s3_api_version=s3_api_version,
@@ -138,94 +150,85 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_strip_base64_files: bool = False,
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
+        params_source: Optional[dict] = None,
     ):
         """
-        Initialize the s3 params for this logging callback
+        Initialize the s3 params for this logging callback. Reads from
+        `params_source` if given (e.g. `s3_audit_callback_params` for the
+        audit-log instance), otherwise falls back to `litellm.s3_callback_params`.
+        Resolves `os.environ/X` markers into a local dict; never mutates the source.
         """
-        litellm.s3_callback_params = litellm.s3_callback_params or {}
-        # read in .env variables - example os.environ/AWS_BUCKET_NAME
-        for key, value in litellm.s3_callback_params.items():
-            if isinstance(value, str) and value.startswith("os.environ/"):
-                litellm.s3_callback_params[key] = litellm.get_secret(value)
+        if params_source is None:
+            params_source = litellm.s3_callback_params or {}
+        params: dict = {
+            key: (
+                litellm.get_secret(value)
+                if isinstance(value, str) and value.startswith("os.environ/")
+                else value
+            )
+            for key, value in params_source.items()
+        }
 
-        self.s3_bucket_name = (
-            litellm.s3_callback_params.get("s3_bucket_name") or s3_bucket_name
-        )
-        self.s3_region_name = (
-            litellm.s3_callback_params.get("s3_region_name") or s3_region_name
-        )
-        self.s3_api_version = (
-            litellm.s3_callback_params.get("s3_api_version") or s3_api_version
-        )
+        self.s3_bucket_name = params.get("s3_bucket_name") or s3_bucket_name
+        self.s3_region_name = params.get("s3_region_name") or s3_region_name
+        self.s3_api_version = params.get("s3_api_version") or s3_api_version
         self.s3_use_ssl = (
-            litellm.s3_callback_params.get("s3_use_ssl", True)
-            if litellm.s3_callback_params.get("s3_use_ssl") is not None
+            params.get("s3_use_ssl", True)
+            if params.get("s3_use_ssl") is not None
             else s3_use_ssl
         )
         self.s3_verify = (
-            litellm.s3_callback_params.get("s3_verify")
-            if litellm.s3_callback_params.get("s3_verify") is not None
+            params.get("s3_verify")
+            if params.get("s3_verify") is not None
             else s3_verify
         )
-        self.s3_endpoint_url = (
-            litellm.s3_callback_params.get("s3_endpoint_url") or s3_endpoint_url
-        )
+        self.s3_endpoint_url = params.get("s3_endpoint_url") or s3_endpoint_url
         self.s3_aws_access_key_id = (
-            litellm.s3_callback_params.get("s3_aws_access_key_id")
-            or s3_aws_access_key_id
+            params.get("s3_aws_access_key_id") or s3_aws_access_key_id
         )
 
         self.s3_aws_secret_access_key = (
-            litellm.s3_callback_params.get("s3_aws_secret_access_key")
-            or s3_aws_secret_access_key
+            params.get("s3_aws_secret_access_key") or s3_aws_secret_access_key
         )
 
         self.s3_aws_session_token = (
-            litellm.s3_callback_params.get("s3_aws_session_token")
-            or s3_aws_session_token
+            params.get("s3_aws_session_token") or s3_aws_session_token
         )
 
         self.s3_aws_session_name = (
-            litellm.s3_callback_params.get("s3_aws_session_name") or s3_aws_session_name
+            params.get("s3_aws_session_name") or s3_aws_session_name
         )
 
         self.s3_aws_profile_name = (
-            litellm.s3_callback_params.get("s3_aws_profile_name") or s3_aws_profile_name
+            params.get("s3_aws_profile_name") or s3_aws_profile_name
         )
 
-        self.s3_aws_role_name = (
-            litellm.s3_callback_params.get("s3_aws_role_name") or s3_aws_role_name
-        )
+        self.s3_aws_role_name = params.get("s3_aws_role_name") or s3_aws_role_name
 
         self.s3_aws_web_identity_token = (
-            litellm.s3_callback_params.get("s3_aws_web_identity_token")
-            or s3_aws_web_identity_token
+            params.get("s3_aws_web_identity_token") or s3_aws_web_identity_token
         )
 
         self.s3_aws_sts_endpoint = (
-            litellm.s3_callback_params.get("s3_aws_sts_endpoint") or s3_aws_sts_endpoint
+            params.get("s3_aws_sts_endpoint") or s3_aws_sts_endpoint
         )
 
-        self.s3_config = litellm.s3_callback_params.get("s3_config") or s3_config
-        self.s3_path = litellm.s3_callback_params.get("s3_path") or s3_path
-        # done reading litellm.s3_callback_params
+        self.s3_config = params.get("s3_config") or s3_config
+        self.s3_path = params.get("s3_path") or s3_path
         self.s3_use_team_prefix = (
-            bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
-            or s3_use_team_prefix
+            bool(params.get("s3_use_team_prefix", False)) or s3_use_team_prefix
         )
 
         self.s3_use_key_prefix = (
-            bool(litellm.s3_callback_params.get("s3_use_key_prefix", False))
-            or s3_use_key_prefix
+            bool(params.get("s3_use_key_prefix", False)) or s3_use_key_prefix
         )
 
         self.s3_strip_base64_files = (
-            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
-            or s3_strip_base64_files
+            bool(params.get("s3_strip_base64_files", False)) or s3_strip_base64_files
         )
 
         self.s3_use_virtual_hosted_style = (
-            bool(litellm.s3_callback_params.get("s3_use_virtual_hosted_style", False))
+            bool(params.get("s3_use_virtual_hosted_style", False))
             or s3_use_virtual_hosted_style
         )
 
@@ -403,11 +406,26 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.put(
-                url, data=json_string, headers=signed_headers
-            )
-            response.raise_for_status()
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
+            # Make the request with retry for transient S3 errors (500/503)
+            max_retries = 3
+            for attempt in range(max_retries):
+                response = await self.async_httpx_client.put(
+                    request_url, data=json_string, headers=signed_headers
+                )
+                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                    wait_time = 2**attempt  # 1s, 2s
+                    verbose_logger.warning(
+                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{max_retries}) "
+                        f"key={batch_logging_element.s3_object_key}"
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
@@ -577,14 +595,33 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify}
-                if self.s3_verify is not None
-                else None
+                params=(
+                    {"ssl_verify": self.s3_verify}
+                    if self.s3_verify is not None
+                    else None
+                )
             )
-            # Make the request
-            response = httpx_client.put(url, data=json_string, headers=signed_headers)
-            response.raise_for_status()
+            # Make the request with retry for transient S3 errors (500/503)
+            max_retries = 3
+            for attempt in range(max_retries):
+                response = httpx_client.put(
+                    request_url, data=json_string, headers=signed_headers
+                )
+                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                    wait_time = 2**attempt  # 1s, 2s
+                    verbose_logger.warning(
+                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{max_retries}) "
+                        f"key={batch_logging_element.s3_object_key}"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
@@ -674,8 +711,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.get(url, headers=signed_headers)
+            request_url = prepped.url or url
+            response = await self.async_httpx_client.get(
+                request_url, headers=signed_headers
+            )
 
             if response.status_code != 200:
                 verbose_logger.exception(

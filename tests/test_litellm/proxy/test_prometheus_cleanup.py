@@ -26,18 +26,14 @@ class TestWipeDirectory:
 class TestMarkWorkerExit:
     def test_calls_mark_process_dead_when_env_set(self, tmp_path):
         with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark:
+            with patch("prometheus_client.multiprocess.mark_process_dead") as mock_mark:
                 mark_worker_exit(12345)
                 mock_mark.assert_called_once_with(12345)
 
     def test_noop_when_env_not_set(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark:
+            with patch("prometheus_client.multiprocess.mark_process_dead") as mock_mark:
                 mark_worker_exit(12345)
                 mock_mark.assert_not_called()
 

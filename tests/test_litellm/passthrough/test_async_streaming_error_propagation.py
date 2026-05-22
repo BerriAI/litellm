@@ -21,7 +21,9 @@ def _make_mock_response(status_code: int, body: bytes, headers: dict = None):  #
 
     def _raise_for_status():
         if status_code >= 400:
-            request = httpx.Request("POST", "https://azure.example.com/openai/responses")
+            request = httpx.Request(
+                "POST", "https://azure.example.com/openai/responses"
+            )
             real_response = httpx.Response(
                 status_code=status_code,
                 content=body,

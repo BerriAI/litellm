@@ -202,6 +202,7 @@ export interface MCPServer {
   tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+  delegate_auth_to_upstream?: boolean;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;
@@ -223,6 +224,10 @@ export interface MCPServer {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   review_notes?: string | null;
+
+  /** Per-user OAuth token storage settings (interactive OAuth only) */
+  token_validation?: Record<string, any> | null;
+  token_storage_ttl_seconds?: number | null;
 }
 
 export interface MCPServerProps {

@@ -292,22 +292,15 @@ class VertexAIPartnerModels(VertexBase):
         Returns:
             Dict containing token count information
         """
-        try:
-            import vertexai
-        except Exception as e:
-            raise VertexAIError(
-                status_code=400,
-                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
-            )
-
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
-            raise VertexAIError(
-                status_code=400,
-                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
-            )
-
+        # Note: we intentionally do not import `vertexai` (the Gemini SDK shipped
+        # by `google-cloud-aiplatform`) on this path. Partner models such as
+        # Claude on Vertex use the Anthropic Messages API protocol directly via
+        # `:rawPredict`, and `VertexAIPartnerModelsTokenCounter` reaches that
+        # endpoint with an authenticated httpx client — it never touches the
+        # Gemini SDK. Requiring `google-cloud-aiplatform>=1.38` here turned a
+        # SDK-free Anthropic-protocol call into a hard dependency on the Gemini
+        # SDK (see #28084), breaking `/v1/messages/count_tokens` for Claude-on-
+        # Vertex on any LiteLLM install without that extra. Stay SDK-free.
         try:
             from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
                 VertexAIPartnerModelsTokenCounter,

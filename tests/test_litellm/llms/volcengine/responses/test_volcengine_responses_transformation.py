@@ -1,6 +1,7 @@
 """
 Tests for Volcengine Responses API transformation.
 """
+
 import os
 import sys
 
@@ -53,7 +54,9 @@ class TestVolcengineResponsesAPITransformation:
             drop_params=False,
         )
 
-        assert "parallel_tool_calls" not in mapped, "parallel_tool_calls must be dropped"
+        assert (
+            "parallel_tool_calls" not in mapped
+        ), "parallel_tool_calls must be dropped"
         assert mapped.get("temperature") == 0.5
         assert "metadata" not in mapped, "Undocumented params should not be included"
 
@@ -97,6 +100,23 @@ class TestVolcengineResponsesAPITransformation:
             api_base="https://custom.volc.com/api/v3/responses", litellm_params={}
         )
         assert api_base_full == "https://custom.volc.com/api/v3/responses"
+
+    def test_response_id_path_requests_encode_response_id(self):
+        """response_id should be encoded before building Volcengine URLs."""
+        config = VolcEngineResponsesAPIConfig()
+
+        url, params = config.transform_cancel_response_api_request(
+            response_id="../../responses/other?x=1#frag",
+            api_base="https://custom.volc.com/api/v3/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://custom.volc.com/api/v3/responses/..%2F..%2Fresponses%2Fother%3Fx%3D1%23frag/cancel"
+        )
+        assert params == {}
 
     @pytest.mark.parametrize(
         "litellm_params, expected_key",
@@ -220,7 +240,9 @@ class TestVolcengineResponsesAPITransformation:
 
         # Use class name comparison instead of isinstance to avoid issues with
         # module reloading during parallel test execution (conftest reloads litellm)
-        assert type(error).__name__ == "VolcEngineError", f"Expected VolcEngineError, got {type(error).__name__}"
+        assert (
+            type(error).__name__ == "VolcEngineError"
+        ), f"Expected VolcEngineError, got {type(error).__name__}"
         assert error.status_code == 400
         assert error.message == "bad request"
         assert error.headers.get("x") == "y"

@@ -2,6 +2,7 @@
 This module is used to transform the request and response for the Voyage contextualized embeddings API. 
 This would be used for all the contextualized embeddings models in Voyage. 
 """
+
 from typing import List, Optional, Union
 
 import httpx

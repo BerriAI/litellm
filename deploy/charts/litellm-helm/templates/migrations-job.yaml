@@ -37,7 +37,7 @@ spec:
       serviceAccountName: {{ include "litellm.migrationServiceAccountName" . }}
       {{- with .Values.migrationJob.extraInitContainers }}
       initContainers:
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }} 
       containers:
         - name: prisma-migrations
@@ -96,7 +96,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.migrationJob.extraContainers }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
       {{- with .Values.volumes }}
       volumes:

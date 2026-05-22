@@ -161,9 +161,10 @@ class InMemoryCache(BaseCache):
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
 
-        if len(self.cache_dict) >= self.max_size_in_memory:
-            # only evict when cache is full
-            self.evict_cache()
+        # Always prune expired/outdated heap roots before inserting.
+        # This keeps expiration_heap bounded even when the live cache stays
+        # below max_size_in_memory and keys are reinserted after TTL expiry.
+        self.evict_cache()
         if not self.check_value_size(value):
             return
 

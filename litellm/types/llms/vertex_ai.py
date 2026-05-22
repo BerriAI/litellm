@@ -6,14 +6,27 @@ from typing_extensions import (
     TypedDict,
 )
 
+from litellm.types.llms.openai import EmbeddingInput
 
-class FunctionResponse(TypedDict):
-    name: str
+# Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
+GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
+
+
+class FunctionResponse(TypedDict, total=False):
+    # `id` correlates this response with the originating `functionCall` part.
+    # Required by Gemini 3.5+ for strict function-calling response matching.
+    id: str
+    name: Required[str]
     response: Optional[dict]
 
 
-class FunctionCall(TypedDict):
-    name: str
+class FunctionCall(TypedDict, total=False):
+    # `id` is returned by Gemini 3.5+ to correlate the corresponding
+    # `functionResponse`. Older Gemini models omit this field.
+    id: str
+    name: Required[str]
     args: Optional[dict]
 
 
@@ -38,8 +51,11 @@ class PartType(TypedDict, total=False):
     media_resolution: Literal["low", "medium", "high"]
 
 
-class HttpxFunctionCall(TypedDict):
-    name: str
+class HttpxFunctionCall(TypedDict, total=False):
+    # `id` is returned by Gemini 3.5+ to correlate the corresponding
+    # `functionResponse`. Older Gemini models omit this field.
+    id: str
+    name: Required[str]
     args: dict
 
 
@@ -325,6 +341,7 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
+    serviceTier: str
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -514,8 +531,9 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict):
-    instances: List[Instance]
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: Required[List[Instance]]
+    parameters: dict
 
 
 class VideoEmbedding(TypedDict):

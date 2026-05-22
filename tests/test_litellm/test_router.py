@@ -238,6 +238,81 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
+    """
+    Ensure file routing preserves deployment custom_llm_provider instead of
+    inferring provider from model string alone.
+    """
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                },
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="team-azure-batch",
+            purpose="batch",
+            file=MagicMock(),
+        )
+
+        assert mock_acreate_file.call_count == 1
+        assert mock_acreate_file.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
+    """
+    Regression test: Ensure afile_content preserves deployment custom_llm_provider
+    when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
+
+    This prevents "None is not a valid LlmProviders" errors when calling file content operations.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",  # No provider prefix
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                    "api_key": "test-key",
+                },
+            },
+        ],
+    )
+
+    # Mock the Azure file handler's afile_content method
+    mock_response = MagicMock(spec=HttpxBinaryResponseContent)
+    mock_response.response = MagicMock()
+
+    with patch(
+        "litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content",
+        return_value=mock_response,
+    ) as mock_afile_content:
+        result = await router.afile_content(
+            model="team-azure-batch",
+            file_id="file-123",
+        )
+
+        # Verify the call was made (proves custom_llm_provider was correctly passed)
+        assert mock_afile_content.call_count == 1
+        assert result == mock_response
+
+
+@pytest.mark.asyncio
 async def test_arouter_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
@@ -1001,6 +1076,69 @@ def test_cached_get_model_group_info():
     # Verify cache still works after invalidation
     result6 = router._cached_get_model_group_info("gpt-4")
     assert result5 is result6
+
+
+def test_model_group_info_cost_from_db_model_info():
+    """
+    When get_deployment_model_info fails (model_info is None fallback),
+    input_cost_per_token and output_cost_per_token should be read from db model_info.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model")
+        assert result is not None
+        assert result.input_cost_per_token == 0.0001
+        assert result.output_cost_per_token == 0.0002
+
+
+def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
+    """
+    When get_deployment_model_info fails and db model_info has no cost fields,
+    input/output_cost_per_token should be None.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-no-cost",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-no-cost",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {},
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model-no-cost")
+        assert result is not None
+        assert result.input_cost_per_token is None
+        assert result.output_cost_per_token is None
 
 
 def test_get_model_access_groups_caching():
@@ -3059,7 +3197,9 @@ def test_multiregion_team_deployments_unique_model_names():
 
     # Each deployment has a unique ID (critical for cooldown/retry to work)
     deployment_ids = {d["model_info"]["id"] for d in deployments}
-    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
+    assert (
+        len(deployment_ids) == 2
+    ), "Each deployment must have a unique ID for cooldown tracking"
 
     # Wrong team: returns nothing
     deployments = router._get_all_deployments(
@@ -3112,9 +3252,9 @@ async def test_multiregion_team_failover_between_regions():
     deployments = router._get_all_deployments(
         model_name="claude-sonnet", team_id="metis-team"
     )
-    assert len(deployments) == 2, (
-        "Router must find both regional deployments by team_public_model_name"
-    )
+    assert (
+        len(deployments) == 2
+    ), "Router must find both regional deployments by team_public_model_name"
 
     # Make a normal request — should succeed from one of the regions
     response = await router.acompletion(
@@ -3127,3 +3267,603 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+def test_access_group_scoped_key_filters_deployments_with_same_public_model():
+    """
+    If a key can access a model only via access group membership,
+    router candidate deployments for that public model should be constrained
+    to deployments in the allowed access group.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+    )
+
+    assert len(deployments) == 1
+    assert deployments[0].get("model_info", {}).get("access_groups") == ["AG2"]
+
+    seen = set()
+    for _ in range(20):
+        response = router.completion(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={"user_api_key_team_id": "team2", "user_api_key_auth": scoped_key},
+        )
+        seen.add(response.choices[0].message.content)
+
+    assert seen == {"response-via-AG2"}
+
+
+def test_explicit_model_access_does_not_force_access_group_filtering():
+    """
+    If a key has explicit model access in addition to access group entries,
+    do not force access-group-only filtering for deployment selection.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    explicit_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2", "gpt-5"],
+        team_models=["AG2", "gpt-5"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": explicit_key,
+            }
+        },
+    )
+
+    deployment_groups = [
+        d.get("model_info", {}).get("access_groups") for d in deployments
+    ]
+    assert ["AG1"] in deployment_groups
+    assert ["AG2"] in deployment_groups
+
+
+def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When access-group filtering removes all candidates, _get_deployment_by_litellm_model
+    must not run: it does not re-apply access groups and could return blocked deployments
+    that share the same litellm_params.model as the request model string.
+
+    ``get_model_access_groups`` is patched to expose AG1 for the public model (so the
+    access-group filter runs with a non-empty allowed set) while every deployment
+    returned for that name is AG2-only — filtered to empty. Without the guard, the
+    litellm-model fallback would return both rows because ``litellm_params.model`` matches.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key2",
+                    "mock_response": "blocked-dep-2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_access_group_block_does_not_silently_use_default_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When access-group filtering empties candidates for model X, the router must not use
+    ``fallbacks`` default ``*`` routing to model Y: Y may have no ``access_groups``, so
+    ``_filter_deployments_by_model_access_groups`` would not constrain Y and the caller
+    would be served despite being blocked from X.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key2",
+                    "mock_response": "blocked-dep-2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-4-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fallback-key",
+                    "mock_response": "should-not-reach",
+                },
+            },
+        ],
+        fallbacks=[{"*": ["gpt-4-fallback"]}],
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When the by-name lookup returns no deployments and the litellm-model fallback
+    branch finds candidates that access-group filtering then empties, the router
+    must not fall through to default ``fallbacks`` routing — the default fallback
+    model may have no ``access_groups`` and would short-circuit the filter,
+    silently serving a caller blocked by access-group restrictions.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-alias",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-4-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fallback-key",
+                    "mock_response": "should-not-reach",
+                },
+            },
+        ],
+        fallbacks=[{"*": ["gpt-4-fallback"]}],
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_try_early_resolve_deployments_for_model_not_in_names():
+    """
+    Direct coverage for ``_try_early_resolve_deployments_for_model_not_in_names``:
+
+    - Returns ``None`` when the requested model is already in ``self.model_names``
+      (the by-name lookup path will handle it).
+    - Returns ``None`` when there are no team deployments, no pattern matches, and
+      no default deployment to fall back to.
+    - Returns the pattern-router match when the model matches a wildcard route.
+    - Returns the default deployment with the request model substituted in when one
+      is configured, without mutating the stored default.
+    """
+    router_in_names = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "key1",
+                },
+            },
+        ]
+    )
+
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="gpt-5", request_team_id=None
+        )
+        is None
+    )
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="some-unknown-model", request_team_id=None
+        )
+        is None
+    )
+
+    pattern_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "key-pattern",
+                },
+            },
+        ]
+    )
+
+    pattern_result = (
+        pattern_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="openai/gpt-4o-mini", request_team_id=None
+        )
+    )
+    assert pattern_result is not None
+    resolved_model, pattern_deployments = pattern_result
+    assert resolved_model == "openai/gpt-4o-mini"
+    assert isinstance(pattern_deployments, list) and len(pattern_deployments) == 1
+
+    default_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "named-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key-named",
+                },
+            },
+        ]
+    )
+    default_router.default_deployment = {
+        "model_name": "default",
+        "litellm_params": {
+            "model": "openai/will-be-overridden",
+            "api_key": "key-default",
+        },
+    }
+
+    default_result = (
+        default_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="brand-new-model", request_team_id=None
+        )
+    )
+    assert default_result is not None
+    resolved_model, default_deployment = default_result
+    assert resolved_model == "brand-new-model"
+    assert isinstance(default_deployment, dict)
+    assert default_deployment["litellm_params"]["model"] == "brand-new-model"
+    # The original default_deployment must not be mutated.
+    assert (
+        default_router.default_deployment["litellm_params"]["model"]
+        == "openai/will-be-overridden"
+    )
+
+
+def _router_with_two_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": f"openai/gpt-4o-{idx}"},
+                "model_info": {"id": f"dep-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_fully_blocked_model_names_marks_name_when_all_deployments_blocked():
+    router = _router_with_two_deployments([True, True])
+    assert router.get_fully_blocked_model_names() == {"gpt-4o"}
+
+
+def test_get_fully_blocked_model_names_keeps_name_when_partial_blocked():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_fully_blocked_model_names() == set()
+
+
+def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "dep-0"},
+            }
+        ]
+    )
+    assert router.get_fully_blocked_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_healthy_deployments_skips_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    healthy, all_dep = await router._async_get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" not in healthy_ids
+    assert "dep-1" in healthy_ids
+    assert len(all_dep) == 2
+
+
+def test_get_healthy_deployments_sync_skips_blocked_deployment():
+    router = _router_with_two_deployments([False, True])
+    healthy, all_dep = router._get_healthy_deployments(
+        model="gpt-4o", parent_otel_span=None
+    )
+    healthy_ids = [d["model_info"]["id"] for d in healthy]
+    assert "dep-0" in healthy_ids
+    assert "dep-1" not in healthy_ids
+    assert len(all_dep) == 2
+
+
+def test_filter_blocked_deployments_drops_blocked_keeps_unblocked():
+    router = _router_with_two_deployments([True, False])
+    filtered = router._filter_blocked_deployments(router.get_model_list() or [])
+    ids = [d["model_info"]["id"] for d in filtered]
+    assert ids == ["dep-1"]
+
+
+@pytest.mark.asyncio
+async def test_public_async_get_healthy_deployments_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployments = await router.async_get_healthy_deployments(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert isinstance(deployments, list)
+    ids = [d["model_info"]["id"] for d in deployments]
+    assert "dep-0" not in ids
+    assert "dep-1" in ids
+
+
+def test_public_get_available_deployment_skips_blocked_on_primary_path():
+    router = _router_with_two_deployments([True, False])
+    deployment = router.get_available_deployment(model="gpt-4o", request_kwargs={})
+    assert deployment["model_info"]["id"] == "dep-1"
+
+
+def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
+    import litellm
+
+    router = _router_with_two_deployments([True, True])
+    with pytest.raises(litellm.ServiceUnavailableError):
+        router.get_available_deployment(model="dep-0", request_kwargs={})
+
+
+def _router_with_two_pass_through_deployments(blocked_flags):
+    import litellm
+
+    model_list = []
+    for idx, blocked in enumerate(blocked_flags):
+        model_list.append(
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": f"openai/gpt-4o-{idx}",
+                    "api_key": "sk-fake-for-tests",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": f"pt-{idx}", "blocked": blocked},
+            }
+        )
+    return litellm.Router(model_list=model_list)
+
+
+def test_get_available_deployment_for_pass_through_skips_blocked():
+    router = _router_with_two_pass_through_deployments([True, False])
+    deployment = router.get_available_deployment_for_pass_through(
+        model="gpt-4o", request_kwargs={}
+    )
+    assert deployment["model_info"]["id"] == "pt-1"
+
+
+def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
+    import litellm
+
+    router = _router_with_two_pass_through_deployments([True, True])
+    with pytest.raises(litellm.ServiceUnavailableError):
+        router.get_available_deployment_for_pass_through(
+            model="pt-0", request_kwargs={}
+        )
+
+
+def test_get_deployment_credentials_returns_none_for_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_deployment_credentials(model_id="dep-0") is None
+    assert router.get_deployment_credentials(model_id="dep-1") is not None
+
+
+def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_deployment_credentials_with_provider(model_id="dep-0") is None
+    assert router.get_deployment_credentials_with_provider(model_id="dep-1") is not None
+
+
+def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
+    """
+    Exercises Router._is_deployment_blocked so router_code_coverage.py (AST call graph)
+    marks the helper as covered by router-named tests.
+    """
+    import types
+
+    import litellm
+
+    router = _router_with_two_deployments([True, False])
+    blocked_dep = router.get_deployment("dep-0")
+    unblocked_dep = router.get_deployment("dep-1")
+    assert blocked_dep is not None and unblocked_dep is not None
+    assert litellm.Router._is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router._is_deployment_blocked(unblocked_dep) is False
+
+    # No model_info on deployment object → treated as not blocked
+    assert litellm.Router._is_deployment_blocked(object()) is False
+    missing_blocked = types.SimpleNamespace()
+    assert litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
+    assert litellm.Router._is_deployment_blocked(
+        types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
+    ) is True

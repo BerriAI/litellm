@@ -65,7 +65,7 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
-from .transformation import AnthropicConfig
+from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -83,13 +83,19 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
     speed: Optional[str] = None,
+    tool_name_reverse_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
 
     try:
         response = await client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -112,6 +118,7 @@ async def make_call(
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -136,13 +143,19 @@ def make_sync_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
     speed: Optional[str] = None,
+    tool_name_reverse_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
 
     try:
         response = client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -173,6 +186,7 @@ def make_sync_call(
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
+        tool_name_reverse_map=tool_name_reverse_map,
     )
 
     # LOGGING
@@ -227,6 +241,11 @@ class AnthropicChatCompletion(BaseLLM):
             timeout=timeout,
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
+            tool_name_reverse_map=(
+                litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+                if isinstance(litellm_params, dict)
+                else None
+            ),
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -266,7 +285,11 @@ class AnthropicChatCompletion(BaseLLM):
 
         try:
             response = await async_handler.post(
-                api_base, headers=headers, json=data, timeout=timeout
+                api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             ## LOGGING
@@ -448,6 +471,11 @@ class AnthropicChatCompletion(BaseLLM):
                     timeout=timeout,
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
+                    tool_name_reverse_map=(
+                        litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+                        if isinstance(litellm_params, dict)
+                        else None
+                    ),
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -469,6 +497,7 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=headers,
                         data=json.dumps(data),
                         timeout=timeout,
+                        logging_obj=logging_obj,
                     )
                 except Exception as e:
                     status_code = getattr(e, "status_code", 500)
@@ -511,6 +540,7 @@ class ModelResponseIterator:
         sync_stream: bool,
         json_mode: Optional[bool] = False,
         speed: Optional[str] = None,
+        tool_name_reverse_map: Optional[Dict[str, str]] = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -518,6 +548,13 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        # rewritten-name -> caller's original. Built per-request from the
+        # forward map in AnthropicConfig._build_request_tool_name_maps; only
+        # contains entries we actually rewrote, so a tool legitimately named
+        # `foo_bar` is *not* reverse-mapped just because some other tool was
+        # rewritten to `foo_bar` in a different request. Empty/None is the
+        # common case (no '/' or other invalid chars in any tool name).
+        self.tool_name_reverse_map: Dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
 
@@ -541,6 +578,10 @@ class ModelResponseIterator:
 
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: List[Dict[str, Any]] = []
+
+        # Accumulate streamed thinking text so final usage can split reasoning
+        # tokens from regular output tokens.
+        self.reasoning_content_chunks: List[str] = []
 
         # Track server tool use inputs and results for code_interpreter_results
         self._server_tool_inputs: Dict[str, Any] = {}
@@ -572,15 +613,18 @@ class ModelResponseIterator:
         return False
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        reasoning_content = (
+            "".join(self.reasoning_content_chunks)
+            if self.reasoning_content_chunks
+            else None
+        )
         return AnthropicConfig().calculate_usage(
             usage_object=cast(dict, anthropic_usage_chunk),
-            reasoning_content=None,
+            reasoning_content=reasoning_content,
             speed=self.speed,
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -623,10 +667,13 @@ class ModelResponseIterator:
             "thinking" in content_block["delta"]
             or "signature" in content_block["delta"]
         ):
+            thinking_content = content_block["delta"].get("thinking")
+            if isinstance(thinking_content, str) and thinking_content:
+                self.reasoning_content_chunks.append(thinking_content)
             thinking_blocks = [
                 ChatCompletionThinkingBlock(
                     type="thinking",
-                    thinking=content_block["delta"].get("thinking") or "",
+                    thinking=thinking_content or "",
                     signature=str(content_block["delta"].get("signature") or ""),
                 )
             ]
@@ -779,6 +826,16 @@ class ModelResponseIterator:
                     or content_block_start["content_block"]["type"] == "server_tool_use"
                 ):
                     self.tool_index += 1
+                    # Reverse-map the (sanitized) tool name back to the
+                    # caller's original. No-op when the map is empty.
+                    _stream_tool_name = content_block_start["content_block"]["name"]
+                    if (
+                        self.tool_name_reverse_map
+                        and _stream_tool_name in self.tool_name_reverse_map
+                    ):
+                        _stream_tool_name = self.tool_name_reverse_map[
+                            _stream_tool_name
+                        ]
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
@@ -786,7 +843,7 @@ class ModelResponseIterator:
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
+                            name=_stream_tool_name,
                             arguments="",
                         ),
                         index=self.tool_index,
@@ -805,9 +862,9 @@ class ModelResponseIterator:
                         tool_input = content_block_start["content_block"].get(
                             "input", {}
                         )
-                        self._server_tool_inputs[
-                            self._current_server_tool_id
-                        ] = tool_input
+                        self._server_tool_inputs[self._current_server_tool_id] = (
+                            tool_input
+                        )
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data = content_block_start["content_block"]["caller"]
@@ -828,9 +885,9 @@ class ModelResponseIterator:
                     # Handle compaction blocks
                     # The full content comes in content_block_start
                     self.compaction_blocks.append(content_block_start["content_block"])
-                    provider_specific_fields[
-                        "compaction_blocks"
-                    ] = self.compaction_blocks
+                    provider_specific_fields["compaction_blocks"] = (
+                        self.compaction_blocks
+                    )
                     provider_specific_fields["compaction_start"] = {
                         "type": "compaction",
                         "content": content_block_start["content_block"].get(
@@ -852,9 +909,9 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields[
-                            "web_search_results"
-                        ] = self.web_search_results
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
@@ -862,18 +919,18 @@ class ModelResponseIterator:
                         self.web_search_results.append(
                             content_block_start["content_block"]
                         )
-                        provider_specific_fields[
-                            "web_search_results"
-                        ] = self.web_search_results
+                        provider_specific_fields["web_search_results"] = (
+                            self.web_search_results
+                        )
                     elif content_type != "tool_search_tool_result":
                         # Handle other tool results (code execution, etc.)
                         # Skip tool_search_tool_result as it's internal metadata
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
                         # Convert to provider-neutral code_interpreter_results
-                        provider_specific_fields[
-                            "code_interpreter_results"
-                        ] = self._build_code_interpreter_results()
+                        provider_specific_fields["code_interpreter_results"] = (
+                            self._build_code_interpreter_results()
+                        )
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
@@ -930,9 +987,9 @@ class ModelResponseIterator:
                     )
                     if container_id and self.tool_results:
                         self._container_id = container_id
-                        provider_specific_fields[
-                            "code_interpreter_results"
-                        ] = self._build_code_interpreter_results()
+                        provider_specific_fields["code_interpreter_results"] = (
+                            self._build_code_interpreter_results()
+                        )
             elif type_chunk == "message_start":
                 """
                 Anthropic

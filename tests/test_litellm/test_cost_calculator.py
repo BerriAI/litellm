@@ -67,6 +67,68 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+def test_baseten_model_api_pricing_entries():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected_pricing = {
+        "baseten/nvidia/Nemotron-120B-A12B": (3e-07, 7.5e-07),
+        "baseten/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "baseten/zai-org/GLM-5": (9.5e-07, 3.15e-06),
+        "baseten/zai-org/GLM-4.7": (6e-07, 2.2e-06),
+        "baseten/zai-org/GLM-4.6": (6e-07, 2.2e-06),
+        "baseten/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
+        "baseten/moonshotai/Kimi-K2-Thinking": (6e-07, 2.5e-06),
+        "baseten/moonshotai/Kimi-K2-Instruct-0905": (6e-07, 2.5e-06),
+        "baseten/openai/gpt-oss-120b": (1e-07, 5e-07),
+        "baseten/deepseek-ai/DeepSeek-V3.1": (5e-07, 1.5e-06),
+        "baseten/deepseek-ai/DeepSeek-V3-0324": (7.7e-07, 7.7e-07),
+    }
+
+    for model_name, (input_cost, output_cost) in expected_pricing.items():
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["litellm_provider"] == "baseten"
+        assert model_info["input_cost_per_token"] == input_cost
+        assert model_info["output_cost_per_token"] == output_cost
+
+
+def test_wandb_model_api_pricing_entries():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected_pricing = {
+        "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
+        "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+    }
+
+    for model_name, (input_cost, output_cost) in expected_pricing.items():
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["litellm_provider"] == "wandb"
+        assert model_info["input_cost_per_token"] == input_cost
+        assert model_info["output_cost_per_token"] == output_cost
+
+
+def test_openrouter_qwen36_plus_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get("openrouter/qwen/qwen3.6-plus")
+
+    assert model_info is not None
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 1000000
+    assert model_info["max_output_tokens"] == 65536
+    assert model_info["input_cost_per_token"] == 3.25e-07
+    assert model_info["output_cost_per_token"] == 1.95e-06
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_tool_choice"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_vision"] is True
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -123,6 +185,7 @@ def test_cost_calculator_with_usage(monkeypatch):
 
     # Invalidate caches after modifying litellm.model_cost
     from litellm.utils import _invalidate_model_cost_lowercase_map
+
     _invalidate_model_cost_lowercase_map()
 
     result = response_cost_calculator(
@@ -172,7 +235,7 @@ def test_transcription_cost_uses_token_pricing():
         call_type="atranscription",
     )
 
-    expected_cost = (14 * 6e-06) + (45 * 1e-05)
+    expected_cost = (14 * 2.5e-06) + (45 * 1e-05)
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
@@ -528,9 +591,7 @@ def test_azure_audio_output_cost_calculation():
     model_info = litellm.get_model_info("azure/gpt-audio-2025-08-28")
 
     # Calculate expected cost
-    expected_input_cost = (
-        model_info["input_cost_per_token"] * 17  # text tokens
-    )
+    expected_input_cost = model_info["input_cost_per_token"] * 17  # text tokens
     expected_output_cost = (
         model_info["output_cost_per_token"] * 110  # text tokens
         + model_info["output_cost_per_audio_token"] * 482  # audio tokens
@@ -542,14 +603,14 @@ def test_azure_audio_output_cost_calculation():
     wrong_total_cost = expected_input_cost + wrong_output_cost
 
     # Verify audio tokens are NOT charged at text rate (the bug)
-    assert abs(cost - wrong_total_cost) > 0.001, (
-        "Bug: Audio tokens are being charged at text token rate"
-    )
+    assert (
+        abs(cost - wrong_total_cost) > 0.001
+    ), "Bug: Audio tokens are being charged at text token rate"
 
     # Verify cost matches
-    assert abs(cost - expected_total_cost) < 0.0000001, (
-        f"Expected cost {expected_total_cost}, got {cost}"
-    )
+    assert (
+        abs(cost - expected_total_cost) < 0.0000001
+    ), f"Expected cost {expected_total_cost}, got {cost}"
 
 
 def test_default_image_cost_calculator(monkeypatch):
@@ -1056,12 +1117,12 @@ def test_azure_ai_cache_cost_calculation():
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert abs(input_cost - expected_input_cost) < 1e-10, (
-        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
-    )
-    assert abs(output_cost - expected_output_cost) < 1e-10, (
-        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
-    )
+    assert (
+        abs(input_cost - expected_input_cost) < 1e-10
+    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    assert (
+        abs(output_cost - expected_output_cost) < 1e-10
+    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
 def test_cost_discount_vertex_ai():
@@ -1834,7 +1895,7 @@ def test_gemini_without_cache_tokens_details():
             "promptTokensDetails": [
                 {"modality": "TEXT", "tokenCount": 6},
                 {"modality": "IMAGE", "tokenCount": 258},
-            ]
+            ],
             # No cacheTokensDetails
         }
     }
@@ -1929,7 +1990,9 @@ def test_gemini_implicit_caching_cost_calculation():
         f"Cached tokens may not be using reduced pricing."
     )
 
-    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
+    print(
+        "✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly"
+    )
 
 
 def test_additional_costs_only_for_azure_ai():
@@ -1970,3 +2033,341 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
+
+
+def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
+    """
+    Test that openrouter/google/gemini-3.1-flash-lite-preview has a pricing entry.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25604
+
+    The model exists and is callable via OpenRouter, but was missing from
+    model_prices_and_context_window.json when other Gemini 3.x variants were present.
+    This caused ValueError: This model isn't mapped yet during router pre-call checks.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_name = "openrouter/google/gemini-3.1-flash-lite-preview"
+    model_info = litellm.model_cost.get(model_name)
+
+    assert model_info is not None, f"Missing model pricing entry: {model_name}"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["input_cost_per_token"] == 2.5e-07
+    assert model_info["output_cost_per_token"] == 1.5e-06
+    assert model_info["max_input_tokens"] == 1048576
+    assert model_info["max_output_tokens"] == 65536
+
+
+def test_custom_pricing_applies_cache_read_input_cost():
+    """
+    Bug 1 reproduction: custom_cost_per_token with cache_read_input_token_cost
+    should bill cached prompt tokens at the cache rate, not the full input rate.
+    """
+    usage = Usage(
+        prompt_tokens=6074,
+        completion_tokens=285,
+        total_tokens=6359,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=3456,
+            audio_tokens=0,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+        },
+    )
+
+    expected = (6074 - 3456) * 0.0000025 + 3456 * 0.00000025 + 285 * 0.000015
+
+    assert cost == pytest.approx(expected)
+
+
+def test_custom_pricing_applies_cache_creation_input_cost_via_prompt_details():
+    """
+    OpenAI-compatible providers report cache-write tokens under
+    prompt_tokens_details.cache_creation_tokens. The custom-pricing helper must
+    bill those at cache_creation_input_token_cost, not the full input rate.
+    """
+    pt_details = PromptTokensDetailsWrapper(cached_tokens=1000, audio_tokens=0)
+    pt_details.cache_creation_tokens = 500
+
+    usage = Usage(
+        prompt_tokens=4000,
+        completion_tokens=100,
+        total_tokens=4100,
+        prompt_tokens_details=pt_details,
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+            "cache_creation_input_token_cost": 0.000003125,
+        },
+    )
+
+    expected = (
+        (4000 - 1000 - 500) * 0.0000025
+        + 1000 * 0.00000025
+        + 500 * 0.000003125
+        + 100 * 0.000015
+    )
+
+    assert cost == pytest.approx(expected)
+
+
+def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens_alias():
+    """
+    Some OpenAI-compatible providers (e.g. kimi-k2) emit cache-write tokens as
+    `cache_write_tokens` rather than `cache_creation_tokens`. The cost
+    calculator must mirror db_spend_update_writer and accept either name —
+    otherwise daily aggregation counts the tokens but the per-request cost
+    bills them at the full input rate.
+
+    Drives `cost_per_token` directly with a SimpleNamespace usage stub so the
+    `cache_write_tokens` alias survives the call (Pydantic's Usage init
+    rebuilds prompt_tokens_details and drops dynamic attributes).
+    """
+    from types import SimpleNamespace
+
+    from litellm.cost_calculator import cost_per_token
+
+    pt_details = SimpleNamespace(cached_tokens=1000, cache_write_tokens=500)
+    usage_stub = SimpleNamespace(
+        prompt_tokens=4000,
+        completion_tokens=100,
+        total_tokens=4100,
+        prompt_tokens_details=pt_details,
+        cache_read_input_tokens=None,
+        cache_creation_input_tokens=None,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="moonshotai/kimi-k2",
+        prompt_tokens=4000,
+        completion_tokens=100,
+        custom_llm_provider="openai",
+        usage_object=usage_stub,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+            "cache_creation_input_token_cost": 0.000003125,
+        },
+    )
+
+    expected_prompt = (
+        (4000 - 1000 - 500) * 0.0000025 + 1000 * 0.00000025 + 500 * 0.000003125
+    )
+    expected_completion = 100 * 0.000015
+
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 — db_spend_update_writer cache token extraction helpers.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_cache_read_tokens_anthropic_top_level():
+    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+
+    usage_obj = {
+        "prompt_tokens": 100,
+        "cache_read_input_tokens": 80,
+        "prompt_tokens_details": {"cached_tokens": 80},
+    }
+    # Anthropic top-level value should win over prompt_tokens_details fallback.
+    assert _extract_cache_read_tokens(usage_obj) == 80
+
+
+def test_extract_cache_read_tokens_openai_compatible_fallback():
+    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+
+    # Anthropic field absent — fall back to prompt_tokens_details.cached_tokens.
+    usage_obj = {
+        "prompt_tokens": 22583,
+        "prompt_tokens_details": {"cached_tokens": 22016},
+    }
+    assert _extract_cache_read_tokens(usage_obj) == 22016
+
+
+def test_extract_cache_read_tokens_zero_when_missing():
+    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+
+    assert _extract_cache_read_tokens({}) == 0
+    assert _extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
+    assert (
+        _extract_cache_read_tokens({"prompt_tokens_details": {"cached_tokens": None}})
+        == 0
+    )
+
+
+def test_extract_cache_creation_tokens_anthropic_top_level():
+    from litellm.proxy.db.db_spend_update_writer import (
+        _extract_cache_creation_tokens,
+    )
+
+    usage_obj = {
+        "prompt_tokens": 100,
+        "cache_creation_input_tokens": 50,
+        "prompt_tokens_details": {"cache_write_tokens": 50},
+    }
+    # Anthropic top-level should short-circuit the fallback.
+    assert _extract_cache_creation_tokens(usage_obj) == 50
+
+
+def test_extract_cache_creation_tokens_openai_cache_write_alias():
+    from litellm.proxy.db.db_spend_update_writer import (
+        _extract_cache_creation_tokens,
+    )
+
+    # kimi-k2 emits cache_write_tokens.
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cache_write_tokens": 200},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 200
+
+
+def test_extract_cache_creation_tokens_openai_cache_creation_alias():
+    from litellm.proxy.db.db_spend_update_writer import (
+        _extract_cache_creation_tokens,
+    )
+
+    # Other OpenAI-compatible providers emit cache_creation_tokens.
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cache_creation_tokens": 300},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 300
+
+
+def test_extract_cache_creation_tokens_zero_when_missing():
+    from litellm.proxy.db.db_spend_update_writer import (
+        _extract_cache_creation_tokens,
+    )
+
+    assert _extract_cache_creation_tokens({}) == 0
+    assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
+    assert (
+        _extract_cache_creation_tokens(
+            {"prompt_tokens_details": {"cache_write_tokens": None}}
+        )
+        == 0
+    )
+
+
+def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
+    """
+    Anthropic providers report cache tokens at the top level of Usage, and
+    `prompt_tokens` EXCLUDES them. The helper expects `prompt_tokens` to
+    include cache tokens, so cost_per_token must adjust before invoking it —
+    otherwise regular_prompt_tokens goes negative and clamps to 0.
+    """
+    usage = Usage(
+        prompt_tokens=2000,
+        completion_tokens=100,
+        total_tokens=2100,
+        cache_read_input_tokens=1500,
+        cache_creation_input_tokens=300,
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="anthropic/claude-3-5-sonnet",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="anthropic/claude-3-5-sonnet",
+        custom_llm_provider="anthropic",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.000003,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.0000003,
+            "cache_creation_input_token_cost": 0.00000375,
+        },
+    )
+
+    # Anthropic prompt_tokens=2000 excludes cache. After normalization the
+    # helper sees 2000 + 1500 + 300 = 3800, of which 2000 are uncached.
+    expected = 2000 * 0.000003 + 1500 * 0.0000003 + 300 * 0.00000375 + 100 * 0.000015
+
+    assert cost == pytest.approx(expected)
+
+
+def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
+    """
+    Backward compatibility: when custom_cost_per_token omits both cache rates,
+    cached tokens must be billed at input_cost_per_token (matching the pre-fix
+    behavior) so existing callers see no change.
+    """
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=400,
+            audio_tokens=0,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+        },
+    )
+
+    # All 1000 prompt tokens billed at input rate, regardless of cached_tokens.
+    expected = 1000 * 0.0000025 + 100 * 0.000015
+
+    assert cost == pytest.approx(expected)

@@ -2,7 +2,11 @@ name: "Unit Tests: Enterprise, Google GenAI & Routing"
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read

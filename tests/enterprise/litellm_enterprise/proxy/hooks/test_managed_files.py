@@ -392,13 +392,13 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
                 "model_info": {"id": "1234"},
             },
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
                 "model_info": {"id": "5678"},
             },
         ],
@@ -413,7 +413,7 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
     ) as mock_acreate_batch:
         for _ in range(1000):
             await router.acreate_batch(
-                model="gpt-3.5-turbo",
+                model="gpt-5-mini",
                 input_file_id=file_id,
                 model_file_id_mapping=model_file_id_mapping,
             )
@@ -463,7 +463,7 @@ async def test_output_file_id_for_batch_retrieve():
         "model_id": "12345679",
         "response_cost": 0.0,
         "additional_headers": {},
-        "litellm_model_name": "gpt-4o",
+        "litellm_model_name": "gpt-5.5",
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -595,10 +595,10 @@ async def test_error_file_id_for_failed_batch():
         "litellm_call_id": "test-call-id",
         "api_base": "https://api.openai.com",
         "model_id": "test-model-id",
-        "model_name": "gpt-4o",
+        "model_name": "gpt-5.5",
         "response_cost": 0.0,
         "additional_headers": {},
-        "litellm_model_name": "gpt-4o",
+        "litellm_model_name": "gpt-5.5",
         "unified_batch_id": "litellm_proxy;model_id:test-model-id;llm_batch_id:batch_abc123",
     }
     
@@ -667,7 +667,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     batch._hidden_params = {
         "model_id": "12345679",
         "response_cost": 0.0,
-        "litellm_model_name": "gpt-4o",
+        "litellm_model_name": "gpt-5.5",
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
 
@@ -1265,7 +1265,7 @@ async def test_completion_with_file_access_check():
                 ],
             }
         ],
-        "model": "gpt-4",
+        "model": "gpt-5.5",
     }
     
     # Should not raise exception
@@ -1331,7 +1331,7 @@ async def test_responses_with_file_access_check():
                 },
             }
         ],
-        "model": "gpt-4",
+        "model": "gpt-5.5",
     }
     
     # Should not raise exception
@@ -1730,7 +1730,7 @@ async def test_list_batches_from_managed_objects_table_target_model_name_filter_
         await proxy_managed_files.list_user_batches(
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
             limit=10,
-            target_model_names="gpt-4o,gpt-3.5",
+            target_model_names="gpt-5.5,gpt-3.5",
         )
     
     assert str(exc_info.value) == (
@@ -1838,7 +1838,7 @@ async def test_return_unified_file_id_includes_expires_at():
         create_file_request=create_file_request,
         internal_usage_cache=internal_usage_cache,
         litellm_parent_otel_span=None,
-        target_model_names_list=["gpt-4o"],
+        target_model_names_list=["gpt-5.5"],
     )
 
     # Verify expires_at is passed through

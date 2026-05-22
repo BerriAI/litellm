@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 
 class PromptTemplate:
@@ -59,7 +60,10 @@ class PromptManager:
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: Dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
-        self.jinja_env = Environment(
+        # Sandboxed env: templates can come from user input via /prompts/test,
+        # so we must block access to unsafe Python attributes and mutation of
+        # caller-supplied mutables.
+        self.jinja_env = ImmutableSandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Handlebars-style delimiters to match Dotprompt spec

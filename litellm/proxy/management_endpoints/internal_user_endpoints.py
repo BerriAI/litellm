@@ -35,6 +35,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
+    require_caller_user_id_for_non_admin,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -81,9 +82,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -395,6 +396,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
+    - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -617,6 +619,40 @@ def _normalize_user_info_user_id(
     return user_id
 
 
+def _enforce_user_info_access(
+    user_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    """Re-validate that the caller may read the resolved ``user_id`` after
+    URL-decoding has been finalized.
+
+    The route-level check in ``RouteChecks.non_proxy_admin_allowed_routes_check``
+    runs against ``request.query_params``, which decodes a literal ``+`` to a
+    space. ``_normalize_user_info_user_id`` then re-parses the raw query with
+    ``unquote`` so the endpoint can return rows for user_ids that contain ``+``
+    (e.g. plus-addressed emails). That asymmetry let an attacker who registered
+    a username with a literal space pass the route check and then read another
+    user's row by sending the encoded ``+`` form. Re-checking ownership here
+    closes the gap without changing the supported user_id grammar.
+    """
+    if user_id is None:
+        return
+    # Only true proxy admin bypasses ownership. PROXY_ADMIN_VIEW_ONLY is
+    # subject to the same `user_id == valid_token.user_id` rule that
+    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream
+    # for the `/user/info` route.
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if user_id == user_api_key_dict.user_id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"key not allowed to access this user's info. user_id={user_id}, "
+            f"key's user_id={user_api_key_dict.user_id}"
+        ),
+    )
+
+
 async def _get_user_info_teams(
     prisma_client: Any,
     user_id: Optional[str],
@@ -731,6 +767,7 @@ async def user_info(  # noqa: PLR0915
 
     try:
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
+        _enforce_user_info_access(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
         if prisma_client is None:
             raise Exception(
@@ -1103,9 +1140,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1113,6 +1150,81 @@ def _update_internal_user_params(
             )
 
     return non_default_values
+
+
+async def _schedule_user_update_audit_log(
+    response: Dict[str, Any],
+    existing_user_row: Optional[BaseModel],
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+    try:
+        updated_user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": response["user_id"]}
+        )
+        if updated_user_row:
+            user_row_typed = LiteLLM_UserTable(
+                **updated_user_row.model_dump(exclude_none=True)
+            )
+            asyncio.create_task(
+                UserManagementEventHooks.create_internal_user_audit_log(
+                    user_id=user_row_typed.user_id,
+                    action="updated",
+                    litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    before_value=(
+                        existing_user_row.model_dump_json(exclude_none=True)
+                        if existing_user_row
+                        else None
+                    ),
+                    after_value=user_row_typed.model_dump_json(exclude_none=True),
+                )
+            )
+    except Exception as audit_error:
+        verbose_proxy_logger.warning(
+            f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
+        )
+
+
+def _check_user_update_authz(
+    user_request: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_user_row: Optional[BaseModel],
+) -> None:
+    """Authorization checks for /user/update — raises HTTPException on failure."""
+    if (
+        user_request.user_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can modify user roles."
+        )
+
+    if existing_user_row is not None:
+        typed_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+        if not can_user_call_user_update(
+            user_api_key_dict=user_api_key_dict, user_info=typed_row
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
+    elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        # Silent-create guard: only PROXY_ADMIN may create via /user/update.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "User not found. Only PROXY_ADMIN can create users via /user/update; use /user/new instead."
+            },
+        )
 
 
 async def _update_single_user_helper(
@@ -1131,21 +1243,15 @@ async def _update_single_user_helper(
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
-    # Validate user identifier
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    # Convert to data format expected by update logic
     data_json: dict = user_request.model_dump(exclude_unset=True)
-
-    # Apply update transformations (reuse existing logic)
     non_default_values = _update_internal_user_params(
         data_json=data_json, data=user_request
     )
-
     _hash_password_in_dict(non_default_values)
 
-    # Get existing user data for audit logging and metadata preparation
     existing_user_row: Optional[BaseModel] = None
     if user_request.user_id:
         existing_user_row = await prisma_client.db.litellm_usertable.find_first(
@@ -1156,20 +1262,38 @@ async def _update_single_user_helper(
             where={"user_email": user_request.user_email}
         )
 
+    _check_user_update_authz(user_request, user_api_key_dict, existing_user_row)
+
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(
             **existing_user_row.model_dump(exclude_none=True)
         )
-        if not can_user_call_user_update(
-            user_api_key_dict=user_api_key_dict,
-            user_info=existing_user_row,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
-                },
-            )
+
+    # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
+    # must not be able to raise their own budget/spend fields.
+    # can_user_call_user_update() already restricts non-admins to self-updates,
+    # so this guard only fires for self-escalation attempts.
+    _target_user_id = user_request.user_id or (
+        getattr(existing_user_row, "user_id", None)
+        if existing_user_row is not None
+        else None
+    )
+    _is_self_update = (
+        _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
+    )
+    if (
+        _is_self_update
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        _protected_fields = ("max_budget", "soft_budget", "spend")
+        for _field in _protected_fields:
+            if _field in non_default_values:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Non-admin users cannot modify '{_field}' on their own record. Contact your proxy admin."
+                    },
+                )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
@@ -1222,39 +1346,14 @@ async def _update_single_user_helper(
                 data=non_default_values, table_name="user"
             )
 
-    # Create audit log for successful update
     if response is not None:
-        try:
-            updated_user_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": response["user_id"]}
-            )
-
-            if updated_user_row:
-                user_row_typed = LiteLLM_UserTable(
-                    **updated_user_row.model_dump(exclude_none=True)
-                )
-
-                # Create audit log asynchronously
-                asyncio.create_task(
-                    UserManagementEventHooks.create_internal_user_audit_log(
-                        user_id=user_row_typed.user_id,
-                        action="updated",
-                        litellm_changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=(
-                            existing_user_row.model_dump_json(exclude_none=True)
-                            if existing_user_row
-                            else None
-                        ),
-                        after_value=user_row_typed.model_dump_json(exclude_none=True),
-                    )
-                )
-        except Exception as audit_error:
-            verbose_proxy_logger.warning(
-                f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
-            )
+        await _schedule_user_update_audit_log(
+            response=response,
+            existing_user_row=existing_user_row,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
 
     if response is None:
         raise HTTPException(
@@ -1336,7 +1435,8 @@ async def user_update(
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-    
+        - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+
     """
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
@@ -1508,12 +1608,35 @@ async def bulk_user_update(
             detail={"error": "Database not connected"},
         )
 
+    # Only proxy admins can modify user_role in bulk updates
+    _bulk_role = (
+        getattr(data.user_updates, "user_role", None) if data.user_updates else None
+    )
+    if _bulk_role is None and data.users:
+        _bulk_role = next(
+            (u.user_role for u in data.users if u.user_role is not None), None
+        )
+    if (
+        _bulk_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can modify user roles.",
+        )
+
     # Determine the list of users to update
     users_to_update: Union[
         List[UpdateUserRequest], List[UpdateUserRequestNoUserIDorEmail]
     ] = []
 
     if data.all_users and data.user_updates:
+        # Only proxy admins can update all users at once
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins can update all users at once.",
+            )
         # Optimized path for updating all users directly in database
         all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
             order={"created_at": "desc"}
@@ -2017,12 +2140,61 @@ async def delete_user(
         litellm_proxy_admin_name,
         prisma_client,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     if data.user_ids is None:
         raise HTTPException(status_code=400, detail={"error": "No user id passed in"})
+
+    # Per-target authorization: the route-level gate accepts this call when
+    # the caller is PROXY_ADMIN or an ORG_ADMIN of *any* org named in
+    # request_data["organization_id"]/["organizations"]. That gate does NOT
+    # cross-check data.user_ids against the caller's scope, so without this
+    # loop an org-admin of org-A could delete users in org-B by supplying
+    # {"user_ids": [victim_in_org_B], "organization_id": "org-A"}.
+    caller_is_proxy_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    caller_admin_org_ids: set = set()
+    if not caller_is_proxy_admin:
+        caller_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={
+                    "user_id": user_api_key_dict.user_id,
+                    "user_role": LitellmUserRoles.ORG_ADMIN.value,
+                }
+            )
+            if user_api_key_dict.user_id
+            else []
+        )
+        caller_admin_org_ids = {
+            m.organization_id for m in caller_memberships if m.organization_id
+        }
+        if not caller_admin_org_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only PROXY_ADMIN or ORG_ADMIN users may delete users."
+                },
+            )
+
+    # Batch-fetch target memberships once before the per-user loop. Avoids
+    # an N+1 DB call when delete_user is called with a large user_ids list.
+    target_org_ids_by_user: Dict[str, set] = {}
+    if not caller_is_proxy_admin:
+        all_target_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+        )
+        for m in all_target_memberships:
+            if not m.organization_id:
+                continue
+            target_org_ids_by_user.setdefault(m.user_id, set()).add(m.organization_id)
 
     # check that all teams passed exist
     for user_id in data.user_ids:
@@ -2035,30 +2207,49 @@ async def delete_user(
                 status_code=404,
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
-        else:
-            # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-            # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-            if litellm.store_audit_logs is True:
-                # make an audit log for each team deleted
-                _user_row = user_row.json(exclude_none=True)
 
-                asyncio.create_task(
-                    create_audit_log_for_update(
-                        request_data=LiteLLM_AuditLogs(
-                            id=str(uuid.uuid4()),
-                            updated_at=datetime.now(timezone.utc),
-                            changed_by=litellm_changed_by
-                            or user_api_key_dict.user_id
-                            or litellm_proxy_admin_name,
-                            changed_by_api_key=user_api_key_dict.api_key,
-                            table_name=LitellmTableNames.USER_TABLE_NAME,
-                            object_id=user_id,
-                            action="deleted",
-                            updated_values="{}",
-                            before_value=_user_row,
+        if not caller_is_proxy_admin:
+            target_org_ids = target_org_ids_by_user.get(user_id, set())
+            # Org-admin may only delete users whose entire org membership is
+            # within their admin scope. A target with ANY org outside the
+            # caller's scope (or no org at all) requires PROXY_ADMIN.
+            if not target_org_ids or not target_org_ids.issubset(caller_admin_org_ids):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            f"User {user_id} is not within your admin scope. "
+                            "Only PROXY_ADMIN may delete users outside your "
+                            "administered organizations."
                         )
+                    },
+                )
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+        if litellm.store_audit_logs is True:
+            # make an audit log for each team deleted
+            _user_row = user_row.json(exclude_none=True)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.USER_TABLE_NAME,
+                        object_id=user_id,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=_user_row,
                     )
                 )
+            )
 
         ## CLEANUP MEMBERS_WITH_ROLES
         fetch_all_teams = await prisma_client.db.litellm_teamtable.find_many(
@@ -2366,13 +2557,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
@@ -2467,9 +2658,10 @@ async def get_user_daily_activity(
         if is_admin:
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
+            caller_user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
             if user_id is None:
-                user_id = user_api_key_dict.user_id
-            if user_id != user_api_key_dict.user_id:
+                user_id = caller_user_id
+            if user_id != caller_user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
@@ -2564,9 +2756,10 @@ async def get_user_daily_activity_aggregated(
         if is_admin:
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
+            caller_user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
             if user_id is None:
-                user_id = user_api_key_dict.user_id
-            if user_id != user_api_key_dict.user_id:
+                user_id = caller_user_id
+            if user_id != caller_user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={

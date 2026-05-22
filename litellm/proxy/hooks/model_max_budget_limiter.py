@@ -255,7 +255,16 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         response_cost: float = standard_logging_payload.get("response_cost", 0)
-        model = standard_logging_payload.get("model")
+        # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
+        # available.  The enforcement path (is_key_within_model_budget) receives
+        # the model name from request_data["model"] which is the model group
+        # alias, so the spend tracking cache key must use the same name.
+        # Falling back to the deployment-level "model" field preserves
+        # behaviour for non-proxy or non-router deployments where model_group
+        # is None.
+        model = standard_logging_payload.get(
+            "model_group"
+        ) or standard_logging_payload.get("model")
         virtual_key = standard_logging_payload.get("metadata", {}).get(
             "user_api_key_hash"
         )
@@ -309,6 +318,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     start_time_key=end_user_start_time_key,
                     response_cost=response_cost,
                 )
+
+        if self.dual_cache.redis_cache is not None:
+            await self._push_in_memory_increments_to_redis()
 
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",

@@ -8,11 +8,11 @@ from ..base import GuardrailConfigModel
 class BaseOpenAIModerationGuardrailConfigModel(GuardrailConfigModel):
     """Base configuration model for the OpenAI Moderation guardrail"""
 
-    model: Optional[
-        Literal["omni-moderation-latest", "text-moderation-latest"]
-    ] = Field(
-        default="omni-moderation-latest",
-        description="The OpenAI moderation model to use. 'omni-moderation-latest' supports more categorization options and multi-modal inputs. Defaults to 'omni-moderation-latest'.",
+    model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = (
+        Field(
+            default="omni-moderation-latest",
+            description="The OpenAI moderation model to use. 'omni-moderation-latest' supports more categorization options and multi-modal inputs. Defaults to 'omni-moderation-latest'.",
+        )
     )
 
 

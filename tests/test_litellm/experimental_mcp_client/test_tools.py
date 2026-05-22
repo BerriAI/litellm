@@ -166,52 +166,52 @@ def test_normalize_mcp_input_schema():
     assert _normalize_mcp_input_schema(None) == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     assert _normalize_mcp_input_schema({}) == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 2: Schema with only type should get properties added
     schema_with_type_only = {"type": "object"}
     normalized = _normalize_mcp_input_schema(schema_with_type_only)
     assert normalized == {
         "type": "object",
         "properties": {},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 3: Schema missing type should get type added
     schema_missing_type = {"properties": {"param": {"type": "string"}}}
     normalized = _normalize_mcp_input_schema(schema_missing_type)
     assert normalized == {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 4: Complete schema should be preserved with additionalProperties added
     complete_schema = {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "required": ["param"]
+        "required": ["param"],
     }
     normalized = _normalize_mcp_input_schema(complete_schema)
     assert normalized == {
         "type": "object",
         "properties": {"param": {"type": "string"}},
         "required": ["param"],
-        "additionalProperties": False
+        "additionalProperties": False,
     }
-    
+
     # Test case 5: Schema with existing additionalProperties should be preserved
     schema_with_additional = {
         "type": "object",
         "properties": {"param": {"type": "string"}},
-        "additionalProperties": True
+        "additionalProperties": True,
     }
     normalized = _normalize_mcp_input_schema(schema_with_additional)
     assert normalized["additionalProperties"] == True
@@ -223,9 +223,9 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     minimal_tool = MCPTool(
         name="GitMCP-fetch_litellm_documentation",
         description="Fetch entire documentation file from GitHub repository",
-        inputSchema={"type": "object"}  # This was causing the error
+        inputSchema={"type": "object"},  # This was causing the error
     )
-    
+
     openai_tool = transform_mcp_tool_to_openai_responses_api_tool(minimal_tool)
     assert openai_tool["name"] == "GitMCP-fetch_litellm_documentation"
     assert openai_tool["type"] == "function"
@@ -233,7 +233,7 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     assert openai_tool["parameters"]["type"] == "object"
     assert openai_tool["parameters"]["properties"] == {}
     assert openai_tool["parameters"]["additionalProperties"] == False
-    
+
     # Test case 2: Tool with complete schema
     complete_tool = MCPTool(
         name="test_tool_complete",
@@ -241,10 +241,10 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
         inputSchema={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     )
-    
+
     openai_tool = transform_mcp_tool_to_openai_responses_api_tool(complete_tool)
     assert openai_tool["parameters"]["type"] == "object"
     assert "query" in openai_tool["parameters"]["properties"]

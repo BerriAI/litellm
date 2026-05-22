@@ -8,7 +8,8 @@ from litellm.llms.base_llm.embedding.transformation import (
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllEmbeddingInputValues
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.utils import token_counter
 
 from ..common_utils import TritonError
 
@@ -103,7 +104,35 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
 
         model_response.model = raw_response_json.get("model_name", "None")
         model_response.data = _embedding_output
+        model_response.usage = self._build_embedding_usage(
+            model=model, request_data=request_data
+        )
         return model_response
+
+    def _build_embedding_usage(self, model: str, request_data: dict) -> Usage:
+        input_data = request_data.get("inputs", [])
+        input_text_values: List[str] = []
+        for item in input_data:
+            if isinstance(item, dict) and item.get("name") == "input_text":
+                data_values = item.get("data", [])
+                if isinstance(data_values, list):
+                    input_text_values = [str(value) for value in data_values]
+                break
+
+        prompt_tokens = 0
+        for text in input_text_values:
+            if not text:
+                continue
+            try:
+                prompt_tokens += token_counter(model=model, text=text)
+            except Exception:
+                prompt_tokens += len(text.split())
+
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

@@ -36,7 +36,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
     response_id = None
     if sync_mode is True:
         response = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
             stream=streaming,
@@ -50,7 +50,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
         time.sleep(2)
     else:
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
             stream=streaming,
@@ -102,7 +102,7 @@ async def test_basic_s3_v2_logging(streaming):
     litellm.set_verbose = True
     response_id = None
     response = await litellm.acompletion(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "This is a test"}],
         mock_response="It's simple to use and easy to get started",
         stream=streaming,
@@ -116,9 +116,9 @@ async def test_basic_s3_v2_logging(streaming):
     await asyncio.sleep(5)
 
     assert len(uploaded_keys) > 0, "S3 upload was never called"
-    assert any(response_id in key for key in uploaded_keys), (
-        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
-    )
+    assert any(
+        response_id in key for key in uploaded_keys
+    ), f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
 
 
 @pytest.mark.asyncio
@@ -149,7 +149,7 @@ async def test_basic_s3_v2_logging_failure():
         # Mock the upload process but still make the httpx call
         url = f"https://test-bucket.s3.us-west-2.amazonaws.com/{batch_logging_element.s3_object_key}"
         headers = {"Content-Type": "application/json"}
-        data = '{"model": "gpt-4o-mini"}'
+        data = '{"model": "gpt-5-mini"}'
 
         # Make the actual httpx call we want to test
         await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
@@ -169,7 +169,7 @@ async def test_basic_s3_v2_logging_failure():
     # Trigger a failure by using invalid API key
     try:
         response = await litellm.acompletion(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             api_key="invalid-api-key",
             messages=[{"role": "user", "content": "This is a test"}],
         )
@@ -203,7 +203,7 @@ async def test_basic_s3_v2_logging_failure():
     # Verify JSON data was included
     data = call_args[1]["data"]
     assert data is not None
-    assert '"model": "gpt-4o-mini"' in data
+    assert '"model": "gpt-5-mini"' in data
     print("✓ S3 request data contains expected log payload")
 
 
@@ -256,7 +256,7 @@ def test_s3_logging():
 
         async def _test():
             return await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": f"This is a test {curr_time}"}],
                 max_tokens=10,
                 temperature=0.7,
@@ -269,7 +269,7 @@ def test_s3_logging():
 
         async def _test():
             return await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": f"This is a test {curr_time}"}],
                 max_tokens=10,
                 temperature=0.7,

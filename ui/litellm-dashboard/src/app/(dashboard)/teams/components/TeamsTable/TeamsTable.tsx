@@ -80,6 +80,7 @@ const TeamsTable = ({
                           size="xs"
                           variant="light"
                           className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                          data-testid="team-id-cell"
                           onClick={() => {
                             // Add click handler
                             setSelectedTeamId(team.team_id);

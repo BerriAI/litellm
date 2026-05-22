@@ -270,4 +270,16 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  promptguard: {
+    provider: "Promptguard",
+    guardrailNameSuggestion: "PromptGuard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  xecguard: {
+    provider: "Xecguard",
+    guardrailNameSuggestion: "XecGuard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };

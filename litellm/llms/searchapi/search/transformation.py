@@ -3,6 +3,7 @@ Calls SearchAPI.io's Google Search API endpoint.
 
 SearchAPI.io API Reference: https://www.searchapi.io/docs/google
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union, cast
 from urllib.parse import urlencode
 

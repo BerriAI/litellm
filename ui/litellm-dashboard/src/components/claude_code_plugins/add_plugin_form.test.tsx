@@ -20,112 +20,90 @@ describe("AddPluginForm", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the source type select with GitHub as default", () => {
+  it("renders with GitHub URL input", () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    // The default value "GitHub" is displayed in the collapsed select
-    expect(screen.getByText("GitHub")).toBeInTheDocument();
-    // The form label is present
-    expect(screen.getByText("Source Type")).toBeInTheDocument();
+    expect(screen.getByText("GitHub URL")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("https://github.com/org/repo/tree/main/my-skill")
+    ).toBeInTheDocument();
   });
 
-  it("shows URL and Path fields when git-subdir is selected", async () => {
+  it("shows GitHub repo preview for a plain repo URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    const sourceSelect = screen.getByLabelText("Source Type");
+    const urlInput = screen.getByPlaceholderText(
+      "https://github.com/org/repo/tree/main/my-skill"
+    );
+
     await act(async () => {
-      fireEvent.mouseDown(sourceSelect);
+      fireEvent.change(urlInput, {
+        target: { value: "https://github.com/anthropics/claude-code" },
+      });
     });
 
     await waitFor(() => {
-      fireEvent.click(screen.getByText("Git Subdir"));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("https://github.com/org/repo.git")).toBeInTheDocument();
-      expect(screen.getByPlaceholderText("plugins/plugin-name")).toBeInTheDocument();
-    });
-  });
-
-  it("does not show Path field for url source type", async () => {
-    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
-
-    const sourceSelect = screen.getByLabelText("Source Type");
-    await act(async () => {
-      fireEvent.mouseDown(sourceSelect);
-    });
-
-    await waitFor(() => {
-      fireEvent.click(screen.getByText("Git URL"));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("https://github.com/org/repo.git")).toBeInTheDocument();
-      expect(screen.queryByPlaceholderText("plugins/plugin-name")).not.toBeInTheDocument();
+      expect(screen.getByText(/GitHub repo/)).toBeInTheDocument();
     });
   });
 
-  it("shows path format error when pattern does not match", async () => {
+  it("shows git-subdir preview for a tree URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    // Switch to git-subdir
-    const sourceSelect = screen.getByLabelText("Source Type");
-    await act(async () => {
-      fireEvent.mouseDown(sourceSelect);
-    });
-    await waitFor(() => {
-      fireEvent.click(screen.getByText("Git Subdir"));
-    });
+    const urlInput = screen.getByPlaceholderText(
+      "https://github.com/org/repo/tree/main/my-skill"
+    );
 
-    // Fill required fields
-    fireEvent.change(screen.getByPlaceholderText("my-awesome-plugin"), {
-      target: { value: "my-plugin" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("https://github.com/org/repo.git"), {
-      target: { value: "https://github.com/org/repo.git" },
-    });
-    // Enter a path that violates the allowlist
-    fireEvent.change(screen.getByPlaceholderText("plugins/plugin-name"), {
-      target: { value: "../../etc/passwd" },
-    });
-
-    // Submit — triggers Antd form validation
     await act(async () => {
-      fireEvent.click(screen.getByText("Register Plugin"));
+      fireEvent.change(urlInput, {
+        target: {
+          value: "https://github.com/anthropics/claude-code/tree/main/plugins/my-skill",
+        },
+      });
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "Path must be relative segments (alphanumeric, dots, hyphens, underscores), e.g. plugins/plugin-name"
-        )
-      ).toBeInTheDocument();
+      expect(screen.getByText(/GitHub subdir/)).toBeInTheDocument();
     });
   });
 
-  it("clears path field when switching away from git-subdir", async () => {
+  it("auto-fills skill name from repo URL", async () => {
     renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
 
-    // Switch to git-subdir
-    const sourceSelect = screen.getByLabelText("Source Type");
-    await act(async () => {
-      fireEvent.mouseDown(sourceSelect);
-    });
-    await waitFor(() => {
-      fireEvent.click(screen.getByText("Git Subdir"));
-    });
+    const urlInput = screen.getByPlaceholderText(
+      "https://github.com/org/repo/tree/main/my-skill"
+    );
 
-    // Switch back to GitHub
     await act(async () => {
-      fireEvent.mouseDown(sourceSelect);
-    });
-    await waitFor(() => {
-      fireEvent.click(screen.getByText("GitHub"));
+      fireEvent.change(urlInput, {
+        target: { value: "https://github.com/anthropics/my-awesome-skill" },
+      });
     });
 
     await waitFor(() => {
-      expect(screen.queryByPlaceholderText("plugins/plugin-name")).not.toBeInTheDocument();
-      expect(screen.getByPlaceholderText("anthropics/claude-code")).toBeInTheDocument();
+      const nameInput = screen.getByPlaceholderText("my-skill") as HTMLInputElement;
+      expect(nameInput.value).toBe("my-awesome-skill");
+    });
+  });
+
+  it("does not auto-fill name when name is already set", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    const nameInput = screen.getByPlaceholderText("my-skill") as HTMLInputElement;
+    fireEvent.change(nameInput, { target: { value: "existing-name" } });
+
+    const urlInput = screen.getByPlaceholderText(
+      "https://github.com/org/repo/tree/main/my-skill"
+    );
+
+    await act(async () => {
+      fireEvent.change(urlInput, {
+        target: { value: "https://github.com/anthropics/other-skill" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(nameInput.value).toBe("existing-name");
     });
   });
 });
