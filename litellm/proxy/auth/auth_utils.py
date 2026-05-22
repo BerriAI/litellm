@@ -200,6 +200,9 @@ _SAFE_CLIENT_CALLBACK_PARAMS: FrozenSet[str] = frozenset(
     {
         "langfuse_prompt_version",
         "langsmith_sampling_rate",
+        # Phoenix/Arize per-request project routing (label only, not credentials).
+        "phoenix_project_name",
+        "phoenix_project_name_override",
     }
 )
 

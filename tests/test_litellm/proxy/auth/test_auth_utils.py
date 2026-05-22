@@ -1364,8 +1364,6 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -1435,8 +1433,8 @@ class TestObservabilityCallbackBans:
         )
 
     def test_safe_per_request_observability_metadata_is_allowed(self):
-        # Informational fields (sampling rate, prompt version) describe
-        # the request being logged — they don't choose the destination or
+        # Informational fields (sampling rate, prompt version, Phoenix project
+        # routing) describe the request being logged — they don't choose
         # credentials, so they must remain accepted from clients without
         # the opt-in flag.
         assert (
@@ -1446,7 +1444,27 @@ class TestObservabilityCallbackBans:
                     "metadata": {
                         "langfuse_prompt_version": "v2",
                         "langsmith_sampling_rate": 0.1,
+                        "phoenix_project_name": "my-phoenix-project",
+                        "phoenix_project_name_override": "override-project",
                     },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "metadata_key",
+        ["metadata", "litellm_metadata"],
+    )
+    def test_phoenix_project_routing_fields_allowed_in_metadata(self, metadata_key):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {"phoenix_project_name": "team-a"},
                 },
                 general_settings={},
                 llm_router=None,
