@@ -274,6 +274,8 @@ Nested attribute paths are supported (e.g., `claims.role` or `attributes.litellm
 
 Use `GENERIC_USER_EXTRA_ATTRIBUTES` to extract additional fields from the SSO provider response beyond the standard user attributes (id, email, name, etc.). This is useful when you need to access custom organization-specific data (e.g., department, employee ID, groups) in your [custom SSO handler](./custom_sso.md).
 
+For **CLI SSO**, you can map the same (or other) claims into user `metadata` and return scalars to the CLI via `CLI_SSO_CLAIM_MAP` — see [CLI Authentication](./cli_sso.md#attribution-metadata-oidc-claims).
+
 ```shell
 # Comma-separated list of field names to extract
 GENERIC_USER_EXTRA_ATTRIBUTES="department,employee_id,manager,groups"

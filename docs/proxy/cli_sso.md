@@ -63,6 +63,42 @@ litellm-proxy whoami
 ```
 :::
 
+#### Attribution metadata (OIDC claims)
+
+Map allowlisted OIDC claims into the LiteLLM user's `metadata` and return them to the CLI in `/sso/cli/poll` as `attribution_metadata`. Use this for stable attribution fields (for example employment type or cost center) without parsing large group lists in the client.
+
+Set on the **proxy** before startup:
+
+```bash
+export CLI_SSO_CLAIM_MAP="employment_type->acme_employment_type,org_info.department->department"
+export GENERIC_USER_EXTRA_ATTRIBUTES="employment_type,org_info.department"
+```
+
+`CLI_SSO_CLAIM_MAP` and `LITELLM_CLI_SSO_CLAIM_MAP` are equivalent. Format: comma-separated `source_claim->metadata_key` pairs. The optional `metadata.` prefix on the destination is stripped; values are stored on the user's `metadata` JSON column.
+
+| Part | Meaning |
+|------|---------|
+| `source_claim` | OIDC claim path (dot notation), including fields from `GENERIC_USER_EXTRA_ATTRIBUTES` |
+| `metadata_key` | Key under LiteLLM user `metadata` (supports nested keys via dots) |
+
+Only non-secret scalar values (`string`, `int`, `float`, `bool`) are persisted and returned. Lists, objects, and destination keys containing fragments like `token` or `secret` are dropped.
+
+Example poll response (after SSO completes):
+
+```json
+{
+  "status": "ready",
+  "key": "eyJ...",
+  "user_id": "user@company.com",
+  "attribution_metadata": {
+    "acme_employment_type": "full_time",
+    "department": "Engineering"
+  }
+}
+```
+
+**Local testing without a real IdP:** run `python scripts/mock_oidc_server_for_cli_sso.py` from the LiteLLM repo, point Generic SSO env vars at `http://127.0.0.1:8765`, then run `python scripts/test_cli_sso_claims_e2e.py`.
+
 ### Steps
 
 1. **Install the CLI**
