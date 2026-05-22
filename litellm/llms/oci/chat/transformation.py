@@ -274,6 +274,11 @@ class OCIChatConfig(BaseConfig):
         }
         self.openai_to_oci_cohere_param_map["tool_choice"] = False
         self.openai_to_oci_cohere_param_map["n"] = False
+        # ``top_k`` is not a standard OpenAI param, but Cohere's chat request
+        # accepts ``topK`` and LiteLLM commonly forwards ``top_k`` as a
+        # passthrough param. Cohere-only — ``OCIChatRequestPayload`` (GENERIC)
+        # has no ``topK`` field.
+        self.openai_to_oci_cohere_param_map["top_k"] = "topK"
         # OCI Cohere models are not reasoning models; mark reasoning_effort
         # explicitly unsupported so callers either get a clear error or have
         # the param dropped under drop_params, rather than silently passing
