@@ -10,11 +10,11 @@ This means you can use this with weighted-pick, lowest-latency, simple-shuffle, 
 Example:
 ```
 openai:
-	budget_limit: 0.000000000001
-	time_period: 1d
+        budget_limit: 0.000000000001
+        time_period: 1d
 anthropic:
-	budget_limit: 100
-	time_period: 7d
+        budget_limit: 100
+        time_period: 7d
 ```
 """
 

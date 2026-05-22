@@ -91,6 +91,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             "stream", None
         )  # Streaming not supported, will be faked client-side
         openai_request.pop("stream_options", None)  # Stream options not supported
+        # Vertex Gemma's chatCompletions wrapper does not understand
+        # `context_management` (an Anthropic/Responses API concept). Strip it
+        # so the upstream endpoint does not 400 on the unknown field.
+        openai_request.pop("context_management", None)
 
         # Wrap in Vertex Gemma format
         return {
