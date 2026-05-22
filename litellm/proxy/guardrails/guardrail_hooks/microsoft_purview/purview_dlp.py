@@ -257,7 +257,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         data: Dict[str, Any],
         user_api_key_dict: Any,
-    ) -> Optional[str]:
+    ) -> str:
         """Resolve user ID for blocking (pre_call / post_call) DLP hooks.
 
         Uses only trusted proxy-authenticated sources (``_resolve_trusted_user_id``).
@@ -307,8 +307,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     ) -> Optional[Dict[str, Any]]:
         """Check user prompt against Purview DLP policies before LLM call."""
         user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
-        if not user_id:
-            return data
 
         prompt_text: Optional[str] = None
         is_text_completion = call_type in ("text_completion", "atext_completion")
@@ -360,8 +358,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         this hook for requests that have a streaming iterator hook defined.
         """
         user_id = self._resolve_user_id_for_blocking(data, user_api_key_dict)
-        if not user_id:
-            return response
 
         parts = self._completion_response_text_parts(response)
 
