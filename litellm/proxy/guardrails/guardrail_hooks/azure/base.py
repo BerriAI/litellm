@@ -2,6 +2,9 @@ import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_last_user_message,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -134,32 +137,4 @@ class AzureGuardrailBase:
         ]
         get_user_prompt(messages) -> "What is the weather in Tokyo?"
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            convert_content_list_to_str,
-        )
-
-        if not messages:
-            return None
-
-        # Iterate from the end to find the last consecutive block of user messages
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                # Stop when we hit a non-user message
-                break
-
-        if not user_messages:
-            return None
-
-        # Reverse to get the messages in chronological order
-        user_messages.reverse()
-
-        user_prompt = ""
-        for message in user_messages:
-            text_content = convert_content_list_to_str(message)
-            user_prompt += text_content + "\n"
-
-        result = user_prompt.strip()
-        return result if result else None
+        return get_last_user_message(messages)
