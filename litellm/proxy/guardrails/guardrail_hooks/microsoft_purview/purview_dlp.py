@@ -393,14 +393,16 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
 
+        # Resolve user ID up-front so identity failures don't waste work
+        # buffering and assembling the stream.
+        user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
+
         # Buffer the entire stream before any DLP scan.
         all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
         assembled_response = stream_chunk_builder(chunks=all_chunks)
-
-        user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
 
         if assembled_response is None and all_chunks:
             # Fail closed: stream_chunk_builder dropped all chunks, so we cannot
