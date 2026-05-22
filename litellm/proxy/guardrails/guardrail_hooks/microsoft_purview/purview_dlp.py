@@ -540,7 +540,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 },
             )
 
-        if isinstance(assembled_response, TextCompletionResponse):
+        if isinstance(
+            assembled_response, (TextCompletionResponse, ResponsesAPIResponse)
+        ):
             parts = self._completion_response_text_parts(assembled_response)
             if parts:
                 combined = "\n\n---\n\n".join(parts)
@@ -556,7 +558,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             return
 
         if not isinstance(assembled_response, ModelResponse):
-            # Non-chat response (e.g. embeddings) — pass through unchanged.
+            # Non-content response (e.g. embeddings) — pass through unchanged.
             for chunk in all_chunks:
                 yield chunk
             return
