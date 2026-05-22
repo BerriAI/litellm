@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -406,38 +407,52 @@ def test_opus_4_5_model_detection():
 #         f"computer-use beta should be kept, got: {anthropic_beta}"
 
 
-def test_output_config_removed_from_bedrock_chat_invoke_request():
-    """
-    Test that output_config parameter is stripped from Bedrock Chat Invoke requests.
-
-    Bedrock Invoke API doesn't support the output_config parameter (Anthropic-only).
-    Ensures the chat/invoke path mirrors the messages/invoke path fix.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/22797
-    """
+def test_output_config_forwarded_for_bedrock_chat_invoke_request():
+    """Bedrock Invoke chat path forwards ``output_config`` for adaptive Claude models."""
     config = AmazonAnthropicClaudeConfig()
 
     messages = [{"role": "user", "content": "test"}]
 
-    # Inject output_config into optional_params (simulates Anthropic SDK forwarding it)
     optional_params = {
         "max_tokens": 100,
         "output_config": {"effort": "high"},
     }
 
     result = config.transform_request(
-        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers={},
     )
 
-    assert (
-        "output_config" not in result
-    ), f"output_config should be stripped for Bedrock Chat Invoke, got keys: {list(result.keys())}"
-    # Verify normal params survive
+    assert result.get("output_config") == {"effort": "high"}
     assert result["max_tokens"] == 100
+
+
+def test_bedrock_chat_invoke_checks_output_config_support_with_bedrock_provider():
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {"max_tokens": 100, "output_config": {"effort": "high"}}
+
+    with patch(
+        "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ) as mock_supports_factory:
+        result = config.transform_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    mock_supports_factory.assert_called_once_with(
+        model="us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        key="supports_output_config",
+    )
+    assert result["output_config"] == {"effort": "high"}
 
 
 def test_output_format_removed_from_bedrock_invoke_request():

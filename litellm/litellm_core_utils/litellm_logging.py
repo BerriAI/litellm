@@ -994,10 +994,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = (
-                            "redacted by litellm. \
+                        _metadata["raw_request"] = "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
-                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1031,12 +1029,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = (
-                        "Unable to Log \
-                        raw request: {}".format(
-                            str(e)
-                        )
-                    )
+                    _metadata["raw_request"] = "Unable to Log \
+                        raw request: {}".format(str(e))
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1050,6 +1044,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+            # Set-once first provider-handoff instant. api_call_start_time
+            # is overwritten on every retry, so it can't measure one-time
+            # preprocessing; pinning the first attempt excludes retry loops
+            # + backoff. Logging object only — must NOT go into
+            # litellm_params["metadata"] (caller request metadata, typed
+            # Dict[str, str], echoed downstream; a datetime breaks it).
+            if self.model_call_details.get("first_api_call_start_time") is None:
+                self.model_call_details["first_api_call_start_time"] = (
+                    self.model_call_details["api_call_start_time"]
+                )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -1212,7 +1216,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response)
+            original_response = json.dumps(original_response, default=str)
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -1467,6 +1471,8 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            dict,
+            list,
         ],
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
@@ -1725,12 +1731,18 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         if self.model_call_details.get("litellm_params") is None:
             return
-        self.model_call_details["litellm_params"].setdefault("metadata", {})
-        if self.model_call_details["litellm_params"]["metadata"] is None:
-            self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = (
-            getattr(logging_result, "_hidden_params", {})
-        )
+        metadata_hidden_params = hidden_params.copy()
+        response_cost = self.model_call_details.get("response_cost")
+        if (
+            metadata_hidden_params.get("response_cost") is None
+            and response_cost is not None
+        ):
+            metadata_hidden_params["response_cost"] = response_cost
+
+        litellm_params = self.model_call_details["litellm_params"]
+        metadata = litellm_params.get("metadata") or {}
+        litellm_params["metadata"] = metadata
+        metadata["hidden_params"] = metadata_hidden_params
 
     def _process_hidden_params_and_response_cost(
         self,
@@ -1738,6 +1750,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
+        """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -1750,9 +1763,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
-        elif self.model_call_details.get("response_cost") is not None:
+        elif (
+            existing_cost := self.model_call_details.get("response_cost")
+        ) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
-            # handlers like Gemini/Vertex which call completion_cost directly)
+            # handlers like Gemini/Vertex which call completion_cost directly).
+            # Do not preserve 0 from failure_handler on intermediate router retries.
             pass
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(
@@ -1871,24 +1887,12 @@ class Logging(LiteLLMLoggingBaseClass):
             ):
                 if self._is_recognized_call_type_for_logging(
                     logging_result=logging_result
-                ):
+                ) or isinstance(logging_result, (dict, list)):
                     self._process_hidden_params_and_response_cost(
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
                     )
-                elif isinstance(result, dict) or isinstance(result, list):
-                    self.model_call_details["standard_logging_object"] = (
-                        self._build_standard_logging_payload(
-                            result, start_time, end_time
-                        )
-                    )
-                    if (
-                        standard_logging_payload := self.model_call_details.get(
-                            "standard_logging_object"
-                        )
-                    ) is not None:
-                        emit_standard_logging_payload(standard_logging_payload)
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = (
                     standard_logging_object
@@ -3245,10 +3249,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     langfuse_secret=self.standard_callback_dynamic_params.get(
                         "langfuse_secret"
-                    ),
+                    )
+                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
                     langfuse_host=self.standard_callback_dynamic_params.get(
                         "langfuse_host"
                     ),
+                    allow_env_credentials=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    )
+                    is None,
                 )
             return langFuseLogger
 
@@ -4723,7 +4732,7 @@ class StandardLoggingPayloadSetup:
         ):
             for key, value in litellm_params["metadata"].items():
                 # Skip non-serializable objects like UserAPIKeyAuth
-                if key == "user_api_key_auth":
+                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
                     continue
                 merged_metadata[key] = value
 
@@ -5438,11 +5447,6 @@ def get_standard_logging_object_payload(
             completion_start_time_float=completion_start_time_float,
             stream=kwargs.get("stream", False),
         )
-        # clean up litellm hidden params
-        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
-            hidden_params
-        )
-
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
@@ -5476,6 +5480,18 @@ def get_standard_logging_object_payload(
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+        raw_response_cost = kwargs.get("response_cost")
+        response_cost: float = raw_response_cost or 0.0
+
+        # clean up litellm hidden params
+        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
+            hidden_params
+        )
+        if (
+            clean_hidden_params["response_cost"] is None
+            and raw_response_cost is not None
+        ):
+            clean_hidden_params["response_cost"] = response_cost
 
         model_cost_information = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
@@ -5484,7 +5500,6 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
         )
-        response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
         error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,

@@ -3079,7 +3079,11 @@ async def global_spend_models(
     return response
 
 
-@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+@router.get(
+    "/provider/budgets",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ProviderBudgetResponse,
+)
 async def provider_budgets() -> ProviderBudgetResponse:
     """
     Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
@@ -3180,16 +3184,14 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw(
-        """
+    response = await prisma_client.db.query_raw("""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """
-    )
+        """)
 
     return response
 

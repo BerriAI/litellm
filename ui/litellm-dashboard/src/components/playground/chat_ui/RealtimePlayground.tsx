@@ -134,10 +134,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
           const type = data.type;
 
           if (type === "session.created") {
+            // GA: session.type is required ("realtime" | "transcription")
             ws.send(
               JSON.stringify({
                 type: "session.update",
                 session: {
+                  type: "realtime",
                   modalities: ["text", "audio"],
                   voice: selectedVoice,
                   input_audio_format: "pcm16",
@@ -149,24 +151,36 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             );
           } else if (type === "session.updated") {
             // session configured
-          } else if (type === "response.audio.delta") {
+          } else if (
+            // GA: response.output_audio.delta  |  beta: response.audio.delta
+            type === "response.output_audio.delta" || type === "response.audio.delta"
+          ) {
             if (data.delta) playAudioChunk(data.delta);
-          } else if (type === "response.audio_transcript.delta" || type === "response.text.delta") {
+          } else if (
+            // GA: response.output_text.delta / response.output_audio_transcript.delta
+            // beta: response.text.delta / response.audio_transcript.delta
+            type === "response.output_text.delta" ||
+            type === "response.output_audio_transcript.delta" ||
+            type === "response.audio_transcript.delta" ||
+            type === "response.text.delta"
+          ) {
             if (data.delta) appendAssistantText(data.delta);
           } else if (
             type === "conversation.item.input_audio_transcription.completed"
           ) {
             if (data.transcript) addMessage("user", data.transcript);
           } else if (type === "response.done") {
-            // Ensure we have the full text if deltas were missed
+            // Ensure we have the full text if deltas were missed.
+            // Accept both beta (type=text/audio) and GA (type=output_text/output_audio) content.
             setMessages((prev) => {
               const last = prev[prev.length - 1];
               if (last && last.role === "assistant" && last.content) return prev;
-              // No assistant message yet — extract from response.done
               const output = data.response?.output || [];
               const texts: string[] = [];
               for (const item of output) {
                 for (const c of item.content || []) {
+                  // beta: c.text (type=text), c.transcript (type=audio)
+                  // GA:   c.text (type=output_text), c.transcript (type=output_audio)
                   const t = c.text || c.transcript;
                   if (t) texts.push(t);
                 }
@@ -219,10 +233,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     // Switch to server VAD mode for voice input
+    // GA: session.type is required
     wsRef.current.send(
       JSON.stringify({
         type: "session.update",
         session: {
+          type: "realtime",
           modalities: ["text", "audio"],
           voice: selectedVoice,
           input_audio_format: "pcm16",
@@ -304,10 +320,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (configureSessionRef.current) return;
     configureSessionRef.current = true;
+    // GA: session.type is required
     wsRef.current.send(
       JSON.stringify({
         type: "session.update",
         session: {
+          type: "realtime",
           modalities: ["text", "audio"],
           voice: selectedVoice,
           input_audio_format: "pcm16",

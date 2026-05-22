@@ -26,6 +26,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -153,6 +154,30 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _google_genai_streaming_hidden_params(
+    *,
+    api_base: str,
+    litellm_params: GenericLiteLLMParams,
+    logging_obj: LiteLLMLoggingObj,
+    response_headers: httpx.Headers,
+) -> Dict[str, Any]:
+    """Pre-stream metadata for proxy response headers (mirrors CustomStreamWrapper._hidden_params)."""
+    from litellm.litellm_core_utils.core_helpers import process_response_headers
+
+    _model_info: Dict[str, Any] = dict(
+        getattr(litellm_params, "model_info", None) or {}
+    )
+    _raw_id = _model_info.get("id") or logging_obj.get_router_model_id() or ""
+    _model_id = _raw_id if isinstance(_raw_id, str) else str(_raw_id)
+    return {
+        "model_id": _model_id,
+        "api_base": api_base,
+        "cache_key": "",
+        "response_cost": "",
+        "additional_headers": process_response_headers(response_headers),
+    }
 
 
 class BaseLLMHTTPHandler:
@@ -983,6 +1008,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        litellm_params: Optional[Dict[str, Any]] = None,
     ) -> RerankResponse:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -1002,6 +1028,7 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_rerank_params=optional_rerank_params,
             headers=headers,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -1382,6 +1409,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -1450,6 +1479,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -2511,10 +2542,16 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        delete_kwargs: Dict[str, Any] = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if data:
+            delete_kwargs["json"] = data
+
         try:
-            response = await async_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            response = await async_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
@@ -2595,10 +2632,16 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        delete_kwargs: Dict[str, Any] = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if data:
+            delete_kwargs["json"] = data
+
         try:
-            response = sync_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            response = sync_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
@@ -4595,6 +4638,7 @@ class BaseLLMHTTPHandler:
         fingerprints: List[str],
         fingerprint: str,
         stream: bool = False,
+        callback: Optional[Any] = None,
     ) -> Any:
         from litellm.anthropic_interface import messages as anthropic_messages
 
@@ -4636,7 +4680,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
-        return await anthropic_messages.acreate(
+        response = await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
@@ -4646,6 +4690,23 @@ class BaseLLMHTTPHandler:
                 **kwargs_for_followup,
             }
         )
+
+        if callback is not None:
+            try:
+                response = await callback.async_post_agentic_loop_response_hook(
+                    response=response, plan=plan, kwargs=kwargs
+                )
+            except Exception as e:
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in "
+                    "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
+                    _call_id,
+                    model,
+                    str(e),
+                )
+
+        return response
 
     async def _execute_chat_completion_agentic_plan(
         self,
@@ -4830,6 +4891,7 @@ class BaseLLMHTTPHandler:
                     fingerprints=fingerprints,
                     fingerprint=fingerprint,
                     stream=stream,
+                    callback=callback,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5232,7 +5294,6 @@ class BaseLLMHTTPHandler:
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "OpenAI-Beta": "realtime=v1",
             }
 
         if extra_headers:
@@ -5556,6 +5617,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -5653,6 +5717,9 @@ class BaseLLMHTTPHandler:
             image_edit_optional_request_params=image_edit_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
         )
 
         ## LOGGING
@@ -7787,7 +7854,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -7864,7 +7931,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -7954,7 +8021,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8031,7 +8098,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8121,7 +8188,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8198,7 +8265,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8294,7 +8361,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8373,7 +8440,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8461,7 +8528,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(
@@ -8537,7 +8604,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(
@@ -8601,6 +8668,7 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
+                extra_body=extra_body,
             )
         else:
             (
@@ -8613,6 +8681,7 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
+                extra_body=extra_body,
             )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -8713,6 +8782,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_logging_obj=logging_obj,
             litellm_params=dict(litellm_params),
+            extra_body=extra_body,
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -8923,7 +8993,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -8990,7 +9063,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9189,7 +9265,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9272,7 +9351,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9338,7 +9420,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9403,7 +9488,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -10441,6 +10529,12 @@ class BaseLLMHTTPHandler:
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
                     request_body=data,
+                    hidden_params=_google_genai_streaming_hidden_params(
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        logging_obj=logging_obj,
+                        response_headers=response.headers,
+                    ),
                 )
             else:
                 response = sync_httpx_client.post(
@@ -10550,6 +10644,12 @@ class BaseLLMHTTPHandler:
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
                     request_body=data,
+                    hidden_params=_google_genai_streaming_hidden_params(
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        logging_obj=logging_obj,
+                        response_headers=response.headers,
+                    ),
                 )
             else:
                 response = await async_httpx_client.post(

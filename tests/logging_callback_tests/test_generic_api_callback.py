@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import asyncio
 import litellm
 import gzip
+import httpx
 import json
 import logging
 import time
@@ -58,7 +59,7 @@ async def test_generic_api_callback():
 
     # Make the completion call
     response = await litellm.acompletion(
-        model="gpt-4o",
+        model="gpt-5.5",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="hi",
         user="test_user",
@@ -108,11 +109,11 @@ async def test_generic_api_callback():
 
     # Basic assertions for standard logging payload
     assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
-    assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+    assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
     assert (
         payload_item["model_parameters"]["user"] == "test_user"
     ), "User should be test_user"
-    assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+    assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
     assert payload_item["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ], "Messages should be the same"
@@ -146,7 +147,7 @@ async def test_generic_api_callback_multiple_logs():
     # Make the completion call
     for _ in range(10):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="hi",
             user="test_user",
@@ -196,11 +197,11 @@ async def test_generic_api_callback_multiple_logs():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert (
             payload_item["model_parameters"]["user"] == "test_user"
         ), "User should be test_user"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert payload_item["messages"] == [
             {"role": "user", "content": "Hello, world!"}
         ], "Messages should be the same"
@@ -238,7 +239,7 @@ async def test_generic_api_callback_ndjson_format():
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -278,7 +279,7 @@ async def test_generic_api_callback_ndjson_format():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
         assert (
             payload_item["model_parameters"]["user"] == "test_user"
         ), "User should be test_user"
@@ -313,7 +314,7 @@ async def test_generic_api_callback_single_format():
     # Make 3 completion calls
     for i in range(3):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -344,7 +345,7 @@ async def test_generic_api_callback_single_format():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -376,7 +377,7 @@ async def test_generic_api_callback_json_array_format_explicit():
     # Make multiple completion calls
     for i in range(5):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Hello, world! {i}"}],
             mock_response="hi",
             user="test_user",
@@ -403,7 +404,7 @@ async def test_generic_api_callback_json_array_format_explicit():
         assert (
             payload_item["response_cost"] > 0
         ), "Response cost should be greater than 0"
-        assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
+        assert payload_item["model"] == "gpt-5.5", "Model should be gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -433,7 +434,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     # Make completion calls
     for i in range(2):
         await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": f"Test {i}"}],
             mock_response="response",
             user="test_user",
@@ -470,3 +471,96 @@ async def test_generic_api_callback_invalid_log_format():
             endpoint=test_endpoint,
             log_format="invalid_format",  # type: ignore  # Intentionally invalid for testing
         )
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_retries_timeout_then_succeeds():
+    """
+    Test that GenericAPILogger retries LiteLLM timeout errors when configured.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=1,
+        retry_delay=0,
+        timeout=0.2,
+    )
+
+    mock_post = AsyncMock()
+    mock_post.side_effect = [
+        litellm.Timeout(
+            message="Connection timed out",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+        type("Response", (), {"status_code": 200})(),
+    ]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "timeout-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+    first_call = mock_post.call_args_list[0][1]
+    assert first_call["url"] == test_endpoint
+    assert first_call["timeout"] == 0.2
+    assert json.loads(first_call["data"]) == [{"event": "timeout-retry"}]
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_retries_5xx_then_succeeds():
+    """
+    Test that GenericAPILogger retries transient HTTP 5xx errors when configured.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    request = httpx.Request("POST", test_endpoint)
+    response = httpx.Response(status_code=503, request=request)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [
+        httpx.HTTPStatusError(
+            "Server error",
+            request=request,
+            response=response,
+        ),
+        type("Response", (), {"status_code": 200})(),
+    ]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "5xx-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_does_not_retry_4xx():
+    """
+    Test that GenericAPILogger does not retry non-transient HTTP 4xx errors.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=2,
+        retry_delay=0,
+    )
+
+    request = httpx.Request("POST", test_endpoint)
+    response = httpx.Response(status_code=401, request=request)
+    mock_post = AsyncMock()
+    mock_post.side_effect = httpx.HTTPStatusError(
+        "Unauthorized",
+        request=request,
+        response=response,
+    )
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "4xx-no-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    mock_post.assert_called_once()
