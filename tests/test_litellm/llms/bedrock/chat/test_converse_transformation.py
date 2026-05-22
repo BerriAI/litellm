@@ -781,6 +781,7 @@ def test_transform_response_with_computer_use_tool():
         encoding=None,
     )
     # Check that the tool call is present in the returned message
+    assert result.choices[0].message.content is None
     assert result.choices[0].message.tool_calls is not None
     assert len(result.choices[0].message.tool_calls) == 1
     tool_call = result.choices[0].message.tool_calls[0]

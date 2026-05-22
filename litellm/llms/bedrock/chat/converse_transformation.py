@@ -2250,6 +2250,8 @@ class AmazonConverseConfig(BaseConfig):
         )
         if filtered_tools:
             chat_completion_message["tool_calls"] = filtered_tools
+            if chat_completion_message.get("content") == "":
+                chat_completion_message["content"] = None
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         usage = self._transform_usage(
