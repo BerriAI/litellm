@@ -241,20 +241,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             )
             return self.get_prompt_text_for_dlp(cast(List[Any], messages))
         except Exception:
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.warning(
                 "Purview DLP: failed to transform responses API input",
                 exc_info=True,
             )
             if raise_on_failure:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": (
-                            "Microsoft Purview DLP: Responses API input could "
-                            "not be transformed for DLP scanning in blocking mode"
-                        ),
-                    },
-                )
+                raise
             return None
 
     # ------------------------------------------------------------------
@@ -272,7 +264,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         Caller-supplied ``metadata[user_id_field]`` is rejected (fail closed) because
         it can impersonate another Entra user's Purview policy.
 
-        Returns ``None`` when no trusted identity exists — hooks skip the DLP check.
+        Raises ``HTTPException`` when no trusted identity exists or when only
+        caller-supplied metadata is available (fail closed).
         """
         trusted_id = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted_id:
@@ -290,10 +283,15 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 },
             )
 
-        verbose_proxy_logger.warning(
-            "Purview DLP: no trusted user_id resolved; skipping DLP check"
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "Microsoft Purview DLP: No proxy-authenticated user identity; "
+                    "bind user_id to the API key for blocking DLP"
+                ),
+            },
         )
-        return None
 
     # ------------------------------------------------------------------
     # Pre-call hook — DLP on prompts
@@ -404,18 +402,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         assembled_response = stream_chunk_builder(chunks=all_chunks)
 
-        if not isinstance(assembled_response, ModelResponse):
-            # Non-chat response (e.g. embeddings) — pass through unchanged.
-            for chunk in all_chunks:
-                yield chunk
-            return
-
         user_id = self._resolve_user_id_for_blocking(request_data, user_api_key_dict)
-        if user_id:
+
+        if isinstance(assembled_response, TextCompletionResponse):
             parts = self._completion_response_text_parts(assembled_response)
             if parts:
                 combined = "\n\n---\n\n".join(parts)
-                # Raises HTTPException(400) on violation — no chunks are yielded.
                 await self._check_content(
                     user_id=user_id,
                     text=combined,
@@ -423,8 +415,29 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                     request_data=request_data,
                     block_on_violation=True,
                 )
+            for chunk in all_chunks:
+                yield chunk
+            return
 
-        # DLP passed (or skipped) — re-yield chunks from the assembled response.
+        if not isinstance(assembled_response, ModelResponse):
+            # Non-chat response (e.g. embeddings) — pass through unchanged.
+            for chunk in all_chunks:
+                yield chunk
+            return
+
+        parts = self._completion_response_text_parts(assembled_response)
+        if parts:
+            combined = "\n\n---\n\n".join(parts)
+            # Raises HTTPException(400) on violation — no chunks are yielded.
+            await self._check_content(
+                user_id=user_id,
+                text=combined,
+                activity="downloadText",
+                request_data=request_data,
+                block_on_violation=True,
+            )
+
+        # DLP passed — re-yield chunks from the assembled chat response.
         mock_response = MockResponseIterator(model_response=assembled_response)
         async for chunk in mock_response:
             yield chunk

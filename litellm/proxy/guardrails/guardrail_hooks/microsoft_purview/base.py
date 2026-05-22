@@ -293,6 +293,10 @@ class PurviewGuardrailBase:
             return trusted
 
         metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+        uid = metadata.get("user_api_key_user_id")
+        if uid:
+            return str(uid)
+
         uid = metadata.get(self.user_id_field)
         if uid:
             return str(uid)
@@ -313,26 +317,18 @@ class PurviewGuardrailBase:
     ) -> Optional[str]:
         """Resolve user ID from trusted (proxy-authenticated) sources only.
 
-        Identical trust order to ``_resolve_user_id`` levels 1-3, but intentionally
-        omits level 4 (``metadata[user_id_field]``) because that value is supplied
-        by the caller and can be forged.  Use this in blocking modes so that
-        content is always evaluated against the actual authenticated user's Purview
-        policy, not one chosen by the caller.
+        Uses only ``UserAPIKeyAuth.user_id`` and ``UserAPIKeyAuth.end_user_id``.
+        Intentionally omits ``metadata[user_id_field]`` and
+        ``metadata["user_api_key_user_id"]`` because those can be supplied or
+        spoofed by the caller when the API key has no bound user.
 
-        Returns ``None`` when no authenticated identity is available, even if a
-        caller-supplied value exists.  Callers should then decide whether to fail
-        open (skip) or fail closed (block).
+        Returns ``None`` when no authenticated identity is available.  Blocking
+        hooks must fail closed rather than skip the DLP check.
         """
-        metadata = data.get("metadata") or data.get("litellm_metadata") or {}
-
         if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id:
             return str(user_api_key_dict.user_id)
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
-
-        uid = metadata.get("user_api_key_user_id")
-        if uid:
-            return str(uid)
 
         return None
 
