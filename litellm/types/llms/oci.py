@@ -353,7 +353,7 @@ class CohereChatRequest(BaseModel):
     safetyMode: Optional[str] = None
     citationQuality: Optional[str] = None
     maxInputTokens: Optional[int] = None
-    isStream: Optional[bool] = None
+    isStream: bool = False
     streamOptions: Optional[Dict[str, Any]] = None
 
 
