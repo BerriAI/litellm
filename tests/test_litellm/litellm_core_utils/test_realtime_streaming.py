@@ -1265,7 +1265,12 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     assert streaming._send_to_backend.await_count == 1
     sent_update = json.loads(streaming._send_to_backend.await_args_list[0].args[0])
     assert sent_update["type"] == "session.update"
-    assert sent_update["session"]["turn_detection"]["create_response"] is False
+    injected_session = sent_update["session"]
+    assert injected_session["type"] == "realtime"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"]
+        is False
+    )
 
 
 @pytest.mark.asyncio

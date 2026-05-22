@@ -674,6 +674,79 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[5]["response"]["status"] == "completed"
     assert len(responses[5]["response"]["output"]) == 1
     assert responses[5]["response"]["output"][0]["type"] == "function_call"
+    assert result["current_output_item_id"] is None
+    assert result["current_response_id"] is None
+
+
+def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
+    """After tool-call response.done, a subsequent modelTurn must emit response.created."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_123"
+
+    session_configuration_request = json.dumps(
+        {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["TEXT"]},
+        }
+    )
+
+    tool_result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_123",
+                            "name": "get_weather",
+                            "args": {"location": "San Francisco"},
+                        }
+                    ]
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    tool_response_id = tool_result["response"][0]["response"]["id"]
+    assert tool_result["current_output_item_id"] is None
+    assert tool_result["current_response_id"] is None
+
+    post_tool_result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "serverContent": {
+                    "modelTurn": {"parts": [{"text": "The weather is sunny."}]}
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request,
+            "current_output_item_id": tool_result["current_output_item_id"],
+            "current_response_id": tool_result["current_response_id"],
+            "current_conversation_id": tool_result["current_conversation_id"],
+            "current_delta_chunks": tool_result["current_delta_chunks"],
+            "current_item_chunks": tool_result["current_item_chunks"],
+            "current_delta_type": tool_result["current_delta_type"],
+        },
+    )
+
+    post_tool_events = post_tool_result["response"]
+    assert post_tool_events[0]["type"] == "response.created"
+    assert post_tool_events[0]["response"]["id"] != tool_response_id
+    assert post_tool_result["current_response_id"] == post_tool_events[0]["response"]["id"]
 
 
 def test_gemini_function_call_output_includes_name():

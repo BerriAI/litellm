@@ -145,14 +145,14 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         setup_config = self.map_openai_params(
             optional_params={}, non_default_params=session_params
         )
-        
+
         # Use full Vertex AI model path
         setup_config["model"] = (
             f"projects/{self._project}"
             f"/locations/{self._location}"
             f"/publishers/google/models/{model}"
         )
-        
+
         # Add Vertex AI specific defaults if not provided
         generation_config = setup_config.setdefault("generationConfig", {})
         generation_config.setdefault("responseModalities", ["AUDIO"])
@@ -167,7 +167,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         )
         setup_config.setdefault("inputAudioTranscription", {})
         setup_config.setdefault("outputAudioTranscription", {})
-        
+
         return setup_config
 
     def transform_realtime_request(
@@ -178,12 +178,12 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     ) -> List[str]:
         """
         Translate OpenAI realtime client messages to Vertex AI format.
-        
+
         Handles session.update by sending setup with proper Vertex AI model path.
         """
         json_message = json.loads(message)
         msg_type = json_message.get("type")
-        
+
         # Handle session.update with Vertex AI specific model path
         if msg_type == "session.update":
             if session_configuration_request is None:
@@ -192,7 +192,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     model, json_message["session"]
                 )
                 gemini_setup_msg = json.dumps({"setup": setup_config})
-                
+
                 verbose_logger.debug(
                     "Vertex AI Realtime: Sending initial setup with tools to backend"
                 )
@@ -203,7 +203,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "Vertex AI Realtime: Ignoring session.update (setup already sent)"
                 )
                 return []
-        
+
         # For other message types, use parent's logic
         return super().transform_realtime_request(
             message, model, session_configuration_request
