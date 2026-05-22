@@ -197,12 +197,47 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 content["image_url"]["url"] = f"{url}#transform=inline"
         return content
 
+    @staticmethod
+    def _sanitize_schema(schema: dict) -> dict:
+        """Remove fields unsupported by Fireworks AI from a JSON Schema object.
+
+        Strips 'title' everywhere and 'default' when its value is None,
+        recursing into properties, items, anyOf, allOf, oneOf, and $defs.
+        """
+        schema.pop("title", None)
+        if "default" in schema and schema["default"] is None:
+            schema.pop("default")
+
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            for prop_schema in schema["properties"].values():
+                if isinstance(prop_schema, dict):
+                    FireworksAIConfig._sanitize_schema(prop_schema)
+
+        if "items" in schema and isinstance(schema["items"], dict):
+            FireworksAIConfig._sanitize_schema(schema["items"])
+
+        for keyword in ("anyOf", "allOf", "oneOf"):
+            if keyword in schema and isinstance(schema[keyword], list):
+                for sub_schema in schema[keyword]:
+                    if isinstance(sub_schema, dict):
+                        FireworksAIConfig._sanitize_schema(sub_schema)
+
+        if "$defs" in schema and isinstance(schema["$defs"], dict):
+            for def_schema in schema["$defs"].values():
+                if isinstance(def_schema, dict):
+                    FireworksAIConfig._sanitize_schema(def_schema)
+
+        return schema
+
     def _transform_tools(
         self, tools: List[OpenAIChatCompletionToolParam]
     ) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
             if tool.get("type") == "function":
                 tool["function"].pop("strict", None)
+                function_params = tool["function"].get("parameters")
+                if isinstance(function_params, dict):
+                    self._sanitize_schema(function_params)
         return tools
 
     def _transform_messages_helper(
