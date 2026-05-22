@@ -457,6 +457,95 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         )
 
 
+def test_get_model_from_request_ignores_vector_store_id_on_vector_store_routes():
+    """Regression test for LIT-3244.
+
+    When a team has a restricted model list and a request targets a vector
+    store route, the model encoded inside the vector_store_id (used for
+    provider routing) must NOT be surfaced as a candidate for the team model
+    access check.  Vector store access is already controlled separately via
+    allowed_vector_store_indexes / assert_user_can_access_vector_store_id.
+    """
+    from litellm.llms.base_llm.managed_resources.utils import (
+        encode_unified_id,
+        generate_unified_id_string,
+    )
+
+    # Build a unified vector_store_id that encodes a model the team does NOT
+    # have in its allowlist.
+    unified_str = generate_unified_id_string(
+        resource_type="vector_store",
+        unified_uuid="abc-123",
+        target_model_names=["restricted-embedding-model"],
+        provider_resource_id="vs_xyz",
+        model_id="restricted-embedding-model",
+    )
+    vector_store_id = encode_unified_id(unified_str)
+
+    # GET /v1/vector_stores/{id}/files  — file-listing route
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": vector_store_id},
+            route="/v1/vector_stores/abc-123/files",
+        )
+        is None
+    ), "vector_store_id model must not be surfaced on vector store file routes"
+
+    # POST /v1/vector_stores/{id}/files  — same path, different method (same route string)
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": vector_store_id},
+            route="/v1/vector_stores/abc-123/files",
+        )
+        is None
+    ), "vector_store_id model must not be surfaced on vector store file create routes"
+
+    # GET /v1/vector_stores/{id}/files/{file_id} — file-retrieve route
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": vector_store_id},
+            route="/v1/vector_stores/abc-123/files/file-456",
+        )
+        is None
+    ), "vector_store_id model must not be surfaced on vector store file retrieve routes"
+
+    # GET /v1/vector_stores/{id} — vector store retrieve (no /files suffix)
+    # The model is still not extracted because all /vector_stores routes skip
+    # vector_store_id model extraction.
+    assert (
+        get_model_from_request(
+            request_data={"vector_store_id": vector_store_id},
+            route="/v1/vector_stores/abc-123",
+        )
+        is None
+    ), "vector_store_id model must not be surfaced on vector store management routes"
+
+
+def test_get_model_from_request_still_extracts_file_id_model_on_non_vector_store_routes():
+    """Sanity check: model extraction from file_id continues to work on /files routes.
+
+    This ensures the LIT-3244 fix for vector_store_id does not regress the
+    existing behaviour for other managed-resource ID fields.
+    """
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    file_id = encode_file_id_with_model(
+        file_id="file-provider-id",
+        model="restricted-model",
+    )
+
+    # file_id model is still extracted for /files routes
+    assert (
+        get_model_from_request(
+            request_data={"file_id": file_id},
+            route="/v1/files/file-provider-id",
+        )
+        == "restricted-model"
+    ), "file_id model extraction must still work on /files routes"
+
+
 def test_abbreviate_api_key():
     assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
 

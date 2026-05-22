@@ -1323,6 +1323,18 @@ def _extract_model_candidates_from_request(
             )
 
         for field in _MODEL_ROUTING_ID_FIELDS:
+            # Skip vector_store_id model extraction for vector store routes.
+            # Vector store access is enforced separately via
+            # allowed_vector_store_indexes / assert_user_can_access_vector_store_id.
+            # The model embedded in vector_store_id is for provider routing only
+            # (so LiteLLM knows which backend to call) and must not be checked
+            # against the team's model allowlist — doing so incorrectly blocks
+            # teams that have vector store access but don't hold an explicit
+            # allowlist entry for the underlying routing model.
+            if field == "vector_store_id" and _route_matches_any_marker(
+                route=route, markers=("/vector_stores",)
+            ):
+                continue
             _append_model_candidates(
                 candidates,
                 _extract_models_from_managed_resource_id(
