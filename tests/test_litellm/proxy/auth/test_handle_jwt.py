@@ -2776,7 +2776,7 @@ async def test_auth_builder_reconciles_jwt_email_to_canonical_uuid():
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
         patch.object(
             JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ) as mock_check_rbac,
+        ),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
@@ -2854,7 +2854,7 @@ async def test_auth_builder_reconciles_sso_external_id_to_canonical_uuid():
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
         patch.object(
             JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ) as mock_check_rbac,
+        ),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
@@ -2932,7 +2932,7 @@ async def test_auth_builder_no_reconciliation_when_jwt_user_id_already_canonical
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
         patch.object(
             JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ) as mock_check_rbac,
+        ),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
