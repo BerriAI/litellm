@@ -2147,6 +2147,27 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(self):
+        """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
+
+        The old fix used ``break`` after the first matched prefix, so
+        ``bedrock/invoke/arn:...`` would only strip ``bedrock/``, leaving
+        ``invoke/arn:...``.  The subsequent ``.replace('invoke/', '')`` call
+        then returned the bare unencoded ARN, reproducing the same
+        malformed-URL bug the fix aimed to prevent.
+
+        strip_bedrock_routing_prefix() has no break and handles this correctly.
+        """
+        model_id = self._call(f"bedrock/invoke/{self.ARN}")
+        assert "invoke/" not in model_id, (
+            f"'invoke/' prefix not stripped; got: {model_id}"
+        )
+        assert "bedrock/" not in model_id, (
+            f"'bedrock/' prefix not stripped; got: {model_id}"
+        )
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
     def test_bare_arn_is_encoded(self):
         """Direct ARN without routing prefix must also be URL-encoded."""
         model_id = self._call(self.ARN)
