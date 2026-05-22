@@ -131,4 +131,31 @@ test.describe("Proxy Admin - Teams", () => {
 
     await expect(page.getByText(/updated|success/i).first()).toBeVisible({ timeout: 10_000 });
   });
+
+  test("Edit team model selection", async ({ page }) => {
+    await navigateToPage(page, Page.Teams);
+    await dismissFeedbackPopup(page);
+
+    await clickTeamId(page, E2E_TEAM_CRUD_ID);
+
+    await page.getByRole("tab", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Edit Settings" }).click();
+
+    // E2E Team CRUD seeds with {fake-openai-gpt-4, fake-anthropic-claude}.
+    // Remove the anthropic tag — other tests against this team use "All Team
+    // Models" so they pick up whatever remains.
+    const modelsSelect = page.locator("[data-testid='models-select']");
+    await expect(modelsSelect).toBeVisible({ timeout: 10_000 });
+
+    const anthropicTag = modelsSelect
+      .locator(".ant-select-selection-item")
+      .filter({ hasText: "fake-anthropic-claude" });
+    await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
+    await anthropicTag.locator(".ant-select-selection-item-remove").click();
+
+    await page.getByRole("button", { name: "Save Changes" }).click();
+
+    await expect(page.getByText(/Team settings updated|updated successfully/i).first())
+      .toBeVisible({ timeout: 10_000 });
+  });
 });
