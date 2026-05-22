@@ -583,6 +583,7 @@ cloudflare_models: Set = set()
 codestral_models: Set = set()
 friendliai_models: Set = set()
 featherless_ai_models: Set = set()
+wafer_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
@@ -843,6 +844,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gradient_ai_models.add(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.add(key)
+        elif value.get("litellm_provider") == "wafer":
+            wafer_models.add(key)
         elif value.get("litellm_provider") == "deepgram":
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
@@ -990,6 +993,7 @@ model_list = list(
     | gradient_ai_models
     | llama_models
     | featherless_ai_models
+    | wafer_models
     | nscale_models
     | deepgram_models
     | elevenlabs_models
@@ -1089,6 +1093,7 @@ models_by_provider: dict = {
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
+    "wafer": wafer_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
@@ -1814,6 +1819,7 @@ if TYPE_CHECKING:
     from .llms.featherless_ai.chat.transformation import (
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
+    from .llms.wafer.chat.transformation import WaferConfig as WaferConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
     from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig

@@ -610,6 +610,7 @@ LITELLM_CHAT_PROVIDERS = [
     "novita",
     "meta_llama",
     "featherless_ai",
+    "wafer",
     "nscale",
     "nebius",
     "dashscope",
@@ -765,6 +766,7 @@ openai_compatible_endpoints: List = [
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
+    "api.wafer.ai/v1",
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -825,6 +827,7 @@ openai_compatible_providers: List = [
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
+    "wafer",
     "nscale",
     "nebius",
     "dashscope",
@@ -850,6 +853,7 @@ openai_text_completion_compatible_providers: List = (
         "meta_llama",
         "llamafile",
         "featherless_ai",
+        "wafer",
         "nebius",
         "dashscope",
         "moonshot",
@@ -1001,6 +1005,18 @@ featherless_ai_models: set = set(
         "mistralai/Mistral-Small-24B-Instruct-2501",
         "mistralai/Mistral-Nemo-Instruct-2407",
         "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+    ]
+)
+
+wafer_models: set = set(
+    [
+        "GLM-5.1",
+        "Qwen3.5-397B-A17B",
+        "Qwen3.6-35B-A3B",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "qwen3.6-max-preview",
+        "Kimi-K2.6",
     ]
 )
 

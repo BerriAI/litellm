@@ -6473,6 +6473,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("FEATHERLESS_AI_API_KEY")
+        elif custom_llm_provider == "wafer":
+            if "WAFER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("WAFER_API_KEY")
         elif custom_llm_provider == "gemini":
             if ("GOOGLE_API_KEY" in os.environ) or ("GEMINI_API_KEY" in os.environ):
                 keys_in_environment = True
@@ -8226,6 +8231,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.WAFER: (lambda: litellm.WaferConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),

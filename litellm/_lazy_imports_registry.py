@@ -252,6 +252,7 @@ LLM_CONFIG_NAMES = (
     "NvidiaNimConfig",
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
+    "WaferConfig",
     "CerebrasConfig",
     "BasetenConfig",
     "SambanovaConfig",
@@ -996,6 +997,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "FeatherlessAIConfig": (
         ".llms.featherless_ai.chat.transformation",
         "FeatherlessAIConfig",
+    ),
+    "WaferConfig": (
+        ".llms.wafer.chat.transformation",
+        "WaferConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
