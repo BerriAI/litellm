@@ -380,11 +380,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             f"Gemini Realtime: Transforming function_call_output for call_id={call_id}"
         )
 
-        # Parse the output to get the result
+        # Parse the output to get the result. Gemini's
+        # functionResponses[].response field is a Struct, so it must be a
+        # dict; wrap any non-dict (primitives, lists, invalid JSON) under a
+        # `result` key.
         try:
-            output_dict = json.loads(output) if isinstance(output, str) else output
+            parsed_output = json.loads(output) if isinstance(output, str) else output
         except json.JSONDecodeError:
-            output_dict = {"result": output}
+            parsed_output = output
+        output_dict = (
+            parsed_output
+            if isinstance(parsed_output, dict)
+            else {"result": parsed_output}
+        )
 
         # Look up the function name from stored mapping and remove the
         # entry to prevent unbounded growth in long-running sessions.
@@ -1286,7 +1294,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                     )
 
-                # response.done - close the response so clients can submit tool results
+                # response.done - close the response so clients can submit tool results.
+                # Include an empty usage block for parity with the non-tool-call
+                # response.done path; OpenAI-compatible clients expect `usage`
+                # to always be present on response.done events.
+                tool_call_responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                    get_empty_usage(),
+                )
                 returned_message.append(
                     OpenAIRealtimeDoneEvent(
                         type="response.done",
@@ -1308,6 +1322,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 for te in tool_call_events
                             ],
                             conversation_id=current_conversation_id,
+                            usage=tool_call_responses_api_usage.model_dump(),
                         ),
                     )
                 )
