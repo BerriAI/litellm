@@ -2294,6 +2294,52 @@ class TestTokenIdPromptHandling:
         assert result is data
         assert result["prompt"] == empty_prompt
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_prompt",
+        [
+            [[1, 2, 3]],
+            [[1, 2], [3, 4]],
+            ["benign text", [99, 100]],
+        ],
+    )
+    async def test_nested_token_id_prompt_raises_in_blocking_mode(self, raw_prompt):
+        """Nested/mixed token-id prompts must also be rejected in blocking pre_call mode."""
+        guardrail = _make_guardrail()
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="u1"),
+                    cache=None,
+                    data={"prompt": raw_prompt},
+                    call_type="text_completion",
+                )
+
+            mock_check.assert_not_called()
+            assert exc_info.value.status_code == 400
+            assert "Token-id" in str(exc_info.value.detail)
+
+
+class TestIsTokenIdPrompt:
+    @pytest.mark.parametrize(
+        "prompt,expected",
+        [
+            ([1, 2, 3], True),
+            ([[1, 2, 3]], True),
+            ([[1, 2], [3, 4]], True),
+            (["hi", [1, 2]], True),
+            (["a", "b"], False),
+            ([], False),
+            ("hello", False),
+            (None, False),
+        ],
+    )
+    def test_is_token_id_prompt(self, prompt, expected):
+        assert PurviewGuardrailBase.is_token_id_prompt(prompt) is expected
+
 
 # ---------------------------------------------------------------
 # Streaming iterator hook

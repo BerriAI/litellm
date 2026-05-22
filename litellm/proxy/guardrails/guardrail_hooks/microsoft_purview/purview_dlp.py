@@ -422,16 +422,12 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             prompt_text = self._responses_api_input_to_str(data, raise_on_failure=True)
         elif call_type in ("text_completion", "atext_completion"):
             raw_prompt = data.get("prompt")
-            prompt_text = self.completion_prompt_to_str(raw_prompt)
-            # Only reject true token-id prompts (list of ints with no plaintext
-            # for Purview to evaluate).  Empty/whitespace-only strings also yield
-            # ``prompt_text is None`` but contain no sensitive data and should
-            # pass through harmlessly.
-            if (
-                isinstance(raw_prompt, list)
-                and raw_prompt
-                and all(isinstance(x, int) for x in raw_prompt)
-            ):
+            # Reject every token-id prompt shape Purview cannot evaluate —
+            # flat ``list[int]`` (single prompt), ``list[list[int]]`` (multi-prompt
+            # batches), and mixed lists that include any token-id sub-array.
+            # Empty/whitespace-only strings also yield ``prompt_text is None`` but
+            # contain no sensitive data and pass through harmlessly below.
+            if self.is_token_id_prompt(raw_prompt):
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -441,6 +437,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                         ),
                     },
                 )
+            prompt_text = self.completion_prompt_to_str(raw_prompt)
         else:
             messages: Optional[List] = data.get("messages")
             if messages:

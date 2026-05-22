@@ -379,6 +379,24 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def is_token_id_prompt(prompt: Any) -> bool:
+        """Return True if ``prompt`` carries OpenAI completions token ids.
+
+        Covers every list shape that ``completion_prompt_to_str`` cannot decode
+        for Purview, including flat ``list[int]`` (single token-id prompt),
+        ``list[list[int]]`` (multi-prompt token-id batches), and mixed lists
+        that include any token-id sub-array.
+        """
+        if not isinstance(prompt, list) or not prompt:
+            return False
+        for x in prompt:
+            if isinstance(x, int):
+                return True
+            if isinstance(x, list) and x and any(isinstance(y, int) for y in x):
+                return True
+        return False
+
+    @staticmethod
     def completion_prompt_to_str(prompt: Any) -> Optional[str]:
         """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
 
