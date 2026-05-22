@@ -787,6 +787,65 @@ async def oauth_protected_resource_mcp(
 """
 
 
+def _delegate_auth_authorization_server_response(
+    mcp_server: MCPServer,
+) -> Optional[dict]:
+    """
+    Build authorization-server metadata for an MCP server configured with
+    ``delegate_auth_to_upstream=True``.
+
+    In delegate-auth mode the end-user authenticates directly with the
+    upstream IdP (PKCE in their MCP client) and LiteLLM is just a network
+    relay. Advertising LiteLLM as the issuer would point the client at
+    LiteLLM's own ``/authorize`` and ``/token`` routes, which don't speak
+    OAuth — so the client either dead-ends or mints a token tied to the
+    wrong issuer. Re-advertise the upstream values that were resolved at
+    registration time (``MCPServer.authorization_url`` /
+    ``token_url`` / ``registration_url`` / ``scopes``) so spec-conforming
+    MCP clients (OpenWebUI, Cursor, mcp-inspector) can drive the flow
+    against the real authorization server.
+
+    Returns ``None`` when the upstream metadata wasn't resolved at
+    registration (network failure, server defined without ``auth_type``,
+    etc.) so the caller falls back to the LiteLLM-issuer response.
+    """
+    if not mcp_server.delegate_auth_to_upstream:
+        return None
+    if mcp_server.auth_type != MCPAuth.oauth2:
+        return None
+
+    authorization_endpoint = mcp_server.authorization_url
+    token_endpoint = mcp_server.token_url
+    if not authorization_endpoint or not token_endpoint:
+        verbose_logger.warning(
+            "MCP delegate-auth: server %s has no upstream authorization/token "
+            "URL stored; falling back to LiteLLM-issuer discovery, which the "
+            "upstream IdP cannot honor. Re-register the server so OAuth "
+            "discovery can populate these fields.",
+            mcp_server.name,
+        )
+        return None
+
+    # Issuer is the upstream authorization server's origin per RFC 8414.
+    parsed = urlparse(authorization_endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    issuer = f"{parsed.scheme}://{parsed.netloc}"
+
+    response: Dict[str, Any] = {
+        "issuer": issuer,
+        "authorization_endpoint": authorization_endpoint,
+        "token_endpoint": token_endpoint,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": mcp_server.scopes or [],
+    }
+    if mcp_server.registration_url:
+        response["registration_endpoint"] = mcp_server.registration_url
+    return response
+
+
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: Optional[str],
@@ -814,6 +873,17 @@ def _build_oauth_authorization_server_response(
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
+
+    if mcp_server is not None:
+        delegated = _delegate_auth_authorization_server_response(mcp_server)
+        if delegated is not None:
+            return delegated
+
     authorization_endpoint = (
         f"{request_base_url}/{mcp_server_name}/authorize"
         if mcp_server_name
@@ -824,12 +894,6 @@ def _build_oauth_authorization_server_response(
         if mcp_server_name
         else f"{request_base_url}/token"
     )
-
-    mcp_server: Optional[MCPServer] = None
-    if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-            mcp_server_name, client_ip=client_ip
-        )
 
     return {
         "issuer": request_base_url,  # point to your proxy
