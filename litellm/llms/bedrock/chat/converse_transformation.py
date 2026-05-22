@@ -5,6 +5,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import json
 import re
+import ast
 import time
 import types
 from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
@@ -1860,6 +1861,78 @@ class AmazonConverseConfig(BaseConfig):
                 function=Function(
                     name=resolved_function_name,
                     arguments=json.dumps(function_args),
+                )
+            )
+
+        tool_call_match = re.search(
+            r"<tool_call>\s*(.*?)\s*</tool_call>",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if tool_call_match is not None:
+            parsed_tool_call = self._parse_json_string_if_possible(
+                tool_call_match.group(1)
+            )
+            if not isinstance(parsed_tool_call, dict):
+                return None
+
+            resolved_tool_name = self._resolve_nexus_tool_name(
+                cast(Optional[str], parsed_tool_call.get("name")), tool_call_names
+            )
+            if resolved_tool_name is None:
+                return None
+
+            parsed_tool_input: Any = parsed_tool_call.get(
+                "arguments", parsed_tool_call.get("input", {})
+            )
+            if isinstance(parsed_tool_input, str):
+                parsed_tool_input = self._parse_json_string_if_possible(
+                    parsed_tool_input
+                )
+            if not isinstance(parsed_tool_input, dict):
+                return None
+
+            return ChatCompletionMessageToolCall(
+                function=Function(
+                    name=resolved_tool_name,
+                    arguments=json.dumps(parsed_tool_input),
+                )
+            )
+
+        direct_function_call_match = re.match(
+            r"^\s*([A-Za-z0-9_.-]+)\s*\((.*)\)\s*$",
+            content,
+            flags=re.DOTALL,
+        )
+        if direct_function_call_match is not None:
+            resolved_tool_name = self._resolve_nexus_tool_name(
+                direct_function_call_match.group(1), tool_call_names
+            )
+            if resolved_tool_name is None:
+                return None
+
+            raw_tool_input = direct_function_call_match.group(2).strip()
+            parsed_tool_input: Any = {}
+            if raw_tool_input:
+                if raw_tool_input.startswith("{") and raw_tool_input.endswith("}"):
+                    parsed_tool_input = self._parse_json_string_if_possible(
+                        raw_tool_input
+                    )
+                else:
+                    parsed_tool_input = {}
+                    for key, value in re.findall(
+                        r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')",
+                        raw_tool_input,
+                    ):
+                        parsed_tool_input[key] = ast.literal_eval(value)
+
+            if not isinstance(parsed_tool_input, dict):
+                return None
+
+            return ChatCompletionMessageToolCall(
+                function=Function(
+                    name=resolved_tool_name,
+                    arguments=json.dumps(parsed_tool_input),
                 )
             )
 

@@ -329,6 +329,88 @@ def test_apply_tool_call_transformation_if_needed_with_nexus_tool_use_xml_format
     )
 
 
+def test_apply_tool_call_transformation_if_needed_with_nexus_tool_call_json_format():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</tool_call>',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content is None
+    assert transformed_finish_reason == "tool_calls"
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
+def test_apply_tool_call_transformation_if_needed_with_direct_function_call_format():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    message = Message(
+        role="assistant",
+        content='read_file(path="README.md")',
+    )
+
+    transformed_message, transformed_finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message=message,
+            tools=tools,
+            initial_finish_reason="stop",
+        )
+    )
+
+    assert transformed_message.content is None
+    assert transformed_finish_reason == "tool_calls"
+    assert transformed_message.tool_calls is not None
+    assert transformed_message.tool_calls[0].function.name == "read_file"
+    assert transformed_message.tool_calls[0].function.arguments == json.dumps(
+        {"path": "README.md"}
+    )
+
+
 def test_apply_tool_call_transformation_if_needed_ignores_unknown_nexus_tool_name():
     from litellm.types.utils import Message
 
