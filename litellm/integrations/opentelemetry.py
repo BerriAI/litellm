@@ -907,7 +907,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        # Normalize any list elements in scope to tuples so the composed key
+        # is always hashable. guardrail_mode is stored as a list when multiple
+        # lifecycle hooks are configured (e.g. ["pre_call", "post_call"]), and
+        # using a raw list as a dict key raises TypeError: unhashable type: list.
+        hashable_scope = tuple(tuple(s) if isinstance(s, list) else s for s in scope)
+        dedupe_key = (self.__class__.__name__, id(self), *hashable_scope)
         if spans_logged.get(dedupe_key) is True:
             return False
 

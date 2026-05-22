@@ -4604,6 +4604,44 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "success"))
 
+    def test_emit_once_list_guardrail_mode_does_not_raise(self):
+        """Regression test for LIT-3299.
+
+        When guardrail_mode is a list (e.g. ["pre_call", "post_call"]) it must
+        not raise ``TypeError: unhashable type: list`` — the list should be
+        normalised to a tuple before being used as part of the dict key.
+        """
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        list_mode = ["pre_call", "post_call"]
+        # Must not raise TypeError
+        result_first = otel._emit_once(
+            kwargs, "guardrail", "block-code", 1.0, list_mode
+        )
+        self.assertTrue(result_first, "First call with list mode must return True")
+        result_second = otel._emit_once(
+            kwargs, "guardrail", "block-code", 1.0, list_mode
+        )
+        self.assertFalse(
+            result_second,
+            "Second call with identical list mode must be deduped (return False)",
+        )
+
+    def test_emit_once_list_mode_dedupes_against_equivalent_tuple(self):
+        """A list-valued scope and the equivalent tuple must share the same
+        dedupe slot (both representations refer to the same guardrail entry)."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        list_mode = ["pre_call", "post_call"]
+        tuple_mode = ("pre_call", "post_call")
+        # First call with list
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g1", 1.0, list_mode))
+        # Equivalent tuple call must be deduped
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, tuple_mode),
+            "Equivalent tuple form must share the dedupe slot of the list form",
+        )
+
     def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
         """Sync + async callback paths firing for the same kwargs must
         result in exactly one litellm_request span."""
