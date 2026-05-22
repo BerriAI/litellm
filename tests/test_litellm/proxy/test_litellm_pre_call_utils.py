@@ -13,6 +13,8 @@ from starlette.datastructures import Headers
 import litellm
 from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
+    CALLBACK_VAR_MASK,
+    PUBLIC_CALLBACK_VARS,
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
     _apply_credential_overrides_from_model_config,
@@ -27,6 +29,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    redact_callback_vars,
+    redact_metadata_for_response,
+    restore_masked_callback_vars,
 )
 from litellm.types.utils import CredentialItem
 
@@ -4296,3 +4301,189 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
     router.get_deployment_by_model_group_name.assert_not_called()
+
+
+class TestCallbackMetadataRedaction:
+    """Verifies that credential-bearing callback_vars fields are masked while
+    public fields pass through, and that update payloads using the mask
+    sentinel preserve stored values."""
+
+    def test_redact_callback_vars_masks_secrets_and_unknowns_preserves_public(self):
+        # slack_webhook_url is bearer-token-bearing despite the "_url" suffix;
+        # newintegration_api_key exercises deny-by-default for future fields.
+        callback_vars = {
+            "langfuse_secret_key": "sk-real",
+            "langsmith_api_key": "ls-real",
+            "slack_webhook_url": "https://hooks.slack.com/services/T0/B0/abc",
+            "gcs_path_service_account": "/etc/secrets/sa.json",
+            "newintegration_api_key": "future-secret",
+            "langfuse_host": "https://cloud.langfuse.com",
+            "langsmith_project": "my-project",
+        }
+        snapshot = dict(callback_vars)
+        result = redact_callback_vars(callback_vars)
+
+        assert result == {
+            "langfuse_secret_key": CALLBACK_VAR_MASK,
+            "langsmith_api_key": CALLBACK_VAR_MASK,
+            "slack_webhook_url": CALLBACK_VAR_MASK,
+            "gcs_path_service_account": CALLBACK_VAR_MASK,
+            "newintegration_api_key": CALLBACK_VAR_MASK,
+            "langfuse_host": "https://cloud.langfuse.com",
+            "langsmith_project": "my-project",
+        }
+        assert callback_vars == snapshot  # immutability
+
+    def test_redact_metadata_for_response_redacts_callback_vars_only(self):
+        metadata = {
+            "team_alias": "my-team",
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {
+                        "langfuse_secret_key": "sk-real",
+                        "langfuse_host": "https://h1",
+                    },
+                },
+                {
+                    "callback_name": "langsmith",
+                    "callback_vars": {
+                        "langsmith_api_key": "ls-real",
+                        "langsmith_project": "my-project",
+                    },
+                },
+            ],
+        }
+        snapshot = json.loads(json.dumps(metadata))
+        result = redact_metadata_for_response(metadata)
+
+        assert result["team_alias"] == "my-team"
+        first, second = result["logging"]
+        assert first["callback_vars"]["langfuse_secret_key"] == CALLBACK_VAR_MASK
+        assert first["callback_vars"]["langfuse_host"] == "https://h1"
+        assert second["callback_vars"]["langsmith_api_key"] == CALLBACK_VAR_MASK
+        assert second["callback_vars"]["langsmith_project"] == "my-project"
+        assert metadata == snapshot  # immutability
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            None,
+            "not-a-dict",
+            [],
+            {"foo": "bar"},
+            {"logging": []},
+            {"logging": "not-a-list"},
+            {"logging": ["not-a-dict", None, 42]},
+            {"logging": [{"callback_name": "langfuse"}]},  # entry w/o callback_vars
+        ],
+    )
+    def test_redact_metadata_for_response_passes_through_malformed_inputs(
+        self, metadata
+    ):
+        assert redact_metadata_for_response(metadata) == metadata
+
+    def test_restore_masked_callback_vars_substitutes_existing_for_mask(self):
+        existing = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {
+                        "langfuse_secret_key": "sk-stored-original",
+                        "langfuse_host": "https://old-host",
+                    },
+                }
+            ]
+        }
+        incoming = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {
+                        "langfuse_secret_key": CALLBACK_VAR_MASK,
+                        "langfuse_host": "https://new-host",
+                        "langfuse_public_key": "pk-newly-added",
+                    },
+                }
+            ]
+        }
+        existing_snapshot = json.loads(json.dumps(existing))
+        incoming_snapshot = json.loads(json.dumps(incoming))
+        result = restore_masked_callback_vars(incoming, existing)
+
+        restored_vars = result["logging"][0]["callback_vars"]
+        assert restored_vars["langfuse_secret_key"] == "sk-stored-original"
+        assert restored_vars["langfuse_host"] == "https://new-host"
+        assert restored_vars["langfuse_public_key"] == "pk-newly-added"
+        assert existing == existing_snapshot  # immutability
+        assert incoming == incoming_snapshot
+
+    def test_restore_masked_callback_vars_uses_positional_match_for_duplicate_names(
+        self,
+    ):
+        # Two logging entries with the same callback_name — positional
+        # matching keeps each entry's masked value mapped to its own
+        # stored credential, instead of collapsing both to the second.
+        existing = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": "sk-entry-0"},
+                },
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": "sk-entry-1"},
+                },
+            ]
+        }
+        incoming = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": CALLBACK_VAR_MASK},
+                },
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": CALLBACK_VAR_MASK},
+                },
+            ]
+        }
+        result = restore_masked_callback_vars(incoming, existing)
+        assert (
+            result["logging"][0]["callback_vars"]["langfuse_secret_key"] == "sk-entry-0"
+        )
+        assert (
+            result["logging"][1]["callback_vars"]["langfuse_secret_key"] == "sk-entry-1"
+        )
+
+    def test_restore_masked_callback_vars_keeps_mask_when_no_existing_value(self):
+        # If the existing metadata has no stored value for a masked field,
+        # the mask is left in place so a downstream check can flag it.
+        existing = {"logging": [{"callback_name": "langfuse", "callback_vars": {}}]}
+        incoming = {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_vars": {"langfuse_secret_key": CALLBACK_VAR_MASK},
+                }
+            ]
+        }
+        result = restore_masked_callback_vars(incoming, existing)
+        assert (
+            result["logging"][0]["callback_vars"]["langfuse_secret_key"]
+            == CALLBACK_VAR_MASK
+        )
+
+    @pytest.mark.parametrize(
+        "incoming",
+        [
+            None,
+            "x",
+            {"foo": "bar"},
+            {"logging": "not-a-list"},
+        ],
+    )
+    def test_restore_masked_callback_vars_passes_through_malformed_inputs(
+        self, incoming
+    ):
+        assert restore_masked_callback_vars(incoming, {"logging": []}) == incoming

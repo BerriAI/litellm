@@ -74,6 +74,10 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.litellm_pre_call_utils import (
+    redact_metadata_for_response,
+    restore_masked_callback_vars,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
@@ -925,6 +929,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         )
     )
 
+    response.metadata = redact_metadata_for_response(response.metadata)
     return response
 
 
@@ -1709,6 +1714,10 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    if "metadata" in non_default_values:
+        non_default_values["metadata"] = restore_masked_callback_vars(
+            non_default_values["metadata"], existing_metadata
+        )
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -2097,9 +2106,7 @@ async def _process_single_key_update(
     elif hasattr(updated_key_info, "dict"):
         updated_key_info = updated_key_info.dict()
 
-    updated_key_info.pop("token", None)
-
-    return updated_key_info
+    return _prepare_key_row_for_response(updated_key_info)
 
 
 async def _validate_mcp_servers_for_key_update(
@@ -2539,7 +2546,13 @@ async def update_key_fn(  # noqa: PLR0915
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        response_data = response["data"]
+        if hasattr(response_data, "model_dump"):
+            response_data = response_data.model_dump()
+        elif hasattr(response_data, "dict"):
+            response_data = response_data.dict()
+        response_data = _prepare_key_row_for_response(response_data)
+        return {"key": key, **response_data}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -3140,6 +3153,18 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+def _prepare_key_row_for_response(key_row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Single chokepoint for shaping a verification-token row before it leaves
+    a /key/* endpoint or audit log. Drops the hashed token field and masks
+    credential-bearing callback_vars inside metadata.logging."""
+    key_row_dict.pop("token", None)
+    if "metadata" in key_row_dict:
+        key_row_dict["metadata"] = redact_metadata_for_response(
+            key_row_dict.get("metadata")
+        )
+    return key_row_dict
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3211,8 +3236,7 @@ async def info_key_fn_v2(
                 k_dict = k.model_dump()
             except Exception:
                 k_dict = k.dict()
-            k_dict.pop("token", None)
-            filtered_key_info.append(k_dict)
+            filtered_key_info.append(_prepare_key_row_for_response(k_dict))
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
@@ -3293,10 +3317,10 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
-        key_info.pop("token")
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
+        key_info = _prepare_key_row_for_response(key_info)
 
         return {"key": key, "info": key_info}
     except Exception as e:

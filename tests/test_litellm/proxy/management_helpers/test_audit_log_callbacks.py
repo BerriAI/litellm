@@ -18,8 +18,10 @@ from litellm.proxy.management_helpers.audit_logs import (
     _audit_log_task_done_callback,
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
+    _redact_callback_vars_in_audit_payload,
     create_audit_log_for_update,
 )
+from litellm.proxy.litellm_pre_call_utils import CALLBACK_VAR_MASK
 from litellm.types.utils import StandardAuditLogPayload
 
 
@@ -469,3 +471,73 @@ class TestS3AuditCallbackParamsDecoupling:
             assert second is not None
             assert id(second) != id(first)
             assert second.s3_bucket_name == "second"
+
+
+class TestRedactCallbackVarsInAuditPayload:
+    """Audit-log payloads carry stringified key/team rows. Verify the
+    redactor masks credential callback_vars across both single-encoded
+    ({...}) and double-encoded (json.dumps(model.json(...))) shapes."""
+
+    def _row_with_secret(self):
+        return {
+            "team_id": "t1",
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_vars": {
+                            "langfuse_secret_key": "sk-real",
+                            "langfuse_host": "https://h",
+                        },
+                    }
+                ]
+            },
+        }
+
+    def test_redacts_single_encoded_payload(self):
+        payload = json.dumps(self._row_with_secret())
+        result = _redact_callback_vars_in_audit_payload(payload)
+        parsed = json.loads(result)
+        vars_out = parsed["metadata"]["logging"][0]["callback_vars"]
+        assert vars_out["langfuse_secret_key"] == CALLBACK_VAR_MASK
+        assert vars_out["langfuse_host"] == "https://h"
+
+    def test_redacts_double_encoded_payload(self):
+        # Simulates json.dumps(model.json(...), default=str) — what
+        # new_team, _create_team_update_audit_log, async_key_updated_hook
+        # produce.
+        inner = json.dumps(self._row_with_secret())
+        payload = json.dumps(inner, default=str)
+        result = _redact_callback_vars_in_audit_payload(payload)
+        # Result should still be double-encoded.
+        once_unwrapped = json.loads(result)
+        assert isinstance(once_unwrapped, str)
+        parsed = json.loads(once_unwrapped)
+        vars_out = parsed["metadata"]["logging"][0]["callback_vars"]
+        assert vars_out["langfuse_secret_key"] == CALLBACK_VAR_MASK
+        assert vars_out["langfuse_host"] == "https://h"
+
+    def test_redacts_metadata_stored_as_json_string(self):
+        row = self._row_with_secret()
+        row["metadata"] = json.dumps(row["metadata"])  # nested JSON string
+        payload = json.dumps(row)
+        result = _redact_callback_vars_in_audit_payload(payload)
+        parsed = json.loads(result)
+        inner_metadata = json.loads(parsed["metadata"])
+        vars_out = inner_metadata["logging"][0]["callback_vars"]
+        assert vars_out["langfuse_secret_key"] == CALLBACK_VAR_MASK
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            42,
+            "not-json",
+            json.dumps({"name": "no-metadata-here"}),
+            json.dumps({"metadata": None}),
+            json.dumps({"metadata": "plain-string-not-json"}),
+            json.dumps([1, 2, 3]),
+        ],
+    )
+    def test_passes_through_payloads_without_callback_metadata(self, payload):
+        assert _redact_callback_vars_in_audit_payload(payload) == payload

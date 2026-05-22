@@ -72,6 +72,10 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import (
+    redact_metadata_for_response,
+    restore_masked_callback_vars,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -1205,9 +1209,12 @@ async def new_team(  # noqa: PLR0915
             )
 
         try:
-            return team_row.model_dump()
+            team_dict = team_row.model_dump()
         except Exception:
-            return team_row.dict()
+            team_dict = team_row.dict()
+        if "metadata" in team_dict:
+            team_dict["metadata"] = redact_metadata_for_response(team_dict["metadata"])
+        return team_dict
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -1784,6 +1791,9 @@ async def update_team(  # noqa: PLR0915
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(
                 updated_kv["metadata"]
             )
+            updated_kv["metadata"] = restore_masked_callback_vars(
+                updated_kv["metadata"], existing_team_row.metadata
+            )
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -1883,6 +1893,9 @@ async def update_team(  # noqa: PLR0915
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
+        existing_team_metadata = getattr(team_row, "metadata", None)
+        if existing_team_metadata is not None:
+            team_row.metadata = redact_metadata_for_response(existing_team_metadata)
         return {"team_id": team_row.team_id, "data": team_row}
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -3472,6 +3485,18 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        _team_info.metadata = redact_metadata_for_response(_team_info.metadata)
+        keys = [
+            (
+                key.model_copy(
+                    update={"metadata": redact_metadata_for_response(key.metadata)}
+                )
+                if hasattr(key, "metadata") and hasattr(key, "model_copy")
+                else key
+            )
+            for key in keys
+        ]
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,

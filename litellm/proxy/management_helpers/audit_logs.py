@@ -18,10 +18,62 @@ from litellm.proxy._types import (
     Optional,
     UserAPIKeyAuth,
 )
+from litellm.proxy.litellm_pre_call_utils import redact_metadata_for_response
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY = "allow_litellm_changed_by_header"
+
+
+def _redact_callback_vars_in_audit_payload(payload):
+    """Audit log payloads are stringified key/team rows. Redact
+    credential-bearing callback_vars inside metadata.logging before the
+    payload is dispatched to callbacks or persisted to the DB.
+
+    Handles both single-encoded ({...}) and double-encoded
+    (json.dumps(model.json(...)) -> "{...}") shapes — the latter is what
+    new_team, _create_team_update_audit_log, and async_key_updated_hook
+    produce."""
+    if not isinstance(payload, str):
+        return payload
+    try:
+        obj = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return payload
+
+    double_encoded = isinstance(obj, str)
+    if double_encoded:
+        try:
+            obj = json.loads(obj)
+        except (json.JSONDecodeError, TypeError):
+            return payload
+
+    if not isinstance(obj, dict):
+        return payload
+
+    metadata = obj.get("metadata")
+    redacted = False
+    if isinstance(metadata, str):
+        try:
+            metadata_dict = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            return payload
+        if isinstance(metadata_dict, dict):
+            obj["metadata"] = json.dumps(
+                redact_metadata_for_response(metadata_dict), default=str
+            )
+            redacted = True
+    elif isinstance(metadata, dict):
+        obj["metadata"] = redact_metadata_for_response(metadata)
+        redacted = True
+
+    if not redacted:
+        return payload
+
+    result = json.dumps(obj, default=str)
+    if double_encoded:
+        result = json.dumps(result, default=str)
+    return result
 
 
 def _allows_litellm_changed_by_header(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -231,6 +283,13 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     if isinstance(request_data.before_value, dict):
         request_data.before_value = json.dumps(request_data.before_value)
+
+    request_data.updated_values = _redact_callback_vars_in_audit_payload(
+        request_data.updated_values
+    )
+    request_data.before_value = _redact_callback_vars_in_audit_payload(
+        request_data.before_value
+    )
 
     # Dispatch to external audit log callbacks regardless of DB availability
     await _dispatch_audit_log_to_callbacks(request_data)
