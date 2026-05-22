@@ -66,7 +66,6 @@ async def _import_standard_section(
     records = getattr(data, section_name, None)
     if records is None:
         return
-    # Drop "__redacted__" string sentinels from litellm_params before writing.
     records = [_clean_litellm_params_record(r) for r in records]
     result.sections_attempted.append(section_name)
     table = getattr(prisma_client.db, table_name)
@@ -161,7 +160,6 @@ async def _import_all_sections(
 
     if data.mcp_servers is not None:
         result.sections_attempted.append("mcp_servers")
-        # Strip dict-form redaction markers; don't write placeholders to the DB.
         _MCP_REDACTED_FIELDS = ("credentials", "static_headers", "env")
         cleaned_servers: List[Dict[str, Any]] = []
         for rec in data.mcp_servers:
@@ -200,9 +198,6 @@ async def _import_all_sections(
         )
 
 
-# ---------------------------------------------------------------------------
-# Export fetch helper
-# ---------------------------------------------------------------------------
 async def _fetch_export_sections(
     prisma_client: Any,
     sections: Set[str],
