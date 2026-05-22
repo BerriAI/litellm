@@ -41,6 +41,37 @@ from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 router = APIRouter()
 
 
+def _sanitize_openai_batch_metadata(
+    metadata: Optional[Dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Sanitize metadata dict for OpenAI batch API compatibility.
+
+    OpenAI batch API requires all metadata values to be strings (Dict[str, str]).
+    LiteLLM's pre-call processing may inject non-string values into the metadata
+    field that is shared with the user's request, for example:
+      - ``applied_policies``: added as a list by the policy engine
+      - ``guardrails``: added as a list by the guardrail hooks
+      - ``user_api_key_auth``: a Pydantic model added for internal tracking
+
+    Rules applied:
+    - String values → kept as-is
+    - List values → joined into a comma-separated string (e.g. ``"policy_a,policy_b"``)
+    - All other types (dicts, objects, …) → dropped to avoid leaking internal state
+      and to prevent 400 validation errors from OpenAI
+    """
+    if not metadata:
+        return None
+    sanitized: Dict[str, str] = {}
+    for k, v in metadata.items():
+        if isinstance(v, str):
+            sanitized[k] = v
+        elif isinstance(v, list):
+            sanitized[k] = ",".join(str(item) for item in v)
+        # else: drop complex objects (dicts, Pydantic models, etc.)
+    return sanitized or None
+
+
 @router.post(
     "/{provider}/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
@@ -120,6 +151,15 @@ async def create_batch(  # noqa: PLR0915
             or get_custom_llm_provider_from_request_headers(request=request)
             or "openai"
         )
+
+        # Sanitize metadata before forwarding to the provider.
+        # LiteLLM's pre-call hooks store internal state (applied_policies as a
+        # list, user_api_key_auth as an object, …) in data["metadata"].  The
+        # OpenAI batch API only accepts Dict[str, str], so any non-string values
+        # must be converted or dropped here.
+        if "metadata" in data:
+            data["metadata"] = _sanitize_openai_batch_metadata(data["metadata"])
+
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
 
         # Apply team-level batch output expiry enforcement
