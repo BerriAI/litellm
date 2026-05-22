@@ -106,3 +106,32 @@ async def test_async_streaming_data_generator_closes_response_on_error():
     assert "upstream connection reset" in chunks[1]
     mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
     mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_data_generator_swallows_close_errors():
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock(side_effect=RuntimeError("already closed"))
+    mock_proxy_logging_obj = _mock_proxy_logging_obj()
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        yield {"content": "hello"}
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+
+    chunks = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "gpt-3.5-turbo"},
+            proxy_logging_obj=mock_proxy_logging_obj,
+            serialize_chunk=lambda chunk: str(chunk),
+            serialize_error=lambda proxy_exception: str(proxy_exception.to_dict()),
+        )
+    ]
+
+    assert chunks == ["{'content': 'hello'}"]
+    mock_response.aclose.assert_awaited_once()

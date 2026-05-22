@@ -1972,6 +1972,8 @@ class ProxyBaseLLMRequestProcessing:
             with anyio.CancelScope(shield=True):
                 if hasattr(response, "aclose"):
                     try:
+                        # This generator owns final cleanup of the raw upstream stream;
+                        # iterator hooks should transform/drain it without closing it.
                         await response.aclose()
                     except BaseException as e:
                         verbose_proxy_logger.debug(
