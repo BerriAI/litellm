@@ -344,14 +344,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         except (json.JSONDecodeError, AttributeError):
             original_setup = {}
 
+        # Deep-merge ``generationConfig`` and ``realtimeInputConfig`` so a
+        # partial session.update (e.g. only ``temperature`` or only
+        # ``modalities``) does not silently drop unrelated sub-keys
+        # (``responseModalities``, ``maxOutputTokens``, ...) from the original
+        # setup.
         follow_up_setup: BidiGenerateContentSetup = {
             **original_setup,
             **new_overrides,
             "model": f"models/{model}",
         }
-        # Deep-merge nested config dicts so that a partial session.update
-        # (e.g. only ``modalities``) does not silently drop unrelated
-        # sub-keys (e.g. ``temperature``) from the original setup.
         original_generation_config = original_setup.get("generationConfig")
         new_generation_config = new_overrides.get("generationConfig")
         if isinstance(original_generation_config, dict) and isinstance(

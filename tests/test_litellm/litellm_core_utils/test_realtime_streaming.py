@@ -1268,8 +1268,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
     injected_session = sent_update["session"]
     assert injected_session["type"] == "realtime"
     assert (
-        injected_session["audio"]["input"]["turn_detection"]["create_response"]
-        is False
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
     )
 
 
@@ -1298,13 +1297,13 @@ async def test_guardrail_update_respects_idempotency_flag():
         model="gemini-2.5-flash",
     )
     streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
-    
+
     # First call should send the update
     assert streaming._guardrail_turn_detection_update_sent is False
     await streaming._maybe_send_guardrail_turn_detection_update()
     assert streaming._guardrail_turn_detection_update_sent is True
     assert backend_ws.send.await_count == 1
-    
+
     # Second call should be a no-op (idempotent)
     await streaming._maybe_send_guardrail_turn_detection_update()
     assert backend_ws.send.await_count == 1  # Still 1, not 2
@@ -1316,13 +1315,15 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     client_ws = AsyncMock()
     client_ws.receive_text = AsyncMock(
         side_effect=[
-            json.dumps({
-                "type": "session.update",
-                "session": {
-                    "modalities": ["text", "audio"],
-                    "tools": [{"type": "function", "name": "get_weather"}],
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
                 }
-            }),
+            ),
             ConnectionClosed(None, None),
         ]
     )
@@ -1336,9 +1337,11 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
 
     provider_config = MagicMock()
     transformed_messages = []
+
     def mock_transform(msg, model, session_config):
         transformed_messages.append((msg, session_config))
         return [msg]  # Pass through for simplicity
+
     provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
 
     streaming = RealTimeStreaming(
@@ -1349,10 +1352,10 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
         model="gemini-2.5-flash",
     )
     streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
-    
+
     # Simulate first session.update in deferred mode
     await streaming.client_ack_messages()
-    
+
     # Verify turn_detection was injected into the session.update. The
     # injection runs before the GA remap, so the create_response flag ends
     # up nested under audio.input.turn_detection in the GA-shaped payload.
@@ -1361,10 +1364,9 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     msg_obj = json.loads(transformed_msg)
     assert msg_obj["type"] == "session.update"
     session_obj = msg_obj["session"]
-    injected_turn_detection = (
-        session_obj.get("turn_detection")
-        or session_obj.get("audio", {}).get("input", {}).get("turn_detection")
-    )
+    injected_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
     assert injected_turn_detection is not None
     assert injected_turn_detection["create_response"] is False
     assert streaming._guardrail_turn_detection_update_sent is True
@@ -1379,13 +1381,15 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     client_ws = AsyncMock()
     client_ws.receive_text = AsyncMock(
         side_effect=[
-            json.dumps({
-                "type": "session.update",
-                "session": {
-                    "modalities": ["text", "audio"],
-                    "turn_detection": existing_turn_detection,
-                },
-            }),
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "turn_detection": existing_turn_detection,
+                    },
+                }
+            ),
             ConnectionClosed(None, None),
         ]
     )
@@ -1399,9 +1403,11 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
 
     provider_config = MagicMock()
     transformed_messages = []
+
     def mock_transform(msg, model, session_config):
         transformed_messages.append((msg, session_config))
         return [msg]
+
     provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
 
     streaming = RealTimeStreaming(
@@ -1419,10 +1425,9 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     transformed_msg, _ = transformed_messages[0]
     msg_obj = json.loads(transformed_msg)
     session_obj = msg_obj["session"]
-    injected_turn_detection = (
-        session_obj.get("turn_detection")
-        or session_obj.get("audio", {}).get("input", {}).get("turn_detection")
-    )
+    injected_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
     assert isinstance(injected_turn_detection, dict)
     assert injected_turn_detection["create_response"] is False
     assert streaming._guardrail_turn_detection_update_sent is True
@@ -1492,9 +1497,63 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
     forwarded_msg, _ = transformed_messages[0]
     msg_obj = json.loads(forwarded_msg)
     session_obj = msg_obj["session"]
-    forwarded_turn_detection = (
-        session_obj.get("turn_detection")
-        or session_obj.get("audio", {}).get("input", {}).get("turn_detection")
-    )
+    forwarded_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
     assert isinstance(forwarded_turn_detection, dict)
     assert forwarded_turn_detection["create_response"] is False
+
+
+@pytest.mark.asyncio
+async def test_follow_up_setup_updates_cached_session_configuration_request():
+    """A follow-up setup produced by a subsequent session.update must replace
+    the cached ``session_configuration_request`` so downstream readers
+    (e.g. modality lookup in ``response.created``) see the latest config."""
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    follow_up_setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["TEXT"]},
+                "tools": [{"function_declarations": []}],
+            }
+        }
+    )
+    provider_config.transform_realtime_request = MagicMock(
+        return_value=[follow_up_setup]
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Simulate that the original auto-setup was already cached.
+    streaming.session_configuration_request = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+
+    await streaming.client_ack_messages()
+
+    assert streaming.session_configuration_request == follow_up_setup

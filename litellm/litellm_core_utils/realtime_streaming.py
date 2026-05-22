@@ -286,9 +286,14 @@ class RealTimeStreaming:
         return True
 
     def _cache_session_configuration_request(self, transformed_message: str) -> None:
-        """Store setup payload once sent to backend."""
-        if self.session_configuration_request is not None:
-            return
+        """Store setup payload once sent to backend.
+
+        Updates the cached setup on every successful setup send so follow-up
+        ``session.update`` messages (which produce a merged setup with new
+        ``generationConfig`` / ``systemInstruction`` / etc.) are reflected in
+        the cache used by downstream readers (``transform_session_created_event``,
+        ``return_new_content_delta_events`` modality lookup, ...).
+        """
         try:
             message_obj = json.loads(transformed_message)
             if "setup" in message_obj:

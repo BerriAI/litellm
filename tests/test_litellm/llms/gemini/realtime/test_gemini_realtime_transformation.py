@@ -965,3 +965,37 @@ def test_gemini_subsequent_session_update_with_turn_detection_only_preserves_ori
         follow_up["realtimeInputConfig"]["automaticActivityDetection"]["disabled"]
         is True
     )
+
+
+def test_gemini_follow_up_session_update_preserves_response_modalities_on_partial_generation_config():
+    """A follow-up session.update that only sets `temperature` (or any other
+    generationConfig sub-field) must not wipe `responseModalities` from the
+    original setup."""
+    config = GeminiRealtimeConfig()
+
+    original_setup = {
+        "setup": {
+            "model": "models/gemini-2.5-flash-native-audio",
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "maxOutputTokens": 2048,
+            },
+            "inputAudioTranscription": {},
+        }
+    }
+
+    session_update = {
+        "type": "session.update",
+        "session": {"temperature": 0.7},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(original_setup),
+    )
+
+    follow_up = json.loads(messages[0])["setup"]
+    assert follow_up["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert follow_up["generationConfig"]["maxOutputTokens"] == 2048
+    assert follow_up["generationConfig"]["temperature"] == 0.7
