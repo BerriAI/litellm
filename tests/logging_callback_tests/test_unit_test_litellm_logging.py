@@ -27,7 +27,7 @@ service_logger = ServiceLogging()
 
 def setup_logging():
     return Logging(
-        model="gpt-5.5",
+        model="gpt-4o",
         messages=[{"role": "user", "content": "Hello, world!"}],
         stream=False,
         call_type="completion",

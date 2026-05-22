@@ -45,5 +45,4 @@ export const ENDPOINT_OPTIONS = [
   { value: EndpointType.A2A_AGENTS, label: "/v1/a2a/message/send" },
   { value: EndpointType.MCP, label: "/mcp-rest/tools/call" },
   { value: EndpointType.REALTIME, label: "/v1/realtime" },
-  { value: EndpointType.INTERACTIONS, label: "/v1beta/interactions" },
 ];

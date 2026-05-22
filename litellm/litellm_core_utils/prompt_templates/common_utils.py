@@ -20,7 +20,6 @@ from typing import (
     cast,
 )
 
-import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -1171,16 +1170,9 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_sub = message.get("file")
-    if file_sub is None:
-        raise litellm.BadRequestError(
-            message="Content block has type='file' but is missing the required 'file' field",
-            model=None,
-            llm_provider=None,
-        )
-    file_id = file_sub.get("file_id")
-    file_data = file_sub.get("file_data")
-    format = file_sub.get("format")
+    file_id = message["file"].get("file_id")
+    file_data = message["file"].get("file_data")
+    format = message["file"].get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(

@@ -15,7 +15,7 @@ set -euo pipefail
 # In CI (CI=true), expects:
 #   - PostgreSQL already running on 127.0.0.1:5432
 #   - DATABASE_URL already set
-#   - Python/uv already installed
+#   - Python/Poetry already installed
 #   - Node.js/npx already available
 # ================================================================
 
@@ -48,7 +48,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- Pre-flight checks ---
-for cmd in python3 npx uv; do
+for cmd in python3 npx poetry; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found."; exit 1; }
 done
 
@@ -95,10 +95,6 @@ export DISABLE_SCHEMA_UPDATE="true"
 export SERVER_ROOT_PATH=""
 # Prevent logout from redirecting to an external URL
 export PROXY_LOGOUT_URL=""
-# Forward LITELLM_LICENSE if set in the outer env so premium-gated UI flows
-# (e.g. Team-BYOK Model switch) can be exercised. Tests that depend on a
-# premium proxy gate themselves on process.env.LITELLM_LICENSE.
-export LITELLM_LICENSE="${LITELLM_LICENSE:-}"
 
 # --- Rebuild UI from source ---
 echo "=== Building UI from source ==="
@@ -121,15 +117,19 @@ echo "UI build copied and restructured"
 # --- Python environment ---
 echo "=== Setting up Python environment ==="
 cd "$REPO_ROOT"
-uv sync --group dev --group proxy-dev --extra proxy --frozen --quiet
-uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
+if ! poetry run python3 -c "import prisma" 2>/dev/null; then
+  echo "Installing Python dependencies (first run)..."
+  poetry install --with dev,proxy-dev --extras "proxy" --quiet
+  poetry run pip install nodejs-wheel-binaries 2>/dev/null || true
+  poetry run prisma generate --schema litellm/proxy/schema.prisma
+fi
 
 echo "=== Pushing Prisma schema to database ==="
-uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+poetry run prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
 
 # --- Mock LLM server ---
 echo "=== Starting mock LLM server ==="
-uv run --no-sync python "$SCRIPT_DIR/fixtures/mock_llm_server/server.py" &
+poetry run python3 "$SCRIPT_DIR/fixtures/mock_llm_server/server.py" &
 MOCK_PID=$!
 
 for i in $(seq 1 15); do
@@ -140,7 +140,7 @@ done
 # --- LiteLLM proxy ---
 echo "=== Starting LiteLLM proxy ==="
 cd "$REPO_ROOT"
-uv run --no-sync python -m litellm.proxy.proxy_cli \
+poetry run python3 -m litellm.proxy.proxy_cli \
   --config "$SCRIPT_DIR/fixtures/config.yml" \
   --port 4000 &
 PROXY_PID=$!

@@ -239,9 +239,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
-            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model=litellm_params.get("base_model") or model
-            ):
+            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
                 data = litellm.AzureOpenAIGPT5Config().transform_request(
                     model=model,
                     messages=messages,

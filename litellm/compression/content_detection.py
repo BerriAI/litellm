@@ -5,6 +5,7 @@ Auto-detect content type per message: code, JSON, or text.
 import json
 import re
 
+
 _CODE_KEYWORDS = re.compile(
     r"\b(?:def |function |class |import |from |require\(|#include|fn |func |const |let |var |public |private |static )\b"
 )

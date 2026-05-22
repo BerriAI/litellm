@@ -1,4 +1,5 @@
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -162,13 +163,6 @@ def test_max_connections_in_cluster_kwargs():
     assert (
         "max_connections" in kwargs
     ), "max_connections should be in available Redis cluster kwargs"
-
-
-def test_socket_timeouts_in_cluster_kwargs():
-    """Test that Redis cluster clients can receive socket timeout configuration"""
-    kwargs = _get_redis_cluster_kwargs()
-    assert "socket_timeout" in kwargs
-    assert "socket_connect_timeout" in kwargs
 
 
 def test_get_redis_async_client_with_connection_pool():

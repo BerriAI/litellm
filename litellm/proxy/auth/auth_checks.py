@@ -120,22 +120,6 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
-def _get_router_zero_cost_cache(llm_router: Router) -> Optional[Dict[str, bool]]:
-    """
-    Return the router's per-instance zero-cost cache, or ``None`` for objects
-    that don't expose one (e.g. ``MagicMock`` stand-ins in unit tests).
-
-    The cache lives on the ``Router`` instance so it:
-        * is invalidated by ``Router._invalidate_model_group_info_cache`` on
-          any model add/remove/upsert (including in-place pricing changes via
-          ``/model/update``, which go through ``upsert_deployment``);
-        * dies with the router itself — no risk of CPython reusing the
-          previous router's ``id()`` and serving its cached entries.
-    """
-    cache = getattr(llm_router, "_zero_cost_cache", None)
-    return cache if isinstance(cache, dict) else None
-
-
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
 ) -> bool:
@@ -157,15 +141,7 @@ def _is_model_cost_zero(
     # Handle list of models
     model_list = [model] if isinstance(model, str) else model
 
-    zero_cost_cache = _get_router_zero_cost_cache(llm_router)
-
     for model_name in model_list:
-        if zero_cost_cache is not None:
-            cached = zero_cost_cache.get(model_name)
-            if cached is not None:
-                if cached is False:
-                    return False
-                continue
         try:
             # Use router's get_model_group_info method directly for better reliability
             model_group_info = llm_router.get_model_group_info(model_group=model_name)
@@ -176,8 +152,6 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"No model group info found for {model_name}, assuming it has cost"
                 )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
                 return False
 
             # Check costs for this model
@@ -190,8 +164,6 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
                 )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
                 return False
 
             # If either cost is non-zero, return False
@@ -199,8 +171,6 @@ def _is_model_cost_zero(
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
                 )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
                 return False
 
             # Costs are 0 — verify this is from explicit configuration,
@@ -214,8 +184,6 @@ def _is_model_cost_zero(
                     "cost (enforce budget)",
                     safe_name,
                 )
-                if zero_cost_cache is not None:
-                    zero_cost_cache[model_name] = False
                 return False
 
             verbose_proxy_logger.debug(
@@ -224,8 +192,6 @@ def _is_model_cost_zero(
                 input_cost,
                 output_cost,
             )
-            if zero_cost_cache is not None:
-                zero_cost_cache[model_name] = True
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
@@ -1185,127 +1151,6 @@ async def get_end_user_object(
         if isinstance(e, litellm.BudgetExceededError):
             raise e
         return None
-
-
-_END_USER_VALIDATION_NEGATIVE_TTL = 60
-_END_USER_VALIDATION_POSITIVE_TTL = 300
-
-
-async def resolve_and_validate_end_user_id(
-    raw_end_user_id: Optional[str],
-    prisma_client: Optional[PrismaClient],
-    user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: Optional[Span] = None,
-    proxy_logging_obj: Optional[ProxyLogging] = None,
-    route: str = "",
-) -> Optional[str]:
-    """Optionally drop end-user ids that don't resolve to a known DB row.
-
-    Default: pass-through. LiteLLM's documented pattern is that the `user`
-    field is an arbitrary caller-supplied identifier, so validation is
-    opt-in behind ``litellm.validate_end_user_id_in_db`` to preserve
-    backwards compatibility.
-
-    When the flag is set: accept the id when it matches any of
-      - LiteLLM_EndUserTable.user_id
-      - LiteLLM_UserTable.user_id
-      - LiteLLM_UserTable.user_email (case-insensitive)
-
-    If the id doesn't match but ``litellm.max_end_user_budget_id`` is set,
-    we still preserve the id so the default end-user budget is applied
-    downstream; otherwise we return None.
-
-    DB lookups reuse ``get_end_user_object`` / ``get_user_object`` so they
-    share the same cache as the rest of the auth path instead of adding new
-    raw Prisma queries.
-    """
-    if raw_end_user_id is None:
-        return None
-    if not litellm.validate_end_user_id_in_db:
-        return raw_end_user_id
-    if prisma_client is None:
-        return raw_end_user_id
-
-    cache_key = f"end_user_validation:{raw_end_user_id}"
-    cached = await user_api_key_cache.async_get_cache(key=cache_key)
-    if cached == "valid":
-        return raw_end_user_id
-    if cached == "invalid":
-        return raw_end_user_id if litellm.max_end_user_budget_id else None
-
-    is_valid = await _end_user_id_exists_in_db(
-        end_user_id=raw_end_user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
-        route=route,
-    )
-
-    await user_api_key_cache.async_set_cache(
-        key=cache_key,
-        value="valid" if is_valid else "invalid",
-        ttl=(
-            _END_USER_VALIDATION_POSITIVE_TTL
-            if is_valid
-            else _END_USER_VALIDATION_NEGATIVE_TTL
-        ),
-    )
-
-    if is_valid:
-        return raw_end_user_id
-    # Preserve id so the caller can still apply litellm.max_end_user_budget_id.
-    if litellm.max_end_user_budget_id:
-        return raw_end_user_id
-    return None
-
-
-async def _end_user_id_exists_in_db(
-    end_user_id: str,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: Optional[Span] = None,
-    proxy_logging_obj: Optional[ProxyLogging] = None,
-    route: str = "",
-) -> bool:
-    """True when the id matches an EndUser, User, or user_email row."""
-    try:
-        end_user_obj = await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            route=route,
-        )
-        if end_user_obj is not None:
-            return True
-    except litellm.BudgetExceededError:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"end_user validation: get_end_user_object lookup failed: {e}"
-        )
-
-    try:
-        user_obj = await get_user_object(
-            user_id=end_user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            check_db_only=False,
-            user_email=end_user_id if "@" in end_user_id else None,
-        )
-        if user_obj is not None:
-            return True
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"end_user validation: get_user_object lookup failed: {e}"
-        )
-
-    return False
 
 
 @log_db_metrics
@@ -2353,9 +2198,7 @@ class ExperimentalUIJWTToken:
 
     @staticmethod
     def get_cli_jwt_auth_token(
-        user_info: LiteLLM_UserTable,
-        team_id: Optional[str] = None,
-        team_alias: Optional[str] = None,
+        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2366,7 +2209,6 @@ class ExperimentalUIJWTToken:
         Args:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
-            team_alias: Team alias for the selected team, if available
 
         Returns:
             Encrypted JWT token string
@@ -2400,7 +2242,6 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
-            team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),

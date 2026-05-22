@@ -994,8 +994,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = "redacted by litellm. \
+                        _metadata["raw_request"] = (
+                            "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
+                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1029,8 +1031,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = "Unable to Log \
-                        raw request: {}".format(str(e))
+                    _metadata["raw_request"] = (
+                        "Unable to Log \
+                        raw request: {}".format(
+                            str(e)
+                        )
+                    )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1044,16 +1050,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
-            # Set-once first provider-handoff instant. api_call_start_time
-            # is overwritten on every retry, so it can't measure one-time
-            # preprocessing; pinning the first attempt excludes retry loops
-            # + backoff. Logging object only — must NOT go into
-            # litellm_params["metadata"] (caller request metadata, typed
-            # Dict[str, str], echoed downstream; a datetime breaks it).
-            if self.model_call_details.get("first_api_call_start_time") is None:
-                self.model_call_details["first_api_call_start_time"] = (
-                    self.model_call_details["api_call_start_time"]
-                )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
@@ -1763,12 +1759,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
-        elif (
-            existing_cost := self.model_call_details.get("response_cost")
-        ) is not None and existing_cost != 0:
+        elif self.model_call_details.get("response_cost") is not None:
             # Preserve response_cost if already calculated (e.g., by pass-through
-            # handlers like Gemini/Vertex which call completion_cost directly).
-            # Do not preserve 0 from failure_handler on intermediate router retries.
+            # handlers like Gemini/Vertex which call completion_cost directly)
             pass
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(

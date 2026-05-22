@@ -54,7 +54,6 @@ class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
 
     pages_processed: Optional[int] = None
-    credits: Optional[float] = None
     doc_size_bytes: Optional[int] = None
 
     model_config = {"extra": "allow"}

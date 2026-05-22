@@ -225,10 +225,6 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
-use_legacy_interactions_schema: bool = (
-    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
-)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
-# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -413,12 +409,6 @@ internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
-# When True, end-user IDs extracted from requests are validated against
-# LiteLLM_EndUserTable / LiteLLM_UserTable. Values that do not resolve to a
-# known row are dropped before reaching spend logs. Defaults to False for
-# backwards compatibility — arbitrary client-supplied identifiers still
-# pass through unchanged.
-validate_end_user_id_in_db: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -426,7 +416,6 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
-prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
@@ -642,7 +631,6 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
-reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
 
@@ -910,8 +898,6 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
-        elif value.get("litellm_provider") == "reducto":
-            reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
@@ -1023,7 +1009,6 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
-    | reducto_models
     | bedrock_mantle_models
     | set(clarifai_models)
 )
@@ -1130,7 +1115,6 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
-    "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
 }
 
@@ -1303,18 +1287,6 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
-from .interactions.agents.main import (
-    acreate as acreate_agent,
-    create as create_agent,
-    alist as alist_agents,
-    list as list_agents,
-    aget as aget_agent,
-    get as get_agent,
-    adelete as adelete_agent,
-    delete as delete_agent,
-    alist_versions as alist_agent_versions,
-    list_versions as list_agent_versions,
-)
 from .skills.main import (
     create_skill,
     acreate_skill,
@@ -1907,12 +1879,6 @@ if TYPE_CHECKING:
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,
-    )
-    from .llms.dashscope.embed.transformation import (
-        DashScopeEmbeddingConfig as DashScopeEmbeddingConfig,
-    )
-    from .llms.dashscope.rerank.transformation import (
-        DashScopeRerankConfig as DashScopeRerankConfig,
     )
     from .llms.moonshot.chat.transformation import (
         MoonshotChatConfig as MoonshotChatConfig,

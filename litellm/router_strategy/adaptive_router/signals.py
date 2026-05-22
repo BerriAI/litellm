@@ -24,6 +24,7 @@ from litellm.router_strategy.adaptive_router.config import (
     TOOL_CALL_HISTORY_MAX,
 )
 
+
 # ---- Public types ---------------------------------------------------------
 
 

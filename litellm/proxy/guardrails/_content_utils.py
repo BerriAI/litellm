@@ -10,6 +10,7 @@ every text fragment.
 
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 
+
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
 # detection, …) should inspect. The proxy ingress passes ``route_type``

@@ -14,46 +14,18 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 
 # --------------------------------------------------------------------------- #
-# get_bedrock_response_stream_shape lazy-load tests                           #
+# BEDROCK_RESPONSE_STREAM_SHAPE eager-load tests                              #
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(autouse=True)
-def _reset_bedrock_response_stream_shape_cache():
-    """Prevent lru_cache leakage between tests in this module."""
-    import litellm.llms.bedrock.common_utils as mod
-
-    mod.get_bedrock_response_stream_shape.cache_clear()
-    yield
-    mod.get_bedrock_response_stream_shape.cache_clear()
-
-
-def test_bedrock_response_stream_shape_lazy_loads_once():
+def test_bedrock_response_stream_shape_loaded_at_import():
     """
-    get_bedrock_response_stream_shape() loads from botocore at most once per process.
-    """
-    from unittest.mock import MagicMock, patch
-
-    import litellm.llms.bedrock.common_utils as mod
-
-    sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_bedrock_response_stream_shape", return_value=sentinel
-    ) as mock_load:
-        assert mod.get_bedrock_response_stream_shape() is sentinel
-        assert mod.get_bedrock_response_stream_shape() is sentinel
-        mock_load.assert_called_once()
-
-
-def test_bedrock_response_stream_shape_loaded_on_first_access():
-    """
-    get_bedrock_response_stream_shape() loads once on first use.
+    BEDROCK_RESPONSE_STREAM_SHAPE is resolved at module import time.
     In a standard environment with botocore installed it must be non-None.
     """
-    pytest.importorskip("botocore")
-    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+    from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
-    assert get_bedrock_response_stream_shape() is not None
+    assert BEDROCK_RESPONSE_STREAM_SHAPE is not None
 
 
 def test_bedrock_response_stream_shape_load_failure_returns_none():
@@ -66,7 +38,6 @@ def test_bedrock_response_stream_shape_load_failure_returns_none():
 
     import litellm.llms.bedrock.common_utils as mod
 
-    pytest.importorskip("botocore")
     with patch(
         "botocore.loaders.Loader.load_service_model",
         side_effect=Exception("no data"),
@@ -80,29 +51,31 @@ def test_bedrock_response_stream_shape_is_structure_shape():
     The loaded shape should be the botocore StructureShape for ResponseStream,
     not a plain dict or any other type.
     """
-    pytest.importorskip("botocore")
     from botocore.model import StructureShape
 
-    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+    from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
-    loaded_shape = get_bedrock_response_stream_shape()
-    assert (
-        loaded_shape is not None
-    ), "get_bedrock_response_stream_shape() is None — botocore may not be installed"
-    shape: StructureShape = loaded_shape
+    assert BEDROCK_RESPONSE_STREAM_SHAPE is not None, (
+        "BEDROCK_RESPONSE_STREAM_SHAPE is None — botocore may not be installed"
+    )
+    shape: StructureShape = BEDROCK_RESPONSE_STREAM_SHAPE  # remove Optional
     assert isinstance(shape, StructureShape)
     assert shape.name == "ResponseStream"
 
 
-def test_bedrock_response_stream_shape_same_object_across_calls():
+def test_bedrock_response_stream_shape_same_object_across_imports():
     """
-    Repeated calls must return the identical cached object.
+    Both bedrock modules that use the shape must reference the identical object —
+    confirming the constant is not re-loaded per import.
     """
-    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        BEDROCK_RESPONSE_STREAM_SHAPE as invoke_shape,
+    )
+    from litellm.llms.bedrock.common_utils import (
+        BEDROCK_RESPONSE_STREAM_SHAPE as common_shape,
+    )
 
-    first = get_bedrock_response_stream_shape()
-    second = get_bedrock_response_stream_shape()
-    assert first is second
+    assert common_shape is invoke_shape
 
 
 def test_bedrock_event_stream_decoder_base_uses_module_shape():
@@ -122,23 +95,19 @@ def test_bedrock_event_stream_decoder_base_uses_module_shape():
 
 def test_bedrock_parse_message_from_event_raises_on_none_shape():
     """
-    When get_bedrock_response_stream_shape() returns None (botocore unavailable),
+    When BEDROCK_RESPONSE_STREAM_SHAPE is None (botocore unavailable),
     _parse_message_from_event must raise BedrockError before touching the
     botocore parser — not an opaque AttributeError from inside botocore.
     """
     from unittest.mock import MagicMock, patch
 
     import litellm.llms.bedrock.common_utils as mod
-    from litellm.llms.bedrock.common_utils import (
-        BedrockError,
-        BedrockEventStreamDecoderBase,
-    )
+    from litellm.llms.bedrock.common_utils import BedrockError, BedrockEventStreamDecoderBase
 
-    decoder = BedrockEventStreamDecoderBase.__new__(BedrockEventStreamDecoderBase)
-    decoder.parser = MagicMock()
+    decoder = BedrockEventStreamDecoderBase()
     mock_event = MagicMock()
 
-    with patch.object(mod, "get_bedrock_response_stream_shape", return_value=None):
+    with patch.object(mod, "BEDROCK_RESPONSE_STREAM_SHAPE", None):
         with pytest.raises(BedrockError) as exc_info:
             decoder._parse_message_from_event(mock_event)
 

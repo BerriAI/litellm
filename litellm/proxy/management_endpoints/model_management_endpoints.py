@@ -150,9 +150,6 @@ def update_db_model(
                 model_info[key] = value.isoformat()
         prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
 
-    if updated_patch.blocked is not None:
-        prisma_compatible_model_dict["blocked"] = updated_patch.blocked
-
     return prisma_compatible_model_dict
 
 
@@ -232,20 +229,6 @@ async def patch_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-
-        # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
-        # passed the auth check above for team-scoped models, but they must not
-        # be able to unblock (or block) a model their proxy admin has paused.
-        if (
-            patch_data.blocked is not None
-            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        ):
-            raise ProxyException(
-                message="Only proxy admins can change a model's blocked flag.",
-                type=ProxyErrorTypes.auth_error.value,
-                code=status.HTTP_403_FORBIDDEN,
-                param="blocked",
-            )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -546,7 +529,7 @@ async def _update_existing_team_model_assignment(
     """
 
     def _get_team_public_model_name(
-        model_info: Optional[Union[dict, str]],
+        model_info: Optional[Union[dict, str]]
     ) -> Optional[str]:
         if isinstance(model_info, dict):
             value = model_info.get("team_public_model_name")

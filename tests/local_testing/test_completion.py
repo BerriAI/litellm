@@ -1047,50 +1047,22 @@ def test_completion_openai_params(model):
 
 
 def test_completion_fireworks_ai():
-    """
-    Mocked so it does not depend on Fireworks' rotating serverless catalog
-    (no externally-verifiable model list exists). Asserts the request is
-    built correctly and the OpenAI-compatible response is parsed back.
-    """
-    litellm.set_verbose = True
-    messages = [
-        {"role": "system", "content": "You're a good bot"},
-        {"role": "user", "content": "Hey"},
-    ]
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "accounts/fireworks/models/deepseek-v3p1",
-        "choices": [
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
             {
-                "index": 0,
-                "message": {"role": "assistant", "content": "Hello there!"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
-    }
-    mock_response.text = json.dumps(mock_response.json.return_value)
-
-    client = HTTPHandler()
-    with patch.object(client, "post", return_value=mock_response) as mock_post:
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
         response = completion(
-            model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+            model="fireworks_ai/llama-v3p3-70b-instruct",
             messages=messages,
-            client=client,
         )
-
-    mock_post.assert_called_once()
-    request_body = json.loads(mock_post.call_args.kwargs["data"])
-    assert "deepseek-v3p1" in request_body["model"]
-    assert request_body["messages"] == messages
-    assert response.choices[0].message.content == "Hello there!"
-    assert response.usage.total_tokens == 12
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(

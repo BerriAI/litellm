@@ -94,12 +94,6 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_interaction": "/interactions/{interaction_id}",
     "adelete_interaction": "/interactions/{interaction_id}",
     "acancel_interaction": "/interactions/{interaction_id}/cancel",
-    # Google Managed Agents API routes
-    "acreate_agent": "/v1beta/agents",
-    "alist_agents": "/v1beta/agents",
-    "aget_agent": "/v1beta/agents/{name}",
-    "adelete_agent": "/v1beta/agents/{name}",
-    "alist_agent_versions": "/v1beta/agents/{name}/versions",
     # OpenAI Evals API routes
     "acreate_eval": "/evals",
     "alist_evals": "/evals",
@@ -317,11 +311,6 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "aget_interaction",
         "adelete_interaction",
         "acancel_interaction",
-        "acreate_agent",
-        "alist_agents",
-        "aget_agent",
-        "adelete_agent",
-        "alist_agent_versions",
         "asend_message",
         "call_mcp_tool",
         "acancel_batch",
@@ -441,11 +430,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                         deployment = llm_router.get_deployment_by_model_group_name(
                             model_group_name=model
                         )
-                        if (
-                            deployment
-                            and deployment.litellm_params
-                            and not llm_router._is_deployment_blocked(deployment)
-                        ):
+                        if deployment and deployment.litellm_params:
                             deployment_creds = deployment.litellm_params.model_dump(
                                 exclude_none=True
                             )
@@ -477,15 +462,6 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",
-        ]:
-            return getattr(llm_router, f"{route_type}")(**data)
-        # Managed Agents API: these don't need model routing
-        if route_type in [
-            "acreate_agent",
-            "alist_agents",
-            "aget_agent",
-            "adelete_agent",
-            "alist_agent_versions",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -553,10 +529,6 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
-                "avector_store_retrieve",
-                "avector_store_list",
-                "avector_store_update",
-                "avector_store_delete",
                 "avector_store_file_create",
                 "avector_store_file_list",
                 "avector_store_file_retrieve",

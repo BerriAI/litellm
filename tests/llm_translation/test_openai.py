@@ -12,6 +12,7 @@ sys.path.insert(
 
 import httpx
 import pytest
+from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse

@@ -3,7 +3,7 @@ User Agent Analytics Endpoints
 
 This module provides optimized endpoints for tracking user agent activity metrics including:
 - Daily Active Users (DAU) by tags for configurable number of days
-- Weekly Active Users (WAU) by tags for configurable number of weeks
+- Weekly Active Users (WAU) by tags for configurable number of weeks  
 - Monthly Active Users (MAU) by tags for configurable number of months
 - Summary analytics by tags
 

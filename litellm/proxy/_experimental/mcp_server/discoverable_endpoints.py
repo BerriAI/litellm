@@ -86,9 +86,7 @@ def decode_state_hash(encrypted_state: str) -> dict:
 def _get_validated_client_redirect_uri(
     request: Request, state_data: Dict[str, Any]
 ) -> str:
-    """Return a trusted (same-origin, loopback, or ops-allowlisted)
-    client redirect URI from OAuth state.
-    """
+    """Return a trusted (same-origin or loopback) client redirect URI from OAuth state."""
     redirect_uri = state_data.get("client_redirect_uri") or state_data.get("base_url")
     if not redirect_uri or not isinstance(redirect_uri, str):
         raise HTTPException(status_code=400, detail="Invalid redirect URI")
@@ -298,10 +296,11 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
-    # Trusted redirect_uri: same-origin, loopback, or ops-allowlisted.
-    # The URI is encrypted into the OAuth state and decoded on
-    # /callback to redirect the user back; a non-trusted URI would be
-    # an open-redirect + code-theft primitive (VERIA-57 root cause B).
+    # Loopback OR same-origin redirect_uri. The URI is encrypted into the
+    # OAuth state and decoded on /callback to redirect the user back;
+    # restricting to trusted origins blocks the open-redirect +
+    # code-theft primitive (VERIA-57 root cause B). Loopback supports
+    # native MCP clients; same-origin supports the proxy's own UI callback.
     validate_trusted_redirect_uri(request, redirect_uri)
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
@@ -624,12 +623,12 @@ async def callback(request: Request, code: str, state: str):
         state_data = decode_state_hash(state)
         original_state = state_data["original_state"]
 
-        # Re-validate the client redirect URI at the sink. /authorize
-        # rejects untrusted URIs before encoding them into state, but
-        # encrypted states minted before that check was added have no
-        # expiry and remain valid indefinitely. Validating here blocks
-        # the open-redirect + code-theft primitive even for pre-fix
-        # states while permitting same-origin / allowlisted clients.
+        # Re-validate at the sink. /authorize rejects untrusted
+        # redirect_uri before encoding into state, but encrypted states
+        # minted before that check was added have no expiry and remain
+        # valid indefinitely. Validating here (same-origin OR loopback)
+        # blocks the open-redirect + code-theft primitive even for pre-fix
+        # states while allowing the UI's same-origin callback to work.
         redirect_uri = _get_validated_client_redirect_uri(request, state_data)
 
         params = {"code": code, "state": original_state}

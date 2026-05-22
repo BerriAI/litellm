@@ -1099,35 +1099,6 @@ class TestMCPDelegateAuthToUpstream:
             delegate_auth_to_upstream=delegate_auth_to_upstream,
         )
 
-    def test_build_mcp_server_table_preserves_delegate_auth_to_upstream(self):
-        """Registry → API list rows must expose delegate_auth_to_upstream for the UI."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-        )
-        from litellm.types.mcp import MCPAuth
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
-        manager = MCPServerManager()
-        delegated = MCPServer(
-            server_id="delegated-1",
-            name="delegated",
-            transport="http",
-            auth_type=MCPAuth.oauth2,
-            delegate_auth_to_upstream=True,
-            available_on_public_internet=True,
-        )
-        assert (
-            manager._build_mcp_server_table(delegated).delegate_auth_to_upstream is True
-        )
-
-        not_delegated = delegated.model_copy(
-            update={"delegate_auth_to_upstream": False}
-        )
-        assert (
-            manager._build_mcp_server_table(not_delegated).delegate_auth_to_upstream
-            is False
-        )
-
     async def test_delegate_skips_litellm_auth_with_no_authorization(self):
         """
         oauth2 + delegate_auth_to_upstream=True, no Authorization header at
@@ -1491,11 +1462,13 @@ class TestMCPDelegateAuthToUpstream:
             assert exc_info.value.status_code == 401
             mock_auth.assert_called_once()
 
-    async def test_delegate_bypass_for_internal_server(self):
+    async def test_delegate_ignored_for_non_public_server(self):
         """
-        Delegate + oauth2 interactive servers bypass LiteLLM auth even when
-        ``available_on_public_internet`` is False (internal MCPs).
+        Internal-only delegate servers must not bypass LiteLLM auth for
+        anonymous public callers.
         """
+        from fastapi import HTTPException
+
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1516,8 +1489,6 @@ class TestMCPDelegateAuthToUpstream:
         )
 
         async def mock_auth_raises(*_args, **_kwargs):
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=401, detail="No key provided")
 
         with (
@@ -1530,9 +1501,10 @@ class TestMCPDelegateAuthToUpstream:
             ) as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = internal_server
-            auth, *_rest = await MCPRequestHandler.process_mcp_request(scope)
-            mock_auth.assert_not_called()
-            assert auth.api_key is None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+            mock_auth.assert_called_once()
 
     async def test_get_allowed_servers_excludes_client_credentials_delegate(self):
         """
@@ -1579,10 +1551,10 @@ class TestMCPDelegateAuthToUpstream:
         assert "pkce-server" in result
         assert "m2m-server" not in result
 
-    async def test_get_allowed_servers_includes_internal_delegate(self):
+    async def test_get_allowed_servers_excludes_non_public_delegate(self):
         """
         Internal-only (available_on_public_internet=False) delegate servers
-        appear in the anonymous allow-list like public delegate servers.
+        must not appear in the anonymous allow-list.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
@@ -1621,7 +1593,7 @@ class TestMCPDelegateAuthToUpstream:
             result = await manager.get_allowed_mcp_servers(None)
 
         assert "public-server" in result
-        assert "internal-server" in result
+        assert "internal-server" not in result
 
     def test_extract_target_server_names_matches_routing_parser(self):
         """

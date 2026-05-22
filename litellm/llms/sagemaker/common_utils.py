@@ -1,4 +1,3 @@
-import functools
 import json
 from typing import AsyncIterator, Iterator, List, Optional, Union
 
@@ -23,22 +22,14 @@ def _load_sagemaker_response_stream_shape():
         )
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load sagemaker-runtime response stream shape "
+            "litellm: could not pre-load sagemaker-runtime response stream shape "
             "— SageMaker event-stream decoding will be unavailable. Error: %s",
             e,
         )
         return None
 
 
-@functools.lru_cache(maxsize=1)
-def get_sagemaker_response_stream_shape():
-    """
-    Lazily load and cache the sagemaker-runtime stream shape for the process.
-
-    Avoids importing botocore (and logging warnings) unless SageMaker event-stream
-    decoding is actually needed.
-    """
-    return _load_sagemaker_response_stream_shape()
+SAGEMAKER_RESPONSE_STREAM_SHAPE = _load_sagemaker_response_stream_shape()
 
 
 class SagemakerError(BaseLLMException):
@@ -216,8 +207,7 @@ class AWSEventStreamDecoder:
                 verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
 
     def _parse_message_from_event(self, event) -> Optional[str]:
-        response_stream_shape = get_sagemaker_response_stream_shape()
-        if response_stream_shape is None:
+        if SAGEMAKER_RESPONSE_STREAM_SHAPE is None:
             raise SagemakerError(
                 status_code=500,
                 message=(
@@ -226,7 +216,9 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response = self.parser.parse(
+            response_dict, SAGEMAKER_RESPONSE_STREAM_SHAPE
+        )
 
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")

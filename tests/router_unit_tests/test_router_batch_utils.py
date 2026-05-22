@@ -31,11 +31,11 @@ def sample_jsonl_data() -> List[Dict]:
     return [
         {
             "body": {
-                "model": "gpt-5-mini",
+                "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "Hello"}],
             }
         },
-        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "Hi"}]}},
+        {"body": {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}},
     ]
 
 

@@ -41,7 +41,7 @@ class ContextCachingEndpoints(VertexBase):
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        pass
 
     def _get_token_and_url_context_caching(
         self,

@@ -196,12 +196,10 @@ async def _process_binary_request(
     )
     data: Dict[str, Any] = {
         "file_id": file_id,
-        **(
-            await get_container_forwarding_params(
-                container_id=container_id,
-                original_container_id=original_container_id,
-                custom_llm_provider=resolved_provider,
-            )
+        **get_container_forwarding_params(
+            container_id=container_id,
+            original_container_id=original_container_id,
+            custom_llm_provider=resolved_provider,
         ),
     }
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -318,7 +316,7 @@ async def _process_multipart_upload_request(
     )
 
     data.update(
-        await get_container_forwarding_params(
+        get_container_forwarding_params(
             container_id=container_id,
             original_container_id=original_container_id,
             custom_llm_provider=resolved_provider,
@@ -398,7 +396,7 @@ async def _process_request(
             )
         )
         data.update(
-            await get_container_forwarding_params(
+            get_container_forwarding_params(
                 container_id=path_params["container_id"],
                 original_container_id=original_container_id,
                 custom_llm_provider=resolved_provider,

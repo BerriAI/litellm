@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { clearTokenCookies, getCookie, storeLoginToken } from "./cookieUtils";
-import { getToken, setToken } from "./mcpTokenStore";
 
 describe("cookieUtils", () => {
   beforeEach(() => {
@@ -19,15 +18,6 @@ describe("cookieUtils", () => {
 
       clearTokenCookies();
       expect(getCookie("token")).toBeNull();
-    });
-
-    it("should clear MCP session tokens on logout", () => {
-      setToken("server-1", { access_token: "mcp-tok" }, "user-a");
-      expect(getToken("server-1", "user-a")).not.toBeNull();
-
-      clearTokenCookies();
-
-      expect(getToken("server-1", "user-a")).toBeNull();
     });
 
     it("should clear token cookie from /ui path", () => {
