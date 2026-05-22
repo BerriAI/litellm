@@ -920,9 +920,17 @@ class ProxyBaseLLMRequestProcessing:
         ### AUTO STREAM USAGE TRACKING ###
         # If always_include_stream_usage is enabled and this is a streaming request
         # automatically add stream_options={'include_usage': True} if not already set
+        # NOTE: Only apply to chat completions, NOT Responses API routes.
+        # Azure/OpenAI Responses API does not support stream_options (usage is
+        # included automatically in response.completed events).
+        _is_responses_api_route = route_type in {
+            "aresponses",
+            "_aresponses_websocket",
+        }
         if (
             general_settings.get("always_include_stream_usage", False) is True
             and self.data.get("stream", False) is True
+            and not _is_responses_api_route
         ):
             # Only set if stream_options is not already provided by the client
             if "stream_options" not in self.data:
