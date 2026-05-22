@@ -122,17 +122,19 @@ class TestVertexGemmaCompletion:
         # Mock the async HTTP handler and Vertex authentication
         with (
             patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-            ) as mock_http_handler,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+            ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
+            mock_client = Mock()
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.json.return_value = mock_vertex_response
-            mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
 
             # Call litellm.acompletion()
             response = await litellm.acompletion(
@@ -145,7 +147,7 @@ class TestVertexGemmaCompletion:
             )
 
             # Verify the request sent to Vertex
-            call_args = mock_http_handler.return_value.post.call_args
+            call_args = mock_client.post.call_args
             assert call_args is not None, "HTTP handler was not called"
 
             request_data = call_args.kwargs["json"]
@@ -210,17 +212,19 @@ class TestVertexGemmaCompletion:
 
         with (
             patch(
-                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
-            ) as mock_http_handler,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+            ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "test-project"),
             ),
         ):
+            mock_client = Mock()
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.json.return_value = invalid_response
-            mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
 
             # Should raise exception (wrapped as APIConnectionError by LiteLLM)
             with pytest.raises(APIConnectionError) as exc_info:
@@ -286,7 +290,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
@@ -388,7 +392,7 @@ class TestVertexGemmaCompletion:
                 "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
             ) as mock_get_client,
             patch(
-                "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
             ),
         ):
@@ -429,3 +433,123 @@ class TestVertexGemmaCompletion:
             # Verify other parameters are present
             assert "messages" in instance
             assert instance["@requestFormat"] == "chatCompletions"
+
+    @pytest.mark.asyncio
+    async def test_acompletion_filters_context_management(self):
+        """
+        Test that context_management is filtered out from the request.
+
+        Vertex AI Gemma's chatCompletions wrapper does not understand
+        `context_management` (an Anthropic / OpenAI Responses API concept).
+        It must be stripped from the request body so the upstream endpoint
+        does not reject the request with an unknown-field error.
+        """
+        mock_vertex_response = {
+            "deployedModelId": "1207280419999999999",
+            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+            "modelDisplayName": "gemma-3-12b-it-1222199011122",
+            "modelVersionId": "1",
+            "predictions": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": "ok",
+                            "reasoning_content": None,
+                            "role": "assistant",
+                            "tool_calls": [],
+                        },
+                        "stop_reason": None,
+                    }
+                ],
+                "created": 1759863903,
+                "id": "chatcmpl-test-ctxmgmt",
+                "model": "google/gemma-3-12b-it",
+                "object": "chat.completion",
+                "prompt_logprobs": None,
+                "usage": {
+                    "completion_tokens": 1,
+                    "prompt_tokens": 5,
+                    "prompt_tokens_details": None,
+                    "total_tokens": 6,
+                },
+            },
+        }
+
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+            ) as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_vertex_response
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            # Use `allowed_openai_params` so context_management actually
+            # reaches the transformation layer (otherwise the upstream
+            # validator drops it before we can prove the transformation
+            # strips it). This mirrors the real-world scenario where a
+            # caller explicitly opts in to forwarding an arbitrary param.
+            await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                context_management=[
+                    {"type": "compaction", "compact_threshold": 200000}
+                ],
+                allowed_openai_params=["context_management"],
+                api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+
+            call_args = mock_client.post.call_args
+            assert call_args is not None, "HTTP client was not called"
+
+            request_data = call_args.kwargs["json"]
+            print("request body=", json.dumps(request_data, indent=4))
+            instance = request_data["instances"][0]
+
+            assert (
+                "context_management" not in instance
+            ), "context_management should not be forwarded to Vertex Gemma"
+            assert instance["@requestFormat"] == "chatCompletions"
+            assert "messages" in instance
+
+    def test_transform_request_strips_context_management(self):
+        """
+        Direct unit test for VertexGemmaConfig.transform_request: verify that
+        `context_management` is stripped from `optional_params` regardless of
+        how it was supplied to the transformation layer.
+        """
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+
+        config = VertexGemmaConfig()
+        result = config.transform_request(
+            model="gemma-3-12b-it",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={
+                "max_tokens": 32,
+                "context_management": [
+                    {"type": "compaction", "compact_threshold": 200000}
+                ],
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert "instances" in result
+        instance = result["instances"][0]
+        assert instance["@requestFormat"] == "chatCompletions"
+        assert "context_management" not in instance
+        assert instance.get("max_tokens") == 32

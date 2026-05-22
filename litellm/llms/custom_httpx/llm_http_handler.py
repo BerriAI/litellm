@@ -1409,6 +1409,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -1477,6 +1479,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -4634,6 +4638,7 @@ class BaseLLMHTTPHandler:
         fingerprints: List[str],
         fingerprint: str,
         stream: bool = False,
+        callback: Optional[Any] = None,
     ) -> Any:
         from litellm.anthropic_interface import messages as anthropic_messages
 
@@ -4675,7 +4680,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
-        return await anthropic_messages.acreate(
+        response = await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
@@ -4685,6 +4690,23 @@ class BaseLLMHTTPHandler:
                 **kwargs_for_followup,
             }
         )
+
+        if callback is not None:
+            try:
+                response = await callback.async_post_agentic_loop_response_hook(
+                    response=response, plan=plan, kwargs=kwargs
+                )
+            except Exception as e:
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in "
+                    "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
+                    _call_id,
+                    model,
+                    str(e),
+                )
+
+        return response
 
     async def _execute_chat_completion_agentic_plan(
         self,
@@ -4869,6 +4891,7 @@ class BaseLLMHTTPHandler:
                     fingerprints=fingerprints,
                     fingerprint=fingerprint,
                     stream=stream,
+                    callback=callback,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -7815,7 +7838,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -7892,7 +7915,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -7982,7 +8005,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8059,7 +8082,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8149,7 +8172,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8226,7 +8249,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8322,7 +8345,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8401,7 +8424,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8489,7 +8512,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(
@@ -8565,7 +8588,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(

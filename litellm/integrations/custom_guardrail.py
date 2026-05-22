@@ -43,7 +43,11 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
-from litellm.exceptions import ModifyResponseException as ModifyResponseException
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+)
 
 
 class CustomGuardrail(CustomLogger):
@@ -737,11 +741,14 @@ class CustomGuardrail(CustomLogger):
         (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
+        - GuardrailRaisedException (generic guardrail API, tool permission)
+        - BlockedPiiEntityError (Presidio PII detection)
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
         """
-
         if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, (GuardrailRaisedException, BlockedPiiEntityError)):
             return True
         if (
             HTTPException is not None
