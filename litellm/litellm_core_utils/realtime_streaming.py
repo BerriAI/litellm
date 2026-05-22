@@ -525,15 +525,20 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
-            event_str = json.dumps(event)
             if isinstance(event, dict) and event.get("type") == "session.created":
                 if self._session_created_sent_to_client:
+                    # A synthetic session.created (with placeholder defaults) was
+                    # already forwarded to the client when we connected.  The
+                    # provider's real session.created (e.g. emitted from Gemini
+                    # `setupComplete`) carries the authoritative modalities/model
+                    # from the client's session.update.  Re-emit it as
+                    # `session.updated` so the client learns the corrected
+                    # configuration without seeing two `session.created` events.
+                    event = {**event, "type": "session.updated"}
                     await self._maybe_send_guardrail_turn_detection_update()
-                    verbose_logger.debug(
-                        "Skipping duplicate session.created from provider stream"
-                    )
-                    continue
-                self._session_created_sent_to_client = True
+                else:
+                    self._session_created_sent_to_client = True
+            event_str = json.dumps(event)
             ## For audio/VAD guardrail path: forward session.created first, then inject.
             if (
                 isinstance(event, dict)

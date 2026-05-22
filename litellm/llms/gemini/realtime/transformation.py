@@ -1276,6 +1276,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     output_items=None,
                 )
                 returned_message.append(transformed_response_done_event)
+                # Reset IDs so a subsequent turn (e.g. a `toolCall` arriving in
+                # a later WebSocket frame after `turnComplete`) starts a fresh
+                # response with its own `response.created` preamble instead of
+                # reusing the just-completed response ID.
+                current_output_item_id = None
+                current_response_id = None
             elif (
                 openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
                 or openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
