@@ -279,6 +279,7 @@ def _validate_envelope(data: LiteLLMExportEnvelope) -> None:
     _check_ids("mcp_servers", data.mcp_servers, "server_id")
     _check_ids("agents", data.agents, "agent_name")
     _check_ids("guardrails", data.guardrails, "guardrail_name")
+    _check_ids("tags", data.tags, "tag_name")
 
     # keys: key_alias is optional (keyless keys are skipped at import time)
     # — we only warn about them during import, not here

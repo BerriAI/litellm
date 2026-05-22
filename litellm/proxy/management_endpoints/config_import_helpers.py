@@ -134,6 +134,14 @@ async def _import_section(
             "falling back to non-transactional writes.",
             table_name,
         )
+        _snap = (
+            section_result.created,
+            section_result.updated,
+            section_result.skipped,
+            section_result.errors,
+            section_result.total_processed,
+            list(section_result.warnings),
+        )
         try:
             for rec in records:
                 await _upsert(
@@ -147,7 +155,16 @@ async def _import_section(
                     id_query_field=id_query_field,
                 )
         except Exception as e:
+            (
+                section_result.created,
+                section_result.updated,
+                section_result.skipped,
+                section_result.errors,
+                section_result.total_processed,
+                section_result.warnings,
+            ) = _snap
             section_result.errors += len(records)
+            section_result.total_processed += len(records)
             section_result.warnings.append(f"Section failed: {e}")
             verbose_proxy_logger.error(
                 "Section %s failed: %s", table_name, e, exc_info=True
