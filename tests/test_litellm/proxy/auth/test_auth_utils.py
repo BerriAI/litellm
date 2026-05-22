@@ -491,14 +491,14 @@ def test_get_model_from_request_ignores_vector_store_id_on_vector_store_routes()
         is None
     ), "vector_store_id model must not be surfaced on vector store file routes"
 
-    # POST /v1/vector_stores/{id}/files  — same path, different method (same route string)
+    # POST /v1/vector_stores/{id}/search — search route (no /files suffix)
     assert (
         get_model_from_request(
             request_data={"vector_store_id": vector_store_id},
-            route="/v1/vector_stores/abc-123/files",
+            route="/v1/vector_stores/abc-123/search",
         )
         is None
-    ), "vector_store_id model must not be surfaced on vector store file create routes"
+    ), "vector_store_id model must not be surfaced on vector store search routes"
 
     # GET /v1/vector_stores/{id}/files/{file_id} — file-retrieve route
     assert (

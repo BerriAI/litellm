@@ -1332,7 +1332,7 @@ def _extract_model_candidates_from_request(
             # teams that have vector store access but don't hold an explicit
             # allowlist entry for the underlying routing model.
             if field == "vector_store_id" and _route_matches_any_marker(
-                route=route, markers=("/vector_stores",)
+                route=route, markers=_MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS
             ):
                 continue
             _append_model_candidates(
