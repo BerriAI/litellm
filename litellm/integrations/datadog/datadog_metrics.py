@@ -144,7 +144,19 @@ class DatadogMetricsLogger(CustomBatchLogger):
             }
             self.log_queue.append(series_llm_latency)
 
-        # 3. Request Count / Status Code
+        # 3. LiteLLM Overhead Latency Metric (time spent inside LiteLLM, excluding provider)
+        hidden_params = log.get("hidden_params") or {}
+        overhead_ms = hidden_params.get("litellm_overhead_time_ms")
+        if overhead_ms is not None:
+            series_overhead_latency: DatadogMetricSeries = {
+                "metric": "litellm.request.overhead_latency",
+                "type": 3,  # gauge
+                "points": [{"timestamp": timestamp, "value": overhead_ms / 1000}],
+                "tags": tags,
+            }
+            self.log_queue.append(series_overhead_latency)
+
+        # 4. Request Count / Status Code
         series_count: DatadogMetricSeries = {
             "metric": "litellm.llm_api.request_count",
             "type": 1,  # count

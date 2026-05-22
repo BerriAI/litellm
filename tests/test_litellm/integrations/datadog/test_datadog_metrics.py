@@ -104,6 +104,7 @@ async def test_add_metrics_from_log(clean_env):
     logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
 
     # Should have 3 series: total_latency, llm_api_latency, request_count
+    # (no overhead because hidden_params.litellm_overhead_time_ms is absent)
     assert len(logger.log_queue) == 3
 
     metrics = {s["metric"]: s for s in logger.log_queue}
@@ -123,6 +124,75 @@ async def test_add_metrics_from_log(clean_env):
     assert count["type"] == 1  # count
     assert count["points"][0]["value"] == 1.0
     assert "status_code:200" in count["tags"]
+
+
+@pytest.mark.asyncio
+async def test_overhead_latency_metric_emitted(clean_env):
+    """Test that litellm.request.overhead_latency is emitted when hidden_params contains overhead."""
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
+
+    now = datetime.now()
+    start_time = now - timedelta(seconds=2)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        hidden_params={
+            "model_id": None,
+            "cache_key": None,
+            "api_base": None,
+            "response_cost": None,
+            "litellm_overhead_time_ms": 75.0,  # 75 ms overhead
+            "additional_headers": None,
+            "batch_models": None,
+            "litellm_model_name": None,
+            "usage_object": None,
+        },
+    )
+
+    kwargs = {"start_time": start_time, "end_time": now}
+    logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
+
+    metrics = {s["metric"]: s for s in logger.log_queue}
+
+    assert (
+        "litellm.request.overhead_latency" in metrics
+    ), "overhead_latency metric must be present when litellm_overhead_time_ms is set"
+    overhead = metrics["litellm.request.overhead_latency"]
+    assert overhead["type"] == 3  # gauge
+    # 75 ms → 0.075 s
+    assert abs(overhead["points"][0]["value"] - 0.075) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_overhead_latency_metric_omitted_when_none(clean_env):
+    """Test that litellm.request.overhead_latency is NOT emitted when overhead is None."""
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
+
+    now = datetime.now()
+    start_time = now - timedelta(seconds=1)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        hidden_params={
+            "model_id": None,
+            "cache_key": None,
+            "api_base": None,
+            "response_cost": None,
+            "litellm_overhead_time_ms": None,  # explicitly None
+            "additional_headers": None,
+            "batch_models": None,
+            "litellm_model_name": None,
+            "usage_object": None,
+        },
+    )
+
+    kwargs = {"start_time": start_time, "end_time": now}
+    logger._add_metrics_from_log(log=payload, kwargs=kwargs, status_code="200")
+
+    metrics = {s["metric"]: s for s in logger.log_queue}
+    assert "litellm.request.overhead_latency" not in metrics
 
 
 @pytest.mark.asyncio
