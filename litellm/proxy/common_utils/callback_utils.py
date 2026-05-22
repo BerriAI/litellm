@@ -361,8 +361,6 @@ def _register_custom_loggers_into_all_callback_lists(
 
     Idempotent: callbacks already present in a list are not added again.
     """
-    from litellm.integrations.custom_logger import CustomLogger
-
     for callback in callbacks:
         if not isinstance(callback, CustomLogger):
             continue
