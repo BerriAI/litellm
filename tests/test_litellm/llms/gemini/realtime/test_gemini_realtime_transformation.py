@@ -265,9 +265,9 @@ def test_gemini_realtime_transformation_generation_complete():
     contains_audio_done_event = False
     for response in responses:
         if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE.value:
-            contains_audio_delta = True
+            contains_audio_done_event = True
             break
-    assert contains_audio_delta, "Expected audio delta event"
+    assert contains_audio_done_event, "Expected audio done event"
 
 
 def test_gemini_3_1_flash_live_preview_model_cost_map_entry():

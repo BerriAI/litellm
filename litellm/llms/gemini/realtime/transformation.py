@@ -904,7 +904,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         temperature = generation_config.get("temperature")
         max_output_tokens = generation_config.get("max_output_tokens")
-        gemini_modalities = generation_config.get("responseModalities", ["TEXT"])
+        gemini_modalities = generation_config.get("responseModalities", ["AUDIO"])
         _modalities = [
             modality.lower() for modality in cast(List[str], gemini_modalities)
         ]
