@@ -246,6 +246,45 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     return td
         return None
 
+    @staticmethod
+    def _normalize_session_payload_for_mapping(session: dict) -> dict:
+        """Normalize GA-remapped session fields back to their beta keys.
+
+        ``map_openai_params`` only recognises the flat OpenAI-beta key names
+        (``modalities``, ``input_audio_transcription``, ``turn_detection``).
+        For GA clients the upstream shim renames these into the nested GA
+        schema (``output_modalities``, ``audio.input.transcription``,
+        ``audio.input.turn_detection``), which would otherwise be silently
+        dropped here. Surface them back at the top level so the existing
+        mapping logic picks them up without duplicating provider-specific
+        knowledge of the GA schema in ``map_openai_params``.
+        """
+        if not isinstance(session, dict):
+            return session
+
+        normalized = dict(session)
+
+        if "modalities" not in normalized and "output_modalities" in normalized:
+            normalized["modalities"] = normalized["output_modalities"]
+
+        audio = normalized.get("audio")
+        if isinstance(audio, dict):
+            input_cfg = audio.get("input")
+            if isinstance(input_cfg, dict):
+                if (
+                    "input_audio_transcription" not in normalized
+                    and "transcription" in input_cfg
+                ):
+                    normalized["input_audio_transcription"] = input_cfg["transcription"]
+
+        extracted_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
+            normalized
+        )
+        if extracted_turn_detection is not None and "turn_detection" not in normalized:
+            normalized["turn_detection"] = extracted_turn_detection
+
+        return normalized
+
     def _handle_session_update(
         self,
         json_message: dict,
@@ -268,21 +307,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         session_payload = json_message.get("session") or {}
         if session_configuration_request is None:
             # First session.update - send the setup with all configuration.
-            # Normalize ``turn_detection`` to the top level so map_openai_params
-            # picks it up whether the client used the flat beta shape or the
-            # GA nested shape (session.audio.input.turn_detection). Without
-            # this, guardrail-injected ``create_response: False`` would be
-            # silently dropped for GA clients because map_openai_params only
-            # looks at top-level keys.
-            extracted_turn_detection = self._extract_turn_detection(session_payload)
-            if (
-                extracted_turn_detection is not None
-                and "turn_detection" not in session_payload
-            ):
-                session_payload = {
-                    **session_payload,
-                    "turn_detection": extracted_turn_detection,
-                }
+            # Normalize GA-remapped fields (``output_modalities``,
+            # nested ``audio.input.transcription``,
+            # ``audio.input.turn_detection``) back to their flat beta keys so
+            # ``map_openai_params`` picks them up. Without this, GA clients'
+            # explicit modality / transcription / turn-detection settings
+            # would be silently dropped because ``map_openai_params`` only
+            # recognises the flat OpenAI-beta key names.
+            session_payload = self._normalize_session_payload_for_mapping(
+                session_payload
+            )
             client_session_configuration_request = self.map_openai_params(
                 optional_params={}, non_default_params=session_payload
             )
