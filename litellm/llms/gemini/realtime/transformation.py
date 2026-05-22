@@ -1528,6 +1528,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             else:
                 raise ValueError(f"Unknown openai event: {openai_event}")
         if len(returned_message) == 0:
+            # A frame whose only top-level keys are sibling metadata (e.g.
+            # a standalone ``{"usageMetadata": {...}}`` emitted by Gemini
+            # Live between turns) is not an error — there is just nothing
+            # to forward to the OpenAI-shaped client. Returning the
+            # unchanged state keeps the WebSocket alive; raising would
+            # terminate the session for a benign no-op frame.
+            if not any(key in _KNOWN_GEMINI_TOP_LEVEL_KEYS for key in json_message):
+                return {
+                    "response": returned_message,
+                    "current_output_item_id": current_output_item_id,
+                    "current_response_id": current_response_id,
+                    "current_delta_chunks": current_delta_chunks,
+                    "current_conversation_id": current_conversation_id,
+                    "current_item_chunks": current_item_chunks,
+                    "current_delta_type": current_delta_type,
+                    "session_configuration_request": session_configuration_request,
+                }
             if isinstance(message, bytes):
                 message_str = message.decode("utf-8", errors="replace")
             else:

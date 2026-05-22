@@ -1145,3 +1145,43 @@ def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():
         "call_6",
         "call_7",
     ]
+
+
+def test_gemini_standalone_usage_metadata_does_not_crash_websocket():
+    """A Gemini frame containing only sibling metadata (e.g. a standalone
+    ``usageMetadata`` block emitted between turns) must not trip the
+    ``Unknown message type`` guard — that would terminate the WebSocket
+    session on a benign no-op frame."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_usage_only"
+
+    result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 12,
+                    "responseTokenCount": 34,
+                    "totalTokenCount": 46,
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_existing",
+            "current_response_id": "resp_existing",
+            "current_conversation_id": "conv_existing",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    assert result["response"] == []
+    # State must be returned unchanged so subsequent frames continue the
+    # in-flight response correctly.
+    assert result["current_output_item_id"] == "item_existing"
+    assert result["current_response_id"] == "resp_existing"
+    assert result["current_conversation_id"] == "conv_existing"
