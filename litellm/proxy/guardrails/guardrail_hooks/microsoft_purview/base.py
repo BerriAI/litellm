@@ -110,8 +110,10 @@ class PurviewGuardrailBase:
         token_data = response.json()
         access_token = token_data["access_token"]
         expires_in = int(token_data.get("expires_in", 3599))
+        # Recompute ``now`` after the await so the expiry reflects when the
+        # token was actually received, not when the request started.
         with self._cache_lock:
-            self._token_cache = (access_token, now + expires_in)
+            self._token_cache = (access_token, time.time() + expires_in)
         verbose_proxy_logger.debug(
             "Purview: acquired new OAuth2 token (expires_in=%ds)", expires_in
         )
@@ -188,8 +190,11 @@ class PurviewGuardrailBase:
         response_json, response_headers = await self._graph_post(url, body)
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
+        # Recompute ``now`` after the await so the TTL reflects when the
+        # scope response was actually received, not when the request started.
+        fetched_at = time.time()
         with self._cache_lock:
-            self._scope_cache[user_id] = (etag, response_json, now)
+            self._scope_cache[user_id] = (etag, response_json, fetched_at)
             # Move refreshed entry to the end so it is treated as most-recently-used.
             # OrderedDict.__setitem__ preserves existing insertion order for known
             # keys, so an explicit move_to_end() call is required.
