@@ -2872,3 +2872,99 @@ class TestFirstApiCallStartTimeSetOnce:
         assert obj.model_call_details["api_call_start_time"] > first
         assert obj.model_call_details["first_api_call_start_time"] == first
         assert user_meta == {}
+
+
+class TestHandleAnthropicMessagesResponseLoggingResponsesBridge:
+    """
+    Regression tests for _handle_anthropic_messages_response_logging when the
+    Responses API bridge is active (non-Anthropic backend behind /v1/messages).
+
+    Before the fix, result arrived as a ResponseCompletedEvent and
+    AnthropicResponse.model_validate(result) raised a ValidationError that was
+    swallowed as Non-Blocking, silently dropping the spend_logs row.
+    """
+
+    def _make_logging_obj(self, stream: bool) -> LitellmLogging:
+        return LitellmLogging(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            call_type="anthropic_messages",
+            start_time=time.time(),
+            litellm_call_id="test-responses-bridge-123",
+            function_id="test-fn",
+        )
+
+    def _make_responses_api_response(self) -> "ResponsesAPIResponse":
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_abc123",
+            created_at=1700000000,
+            model="gpt-4o",
+            output=[],
+            usage={
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            },
+        )
+
+    def test_handle_anthropic_messages_response_logging_streaming_response_completed_event_returns_responses_api_response(
+        self,
+    ):
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+        )
+
+        logging_obj = self._make_logging_obj(stream=True)
+        inner_response = self._make_responses_api_response()
+        completed_event = ResponseCompletedEvent(
+            type="response.completed",
+            response=inner_response,
+        )
+
+        result = logging_obj._handle_anthropic_messages_response_logging(
+            result=completed_event
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert result.id == "resp_abc123"
+
+    def test_handle_anthropic_messages_response_logging_response_incomplete_event_returns_responses_api_response(
+        self,
+    ):
+        from litellm.types.llms.openai import (
+            ResponseIncompleteEvent,
+            ResponsesAPIResponse,
+        )
+
+        logging_obj = self._make_logging_obj(stream=True)
+        inner_response = self._make_responses_api_response()
+        incomplete_event = ResponseIncompleteEvent(
+            type="response.incomplete",
+            response=inner_response,
+        )
+
+        result = logging_obj._handle_anthropic_messages_response_logging(
+            result=incomplete_event
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert result.id == "resp_abc123"
+
+    def test_handle_anthropic_messages_response_logging_responses_api_response_passthrough(
+        self,
+    ):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        responses_api_response = self._make_responses_api_response()
+
+        result = logging_obj._handle_anthropic_messages_response_logging(
+            result=responses_api_response
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert result.id == "resp_abc123"

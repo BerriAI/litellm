@@ -3424,7 +3424,9 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(
+        self, result: Any
+    ) -> Union[ModelResponse, ResponsesAPIResponse]:
         """
         Handles logging for Anthropic messages responses.
 
@@ -3442,6 +3444,18 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.stream and isinstance(result, ModelResponse):
             return result
         elif isinstance(result, ModelResponse):
+            return result
+
+        # Responses API bridge: streaming delivers a ResponseCompletedEvent (or its
+        # incomplete/failed variants) rather than an AnthropicResponse. Extract the
+        # nested ResponsesAPIResponse so downstream logging (_transform_usage_objects,
+        # spend_logs) can process it without attempting AnthropicResponse.model_validate.
+        if isinstance(
+            result,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            return result.response
+        elif isinstance(result, ResponsesAPIResponse):
             return result
 
         httpx_response = self.model_call_details.get("httpx_response", None)
