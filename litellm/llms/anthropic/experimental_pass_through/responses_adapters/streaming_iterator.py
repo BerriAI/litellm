@@ -259,15 +259,33 @@ class AnthropicResponsesStreamWrapper:
                 if usage is not None:
                     input_tokens = getattr(usage, "input_tokens", 0) or 0
                     output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
-                    cache_creation_tokens = int(
+
+                    # Extract cache tokens from OpenAI Responses API fields
+                    input_tokens_details = getattr(usage, "input_tokens_details", None)
+                    if input_tokens_details is not None:
+                        cache_read_tokens = int(
+                            getattr(input_tokens_details, "cached_tokens", 0) or 0
+                        )
+
+                    output_tokens_details = getattr(
+                        usage, "output_tokens_details", None
+                    )
+                    if output_tokens_details is not None:
+                        # No cache_creation field in OpenAI output_tokens_details,
+                        # but check for future compatibility
+                        pass
+
+                    # Fall back to Anthropic-native fields if present
+                    anthropic_cache_creation = int(
                         getattr(usage, "cache_creation_input_tokens", 0) or 0
                     )
-                    cache_read_tokens = int(
+                    if anthropic_cache_creation:
+                        cache_creation_tokens = anthropic_cache_creation
+                    anthropic_cache_read = int(
                         getattr(usage, "cache_read_input_tokens", 0) or 0
                     )
+                    if anthropic_cache_read:
+                        cache_read_tokens = anthropic_cache_read
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:

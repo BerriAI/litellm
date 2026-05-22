@@ -1043,3 +1043,51 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+# ---------------------------------------------------------------------------
+# cache token extraction in translate_response
+# ---------------------------------------------------------------------------
+
+
+class TestCacheTokenExtraction:
+    """translate_response extracts cache tokens from OpenAI Responses API usage."""
+
+    def test_openai_input_tokens_details_cached_tokens(self):
+        """cached_tokens from input_tokens_details maps to cache_read_input_tokens."""
+        response = _make_mock_response(output=[_make_output_message(["Hi"])])
+        # Simulate OpenAI Responses API usage with input_tokens_details
+        input_details = MagicMock()
+        input_details.cached_tokens = 500
+        response.usage.input_tokens_details = input_details
+        response.usage.output_tokens_details = None
+        # Ensure Anthropic-native fields are absent
+        del response.usage.cache_creation_input_tokens
+        del response.usage.cache_read_input_tokens
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_read_input_tokens"] == 500
+
+    def test_anthropic_native_cache_fields_fallback(self):
+        """Anthropic-native cache fields are used when input_tokens_details is absent."""
+        response = _make_mock_response(output=[_make_output_message(["Hi"])])
+        response.usage.input_tokens_details = None
+        response.usage.output_tokens_details = None
+        response.usage.cache_creation_input_tokens = 200
+        response.usage.cache_read_input_tokens = 1000
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"]["cache_creation_input_tokens"] == 200
+        assert result["usage"]["cache_read_input_tokens"] == 1000
+
+    def test_no_cache_tokens_when_absent(self):
+        """No cache fields in usage when neither source provides them."""
+        response = _make_mock_response(output=[_make_output_message(["Hi"])])
+        response.usage.input_tokens_details = None
+        response.usage.output_tokens_details = None
+        del response.usage.cache_creation_input_tokens
+        del response.usage.cache_read_input_tokens
+
+        result: Any = _ADAPTER.translate_response(response)
+        assert "cache_read_input_tokens" not in result["usage"]
+        assert "cache_creation_input_tokens" not in result["usage"]

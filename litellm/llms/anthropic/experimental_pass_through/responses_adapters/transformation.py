@@ -501,10 +501,35 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         input_tokens = int(getattr(raw_usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(raw_usage, "output_tokens", 0) or 0)
 
+        # Extract cache tokens from OpenAI Responses API fields
+        cache_creation_tokens = 0
+        cache_read_tokens = 0
+        if raw_usage is not None:
+            input_tokens_details = getattr(raw_usage, "input_tokens_details", None)
+            if input_tokens_details is not None:
+                cache_read_tokens = int(
+                    getattr(input_tokens_details, "cached_tokens", 0) or 0
+                )
+            # Fall back to Anthropic-native fields if present
+            anthropic_cache_creation = int(
+                getattr(raw_usage, "cache_creation_input_tokens", 0) or 0
+            )
+            if anthropic_cache_creation:
+                cache_creation_tokens = anthropic_cache_creation
+            anthropic_cache_read = int(
+                getattr(raw_usage, "cache_read_input_tokens", 0) or 0
+            )
+            if anthropic_cache_read:
+                cache_read_tokens = anthropic_cache_read
+
         anthropic_usage = AnthropicUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+        if cache_creation_tokens:
+            anthropic_usage["cache_creation_input_tokens"] = cache_creation_tokens
+        if cache_read_tokens:
+            anthropic_usage["cache_read_input_tokens"] = cache_read_tokens
 
         return AnthropicMessagesResponse(
             id=response.id,
