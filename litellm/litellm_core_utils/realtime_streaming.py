@@ -877,6 +877,31 @@ class RealTimeStreaming:
                         self._pending_guardrail_message = None
                         continue
 
+                    ## GUARDRAIL: Inject turn_detection into first session.update
+                    # if needed. Done BEFORE the GA remap so the injected
+                    # ``create_response`` rides along with any client-provided
+                    # turn_detection fields (e.g. silence_duration_ms) into the
+                    # nested ``audio.input.turn_detection`` path produced by the
+                    # remap. Doing this after the remap would create a separate
+                    # minimal root-level ``turn_detection`` and silently drop
+                    # the client's nested settings.
+                    if (
+                        msg_type == "session.update"
+                        and self.session_configuration_request is None
+                        and not self._guardrail_turn_detection_update_sent
+                        and self._has_audio_transcription_guardrails()
+                    ):
+                        session = msg_obj.setdefault("session", {})
+                        if isinstance(session, dict):
+                            session.setdefault("turn_detection", {})[
+                                "create_response"
+                            ] = False
+                            message = json.dumps(msg_obj)
+                            self._guardrail_turn_detection_update_sent = True
+                            verbose_logger.debug(
+                                "Injected turn_detection into first session.update for audio transcription guardrails"
+                            )
+
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
@@ -893,28 +918,6 @@ class RealTimeStreaming:
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
-                ## GUARDRAIL: Inject turn_detection into first session.update if needed
-                try:
-                    msg_obj = json.loads(message)
-                    if (
-                        msg_obj.get("type") == "session.update"
-                        and self.session_configuration_request is None
-                        and not self._guardrail_turn_detection_update_sent
-                        and self._has_audio_transcription_guardrails()
-                    ):
-                        # Inject turn_detection into the first session.update
-                        session = msg_obj.setdefault("session", {})
-                        session.setdefault("turn_detection", {})[
-                            "create_response"
-                        ] = False
-                        message = json.dumps(msg_obj)
-                        self._guardrail_turn_detection_update_sent = True
-                        verbose_logger.debug(
-                            "Injected turn_detection into first session.update for audio transcription guardrails"
-                        )
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-
                 ## LOGGING
                 # Log after any in-place modifications (GA remap, guardrail
                 # turn_detection injection) so audit logs reflect what we
@@ -922,16 +925,7 @@ class RealTimeStreaming:
                 self.store_input(message=message)
 
                 ## FORWARD TO BACKEND
-                if self.provider_config:
-                    message = self.provider_config.transform_realtime_request(
-                        message, self.model, self.session_configuration_request
-                    )
-
-                    for msg in message:
-                        await self.backend_ws.send(msg)  # type: ignore[union-attr]
-                        self._cache_session_configuration_request(msg)
-                else:
-                    await self.backend_ws.send(message)  # type: ignore[union-attr]
+                await self._send_to_backend(message)
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")

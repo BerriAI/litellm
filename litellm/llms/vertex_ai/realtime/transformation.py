@@ -204,7 +204,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             if session_configuration_request is None:
                 # First session.update - send the setup with Vertex AI configuration
                 setup_config = self._build_vertex_ai_setup_config(
-                    model, json_message["session"]
+                    model, json_message.get("session") or {}
                 )
                 gemini_setup_msg = json.dumps({"setup": setup_config})
 

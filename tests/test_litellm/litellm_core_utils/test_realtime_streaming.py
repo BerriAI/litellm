@@ -1353,11 +1353,18 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     # Simulate first session.update in deferred mode
     await streaming.client_ack_messages()
     
-    # Verify turn_detection was injected into the session.update
+    # Verify turn_detection was injected into the session.update. The
+    # injection runs before the GA remap, so the create_response flag ends
+    # up nested under audio.input.turn_detection in the GA-shaped payload.
     assert len(transformed_messages) == 1
     transformed_msg, session_config = transformed_messages[0]
     msg_obj = json.loads(transformed_msg)
     assert msg_obj["type"] == "session.update"
-    assert "turn_detection" in msg_obj["session"]
-    assert msg_obj["session"]["turn_detection"]["create_response"] is False
+    session_obj = msg_obj["session"]
+    injected_turn_detection = (
+        session_obj.get("turn_detection")
+        or session_obj.get("audio", {}).get("input", {}).get("turn_detection")
+    )
+    assert injected_turn_detection is not None
+    assert injected_turn_detection["create_response"] is False
     assert streaming._guardrail_turn_detection_update_sent is True
