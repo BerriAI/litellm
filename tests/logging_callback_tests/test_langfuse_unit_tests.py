@@ -650,3 +650,36 @@ def test_langfuse_logger_holds_http_handler_reference():
         )
         # The raw httpx client passed to Langfuse SDK must be the handler's client
         assert logger.langfuse_client is mock_handler.client
+
+
+def test_resolve_langfuse_credentials_allow_env_credentials_false_with_no_host():
+    """
+    When allow_env_credentials=False and langfuse_host is NOT provided,
+    resolve_langfuse_credentials must NOT fall back to LANGFUSE_SECRET_KEY /
+    LANGFUSE_PUBLIC_KEY environment variables.
+
+    Previously the guard was ``allow_env_credentials is False and langfuse_host
+    is not None`` which silently ignored the flag when no host was given.
+    """
+    from litellm.integrations.langfuse.langfuse import resolve_langfuse_credentials
+
+    with patch.dict(
+        "os.environ",
+        {
+            "LANGFUSE_SECRET_KEY": "env-secret",
+            "LANGFUSE_PUBLIC_KEY": "env-public",
+        },
+    ):
+        public_key, secret_key, resolved_host = resolve_langfuse_credentials(
+            langfuse_public_key=None,
+            langfuse_secret=None,
+            langfuse_secret_key=None,
+            langfuse_host=None,  # no explicit host
+            allow_env_credentials=False,
+        )
+
+    # Keys must NOT come from the environment
+    assert public_key is None, f"Expected None but got {public_key!r}"
+    assert secret_key is None, f"Expected None but got {secret_key!r}"
+    # Host is a routing setting, not a secret — env fallback is allowed
+    assert resolved_host is not None

@@ -97,7 +97,10 @@ def resolve_langfuse_credentials(
     langfuse_host=None,
     allow_env_credentials: bool = True,
 ):
-    if allow_env_credentials is False and langfuse_host is not None:
+    if allow_env_credentials is False:
+        # Caller explicitly opted out of env-var credentials — use only what was
+        # passed in directly.  ``langfuse_host`` resolution below still falls back
+        # to the env var because it is a routing setting, not a secret.
         secret_key = langfuse_secret or langfuse_secret_key
         public_key = langfuse_public_key
     else:
