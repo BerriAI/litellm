@@ -8248,6 +8248,10 @@ class ProviderConfigManager:
             LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
             LlmProviders.OVHCLOUD: (lambda: litellm.OVHCloudChatConfig(), False),
             LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
+            LlmProviders.TENCENT_CLOUD: (
+                lambda: litellm.TencentCloudChatConfig(),
+                False,
+            ),
             LlmProviders.LANGGRAPH: (
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
