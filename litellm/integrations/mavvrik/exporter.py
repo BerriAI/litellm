@@ -43,15 +43,29 @@ if TYPE_CHECKING:
 # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
 # TeamTable → UserTable). Prisma's relational API cannot express a multi-hop
 # JOIN in a single query without N+1 round-trips.
-#
-# dus.* selects all columns from LiteLLM_DailyUserSpend so that any new
-# columns added to that table in future LiteLLM versions are automatically
-# included in the export without requiring a code change here.
 _USAGE_QUERY = """
 SELECT
-    dus.*,
+    dus.id,
+    dus.date,
+    dus.user_id,
+    dus.api_key,
+    dus.model,
+    dus.model_group,
+    dus.custom_llm_provider,
+    dus.mcp_namespaced_tool_name,
+    dus.endpoint,
+    dus.prompt_tokens,
+    dus.completion_tokens,
+    dus.cache_read_input_tokens,
+    dus.cache_creation_input_tokens,
+    dus.spend,
+    dus.api_requests,
+    dus.successful_requests,
+    dus.failed_requests,
+    dus.created_at,
+    dus.updated_at,
     vt.team_id,
-    vt.key_alias    AS api_key_alias,
+    vt.key_alias        AS api_key_alias,
     vt.organization_id,
     tt.team_alias,
     ut.user_email,
