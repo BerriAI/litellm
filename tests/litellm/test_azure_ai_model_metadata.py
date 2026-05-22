@@ -77,6 +77,10 @@ def test_azure_ai_ai21_jamba_instruct(model_cost):
     assert info["output_cost_per_token"] > 0
     assert info["max_input_tokens"] == 70000
     assert info["max_output_tokens"] == 4096
+    # AI21 Jamba Instruct supports function calling; both flags must be present
+    # so callers that gate on supports_function_calling don't accidentally skip it.
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -40617,7 +40617,8 @@
     "mode": "chat",
     "output_cost_per_token": 7e-07,
     "source": "https://azuremarketplace.microsoft.com/en-us/marketplace/apps/ai21labs.jamba-instruct-offer",
-    "supports_tool_choice": true
+    "supports_tool_choice": true,
+    "supports_function_calling": true
   },
   "azure_ai/Codestral-2501": {
     "input_cost_per_token": 3e-07,
