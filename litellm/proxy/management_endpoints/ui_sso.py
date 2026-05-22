@@ -2229,6 +2229,17 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
+            team_alias = None
+            if team_id and isinstance(user_team_details, list):
+                team_alias = next(
+                    (
+                        team.get("team_alias")
+                        for team in user_team_details
+                        if team.get("team_id") == team_id
+                    ),
+                    None,
+                )
+
             # Create user object for JWT generation
             user_info = LiteLLM_UserTable(
                 user_id=user_id,
@@ -2240,7 +2251,7 @@ async def cli_poll_key(
             # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
             # Pass selected team_id to ensure JWT has correct team
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-                user_info=user_info, team_id=team_id
+                user_info=user_info, team_id=team_id, team_alias=team_alias
             )
 
             # Delete cache entry (single-use)
