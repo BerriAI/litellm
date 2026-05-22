@@ -425,8 +425,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
-        from litellm.types.llms.openai import ResponseAPIUsage
-
         content: List[Dict[str, Any]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
