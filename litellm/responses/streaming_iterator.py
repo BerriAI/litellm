@@ -28,7 +28,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
-from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+from litellm.utils import async_post_call_success_deployment_hook
 
 
 @lru_cache(maxsize=1)
@@ -121,10 +121,10 @@ class BaseResponsesAPIStreamingIterator:
         if not chunk:
             return None
 
-        # Handle SSE format (data: {...})
-        chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
-        if chunk is None:
-            return None
+        # NOTE: ``SSEDecoder`` already strips the SSE ``data:`` field prefix, so
+        # the value passed in here is the raw field content. Do not re-run
+        # ``_strip_sse_data_from_chunk`` on it — doing so would incorrectly mangle
+        # payloads whose actual JSON value happens to start with ``data:``.
 
         # Handle "[DONE]" marker
         if chunk == STREAM_SSE_DONE_STRING:
