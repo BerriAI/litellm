@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 from httpx._models import Headers, Response
 
 import litellm
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.bedrock.embed.cohere_transformation import (
     BedrockCohereEmbeddingConfig,
 )

@@ -147,6 +147,20 @@ class TestSagemakerCohereEmbeddingConfig:
         assert body["texts"] == ["hello"]
         assert body["input_type"] == "search_query"
 
+    def test_get_optional_params_embeddings_maps_dimensions_without_duplicate(self):
+        """dimensions must map to output_dimension only, not also stay as dimensions."""
+        from litellm.utils import get_optional_params_embeddings
+
+        optional_params = get_optional_params_embeddings(
+            model=self.MODEL,
+            custom_llm_provider="sagemaker",
+            dimensions=512,
+            input_type="search_query",
+        )
+        assert optional_params.get("output_dimension") == 512
+        assert "dimensions" not in optional_params
+        assert optional_params.get("input_type") == "search_query"
+
     def test_transform_response_parses_cohere_payload(self):
         cohere_response = {
             "embeddings": [[0.1, 0.2, 0.3]],

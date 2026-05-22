@@ -11,10 +11,10 @@ if TYPE_CHECKING:
 
 from httpx._models import Headers, Response
 
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import Usage, EmbeddingResponse
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
 from .cohere_transformation import SagemakerCohereEmbeddingConfig

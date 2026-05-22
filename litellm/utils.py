@@ -3343,11 +3343,15 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
-        # Provider-specific params (e.g. Cohere input_type) are not in
-        # OPENAI_EMBEDDING_PARAMS, so they are not in non_default_params after
-        # embedding_pre_process. Restore them from passed_params when supported.
+        # Provider-only params (e.g. Cohere input_type) are not in
+        # OPENAI_EMBEDDING_PARAMS, so embedding_pre_process drops them from
+        # non_default_params before map_openai_params. Restore only those extras
+        # from passed_params — skip OPENAI_EMBEDDING_PARAMS to avoid duplicating
+        # values already mapped (e.g. dimensions -> output_dimension).
         if supported_params:
             for param in supported_params:
+                if param in OPENAI_EMBEDDING_PARAMS:
+                    continue
                 if (
                     param in passed_params
                     and passed_params[param] is not None
