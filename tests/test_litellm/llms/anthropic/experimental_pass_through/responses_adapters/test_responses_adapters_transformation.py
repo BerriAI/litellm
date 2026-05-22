@@ -1265,3 +1265,101 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+class TestEdgeCaseInputCoverage:
+    """Cover defensive isinstance/type guards in transformation paths that are
+    otherwise unreachable from typical request shapes."""
+
+    def test_non_dict_block_in_user_content_list_skipped(self):
+        """User-content list containing a non-dict entry (string, None) must
+        be skipped by the `if not isinstance(block, dict): continue` guard
+        rather than raising."""
+        req = _make_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        "not-a-dict",
+                        None,
+                        {"type": "text", "text": "ok"},
+                    ],
+                }
+            ]
+        )
+        out = _ADAPTER.translate_request(req)
+        # Only the dict text block survives; non-dict entries silently dropped.
+        user_msg = next(it for it in out["input"] if it.get("role") == "user")
+        parts = user_msg["content"]
+        assert len(parts) == 1
+        assert parts[0]["type"] == "input_text"
+        assert parts[0]["text"] == "ok"
+
+    def test_non_dict_block_in_assistant_content_list_skipped(self):
+        """Same guard on the assistant-content path."""
+        req = _make_request(
+            messages=[
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        12345,
+                        {"type": "text", "text": "fine"},
+                    ],
+                },
+            ]
+        )
+        out = _ADAPTER.translate_request(req)
+        asst_msg = next(it for it in out["input"] if it.get("role") == "assistant")
+        parts = asst_msg["content"]
+        assert len(parts) == 1
+        assert parts[0]["text"] == "fine"
+
+    def test_tool_result_with_non_string_non_list_inner_stringified(self):
+        """tool_result.content that is neither None / str / list falls into
+        the `else: output_text = str(inner)` branch."""
+        req = _make_request(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": 42,
+                        }
+                    ],
+                }
+            ]
+        )
+        out = _ADAPTER.translate_request(req)
+        fco = next(
+            it for it in out["input"] if it.get("type") == "function_call_output"
+        )
+        assert fco["output"] == "42"
+        assert fco["call_id"] == "tu_1"
+
+    def test_context_management_edits_not_a_list_returns_none(self):
+        """`if not isinstance(edits, list): return None` — bad shape silently
+        ignored rather than crashing translate_request."""
+        result = _ADAPTER.translate_context_management_to_responses_api(
+            {"edits": "not-a-list"}
+        )
+        assert result is None
+
+    def test_context_management_non_dict_edit_entries_skipped(self):
+        """Each edit entry is guarded by `if not isinstance(edit, dict): continue`."""
+        result = _ADAPTER.translate_context_management_to_responses_api(
+            {
+                "edits": [
+                    "skip-me",
+                    None,
+                    {
+                        "type": "compact_20260112",
+                        "trigger": {"type": "input_tokens", "value": 150000},
+                    },
+                ]
+            }
+        )
+        # Only the well-formed entry survives.
+        assert result == [{"type": "compaction", "compact_threshold": 150000}]
