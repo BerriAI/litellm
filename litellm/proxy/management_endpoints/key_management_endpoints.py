@@ -1922,10 +1922,21 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
-        user_api_key_dict=user_api_key_dict,
+    # For updates, only raise if the caller is CHANGING allowed_routes.
+    # Round-tripping the value already set (e.g. by key_type at creation)
+    # must not require admin — the user cannot escalate by submitting a value
+    # that is already stored on the key.
+    _existing_allowed_routes = getattr(existing_key_row, "allowed_routes", None) or []
+    _routes_unchanged = (
+        data.allowed_routes is not None
+        and bool(_existing_allowed_routes)
+        and set(data.allowed_routes) == set(_existing_allowed_routes)
     )
+    if not _routes_unchanged:
+        _check_allowed_routes_caller_permission(
+            allowed_routes=data.allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
     if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
