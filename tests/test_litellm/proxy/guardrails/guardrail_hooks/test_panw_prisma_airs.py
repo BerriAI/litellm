@@ -5375,5 +5375,60 @@ class TestPanwAirsDualScanIndependence:
             assert mcp_call.get("content") is None
 
 
+class TestPanwAirsTimeoutCoercion:
+    """Regression tests for string-valued timeout handling.
+
+    Before the fix, a string `timeout` (which is what the dashboard UI persists
+    and what raw YAML preserves if quoted) survived into httpx, which raised
+    `TypeError: '<=' not supported between instances of 'str' and 'int'`. The
+    broad except in apply_guardrail swallowed it and the proxy returned a
+    misleading 500 'Security scan failed - request blocked for safety'.
+    """
+
+    def test_handler_coerces_string_timeout_to_float(self):
+        handler = make_handler(timeout="30")
+        assert handler.timeout == 30.0
+        assert isinstance(handler.timeout, float)
+
+    def test_handler_accepts_int_timeout(self):
+        handler = make_handler(timeout=15)
+        assert handler.timeout == 15.0
+
+    def test_handler_accepts_float_timeout(self):
+        handler = make_handler(timeout=7.5)
+        assert handler.timeout == 7.5
+
+    def test_handler_none_timeout_falls_back_to_default(self):
+        handler = make_handler(timeout=None)
+        assert handler.timeout == 10.0
+
+    def test_handler_omitted_timeout_uses_default(self):
+        handler = make_handler()
+        assert handler.timeout == 10.0
+
+    def test_litellm_params_coerces_string_timeout(self):
+        """Boundary validation: the Pydantic model itself should normalize
+        string timeouts before any handler reads the value via model_dump()."""
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            timeout="30",
+        )
+        assert params.timeout == 30.0
+        assert isinstance(params.timeout, float)
+
+    def test_litellm_params_rejects_garbage_timeout(self):
+        with pytest.raises(ValueError):
+            LitellmParams(
+                guardrail="panw_prisma_airs",
+                mode="pre_call",
+                api_key="test_key",
+                profile_name="test_profile",
+                timeout="not-a-number",
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
