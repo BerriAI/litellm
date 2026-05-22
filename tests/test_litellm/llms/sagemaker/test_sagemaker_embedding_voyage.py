@@ -190,6 +190,39 @@ class TestSagemakerCohereEmbeddingConfig:
         assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
         assert result.usage.prompt_tokens == 2
 
+    def test_transform_response_does_not_double_call_post_call(self):
+        """
+        Greptile review fix: SageMaker handler already calls
+        `logging_obj.post_call` once before invoking
+        `transform_embedding_response`. The transform must NOT call it again,
+        otherwise callbacks, cost calculators, and log handlers double-fire
+        for every Cohere SageMaker embedding call.
+        """
+        cohere_response = {
+            "embeddings": [[0.1, 0.2, 0.3]],
+            "meta": {"billed_units": {"input_tokens": 2}},
+        }
+        mock_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(cohere_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"input": ["hello"]}
+
+        self.config.transform_embedding_response(
+            model=self.MODEL,
+            raw_response=mock_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=logging_obj,
+            api_key=None,
+            request_data={"texts": ["hello"], "input_type": "search_query"},
+            optional_params={},
+            litellm_params={},
+        )
+
+        logging_obj.post_call.assert_not_called()
+
 
 class TestVoyageEmbeddingConfig:
     """Test Voyage-specific embedding configuration"""
