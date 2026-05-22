@@ -397,7 +397,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     **original_automatic_activity_detection,
                     **new_automatic_activity_detection,
                 }
-            follow_up_setup["realtimeInputConfig"] = merged_realtime_input_config
+            follow_up_setup["realtimeInputConfig"] = cast(
+                BidiGenerateContentRealtimeInputConfig,
+                merged_realtime_input_config,
+            )
         verbose_logger.debug(
             "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
