@@ -87,15 +87,26 @@ Customer segment: {segment}
 {context}
 
 === OUTPUT REQUIREMENTS ===
-Your entire final message must be ONLY these two sections (no preamble, todos,
-research narrative, or postamble like "draft is ready above"):
+Your entire final message must be ONLY the two sections below (no preamble,
+todos narrative, or postamble like "draft is ready above"). The customer reply
+must paste cleanly into Gmail AND Slack — Gmail re-flows nested bullets and
+"###" headers into a table on send, so use plain text with light formatting
+only and wrap it in a "text" fenced block so the Cursor "Copy" button copies
+plain text.
 
 === CUSTOMER REPLY ===
-Short copy-paste reply for the customer: under 350 words. Plain language.
-No repo paths, no Python/function names, no confidence scores here.
-Multiple topics: use ### 1. / ### 2. with at most 4 bullets each + doc links.
-At most one small config snippet (<=15 lines). Assume LiteLLM Enterprise
-unless segment is 'oss' or they ask about OSS vs Enterprise.
+```text
+Short, copy-paste reply: under 350 words. Plain text with:
+- Numbered sections as "1. Title" on their own line (NO ### headers).
+- Single-level "- " bullets only (no nested bullets).
+- No bold **...** or italic for prose; inline backticks OK for short
+  identifiers like x-litellm-api-key.
+- At most ONE small code fence (<=15 lines) inside the reply.
+- No repo paths, no Python symbols, no confidence scores.
+- Doc URLs on their own lines (https://docs.litellm.ai/...).
+Assume LiteLLM Enterprise unless segment is "oss" or the customer asks
+about OSS vs Enterprise.
+```
 
 === INTERNAL NOTES ===
 - Classification: <one line>
@@ -103,6 +114,7 @@ unless segment is 'oss' or they ask about OSS vs Enterprise.
 - Confidence: high | medium | low — <one line why>
 - Open questions: <bullets>
 - Follow-ups: <bullets>
+- Reviewer tip: paste into Gmail with Cmd+Shift+V to keep plain text.
 
 Do not send the reply anywhere. Do not open PRs. Do not modify files.
 """
@@ -149,6 +161,25 @@ def _resolve_cursor_target() -> Tuple[str, Dict[str, str]]:
     return base, headers
 
 
+_FENCE_PATTERN = re.compile(
+    r"^```(?:text|plain|plaintext)?\s*\n(?P<inner>.*?)\n```\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_outer_text_fence(s: str) -> str:
+    """Drop a single outer ```text ... ``` fence so consumers (Slack, Gmail) get clean text.
+
+    The Cursor UI shows a "Copy" button on the fence which copies as plain text;
+    here we strip the fence markers for HTTP / Slack responses so the literal
+    backticks don't show up in the customer reply.
+    """
+    match = _FENCE_PATTERN.match(s.strip())
+    if match:
+        return match.group("inner").strip()
+    return s
+
+
 def _split_sections(raw_text: str) -> Tuple[Optional[str], Optional[str]]:
     """Extract CUSTOMER REPLY and INTERNAL NOTES sections from agent output."""
     pattern = re.compile(
@@ -158,7 +189,8 @@ def _split_sections(raw_text: str) -> Tuple[Optional[str], Optional[str]]:
     match = pattern.search(raw_text)
     if not match:
         return None, None
-    return match.group("reply").strip(), match.group("notes").strip()
+    reply = _strip_outer_text_fence(match.group("reply").strip())
+    return reply, match.group("notes").strip()
 
 
 async def _launch_agent(

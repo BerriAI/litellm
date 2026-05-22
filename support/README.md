@@ -16,6 +16,20 @@ Then paste the customer question (and optional context). The command loads the s
 
 Sources: [`.cursor/commands/`](../.cursor/commands/) — reload the window after `git pull` if commands do not appear.
 
+## Pasting drafts into Gmail
+
+The customer reply is wrapped in a `text` fenced block on purpose: Cursor's chat panel renders chat as HTML, and a direct copy carries `<ul>`, `<h3>`, `<strong>` tags. Gmail accepts that HTML on paste, but its **outbound HTML normalizer** rewrites repeated `<h3>` + `<ul>` groups as a `<table>` when you hit **Send** — that is the "looks fine in the compose box, breaks after send" failure mode (column layout).
+
+To avoid it:
+
+1. In the Cursor chat panel, click the **Copy** button on the `text` fenced block (top-right of the code block). This copies as plain text.
+2. In Gmail, paste with **Cmd+Shift+V** on Mac, **Ctrl+Shift+V** on Windows / Linux. This forces "paste without formatting" even if your clipboard happens to carry rich text.
+3. Send normally.
+
+The agent is configured to write the reply with **no `###` headers**, **no nested bullets**, and **no bold for prose** — those are the specific Markdown features that trigger Gmail's table rewrite. If you ever see a draft that includes them, that's a regression in the rule/skill — file an issue.
+
+For Slack, regular paste of the same text works fine; the HTTP endpoint and Slack bot strip the outer fence automatically.
+
 ## Shareable bundle
 
 Both the rule and the skill are exported as a single self-contained markdown at [`exports/customer-support-bundle.md`](exports/customer-support-bundle.md). Share that file with colleagues who don't have the repo open — it reads cleanly in Notion, Slack, or any markdown viewer, and includes instructions for applying it as a Cursor rule + skill, or as a system prompt for other LLM tooling.
