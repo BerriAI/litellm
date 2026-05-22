@@ -2861,3 +2861,154 @@ def test_build_oauth_authorization_server_response_falls_through_for_non_delegat
     assert "auth.atlassian.com" not in response["authorization_endpoint"]
     assert "auth.atlassian.com" not in response["token_endpoint"]
     assert response["authorization_endpoint"].endswith("/proxied/authorize")
+
+
+def test_build_oauth_protected_resource_advertises_upstream_for_delegate_auth():
+    """RFC 9728 PRM ``authorization_servers`` must mirror the AS-metadata
+    fix: a delegate-auth server points clients at the upstream IdP issuer,
+    not LiteLLM. Otherwise the client follows PRM → LiteLLM AS metadata
+    → LiteLLM endpoints, losing the delegate flow we just wired up."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _delegate_auth_server(scopes=["read:jira-work"])
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="atlassian1",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["authorization_servers"] == ["https://auth.atlassian.com"]
+    assert response["scopes_supported"] == ["read:jira-work"]
+
+
+def test_build_oauth_protected_resource_falls_through_for_non_delegate():
+    """Regression guard: non-delegate servers keep advertising the LiteLLM
+    proxy as their authorization server (the existing flow)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _delegate_auth_server(
+        server_id="proxied",
+        name="proxied",
+        delegate_auth_to_upstream=False,
+    )
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="proxied",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert len(response["authorization_servers"]) == 1
+    assert "auth.atlassian.com" not in response["authorization_servers"][0]
+    assert response["authorization_servers"][0].endswith("/proxied")
+
+
+def test_build_oauth_protected_resource_falls_through_when_upstream_unresolved():
+    """Defensive: a delegate-auth server with no cached upstream URLs
+    (e.g. discovery hasn't run yet) should fall back to the LiteLLM URL
+    rather than emit an empty/half-formed authorization server entry."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _delegate_auth_server(
+        authorization_url=None,
+        token_url=None,
+    )
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="atlassian1",
+            use_standard_pattern=True,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert len(response["authorization_servers"]) == 1
+    assert "auth.atlassian.com" not in response["authorization_servers"][0]
+
+
+@pytest.mark.asyncio
+async def test_canonical_protected_resource_route_returns_200_for_streamable_path():
+    """Mirror of the AS-metadata canonical route: mcp-inspector and other
+    spec-conforming clients construct PRM URLs by inserting
+    ``/.well-known/oauth-protected-resource`` between host and the
+    streamable-http resource path. Without this route they 404 and fall
+    back to the root PRM, which can't carry server-specific auth metadata.
+    """
+    import httpx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        router as discoverable_router,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _delegate_auth_server()
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    app = FastAPI()
+    app.include_router(discoverable_router)
+
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://litellm.example.com"
+        ) as client:
+            response = await client.get(
+                "/.well-known/oauth-protected-resource/mcp/atlassian1/mcp"
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["authorization_servers"] == ["https://auth.atlassian.com"]

@@ -715,14 +715,27 @@ def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
+    # Delegate-auth servers must advertise the upstream IdP as the
+    # authorization server — pointing PRM at LiteLLM would lead the
+    # client to LiteLLM's own auth-server metadata, defeating the
+    # delegate flow. ``_delegate_auth_authorization_server_response``
+    # already gates on ``auth_type == oauth2`` + cached upstream URLs;
+    # reuse the same check here so PRM and AS metadata stay in sync.
+    delegated_auth_server: Optional[str] = None
+    if mcp_server is not None and mcp_server.delegate_auth_to_upstream:
+        delegated_meta = _delegate_auth_authorization_server_response(mcp_server)
+        if delegated_meta is not None:
+            delegated_auth_server = delegated_meta["issuer"]
+
+    if delegated_auth_server is not None:
+        authorization_servers = [delegated_auth_server]
+    elif mcp_server_name:
+        authorization_servers = [f"{request_base_url}/{mcp_server_name}"]
+    else:
+        authorization_servers = [request_base_url]
+
     return {
-        "authorization_servers": [
-            (
-                f"{request_base_url}/{mcp_server_name}"
-                if mcp_server_name
-                else f"{request_base_url}"
-            )
-        ],
+        "authorization_servers": authorization_servers,
         "resource": resource_url,
         "scopes_supported": (
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
@@ -745,6 +758,26 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
     This endpoint is compliant with MCP specification and works with standard
     MCP clients like mcp-inspector and VSCode Copilot.
     """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=True,
+    )
+
+
+# Canonical resource path: /mcp/{server_name}/mcp (path == streamable-http
+# endpoint). RFC 9728 / MCP 2025-06-18+ clients construct PRM by inserting
+# /.well-known/oauth-protected-resource between host and the full resource
+# path — so the resource at /mcp/atlassian1/mcp is probed at
+# /.well-known/oauth-protected-resource/mcp/atlassian1/mcp. mcp-inspector
+# (>= 0.21) does this; without this route it 404s and falls back to root
+# PRM, which can't carry server-specific auth metadata.
+@router.get(
+    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}/mcp"
+)
+async def oauth_protected_resource_mcp_canonical(
+    request: Request, mcp_server_name: str
+):
     return _build_oauth_protected_resource_response(
         request=request,
         mcp_server_name=mcp_server_name,
