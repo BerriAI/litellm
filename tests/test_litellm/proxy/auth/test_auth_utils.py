@@ -1364,6 +1364,8 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
+            "phoenix_project_name",
+            "phoenix_project_name_override",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -1444,8 +1446,6 @@ class TestObservabilityCallbackBans:
                     "metadata": {
                         "langfuse_prompt_version": "v2",
                         "langsmith_sampling_rate": 0.1,
-                        "phoenix_project_name": "my-phoenix-project",
-                        "phoenix_project_name_override": "override-project",
                     },
                 },
                 general_settings={},
