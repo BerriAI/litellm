@@ -1803,10 +1803,11 @@ class TestResolveTrustedUserId:
         auth = UserAPIKeyAuth(api_key="test", user_id="auth-user-111")
         assert guardrail._resolve_trusted_user_id({}, auth) == "auth-user-111"
 
-    def test_trusted_user_id_from_end_user_id(self):
+    def test_end_user_id_not_trusted_for_blocking(self):
+        """end_user_id is request-derived; must not be used for blocking DLP."""
         guardrail = _make_guardrail()
         auth = UserAPIKeyAuth(api_key="test", end_user_id="end-user-222")
-        assert guardrail._resolve_trusted_user_id({}, auth) == "end-user-222"
+        assert guardrail._resolve_trusted_user_id({}, auth) is None
 
     def test_metadata_user_api_key_user_id_not_trusted_without_auth(self):
         """Metadata user_api_key_user_id is not trusted when the key has no user_id."""
@@ -1905,6 +1906,15 @@ class TestResolveUserIdForBlocking:
             guardrail._resolve_user_id_for_blocking({}, auth)
         assert exc_info.value.status_code == 400
         assert "bind user_id" in str(exc_info.value.detail)
+
+    def test_end_user_id_only_raises_for_blocking(self):
+        """Request-derived end_user_id cannot drive blocking Purview checks."""
+        guardrail = _make_guardrail()
+        auth = UserAPIKeyAuth(api_key="test", end_user_id="caller-end-user")
+        with pytest.raises(HTTPException) as exc_info:
+            guardrail._resolve_user_id_for_blocking({}, auth)
+        assert exc_info.value.status_code == 400
+        assert "proxy-authenticated" in str(exc_info.value.detail)
 
 
 # ---------------------------------------------------------------

@@ -261,11 +261,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """Resolve user ID for blocking (pre_call / post_call) DLP hooks.
 
         Uses only trusted proxy-authenticated sources (``_resolve_trusted_user_id``).
-        Caller-supplied ``metadata[user_id_field]`` is rejected (fail closed) because
-        it can impersonate another Entra user's Purview policy.
+        Caller-supplied ``UserAPIKeyAuth.end_user_id`` (from request ``user``,
+        ``metadata.user_id``, ``safety_identifier``, etc.) and
+        ``metadata[user_id_field]`` are rejected (fail closed) because they can
+        impersonate another Entra user's Purview policy.
 
-        Raises ``HTTPException`` when no trusted identity exists or when only
-        caller-supplied metadata is available (fail closed).
+        Raises ``HTTPException`` when no API-key-bound ``user_id`` exists or when
+        only caller-influenceable identity fields are available (fail closed).
         """
         trusted_id = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted_id:

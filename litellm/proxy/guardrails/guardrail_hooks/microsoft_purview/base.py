@@ -280,17 +280,24 @@ class PurviewGuardrailBase:
     ) -> Optional[str]:
         """Resolve the Entra user object ID from request data or auth context.
 
-        Trust order (strongest first) so client ``metadata[user_id_field]`` cannot
-        impersonate another Entra user for Purview ``protectionScopes`` / ``processContent``:
+        Trust order (strongest first). Blocking DLP uses only
+        ``_resolve_trusted_user_id`` (API-key-bound ``user_id``). This resolver
+        also supports audit/logging fallbacks:
 
-            1. ``user_api_key_dict.user_id`` — LiteLLM key / internal user
-            2. ``user_api_key_dict.end_user_id`` — end-user on the API key
-            3. ``metadata["user_api_key_user_id"]`` — proxy-injected from the key (when present)
-            4. ``metadata[user_id_field]`` — caller-supplied; used only when none of the above apply
+            1. ``user_api_key_dict.user_id`` — LiteLLM key / JWT-bound user
+            2. ``user_api_key_dict.end_user_id`` — request-derived; audit only
+            3. ``metadata["user_api_key_user_id"]`` — proxy-injected from the key
+            4. ``metadata[user_id_field]`` — caller-supplied; audit only
         """
         trusted = self._resolve_trusted_user_id(data, user_api_key_dict)
         if trusted:
             return trusted
+
+        if (
+            hasattr(user_api_key_dict, "end_user_id")
+            and user_api_key_dict.end_user_id
+        ):
+            return str(user_api_key_dict.end_user_id)
 
         metadata = data.get("metadata") or data.get("litellm_metadata") or {}
         uid = metadata.get("user_api_key_user_id")
@@ -315,20 +322,23 @@ class PurviewGuardrailBase:
     def _resolve_trusted_user_id(
         self, data: Dict[str, Any], user_api_key_dict: Any
     ) -> Optional[str]:
-        """Resolve user ID from trusted (proxy-authenticated) sources only.
+        """Resolve user ID from API-key/JWT-bound identity for blocking DLP.
 
-        Uses only ``UserAPIKeyAuth.user_id`` and ``UserAPIKeyAuth.end_user_id``.
-        Intentionally omits ``metadata[user_id_field]`` and
-        ``metadata["user_api_key_user_id"]`` because those can be supplied or
-        spoofed by the caller when the API key has no bound user.
+        Uses only ``UserAPIKeyAuth.user_id`` (bound on the LiteLLM key or JWT).
+        Intentionally omits ``UserAPIKeyAuth.end_user_id`` because the proxy sets
+        it from caller-controlled request fields (``user``, ``metadata.user_id``,
+        ``safety_identifier``, custom headers, etc.) via
+        ``get_end_user_id_from_request_body``.
+
+        Also omits ``metadata[user_id_field]`` and
+        ``metadata["user_api_key_user_id"]`` for the same impersonation risk when
+        the key has no bound user.
 
         Returns ``None`` when no authenticated identity is available.  Blocking
         hooks must fail closed rather than skip the DLP check.
         """
         if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id:
             return str(user_api_key_dict.user_id)
-        if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
-            return str(user_api_key_dict.end_user_id)
 
         return None
 
