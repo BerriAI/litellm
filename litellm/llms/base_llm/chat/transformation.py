@@ -108,9 +108,14 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
+        if not non_default_params:
+            return False
+        thinking = non_default_params.get("thinking")
+        thinking_enabled = (
+            isinstance(thinking, dict) and thinking.get("type") == "enabled"
+        )
         return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
-            or non_default_params.get("reasoning_effort") is not None
+            thinking_enabled or non_default_params.get("reasoning_effort") is not None
         )
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
