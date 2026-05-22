@@ -184,9 +184,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             "web_search_options",
         ]
 
-        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
+        # gpt-5.1/5.2/5.5 support logprobs, top_p, top_logprobs, and stop when
+        # reasoning_effort="none" — they can run in full sampling/chat mode.
         if not self._supports_reasoning_effort_level(model, "none"):
             non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
+        else:
+            # Models that support reasoning_effort="none" also support stop sequences
+            # (they can be used as regular chat models when reasoning is disabled).
+            non_supported_params.remove("stop")
 
         return [
             param

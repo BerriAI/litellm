@@ -242,6 +242,50 @@ def test_azure_gpt5_reasoning_effort_none_dropped(config: AzureOpenAIGPT5Config)
     assert "reasoning_effort" not in params or params.get("reasoning_effort") != "none"
 
 
+# Stop param support tests for Azure GPT-5.5 (LIT-3272)
+def test_azure_gpt5_5_supports_stop(config: AzureOpenAIGPT5Config):
+    """Azure gpt-5.5 supports stop sequences.
+
+    gpt-5.5 has supports_none_reasoning_effort=True, so stop is valid.
+    Previously, stop was incorrectly excluded for all Azure gpt-5 models.
+    """
+    supported = litellm.get_supported_openai_params(
+        model="gpt-5.5", custom_llm_provider="azure"
+    )
+    assert supported is not None
+    assert "stop" in supported
+
+
+def test_azure_gpt5_5_stop_passthrough(config: AzureOpenAIGPT5Config):
+    """stop parameter passes through correctly for Azure gpt-5.5."""
+    params = config.map_openai_params(
+        non_default_params={"stop": ["END", "DONE"]},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert params["stop"] == ["END", "DONE"]
+
+
+def test_azure_gpt5_base_does_not_support_stop(config: AzureOpenAIGPT5Config):
+    """Base Azure gpt-5 does NOT support stop (no none reasoning effort)."""
+    supported = litellm.get_supported_openai_params(
+        model="gpt-5", custom_llm_provider="azure"
+    )
+    assert supported is not None
+    assert "stop" not in supported
+
+
+def test_azure_gpt5_1_supports_stop(config: AzureOpenAIGPT5Config):
+    """Azure gpt-5.1 also supports stop (supports_none_reasoning_effort=True)."""
+    supported = litellm.get_supported_openai_params(
+        model="gpt-5.1", custom_llm_provider="azure"
+    )
+    assert supported is not None
+    assert "stop" in supported
+
+
 # Logprobs support tests for Azure GPT-5.2
 def test_azure_gpt5_2_supports_logprobs(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5.2 models support logprobs parameters.

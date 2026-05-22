@@ -1100,6 +1100,44 @@ def test_gpt5_rejects_params_unsupported_by_openai(config: OpenAIConfig):
             ), f"{param} should not be supported for {model}"
 
 
+# GPT-5.5 stop param support (LIT-3272)
+def test_gpt5_5_supports_stop(config: OpenAIConfig):
+    """gpt-5.5 supports stop sequences.
+
+    gpt-5.5 has supports_none_reasoning_effort=True, meaning it can run in
+    full chat mode (reasoning_effort='none').  In that mode stop sequences
+    are valid — previously they were incorrectly excluded for all gpt-5 models.
+    """
+    supported = config.get_supported_openai_params(model="gpt-5.5")
+    assert "stop" in supported
+
+
+def test_gpt5_5_stop_passthrough(config: OpenAIConfig):
+    """stop parameter passes through correctly for gpt-5.5."""
+    params = config.map_openai_params(
+        non_default_params={"stop": ["\n", "###"]},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["stop"] == ["\n", "###"]
+
+
+def test_gpt5_1_supports_stop(config: OpenAIConfig):
+    """gpt-5.1 also supports stop (supports_none_reasoning_effort=True)."""
+    supported = config.get_supported_openai_params(model="gpt-5.1")
+    assert "stop" in supported
+
+
+def test_gpt5_base_does_not_support_stop(config: OpenAIConfig):
+    """Base gpt-5 and gpt-5-mini do NOT support stop (no none reasoning effort)."""
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert (
+            "stop" not in supported
+        ), f"stop should not be supported for {model}"
+
+
 def test_gpt5_1_supports_logprobs_top_p(config: OpenAIConfig):
     """gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort='none'."""
     for model in ["gpt-5.1", "gpt-5.2"]:
