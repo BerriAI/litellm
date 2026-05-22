@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any, Callable, Dict, Literal, NamedTuple, Optional, Union, cast
@@ -485,11 +486,13 @@ class BaseAzureLLM(BaseOpenAILLM):
                 )
                 if _is_async is True and callable(v1_api_key):
                     # AsyncOpenAI expects an async provider; wrap the sync provider
-                    # returned by azure-identity.
+                    # returned by azure-identity. Offload to a thread so a token
+                    # refresh (blocking HTTP call to AAD on cache miss) does not
+                    # stall the event loop.
                     _sync_provider = v1_api_key
 
                     async def _async_v1_api_key() -> str:
-                        return _sync_provider()
+                        return await asyncio.to_thread(_sync_provider)
 
                     v1_api_key = _async_v1_api_key
 
