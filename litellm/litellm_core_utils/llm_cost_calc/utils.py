@@ -1004,18 +1004,34 @@ class CostCalculatorUtils:
                 optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
-            # gpt-image models use token-based pricing.
+            # gpt-image models use token-based pricing when usage is available.
+            # Fall back to flat per-image pricing when Azure doesn't return usage data.
             model_lower = model.lower()
             if "gpt-image" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )
 
-                return openai_gpt_image_cost_calculator(
+                token_cost = openai_gpt_image_cost_calculator(
                     model=model,
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                 )
+                if token_cost > 0.0:
+                    return token_cost
+                # Azure may not return token usage for image generation.
+                # Fall back to flat per-image pricing using quality+size.
+                try:
+                    return default_image_cost_calculator(
+                        model=model,
+                        quality=quality,
+                        custom_llm_provider=custom_llm_provider,
+                        n=n,
+                        size=size,
+                        optional_params=optional_params,
+                    )
+                except Exception:
+                    return 0.0
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
                 model=model,

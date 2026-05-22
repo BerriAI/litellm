@@ -282,6 +282,97 @@ class TestGPTImageCostRouting:
 
         assert cost >= 0
 
+    def test_azure_gpt_image_1_with_usage_uses_token_pricing(self):
+        """Test that Azure gpt-image-1 uses token-based pricing when usage is available"""
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        usage = ImageUsage(
+            input_tokens=100,
+            output_tokens=5000,
+            total_tokens=5100,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=100,
+                image_tokens=0,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+        image_response.usage = usage
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="gpt-image-1",
+            completion_response=image_response,
+            custom_llm_provider="azure",
+            quality="high",
+            size="1024x1024",
+            n=1,
+        )
+
+        # Token-based: text input 100*$5/1M + image output 5000*$40/1M
+        expected_cost = 0.0005 + 0.2
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
+    def test_azure_gpt_image_1_no_usage_falls_back_to_per_image_pricing(self):
+        """
+        Test that Azure gpt-image-1 falls back to flat per-image pricing when
+        the Azure API does not return token usage data (LIT-3268).
+
+        Azure image generation may not return usage/token counts like OpenAI does.
+        When usage is absent, LiteLLM must fall back to per-image flat-rate pricing
+        (e.g. $0.167 for high quality 1024x1024) instead of returning $0.
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        # Image response with NO usage data (as Azure may return)
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+        # No usage set — simulating Azure not returning token counts
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="gpt-image-1",
+            completion_response=image_response,
+            custom_llm_provider="azure",
+            quality="high",
+            size="1024x1024",
+            n=1,
+        )
+
+        # Should fall back to flat per-image pricing for high/1024x1024: $0.167
+        # (from litellm.model_cost["high/1024-x-1024/gpt-image-1"]["input_cost_per_image"])
+        assert cost > 0.0, "Cost should be non-zero (fell back to per-image pricing)"
+        assert (
+            abs(cost - 0.167) < 1e-4
+        ), f"Expected ~$0.167 for high quality 1024x1024 gpt-image-1, got ${cost:.6f}"
+
+    def test_azure_gpt_image_1_no_usage_low_quality(self):
+        """Test fallback per-image pricing for Azure gpt-image-1 low quality"""
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="gpt-image-1",
+            completion_response=image_response,
+            custom_llm_provider="azure",
+            quality="low",
+            size="1024x1024",
+            n=1,
+        )
+
+        # low/1024x1024 gpt-image-1: $0.011 per image
+        assert cost > 0.0, "Cost should be non-zero"
+        assert (
+            abs(cost - 0.011) < 1e-4
+        ), f"Expected ~$0.011 for low quality 1024x1024 gpt-image-1, got ${cost:.6f}"
+
 
 class TestGPTImage15OutputImageTokens:
     """
