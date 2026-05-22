@@ -16,13 +16,13 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers:
-          - openai
-          - minimax
-          - anthropic
-        search_tool_name: perplexity-search  # Optional
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers:
+      - openai
+      - minimax
+      - anthropic
+    search_tool_name: perplexity-search  # Optional
 
 search_tools:
   - search_tool_name: perplexity-search
@@ -214,14 +214,14 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
 
 litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers:
-          - openai
-          - minimax
-          - anthropic
-          - azure
-        search_tool_name: perplexity-search
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers:
+      - openai
+      - minimax
+      - anthropic
+      - azure
+    search_tool_name: perplexity-search
 
 search_tools:
   - search_tool_name: perplexity-search

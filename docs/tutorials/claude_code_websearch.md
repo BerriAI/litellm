@@ -19,13 +19,13 @@ model_list:
 
 # Enable WebSearch interception for providers
 litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers:
-          - bedrock
-          - azure
-          - vertex_ai
-        search_tool_name: perplexity-search  # Optional: specific search tool
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers:
+      - bedrock
+      - azure
+      - vertex_ai
+    search_tool_name: perplexity-search  # Optional: specific search tool
 
 # Configure search provider
 search_tools:
@@ -49,9 +49,9 @@ model_list:
       aws_region_name: us-east-1
 
 litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers: [bedrock]
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: [bedrock]
 
 search_tools:
   - search_tool_name: perplexity-search
@@ -170,13 +170,13 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
 
 litellm_settings:
-  callbacks:
-    - websearch_interception:
-        enabled_providers:
-          - bedrock        # Enable for AWS Bedrock
-          - azure          # Enable for Azure OpenAI
-          - vertex_ai      # Enable for Google Vertex
-        search_tool_name: perplexity-search  # Optional: use specific search tool
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers:
+      - bedrock        # Enable for AWS Bedrock
+      - azure          # Enable for Azure OpenAI
+      - vertex_ai      # Enable for Google Vertex
+    search_tool_name: perplexity-search  # Optional: use specific search tool
 
 # Configure search tools
 search_tools:
