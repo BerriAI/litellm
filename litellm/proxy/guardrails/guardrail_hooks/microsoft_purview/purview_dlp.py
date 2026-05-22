@@ -211,12 +211,14 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
     def _assemble_responses_api_from_chunks(
         self, chunks: List[Any]
-    ) -> Optional[ResponsesAPIResponse]:
+    ) -> Tuple[bool, Optional[ResponsesAPIResponse]]:
         """Extract the final ``ResponsesAPIResponse`` from a buffered Responses API stream.
 
-        Returns ``None`` when the chunks are not Responses API streaming events,
-        signalling the caller to fall through to ``stream_chunk_builder``. When
-        the stream is a Responses API stream the latest event carrying a
+        Returns a ``(is_responses_api_stream, assembled)`` tuple so the caller
+        can distinguish "not a Responses API stream" (fall through to
+        ``stream_chunk_builder``) from "Responses API stream but no final
+        response event was received" (fail closed with an accurate error).
+        When the stream is a Responses API stream the latest event carrying a
         ``ResponsesAPIResponse`` body is returned (``response.completed``, or
         ``response.failed`` / ``response.incomplete`` as fallbacks).
         """
@@ -229,7 +231,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             candidate = getattr(chunk, "response", None)
             if isinstance(candidate, ResponsesAPIResponse):
                 final = candidate
-        return final if looks_like_responses_api else None
+        return looks_like_responses_api, final
 
     def _responses_api_input_to_str(
         self, data: Dict[str, Any], raise_on_failure: bool = False
@@ -450,8 +452,26 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         # are not understood by ``stream_chunk_builder`` (which is built for
         # chat/text-completion deltas). Detect and scan them via the same
         # ``_completion_response_text_parts`` path used by non-streaming.
-        responses_api_assembled = self._assemble_responses_api_from_chunks(all_chunks)
-        if responses_api_assembled is not None:
+        (
+            is_responses_api_stream,
+            responses_api_assembled,
+        ) = self._assemble_responses_api_from_chunks(all_chunks)
+        if is_responses_api_stream:
+            if responses_api_assembled is None:
+                # Fail closed: Responses API events were seen but no final
+                # ``response.completed`` / ``response.failed`` /
+                # ``response.incomplete`` event carrying a ``ResponsesAPIResponse``
+                # body was received, so we cannot scan the content.
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            "Microsoft Purview DLP: Incomplete Responses API "
+                            "stream — no final response event received for "
+                            "DLP scanning; blocking response."
+                        ),
+                    },
+                )
             parts = self._completion_response_text_parts(responses_api_assembled)
             if parts:
                 combined = "\n\n---\n\n".join(parts)
