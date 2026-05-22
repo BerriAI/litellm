@@ -4,9 +4,10 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
-from typing import List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -1777,6 +1778,131 @@ class AmazonConverseConfig(BaseConfig):
                     tool_set.add(_name)
         return list(tool_set)
 
+    @staticmethod
+    def _extract_xml_tag_text(content: str, tag_name: str) -> Optional[str]:
+        match = re.search(
+            rf"<{tag_name}>\s*(.*?)\s*</{tag_name}>",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        return match.group(1).strip()
+
+    @staticmethod
+    def _parse_json_string_if_possible(value: str) -> Any:
+        value = value.strip()
+        if value == "":
+            return ""
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+
+    @staticmethod
+    def _resolve_nexus_tool_name(
+        raw_name: Optional[str], tool_call_names: set[str]
+    ) -> Optional[str]:
+        if raw_name is None:
+            return None
+
+        normalized_name = raw_name.strip()
+        if normalized_name in tool_call_names:
+            return normalized_name
+
+        short_name = normalized_name.split(".")[-1]
+        if short_name in tool_call_names:
+            return short_name
+
+        return None
+
+    def _nexus_text_tool_call_to_openai_tool_call(
+        self,
+        content: str,
+        tools: Optional[
+            Union[List[ToolBlock], List[OpenAIChatCompletionToolParam]]
+        ] = None,
+    ) -> Optional[ChatCompletionMessageToolCall]:
+        tool_call_names = set(self.get_tool_call_names(tools))
+        if content.strip() == "" or not tool_call_names:
+            return None
+
+        function_match = re.search(
+            r"<function>\s*(.*?)\s*</function>",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if function_match is not None:
+            raw_function_content = function_match.group(1)
+            parameter_matches = re.findall(
+                r'<parameter\s+name=["\']([^"\']+)["\']\s*>(.*?)</parameter>',
+                raw_function_content,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+
+            function_name: Optional[str] = None
+            function_args: dict[str, Any] = {}
+            for key, value in parameter_matches:
+                normalized_key = key.strip()
+                parsed_value = self._parse_json_string_if_possible(value)
+                if normalized_key in {"name", "command", "tool_name", "tool"}:
+                    function_name = str(parsed_value).strip()
+                else:
+                    function_args[normalized_key] = parsed_value
+
+            resolved_function_name = self._resolve_nexus_tool_name(
+                function_name, tool_call_names
+            )
+            if resolved_function_name is None:
+                return None
+
+            return ChatCompletionMessageToolCall(
+                function=Function(
+                    name=resolved_function_name,
+                    arguments=json.dumps(function_args),
+                )
+            )
+
+        tool_use_match = re.search(
+            r"<tool_use>\s*(.*?)\s*</tool_use>",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if tool_use_match is None:
+            return None
+
+        raw_tool_use_content = tool_use_match.group(1).strip()
+        raw_tool_name = self._extract_xml_tag_text(raw_tool_use_content, "tool_name")
+        raw_tool_input = self._extract_xml_tag_text(raw_tool_use_content, "input")
+
+        if raw_tool_name is None:
+            tool_use_lines = [
+                line.strip() for line in raw_tool_use_content.splitlines() if line.strip()
+            ]
+            if len(tool_use_lines) == 0:
+                return None
+            raw_tool_name = tool_use_lines[0]
+            raw_tool_input = "\n".join(tool_use_lines[1:]).strip()
+
+        resolved_tool_name = self._resolve_nexus_tool_name(
+            raw_tool_name, tool_call_names
+        )
+        if resolved_tool_name is None:
+            return None
+
+        parsed_tool_input: Any = {}
+        if raw_tool_input:
+            parsed_tool_input = self._parse_json_string_if_possible(raw_tool_input)
+            if not isinstance(parsed_tool_input, dict):
+                return None
+
+        return ChatCompletionMessageToolCall(
+            function=Function(
+                name=resolved_tool_name,
+                arguments=json.dumps(parsed_tool_input),
+            )
+        )
+
     def apply_tool_call_transformation_if_needed(
         self,
         message: Message,
@@ -1795,6 +1921,7 @@ class AmazonConverseConfig(BaseConfig):
             return message, returned_finish_reason
 
         if message.content is not None:
+            parsed_tool_call: Optional[ChatCompletionMessageToolCall] = None
             try:
                 tool_call_names = self.get_tool_call_names(tools)
                 json_content = json.loads(message.content)
@@ -1802,15 +1929,19 @@ class AmazonConverseConfig(BaseConfig):
                     json_content.get("type") == "function"
                     and json_content.get("name") in tool_call_names
                 ):
-                    tool_calls = [
-                        ChatCompletionMessageToolCall(function=Function(**json_content))
-                    ]
-
-                    message.tool_calls = tool_calls
-                    message.content = None
-                    returned_finish_reason = "tool_calls"
+                    parsed_tool_call = ChatCompletionMessageToolCall(
+                        function=Function(**json_content)
+                    )
             except Exception:
-                pass
+                parsed_tool_call = self._nexus_text_tool_call_to_openai_tool_call(
+                    content=message.content,
+                    tools=tools,
+                )
+
+            if parsed_tool_call is not None:
+                message.tool_calls = [parsed_tool_call]
+                message.content = None
+                returned_finish_reason = "tool_calls"
 
         return message, returned_finish_reason
 
@@ -2094,6 +2225,30 @@ class AmazonConverseConfig(BaseConfig):
         ## HANDLE TOOL CALLS
         _message = Message(**chat_completion_message)
         initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+        response_tools = optional_params.get("tools")
+        if response_tools is None:
+            logging_details = (
+                getattr(logging_obj, "model_call_details", None)
+                if logging_obj is not None
+                else None
+            )
+            if isinstance(logging_details, dict):
+                response_tools = logging_details.get("tools")
+
+        if response_tools is None:
+            response_data: Optional[dict] = None
+            if isinstance(data, dict):
+                response_data = data
+            elif isinstance(data, str):
+                try:
+                    parsed_data = json.loads(data)
+                    if isinstance(parsed_data, dict):
+                        response_data = parsed_data
+                except Exception:
+                    pass
+
+            if response_data is not None:
+                response_tools = (response_data.get("toolConfig") or {}).get("tools")
 
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
@@ -2106,7 +2261,7 @@ class AmazonConverseConfig(BaseConfig):
             returned_finish_reason,
         ) = self.apply_tool_call_transformation_if_needed(
             message=_message,
-            tools=optional_params.get("tools"),
+            tools=response_tools,
             initial_finish_reason=initial_finish_reason,
         )
         model_response.choices = [
