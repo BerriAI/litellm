@@ -826,6 +826,34 @@ def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
     )
 
 
+def test_gemini_empty_tool_call_does_not_crash_websocket():
+    """A toolCall payload with no functionCalls must not raise the
+    'Unknown message type' guard — that would terminate the WebSocket session
+    on what is at worst a benign no-op from Gemini."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_empty_tool_call"
+
+    result = config.transform_realtime_response(
+        json.dumps({"toolCall": {"functionCalls": []}}),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    assert result["response"] == []
+    assert result["current_response_id"] is None
+    assert result["current_output_item_id"] is None
+
+
 def test_gemini_function_call_output_includes_name():
     """Verify function_call_output includes name field from stored mapping."""
     config = GeminiRealtimeConfig()

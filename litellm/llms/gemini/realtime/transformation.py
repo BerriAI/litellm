@@ -1238,12 +1238,24 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 returned_message.append(transformed_message)
             elif openai_event == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE:
-                # Handle toolCall from Gemini. Skip entirely if there are no
-                # function calls in the payload — emitting an orphaned
-                # response.created/response.done pair with no output items
-                # would confuse OpenAI-compatible clients.
+                # Handle toolCall from Gemini. If the payload has no function
+                # calls, emit nothing — an orphaned response.created/done pair
+                # with no output items would confuse OpenAI-compatible clients.
+                # Return rather than ``continue`` so a toolCall that is the
+                # only key in the message doesn't leave ``returned_message``
+                # empty and trip the "Unknown message type" guard below
+                # (which would terminate the WebSocket session).
                 if not value.get("functionCalls"):
-                    continue
+                    return {
+                        "response": returned_message,
+                        "current_output_item_id": current_output_item_id,
+                        "current_response_id": current_response_id,
+                        "current_delta_chunks": current_delta_chunks,
+                        "current_conversation_id": current_conversation_id,
+                        "current_item_chunks": current_item_chunks,
+                        "current_delta_type": current_delta_type,
+                        "session_configuration_request": session_configuration_request,
+                    }
 
                 if current_conversation_id is None:
                     current_conversation_id = f"conv_{uuid.uuid4()}"
