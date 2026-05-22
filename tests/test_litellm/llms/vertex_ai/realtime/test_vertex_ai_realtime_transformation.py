@@ -120,6 +120,48 @@ def test_vertex_session_update_defaults_to_audio_modality():
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+def test_vertex_session_update_normalizes_ga_remapped_fields():
+    """GA-format clients send ``output_modalities`` and nested
+    ``audio.input.transcription`` / ``audio.input.turn_detection``. These must
+    be normalised back to the flat beta keys before ``map_openai_params``
+    runs so client preferences aren't silently dropped.
+    """
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "Be concise.",
+            "output_modalities": ["text"],
+            "audio": {
+                "input": {
+                    "transcription": {},
+                    "turn_detection": {"silence_duration_ms": 1500},
+                },
+            },
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    setup_payload = json.loads(messages[0])["setup"]
+
+    assert setup_payload["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert setup_payload["inputAudioTranscription"] == {}
+    assert (
+        setup_payload["realtimeInputConfig"]["automaticActivityDetection"][
+            "silenceDurationMs"
+        ]
+        == 1500
+    )
+
+
 # ---------------------------------------------------------------------------
 # Round-trip test: text-in / text-out via RealTimeStreaming
 # ---------------------------------------------------------------------------
