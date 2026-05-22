@@ -1,5 +1,5 @@
 """
-Legacy /v1/embedding handler for Bedrock Cohere. 
+Legacy /v1/embedding handler for Bedrock Cohere.
 """
 
 import json

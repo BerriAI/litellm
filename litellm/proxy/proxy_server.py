@@ -2710,11 +2710,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -4328,6 +4326,19 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            ### INTERACTIONS API SCHEMA ###
+            _use_legacy_interactions_schema = general_settings.get(
+                "use_legacy_interactions_schema"
+            )
+            if _use_legacy_interactions_schema is not None:
+                if isinstance(_use_legacy_interactions_schema, str):
+                    litellm.use_legacy_interactions_schema = (
+                        _use_legacy_interactions_schema.lower() == "true"
+                    )
+                else:
+                    litellm.use_legacy_interactions_schema = bool(
+                        _use_legacy_interactions_schema
+                    )
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get(
                 "enable_health_check_routing", False
