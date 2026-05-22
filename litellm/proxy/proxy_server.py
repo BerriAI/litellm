@@ -14376,9 +14376,19 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
-                _field_value = general_settings.get(field_name, None)
-                if _field_value is None and field_name in db_general_settings_dict:
+                # Prefer the DB value when present — it is the source of
+                # truth for fields edited through the UI (/config/update,
+                # /config/field/update). The in-memory ``general_settings``
+                # dict is only refreshed by the periodic ``add_deployment``
+                # sync, so it can return a stale boolean (e.g. ``False``)
+                # for several seconds — or indefinitely on a replica that
+                # didn't receive the write — and ``False`` is not None, so
+                # the previous "fall back to DB only when in-memory is
+                # None" rule never let the fresh DB value win.
+                if field_name in db_general_settings_dict:
                     _field_value = db_general_settings_dict[field_name]
+                else:
+                    _field_value = general_settings.get(field_name, None)
 
                 _response_obj = ConfigList(
                     field_name=field_name,

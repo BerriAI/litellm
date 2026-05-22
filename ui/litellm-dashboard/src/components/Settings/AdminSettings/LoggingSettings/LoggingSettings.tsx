@@ -21,7 +21,6 @@ const LoggingSettings: React.FC = () => {
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
   const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
-  const storePromptsValue = Form.useWatch("store_prompts_in_spend_logs", form);
 
   const initialValues = useMemo(() => {
     if (!proxyConfigData) {
@@ -77,6 +76,30 @@ const LoggingSettings: React.FC = () => {
     );
   };
 
+  // When ``proxyConfigData`` is undefined the form would be mounted with
+  // default values (false / empty) and rc-field-form's store would lock
+  // them in. A later re-render that swaps in real initialValues only
+  // *merges* with the existing store — the original false wins and the
+  // toggle visibly shows OFF even when the DB has ``store_prompts_in_spend_logs: true``.
+  // Render a static skeleton instead until the config arrives, so the
+  // Form mounts exactly once with the correct initial values.
+  if (isLoadingConfig || !proxyConfigData) {
+    return (
+      <Card title="Logging Settings">
+        <Space direction="vertical" size="large" style={{ width: "100%" }}>
+          <Typography.Paragraph style={{ marginBottom: 0 }} type="secondary">
+            Proxy-wide settings that control how request and response data are written to spend logs.
+          </Typography.Paragraph>
+          <Skeleton.Input active block />
+          <Skeleton.Input active block />
+          <Button type="primary" disabled>
+            Save Settings
+          </Button>
+        </Space>
+      </Card>
+    );
+  }
+
   return (
     <Card title="Logging Settings">
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -84,55 +107,33 @@ const LoggingSettings: React.FC = () => {
           Proxy-wide settings that control how request and response data are written to spend logs.
         </Typography.Paragraph>
 
-        <Form
-          key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
-          form={form}
-          layout="vertical"
-          onFinish={handleFormSubmit}
-          initialValues={initialValues}
-        >
+        <Form form={form} layout="vertical" onFinish={handleFormSubmit} initialValues={initialValues}>
           <Form.Item
             label="Store Prompts in Spend Logs"
             name="store_prompts_in_spend_logs"
             tooltip={
-              proxyConfigData?.find((f) => f.field_name === "store_prompts_in_spend_logs")?.field_description ||
+              proxyConfigData.find((f) => f.field_name === "store_prompts_in_spend_logs")?.field_description ||
               "When enabled, prompts will be stored in spend logs for tracking and analysis purposes."
             }
             valuePropName="checked"
           >
-            {isLoadingConfig ? (
-              <Skeleton.Input active block />
-            ) : (
-              <Switch
-                checked={storePromptsValue ?? false}
-                onChange={(checked) => form.setFieldValue("store_prompts_in_spend_logs", checked)}
-              />
-            )}
+            <Switch />
           </Form.Item>
 
           <Form.Item
             label="Maximum Spend Logs Retention Period (Optional)"
             name="maximum_spend_logs_retention_period"
             tooltip={
-              proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")
+              proxyConfigData.find((f) => f.field_name === "maximum_spend_logs_retention_period")
                 ?.field_description ||
               "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
             }
           >
-            {isLoadingConfig ? (
-              <Skeleton.Input active block />
-            ) : (
-              <Input placeholder="e.g., 7d, 30d" prefix={<ClockCircleOutlined />} />
-            )}
+            <Input placeholder="e.g., 7d, 30d" prefix={<ClockCircleOutlined />} />
           </Form.Item>
 
           <Form.Item>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={isPending || isDeletingField}
-              disabled={isLoadingConfig}
-            >
+            <Button type="primary" htmlType="submit" loading={isPending || isDeletingField}>
               {isPending || isDeletingField ? "Saving..." : "Save Settings"}
             </Button>
           </Form.Item>
