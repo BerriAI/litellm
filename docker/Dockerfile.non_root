@@ -24,7 +24,8 @@ RUN for i in 1 2 3; do \
         curl \
         openssl \
         libsndfile \
-        nodejs && break || sleep 5; \
+        nodejs \
+        npm && break || sleep 5; \
     done
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
