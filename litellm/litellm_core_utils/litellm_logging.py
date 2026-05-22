@@ -994,10 +994,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = (
-                            "redacted by litellm. \
+                        _metadata["raw_request"] = "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
-                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1031,12 +1029,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = (
-                        "Unable to Log \
-                        raw request: {}".format(
-                            str(e)
-                        )
-                    )
+                    _metadata["raw_request"] = "Unable to Log \
+                        raw request: {}".format(str(e))
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1769,9 +1763,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
-        elif self.model_call_details.get("response_cost") is not None:
+        elif (
+            existing_cost := self.model_call_details.get("response_cost")
+        ) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
-            # handlers like Gemini/Vertex which call completion_cost directly)
+            # handlers like Gemini/Vertex which call completion_cost directly).
+            # Do not preserve 0 from failure_handler on intermediate router retries.
             pass
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(

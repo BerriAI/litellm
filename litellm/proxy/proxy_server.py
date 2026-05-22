@@ -2710,11 +2710,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -4328,6 +4326,19 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            ### INTERACTIONS API SCHEMA ###
+            _use_legacy_interactions_schema = general_settings.get(
+                "use_legacy_interactions_schema"
+            )
+            if _use_legacy_interactions_schema is not None:
+                if isinstance(_use_legacy_interactions_schema, str):
+                    litellm.use_legacy_interactions_schema = (
+                        _use_legacy_interactions_schema.lower() == "true"
+                    )
+                else:
+                    litellm.use_legacy_interactions_schema = bool(
+                        _use_legacy_interactions_schema
+                    )
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get(
                 "enable_health_check_routing", False
@@ -6917,6 +6928,15 @@ async def async_data_generator(  # noqa: PLR0915
 
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
+            elif isinstance(chunk, bytes):
+                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
+                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
+                # Decode to str so the f-string below does not emit a Python b'...' literal,
+                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
+                chunk = chunk.decode("utf-8", errors="replace")
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                    continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break

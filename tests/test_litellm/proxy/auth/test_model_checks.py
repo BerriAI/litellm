@@ -249,3 +249,241 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_expands_team_scoped_wildcard_with_stored_credential(
+    monkeypatch,
+):
+    """
+    Team-scoped BYOK wildcard deployments are stored under an internal model_name,
+    with the public wildcard name in model_info.team_public_model_name.
+    """
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-credential",
+                credential_info={"provider": "openai"},
+                credential_values={
+                    "api_key": "stored-openai-key",
+                    "api_base": "https://example.openai.test/v1",
+                },
+            )
+        ],
+    )
+
+    captured_params = {}
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        captured_params["provider"] = provider
+        captured_params["api_key"] = litellm_params.api_key
+        captured_params["api_base"] = litellm_params.api_base
+        captured_params["credential_name"] = litellm_params.litellm_credential_name
+        return ["gpt-4o"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-1_generated",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "openai-credential",
+                },
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "openai/*",
+                },
+            }
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=["openai/*"],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+        team_id="team-1",
+    )
+
+    assert "openai/gpt-4o" in result
+    assert captured_params == {
+        "provider": "openai",
+        "api_key": "stored-openai-key",
+        "api_base": "https://example.openai.test/v1",
+        "credential_name": None,
+    }
+
+
+def test_wildcard_credential_hydration_preserves_deployment_params(
+    monkeypatch,
+):
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-credential",
+                credential_info={"provider": "openai"},
+                credential_values={
+                    "api_key": "stored-openai-key",
+                    "api_version": "credential-version",
+                    "model": "openai/wrong-model",
+                    "unexpected_field": "unexpected-value",
+                },
+            )
+        ],
+    )
+
+    captured_params = {}
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        captured_params["provider"] = provider
+        captured_params["model"] = litellm_params.model
+        captured_params["api_key"] = litellm_params.api_key
+        captured_params["api_version"] = litellm_params.api_version
+        captured_params["credential_name"] = litellm_params.litellm_credential_name
+        captured_params["has_unexpected_field"] = hasattr(
+            litellm_params, "unexpected_field"
+        )
+        return ["gpt-4o"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_version="deployment-version",
+            litellm_credential_name="openai-credential",
+        ),
+    )
+
+    assert result == ["openai/gpt-4o"]
+    assert captured_params == {
+        "provider": "openai",
+        "model": "openai/*",
+        "api_key": "stored-openai-key",
+        "api_version": "deployment-version",
+        "credential_name": None,
+        "has_unexpected_field": False,
+    }
+
+
+def test_wildcard_credential_hydration_preserves_missing_credential_name(
+    monkeypatch,
+):
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+
+    captured_params = {}
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        captured_params["provider"] = provider
+        captured_params["api_key"] = litellm_params.api_key
+        captured_params["credential_name"] = litellm_params.litellm_credential_name
+        return ["gpt-4o"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_key=None,
+            litellm_credential_name="missing-credential",
+        ),
+    )
+
+    assert result == ["openai/gpt-4o"]
+    assert captured_params == {
+        "provider": "openai",
+        "api_key": None,
+        "credential_name": "missing-credential",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_expands_query_team_wildcard(
+    monkeypatch,
+):
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import get_available_models_for_user
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-credential",
+                credential_info={"provider": "openai"},
+                credential_values={"api_key": "stored-openai-key"},
+            )
+        ],
+    )
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        assert litellm_params.api_key == "stored-openai-key"
+        assert litellm_params.litellm_credential_name is None
+        return ["gpt-4o-mini"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-1_generated",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "custom_llm_provider": "openai",
+                    "litellm_credential_name": "openai-credential",
+                },
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "openai/*",
+                },
+            }
+        ]
+    )
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[],
+            team_id="team-1",
+            team_models=["openai/*"],
+        ),
+        llm_router=router,
+        general_settings={},
+        user_model=None,
+        team_id="team-1",
+    )
+
+    assert "openai/gpt-4o-mini" in result

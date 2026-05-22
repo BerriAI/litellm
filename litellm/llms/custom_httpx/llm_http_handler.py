@@ -1409,6 +1409,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -1477,6 +1479,8 @@ class BaseLLMHTTPHandler:
             document=document,
             optional_params=optional_params,
             headers=headers,
+            api_key=api_key,
+            api_base=api_base,
         )
 
         # All providers return OCRRequestData
@@ -7834,7 +7838,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -7911,7 +7915,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_list_response(
@@ -8001,7 +8005,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8078,7 +8082,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_retrieve_response(
@@ -8168,7 +8172,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8245,7 +8249,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.delete(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_delete_response(
@@ -8341,7 +8345,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8420,7 +8424,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_list_response(
@@ -8508,7 +8512,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(
@@ -8584,7 +8588,7 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(
                 url=url,
                 headers=headers,
-                params=params,
+                params=params or None,
             )
 
             return container_provider_config.transform_container_file_content_response(
