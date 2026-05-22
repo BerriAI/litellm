@@ -45,14 +45,22 @@ def _expand_private_key_values(
     header-only value so downstream ``str.replace`` calls strike the entire
     key (body + footer) rather than just the first line.
 
+    Each PEM block is claimed at most once — when a message contains multiple
+    same-type keys the expansion assigns blocks in order of appearance, so
+    every key gets its own distinct full-block value and none are skipped.
+
     All other secret types pass through unchanged.
     """
+    pem_blocks = list(_PEM_BLOCK_RE.finditer(text))
+    claimed: set = set()  # indices into pem_blocks already assigned to a secret
+
     expanded = []
     for secret in detected_secrets:
         if secret.get("type") == "Private Key":
-            for match in _PEM_BLOCK_RE.finditer(text):
-                if secret.get("value") in match.group(0):
+            for idx, match in enumerate(pem_blocks):
+                if idx not in claimed and secret.get("value") in match.group(0):
                     secret = {**secret, "value": match.group(0)}
+                    claimed.add(idx)
                     break
         expanded.append(secret)
     return expanded
