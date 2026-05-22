@@ -281,6 +281,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "AuxenChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -1077,6 +1078,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "AuxenChatConfig": (".llms.auxen.chat.transformation", "AuxenChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",

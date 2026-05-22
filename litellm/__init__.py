@@ -572,6 +572,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
+auxen_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
@@ -783,6 +784,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "auxen":
+            auxen_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -965,6 +968,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | auxen_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1058,6 +1062,7 @@ models_by_provider: dict = {
     "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
+    "auxen": auxen_models,
     "runwayml": runwayml_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
@@ -1742,6 +1747,9 @@ if TYPE_CHECKING:
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
     )
+    from .llms.auxen.chat.transformation import (
+        AuxenChatConfig as _AuxenChatConfig,
+    )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
     )
@@ -1784,6 +1792,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    AuxenChatConfig: Type[_AuxenChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
