@@ -95,3 +95,25 @@ class TestTencentCloudChatConfig:
         )
         assert api_base == "https://custom-proxy.example/v1"
         assert dynamic_api_key == "explicit-key"
+
+    def test_transform_request_strips_provider_prefix(self):
+        config = TencentCloudChatConfig()
+        result = config.transform_request(
+            model="tencent_cloud/minimax-m2.7",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["model"] == "minimax-m2.7"
+
+    def test_transform_request_preserves_model_without_prefix(self):
+        config = TencentCloudChatConfig()
+        result = config.transform_request(
+            model="minimax-m2.7",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["model"] == "minimax-m2.7"
