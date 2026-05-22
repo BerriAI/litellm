@@ -27,6 +27,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     """
 
     def __init__(self, access_token: str, project: str, location: str) -> None:
+        super().__init__()
         self._access_token = access_token
         self._project = project
         self._location = location
