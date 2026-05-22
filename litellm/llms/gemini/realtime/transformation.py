@@ -346,7 +346,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 cast(OpenAIRealtimeTurnDetection, turn_detection)
             )
             if len(transformed_audio_activity_config) > 0:
+                # Gemini Live treats a subsequent BidiGenerateContentSetup as a
+                # full session replacement rather than a partial merge. Carry
+                # forward the original setup (tools, generationConfig,
+                # inputAudioTranscription, systemInstruction, ...) and only
+                # override realtimeInputConfig so the guardrail-driven VAD
+                # change doesn't silently drop tools or other config.
+                try:
+                    original_setup = cast(
+                        BidiGenerateContentSetup,
+                        json.loads(session_configuration_request).get("setup", {}),
+                    )
+                except (json.JSONDecodeError, AttributeError):
+                    original_setup = {}
                 follow_up_setup: BidiGenerateContentSetup = {
+                    **original_setup,
                     "model": f"models/{model}",
                     "realtimeInputConfig": BidiGenerateContentRealtimeInputConfig(
                         automaticActivityDetection=transformed_audio_activity_config
