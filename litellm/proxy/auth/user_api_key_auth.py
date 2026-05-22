@@ -12,7 +12,7 @@ import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, Iterator, List, NamedTuple, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -587,38 +587,22 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     return api_key
 
 
-def _resolve_inherited_team_id(
-    jwt_handler: JWTHandler,
-    jwt_claims: dict,
-) -> Optional[str]:
+class _PendingAutoRegister(NamedTuple):
     """
-    Resolve the team_id the JWT would have been bound to under standard team-
-    based auth. AUTO_REGISTER stamps this on the new key so it inherits the
-    team's budget/model/tpm/rpm/route limits — auto-registered clients then
-    have the same constraints they'd have via the JWT team-auth path.
+    Signal returned by ``_resolve_jwt_to_virtual_key`` when the JWT's claim is
+    unmapped and ``unregistered_jwt_client_behavior`` is AUTO_REGISTER.
 
-    If ``team_id_jwt_field`` is configured but the JWT lacks the claim and no
-    ``team_id_default`` is set, raise 403: the operator has declared every JWT
-    must carry a team, and registering a teamless (unbounded) key here would
-    silently grant broader access than the team-auth path allows.
+    The caller MUST run standard ``JWTAuthManager.auth_builder`` to apply RBAC,
+    scope mappings, ``custom_validate``, and ``user_allowed_email_domain``
+    policy BEFORE calling ``_auto_register_jwt_mapping`` with the validated
+    ``team_id`` / ``user_id`` from the auth_builder result. Auto-registering
+    purely on a signature-valid JWT (the old behavior) bypassed every JWT
+    policy beyond signature verification.
     """
-    if (
-        jwt_handler.litellm_jwtauth.team_id_jwt_field is None
-        and jwt_handler.litellm_jwtauth.team_id_default is None
-    ):
-        return None
 
-    team_id = jwt_handler.get_team_id(token=jwt_claims, default_value=None)
-    if team_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "JWT Key Mapping: AUTO_REGISTER requires a team_id on the JWT "
-                "(via team_id_jwt_field) or a configured team_id_default — "
-                "refusing to create an unbounded key. Access denied."
-            ),
-        )
-    return team_id
+    claim_field: str
+    claim_value: str
+    cache_key: str
 
 
 async def _auto_register_jwt_mapping(
@@ -631,13 +615,15 @@ async def _auto_register_jwt_mapping(
     proxy_logging_obj: ProxyLogging,
     cache_key: str,
     team_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[UserAPIKeyAuth]:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
-    claim value. The key is stamped with the JWT's resolved ``team_id`` (when
-    available) so it inherits the team's budget/model/tpm/rpm/route limits via
-    the standard auth path — auto-registered clients are then no more permissive
-    than the team-based JWT auth path they would otherwise have taken.
+    claim value. ``team_id`` and ``user_id`` must come from a successful
+    ``JWTAuthManager.auth_builder`` run — they encode the JWT identity AFTER
+    RBAC/scope/custom_validate/email-domain policy has been enforced. The key
+    is stamped with those values so the cached future-request path inherits
+    the same team/user limits the auth_builder path would have applied.
 
     Race safety: if two concurrent requests both reach here simultaneously (both
     saw no mapping in the DB), one will win the unique-constraint race on
@@ -659,6 +645,7 @@ async def _auto_register_jwt_mapping(
         request_type="key",
         table_name="key",
         team_id=team_id,
+        user_id=user_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -754,7 +741,22 @@ async def _resolve_jwt_to_virtual_key(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span],
     proxy_logging_obj: ProxyLogging,
-) -> Optional[UserAPIKeyAuth]:
+) -> Union[Optional[UserAPIKeyAuth], "_PendingAutoRegister"]:
+    """
+    Returns:
+      - ``UserAPIKeyAuth``: a resolved virtual key (cache hit or DB hit). The
+        caller may use this directly; JWT policy has been enforced previously
+        (at key-creation time or, for cached results, before caching).
+      - ``_PendingAutoRegister``: claim is unmapped and behavior is AUTO_REGISTER.
+        The caller MUST run ``JWTAuthManager.auth_builder`` to enforce JWT
+        policy (RBAC, scope, custom_validate, email-domain), then invoke
+        ``_auto_register_jwt_mapping`` with the validated team_id/user_id.
+      - ``None``: claim is unmapped and behavior is FALLBACK_TEAM_MAPPING.
+        The caller falls through to standard team-based JWT auth (which itself
+        enforces full JWT policy via auth_builder).
+      - Raises HTTPException: REJECT policy hit, missing claim under
+        REJECT/AUTO_REGISTER, or other policy violations.
+    """
     virtual_key_claim_field = jwt_handler.litellm_jwtauth.virtual_key_claim_field
     if virtual_key_claim_field is None:
         return None
@@ -800,7 +802,7 @@ async def _resolve_jwt_to_virtual_key(
             )
         if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
             # Stale sentinel written under a prior fallback_team_mapping config —
-            # evict it and auto-register now that the policy has changed. Raise
+            # evict it and defer auto-register to after auth_builder runs. Raise
             # the same 500 as the fresh-path AUTO_REGISTER branch when there is
             # no DB, so behavior is consistent regardless of whether the cache
             # happens to hold the sentinel.
@@ -812,18 +814,11 @@ async def _resolve_jwt_to_virtual_key(
                         "Configure a database or change unregistered_jwt_client_behavior."
                     ),
                 )
-            inherited_team_id = _resolve_inherited_team_id(jwt_handler, jwt_claims)
             await user_api_key_cache.async_delete_cache(cache_key)
-            return await _auto_register_jwt_mapping(
-                virtual_key_claim_field=virtual_key_claim_field,
+            return _PendingAutoRegister(
+                claim_field=virtual_key_claim_field,
                 claim_value=str(claim_value),
-                jwt_handler=jwt_handler,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
                 cache_key=cache_key,
-                team_id=inherited_team_id,
             )
         return None
     elif cached_mapping is not None:
@@ -884,17 +879,14 @@ async def _resolve_jwt_to_virtual_key(
                     "Configure a database or change unregistered_jwt_client_behavior."
                 ),
             )
-        inherited_team_id = _resolve_inherited_team_id(jwt_handler, jwt_claims)
-        return await _auto_register_jwt_mapping(
-            virtual_key_claim_field=virtual_key_claim_field,
+        # Defer: caller runs JWTAuthManager.auth_builder to enforce RBAC, scope,
+        # custom_validate, and email-domain policy, then auto-registers using
+        # the validated identity. Auto-registering here on a signature-only
+        # JWT would bypass every JWT policy beyond signature verification.
+        return _PendingAutoRegister(
+            claim_field=virtual_key_claim_field,
             claim_value=str(claim_value),
-            jwt_handler=jwt_handler,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
             cache_key=cache_key,
-            team_id=inherited_team_id,
         )
 
     # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the
@@ -1093,6 +1085,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # Try JWT-to-Virtual-Key mapping first to avoid
                 # unnecessary DB queries in auth_builder
                 do_standard_jwt_auth = True
+                pending_auto_register: Optional[_PendingAutoRegister] = None
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: Optional[dict]
@@ -1101,7 +1094,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
 
-                    valid_token = await _resolve_jwt_to_virtual_key(
+                    resolve_result = await _resolve_jwt_to_virtual_key(
                         jwt_claims=jwt_claims,
                         jwt_handler=jwt_handler,
                         prisma_client=prisma_client,
@@ -1109,11 +1102,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
-                    if valid_token is not None:
+                    if isinstance(resolve_result, UserAPIKeyAuth):
+                        valid_token = resolve_result
                         api_key = valid_token.token or ""
                         valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
+                    elif isinstance(resolve_result, _PendingAutoRegister):
+                        # Run full JWT policy (RBAC, scope, custom_validate,
+                        # email-domain) via auth_builder, then create the key
+                        # from the validated identity below.
+                        pending_auto_register = resolve_result
+                    # else: None → FALLBACK_TEAM_MAPPING, falls through to
+                    # standard JWT auth_builder below
 
                 if do_standard_jwt_auth:
                     with tracer.trace("litellm.proxy.auth.jwt_auth_builder"):
@@ -1228,6 +1229,30 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_object is not None
                         else None
                     )
+
+                    # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
+                    # JWT policy (RBAC, scope, custom_validate, email-domain)
+                    # has now been enforced by auth_builder above. Create the
+                    # mapping + virtual key from the *validated* identity, then
+                    # replace valid_token with the new key so downstream checks
+                    # use the key-scoped path.
+                    if pending_auto_register is not None and prisma_client is not None:
+                        auto_registered = await _auto_register_jwt_mapping(
+                            virtual_key_claim_field=pending_auto_register.claim_field,
+                            claim_value=pending_auto_register.claim_value,
+                            jwt_handler=jwt_handler,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                            cache_key=pending_auto_register.cache_key,
+                            team_id=team_id,
+                            user_id=user_id,
+                        )
+                        if auto_registered is not None:
+                            auto_registered.jwt_claims = jwt_claims
+                            valid_token = auto_registered
+                            api_key = valid_token.token or ""
 
                     # Check if model has zero cost - if so, skip all budget checks
                     model = _get_model_from_request_context(
