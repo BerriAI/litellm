@@ -293,10 +293,7 @@ class PurviewGuardrailBase:
         if trusted:
             return trusted
 
-        if (
-            hasattr(user_api_key_dict, "end_user_id")
-            and user_api_key_dict.end_user_id
-        ):
+        if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
 
         metadata = data.get("metadata") or data.get("litellm_metadata") or {}
