@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
-    from litellm.types.guardrails import GuardrailEventHooks
 
     tenant_id = getattr(litellm_params, "tenant_id", None)
     client_id = getattr(litellm_params, "client_id", None)
@@ -32,11 +31,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not guardrail_name:
         raise ValueError("Microsoft Purview: guardrail_name is required")
 
-    mode = litellm_params.mode
-    logging_only = False
-    if isinstance(mode, str) and mode == GuardrailEventHooks.logging_only.value:
-        logging_only = True
-
     purview_guardrail = MicrosoftPurviewDLPGuardrail(
         guardrail_name=guardrail_name,
         tenant_id=str(tenant_id),
@@ -46,7 +40,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             getattr(litellm_params, "purview_app_name", None) or "LiteLLM"
         ),
         user_id_field=str(getattr(litellm_params, "user_id_field", None) or "user_id"),
-        logging_only=logging_only,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

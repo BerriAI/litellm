@@ -736,7 +736,7 @@ class TestResponsesAPIHooks:
         """Logging hook must scan both ``input`` and ``ResponsesAPIResponse.output``."""
         from litellm.types.llms.openai import ResponsesAPIResponse
 
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
         result_response = ResponsesAPIResponse(
             id="resp-3",
             created_at=0,
@@ -882,7 +882,7 @@ class TestCheckContent:
     @pytest.mark.asyncio
     async def test_check_content_logging_only_no_block(self):
         """In logging_only mode, violations should NOT raise."""
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
 
         with (
             patch.object(
@@ -1168,7 +1168,7 @@ class TestLoggingHookNonBlocking:
         Before the fix, logging_hook called future.result() which blocked the
         event loop thread for the full round-trip of the two Graph API calls.
         """
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
         call_count = 0
 
         async def slow_async_hook(**_kwargs):
@@ -1191,7 +1191,7 @@ class TestLoggingHookNonBlocking:
 
     def test_logging_hook_returns_original_kwargs_and_result(self):
         """Return value must be the original (kwargs, result) tuple unchanged."""
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
         kwargs = {"messages": [{"role": "user", "content": "hello"}]}
         result_obj = {"some": "result"}
 
@@ -1386,7 +1386,7 @@ class TestAsyncLoggingHookIndependence:
         """A failure in the prompt audit must not prevent the response audit from running."""
         from litellm.types.utils import Choices, Message, ModelResponse
 
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
         response = ModelResponse(
             choices=[
                 Choices(
@@ -1423,7 +1423,7 @@ class TestAsyncLoggingHookIndependence:
         """A failure in the response audit must not affect the prompt audit result."""
         from litellm.types.utils import Choices, Message, ModelResponse
 
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
         response = ModelResponse(
             choices=[
                 Choices(
@@ -1457,7 +1457,7 @@ class TestAsyncLoggingHookIndependence:
     @pytest.mark.asyncio
     async def test_logging_hook_returns_original_when_both_audits_fail(self):
         """async_logging_hook must always return (kwargs, result) even if both audits fail."""
-        guardrail = _make_guardrail(logging_only=True)
+        guardrail = _make_guardrail()
 
         with patch.object(
             guardrail,
@@ -2137,9 +2137,7 @@ class TestStreamingIteratorHook:
             yield assembled_response
 
         with (
-            patch(
-                "litellm.main.stream_chunk_builder", return_value=assembled_response
-            ),
+            patch("litellm.main.stream_chunk_builder", return_value=assembled_response),
             patch.object(
                 guardrail, "_check_content", new_callable=AsyncMock
             ) as mock_check,

@@ -72,7 +72,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         client_secret: str,
         purview_app_name: str = "LiteLLM",
         user_id_field: str = "user_id",
-        logging_only: bool = False,
         **kwargs: Any,
     ):
         supported_event_hooks = [
@@ -93,9 +92,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         )
         self.guardrail_provider = "microsoft_purview"
         verbose_proxy_logger.info(
-            "Initialized Microsoft Purview DLP Guardrail: %s (logging_only=%s)",
+            "Initialized Microsoft Purview DLP Guardrail: %s",
             guardrail_name,
-            logging_only,
         )
 
     @staticmethod
