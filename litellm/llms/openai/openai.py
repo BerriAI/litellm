@@ -35,6 +35,7 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -2026,11 +2027,47 @@ class OpenAIBatchesAPI(BaseLLM):
 
         return openai_client
 
+    @staticmethod
+    def _get_openai_compatible_batch_metadata(
+        metadata: Any,
+    ) -> Dict[str, str]:
+        """
+        OpenAI Batch metadata only accepts ``Dict[str, str]``.
+
+        Proxy hooks (policies, guardrails) inject non-string values such as
+        ``applied_policies: ["my-policy"]`` or
+        ``_model_armor_response: {...}``.  Passing those directly to the
+        OpenAI SDK raises:
+            "Invalid type for 'metadata.applied_policies':
+             expected a string, but got an array instead."
+
+        This method serialises every non-string value to a JSON string and
+        drops ``None`` values and the internal
+        ``standard_logging_guardrail_information`` key.
+        """
+        if not isinstance(metadata, dict):
+            return {}
+
+        sanitized: Dict[str, str] = {}
+        for key, value in metadata.items():
+            if key == "standard_logging_guardrail_information" or value is None:
+                continue
+            str_key = str(key)
+            sanitized[str_key] = value if isinstance(value, str) else safe_dumps(value)
+        return sanitized
+
     async def acreate_batch(
         self,
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
+        if create_batch_data.get("metadata") is not None:
+            create_batch_data = {
+                **create_batch_data,
+                "metadata": self._get_openai_compatible_batch_metadata(
+                    create_batch_data["metadata"]
+                ),
+            }
         response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
@@ -2067,6 +2104,13 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
+        if create_batch_data.get("metadata") is not None:
+            create_batch_data = {
+                **create_batch_data,
+                "metadata": self._get_openai_compatible_batch_metadata(
+                    create_batch_data["metadata"]
+                ),
+            }
         response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
         return LiteLLMBatch(**response.model_dump())
