@@ -20,8 +20,10 @@ def test_gemini_realtime_transformation_session_created():
     assert config is not None
 
     session_configuration_request = {
-        "model": "gemini-1.5-flash",
-        "generationConfig": {"responseModalities": ["TEXT"]},
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["TEXT"]},
+        }
     }
     session_configuration_request_str = json.dumps(session_configuration_request)
     session_created_message = {"setupComplete": {}}
@@ -45,8 +47,11 @@ def test_gemini_realtime_transformation_session_created():
         },
     )
 
-    print(transformed_message)
-    assert transformed_message["response"][0]["type"] == "session.created"
+    session_created = transformed_message["response"][0]
+    assert session_created["type"] == "session.created"
+    # Verify the setup-wrapped configuration reaches the modality lookup so
+    # the synthetic session.created reflects the cached responseModalities.
+    assert session_created["session"]["modalities"] == ["text"]
 
 
 def test_session_created_does_not_overwrite_session_configuration_request():
@@ -1050,10 +1055,6 @@ def test_gemini_follow_up_session_update_preserves_response_modalities_on_partia
 
 
 def test_gemini_subsequent_session_update_preserves_automatic_activity_detection_subfields():
-    """A follow-up turn_detection update that only sets ``create_response``
-    (mapped to ``disabled``) must not drop ``silenceDurationMs`` /
-    ``prefixPaddingMs`` from the original ``automaticActivityDetection``
-    block."""
     config = GeminiRealtimeConfig()
 
     original_setup = {
@@ -1087,3 +1088,52 @@ def test_gemini_subsequent_session_update_preserves_automatic_activity_detection
     assert automatic_activity_detection["disabled"] is True
     assert automatic_activity_detection["silenceDurationMs"] == 500
     assert automatic_activity_detection["prefixPaddingMs"] == 100
+
+
+def test_gemini_tool_call_id_to_name_evicts_oldest_when_capped():
+    """The call_id → name LRU must evict the oldest entry once the cap is
+    reached so long sessions with many tool calls don't grow unboundedly,
+    while keeping recently-seen call_ids resolvable for retried
+    function_call_output messages."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_lru"
+
+    config._TOOL_CALL_ID_TO_NAME_MAX = 4
+
+    for idx in range(8):
+        config.transform_realtime_response(
+            json.dumps(
+                {
+                    "toolCall": {
+                        "functionCalls": [
+                            {
+                                "id": f"call_{idx}",
+                                "name": f"fn_{idx}",
+                                "args": {},
+                            }
+                        ]
+                    }
+                }
+            ),
+            "gemini-2.5-flash",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": None,
+                "current_output_item_id": None,
+                "current_response_id": None,
+                "current_conversation_id": None,
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": None,
+            },
+        )
+
+    assert len(config._tool_call_id_to_name) == 4
+    # Most recent 4 retained; oldest 4 evicted.
+    assert list(config._tool_call_id_to_name) == [
+        "call_4",
+        "call_5",
+        "call_6",
+        "call_7",
+    ]

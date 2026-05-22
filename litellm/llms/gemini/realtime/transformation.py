@@ -3,6 +3,7 @@ This file contains the transformation logic for the Gemini realtime API.
 """
 
 import json
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
@@ -72,10 +73,16 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
+    # Cap the LRU of in-flight tool calls so long sessions with many tool
+    # calls don't grow the dict without bound. Sized large enough to cover
+    # bursts of pending tool responses; the oldest entry is evicted when a
+    # new call beyond the cap arrives.
+    _TOOL_CALL_ID_TO_NAME_MAX = 256
+
     def __init__(self):
         super().__init__()
         # Store call_id → function_name mapping for tool call round-trip
-        self._tool_call_id_to_name: Dict[str, str] = {}
+        self._tool_call_id_to_name: "OrderedDict[str, str]" = OrderedDict()
 
     def validate_environment(
         self, headers: dict, model: str, api_key: Optional[str] = None
@@ -439,9 +446,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # Look up the function name from stored mapping. Keep the entry so a
         # client SDK that retries function_call_output (or sends it twice for
         # the same tool call) still produces a Gemini toolResponse with the
-        # required ``name`` field.
+        # required ``name`` field; refresh the LRU position so an active
+        # call_id stays warm across long sessions.
         function_name = self._tool_call_id_to_name.get(call_id)
-        if not function_name:
+        if function_name:
+            self._tool_call_id_to_name.move_to_end(call_id)
+        else:
             verbose_logger.warning(
                 f"Gemini Realtime: Function name not found for call_id={call_id}. "
                 "This may cause Gemini to reject the response."
@@ -857,9 +867,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             call_id = fc.get("id", "")
             name = fc.get("name", "")
 
-            # Store call_id → name mapping for round-trip
+            # Store call_id → name mapping for round-trip. Use an LRU so
+            # repeated function_call_output lookups (retries) still hit, while
+            # sessions with many tool calls don't grow the dict unboundedly.
             if call_id and name:
                 self._tool_call_id_to_name[call_id] = name
+                self._tool_call_id_to_name.move_to_end(call_id)
+                while len(self._tool_call_id_to_name) > self._TOOL_CALL_ID_TO_NAME_MAX:
+                    self._tool_call_id_to_name.popitem(last=False)
 
             events.append(
                 OpenAIRealtimeFunctionCallArgumentsDone(
