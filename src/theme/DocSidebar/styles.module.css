@@ -1,8 +1,32 @@
+.sidebarDesktop {
+  display: none;
+  height: 100%;
+}
+
+@media (min-width: 997px) {
+  .sidebarDesktop {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+}
+
+.sidebarMobile {
+  display: block;
+}
+
+@media (min-width: 997px) {
+  .sidebarMobile {
+    display: none !important;
+  }
+}
+
 .sidebarContainer {
   display: flex;
   flex-direction: column;
   height: 100%;
   max-height: 100vh;
+  width: 100%;
 }
 
 /* Make the sidebar content scroll inside the container */
