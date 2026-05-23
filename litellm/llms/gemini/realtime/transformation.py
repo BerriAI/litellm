@@ -1198,7 +1198,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Invalid JSON message: {message_str}")
 
         verbose_logger.debug(
-            f"Realtime Response Transform: Gemini message={json.dumps(json_message)[:500]}"
+            "Realtime Response Transform: Gemini frame keys=%s",
+            (
+                sorted(json_message.keys())
+                if isinstance(json_message, dict)
+                else type(json_message).__name__
+            ),
         )
 
         logging_session_id = logging_obj.litellm_trace_id
@@ -1586,11 +1591,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             current_item_chunks=current_item_chunks,
         )
 
-        # Log the transformed events
         for msg in returned_message:
             event_type = msg.get("type") if isinstance(msg, dict) else "unknown"
             verbose_logger.debug(
-                f"Realtime Response Transform: OpenAI event={event_type}, data={json.dumps(msg)[:500] if isinstance(msg, dict) else str(msg)[:500]}"
+                "Realtime Response Transform: OpenAI event=%s", event_type
             )
 
         return {
