@@ -370,12 +370,20 @@ class RealTimeStreaming:
         self,
         transcript: str,
         item_id: Optional[str] = None,
+        pre_block_backend_message: Optional[str] = None,
     ) -> bool:
         """
         Run registered guardrails on a completed speech transcription.
 
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
+
+        ``pre_block_backend_message`` (if provided) is sent to the backend
+        BEFORE any of the guardrail's own backend messages when a block is
+        triggered. This is needed for protocol contracts that require a
+        specific message to be sent first — e.g. Gemini Live requires a
+        matching ``toolResponse`` immediately after a ``toolCall`` before any
+        other client messages can be accepted.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
@@ -435,6 +443,13 @@ class RealTimeStreaming:
                     getattr(callback, "realtime_violation_message", None) or safe_msg
                 )
 
+                # Deliver any caller-supplied backend message FIRST so that
+                # protocol contracts requiring a specific ordering (e.g.
+                # Gemini Live's mandatory ``toolResponse`` after a
+                # ``toolCall``) are honored before the guardrail's own
+                # clientContent / cancel messages are sent.
+                if pre_block_backend_message is not None:
+                    await self._send_to_backend(pre_block_backend_message)
                 # Cancel any in-progress LLM response (e.g. VAD auto-response).
                 await self._send_to_backend(json.dumps({"type": "response.cancel"}))
                 # Send the policy violation hint (shows as small gray status text in UI).
@@ -880,35 +895,51 @@ class RealTimeStreaming:
                                 else json.dumps(output)
                             )
                             if output_text:
+                                # Build the sanitized function_call_output up
+                                # front so we can hand it to the guardrail
+                                # runner as the pre-block message. Providers
+                                # that pair every toolCall with a toolResponse
+                                # (e.g. Gemini/Vertex Live) require the
+                                # toolResponse to arrive BEFORE any other
+                                # client message — otherwise the guardrail's
+                                # own clientContent would violate the
+                                # pending-tool-call protocol contract and the
+                                # backend could close the connection before
+                                # the sanitized response ever lands. Dropping
+                                # the blocked item outright would similarly
+                                # leave such providers waiting indefinitely.
+                                # The sanitized payload carries no blocked
+                                # content — only a generic policy marker.
+                                sanitized_msg = json.dumps(
+                                    {
+                                        **msg_obj,
+                                        "item": {
+                                            **item,
+                                            "output": json.dumps(
+                                                {
+                                                    "error": "Tool output blocked by content policy",
+                                                }
+                                            ),
+                                        },
+                                    }
+                                )
                                 blocked = await self.run_realtime_guardrails(
-                                    output_text
+                                    output_text,
+                                    pre_block_backend_message=sanitized_msg,
                                 )
                                 if blocked:
-                                    # Forward a sanitized function_call_output so
-                                    # providers that pair every toolCall with a
-                                    # toolResponse (e.g. Gemini/Vertex Live) exit
-                                    # their pending-tool-call state. Dropping the
-                                    # blocked item outright would leave such
-                                    # providers waiting indefinitely while the
-                                    # subsequent guardrail clientContent is
-                                    # ignored. The sanitized payload carries no
-                                    # blocked content — only a generic policy
-                                    # marker.
-                                    sanitized_msg = json.dumps(
-                                        {
-                                            **msg_obj,
-                                            "item": {
-                                                **item,
-                                                "output": json.dumps(
-                                                    {
-                                                        "error": "Tool output blocked by content policy",
-                                                    }
-                                                ),
-                                            },
-                                        }
-                                    )
-                                    await self._send_to_backend(sanitized_msg)
-                                    self._pending_guardrail_message = output_text
+                                    # ``_pending_guardrail_message`` is
+                                    # intentionally NOT set here. That flag
+                                    # exists to swallow the reflexive
+                                    # ``response.create`` an OpenAI client
+                                    # sends immediately after a user text
+                                    # message. In a tool-calling flow the
+                                    # client may not send a ``response.create``
+                                    # at all (e.g. Gemini SDKs auto-respond),
+                                    # so leaving the flag set would
+                                    # incorrectly drop an unrelated
+                                    # ``response.create`` from a later
+                                    # interaction turn.
                                     continue
                         elif item.get("role") == "user":
                             content_list = item.get("content", [])
