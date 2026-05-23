@@ -1317,3 +1317,190 @@ def test_gemini_standalone_usage_metadata_does_not_crash_websocket():
     assert result["current_output_item_id"] == "item_existing"
     assert result["current_response_id"] == "resp_existing"
     assert result["current_conversation_id"] == "conv_existing"
+
+
+def test_gemini_standalone_usage_metadata_is_attributed_to_next_tool_call_response_done():
+    """A standalone ``usageMetadata`` frame emitted between turns must not
+    silently drop the consumed tokens. The next tool-call ``response.done``
+    must carry those token counts so an authenticated client cannot drive
+    tool-call turns whose token usage is recorded as zero, bypassing
+    spend/budget accounting."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_standalone_usage_then_tool_call"
+
+    standalone_result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 31,
+                    "responseTokenCount": 9,
+                    "totalTokenCount": 40,
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+    assert standalone_result["response"] == []
+
+    tool_call_result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_buffered",
+                            "name": "get_weather",
+                            "args": {"location": "NYC"},
+                        }
+                    ]
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    response_done = next(
+        ev for ev in tool_call_result["response"] if ev.get("type") == "response.done"
+    )
+    usage = response_done["response"]["usage"]
+    assert usage["input_tokens"] == 31
+    assert usage["output_tokens"] == 9
+    assert usage["total_tokens"] == 40
+    # Buffer must be cleared after attribution so a subsequent tool-call
+    # turn without its own usage does not double-count the previous frame.
+    assert config._pending_usage_metadata is None
+
+
+def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
+    """A standalone ``usageMetadata`` frame must also flow into the normal
+    (non-tool-call) ``response.done`` path so audio/text turns whose usage
+    arrives in a separate frame are still billed correctly."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_standalone_usage_then_turn_complete"
+
+    config.transform_realtime_response(
+        json.dumps(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "responseTokenCount": 11,
+                    "totalTokenCount": 16,
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    turn_complete_result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    response_done = next(
+        ev
+        for ev in turn_complete_result["response"]
+        if ev.get("type") == "response.done"
+    )
+    usage = response_done["response"]["usage"]
+    assert usage["input_tokens"] == 5
+    assert usage["output_tokens"] == 11
+    assert usage["total_tokens"] == 16
+    assert config._pending_usage_metadata is None
+
+
+def test_gemini_in_frame_usage_metadata_clears_pending_buffer():
+    """When ``usageMetadata`` arrives in the same frame as the closing
+    ``toolCall`` / ``turnComplete``, the in-frame counts are authoritative
+    and any buffered standalone metadata must be discarded so a later
+    turn's ``response.done`` does not double-count tokens."""
+    config = GeminiRealtimeConfig()
+    config._pending_usage_metadata = {
+        "promptTokenCount": 99,
+        "responseTokenCount": 99,
+        "totalTokenCount": 198,
+    }
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_in_frame_clears_buffer"
+
+    result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_in_frame",
+                            "name": "get_weather",
+                            "args": {"location": "NYC"},
+                        }
+                    ]
+                },
+                "usageMetadata": {
+                    "promptTokenCount": 3,
+                    "responseTokenCount": 2,
+                    "totalTokenCount": 5,
+                },
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    response_done = next(
+        ev for ev in result["response"] if ev.get("type") == "response.done"
+    )
+    usage = response_done["response"]["usage"]
+    assert usage["input_tokens"] == 3
+    assert usage["output_tokens"] == 2
+    assert usage["total_tokens"] == 5
+    assert config._pending_usage_metadata is None

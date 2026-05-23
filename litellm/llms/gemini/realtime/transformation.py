@@ -91,6 +91,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         super().__init__()
         # Store call_id → function_name mapping for tool call round-trip
         self._tool_call_id_to_name: "OrderedDict[str, str]" = OrderedDict()
+        # Buffer ``usageMetadata`` that Gemini Live emits as a standalone
+        # frame (between turns) so the next ``response.done`` attributes the
+        # tokens consumed. Without this an authenticated client can drive
+        # tool-call or normal turns whose token usage is recorded as zero,
+        # bypassing spend and budget accounting.
+        self._pending_usage_metadata: Optional[dict] = None
 
     def validate_environment(
         self, headers: dict, model: str, api_key: Optional[str] = None
@@ -855,6 +861,32 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
+    def _consume_usage_metadata_for_response_done(self, frame: dict) -> Optional[dict]:
+        """Return the ``usageMetadata`` to attribute to a ``response.done``.
+
+        Gemini Live emits ``usageMetadata`` either alongside the closing
+        frame (``serverContent.turnComplete`` / ``toolCall``) or as a
+        standalone frame between turns. The standalone form would otherwise
+        be discarded by the no-op branch in ``transform_realtime_response``
+        and the consumed tokens silently dropped from spend/budget
+        accounting. ``_pending_usage_metadata`` buffers any such standalone
+        frames so the next emitted ``response.done`` carries the deferred
+        token counts.
+
+        Returns the in-frame ``usageMetadata`` if present (and clears the
+        buffer since the in-frame counts are the authoritative attribution
+        for this turn), otherwise returns the buffered counts. ``None`` is
+        returned when neither is available so the caller can fall back to
+        ``get_empty_usage()``.
+        """
+        in_frame = frame.get("usageMetadata") if isinstance(frame, dict) else None
+        if isinstance(in_frame, dict):
+            self._pending_usage_metadata = None
+            return in_frame
+        buffered = self._pending_usage_metadata
+        self._pending_usage_metadata = None
+        return buffered
+
     def transform_tool_call_events(
         self,
         tool_call_message: dict,
@@ -1014,9 +1046,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         _modalities = [
             modality.lower() for modality in cast(List[str], gemini_modalities)
         ]
-        if "usageMetadata" in message:
+        resolved_usage_metadata = self._consume_usage_metadata_for_response_done(
+            cast(dict, message)
+        )
+        if resolved_usage_metadata is not None:
             _chat_completion_usage = VertexGeminiConfig._calculate_usage(
-                completion_response=message,
+                completion_response=cast(
+                    BidiGenerateContentServerMessage,
+                    {**cast(dict, message), "usageMetadata": resolved_usage_metadata},
+                ),
             )
         else:
             _chat_completion_usage = get_empty_usage()
@@ -1462,14 +1500,26 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 # results. Mirror the non-tool-call RESPONSE_DONE path: if Gemini
                 # delivered ``usageMetadata`` alongside this ``toolCall`` frame,
                 # propagate the real token counts so spend/budget accounting
-                # records the tokens consumed by the tool-call turn. Otherwise
-                # fall back to an empty usage block (OpenAI-compatible clients
-                # expect ``usage`` to always be present on response.done).
-                if "usageMetadata" in json_message:
+                # records the tokens consumed by the tool-call turn. Standalone
+                # ``usageMetadata`` frames emitted in a separate WebSocket frame
+                # are buffered on the instance so the next ``response.done``
+                # picks them up (otherwise an authenticated client could drive
+                # tool-call turns whose token usage is recorded as zero,
+                # bypassing budgets). Falls back to an empty usage block when
+                # neither is available (OpenAI-compatible clients expect
+                # ``usage`` to always be present on response.done).
+                resolved_tool_call_usage_metadata = (
+                    self._consume_usage_metadata_for_response_done(json_message)
+                )
+                if resolved_tool_call_usage_metadata is not None:
                     _tool_call_chat_completion_usage = (
                         VertexGeminiConfig._calculate_usage(
                             completion_response=cast(
-                                BidiGenerateContentServerMessage, json_message
+                                BidiGenerateContentServerMessage,
+                                {
+                                    **json_message,
+                                    "usageMetadata": resolved_tool_call_usage_metadata,
+                                },
                             ),
                         )
                     )
@@ -1586,6 +1636,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 and not (key == "serverContent" and server_content_handled)
                 and not (key == "toolCall" and tool_call_handled)
             ]
+            # Buffer standalone usage metadata so the next response.done can
+            # attribute the token counts. Without this, an authenticated
+            # client driving turns whose usageMetadata is emitted in a
+            # separate frame would have those tokens recorded as zero spend,
+            # bypassing budget enforcement.
+            standalone_usage_metadata = json_message.get("usageMetadata")
+            if isinstance(standalone_usage_metadata, dict):
+                self._pending_usage_metadata = standalone_usage_metadata
             if not unhandled_known_keys:
                 return {
                     "response": returned_message,
