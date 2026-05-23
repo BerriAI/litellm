@@ -706,6 +706,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},

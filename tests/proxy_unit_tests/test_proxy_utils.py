@@ -416,9 +416,10 @@ def test_dynamic_turn_off_message_logging(callback_vars):
     )
 
     assert callbacks is not None
-    assert (
-        callbacks.callback_vars["turn_off_message_logging"]
-        == callback_vars["turn_off_message_logging"]
+    # AddTeamCallback's validator stringifies callback_var values, so compare
+    # against the str() of the input rather than the input bool directly.
+    assert callbacks.callback_vars["turn_off_message_logging"] == str(
+        callback_vars["turn_off_message_logging"]
     )
 
 

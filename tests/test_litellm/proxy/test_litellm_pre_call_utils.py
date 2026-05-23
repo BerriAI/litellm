@@ -1549,6 +1549,57 @@ def test_team_dynamic_logging_settings():
     assert result is None
 
 
+def test_key_dynamic_logging_settings_decrypts_callback_vars(monkeypatch):
+    """Encrypted callback_vars on the key are decrypted before downstream use."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    encrypted_metadata = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real",
+                    },
+                }
+            ]
+        }
+    )
+    cv_on_disk = encrypted_metadata["logging"][0]["callback_vars"]
+    assert cv_on_disk["langfuse_secret_key"] != "sk-real"  # sanity: stored encrypted
+
+    key = UserAPIKeyAuth(api_key="t", metadata=encrypted_metadata, team_metadata={})
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key)
+    cv = result[0]["callback_vars"]
+    assert cv["langfuse_secret_key"] == "sk-real"
+    assert cv["langfuse_public_key"] == "pk-real"
+
+
+def test_team_dynamic_logging_settings_decrypts_callback_vars(monkeypatch):
+    """Encrypted callback_vars on the team are decrypted before downstream use."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    encrypted_team = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "failure",
+                    "callback_vars": {"langfuse_secret_key": "team-sk-real"},
+                }
+            ]
+        }
+    )
+
+    key = UserAPIKeyAuth(api_key="t", metadata={}, team_metadata=encrypted_team)
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key)
+    assert result[0]["callback_vars"]["langfuse_secret_key"] == "team-sk-real"
+
+
 def test_get_dynamic_logging_metadata_with_arize_team_logging():
     """
     Test _get_dynamic_logging_metadata function with arize team logging and dynamic parameters

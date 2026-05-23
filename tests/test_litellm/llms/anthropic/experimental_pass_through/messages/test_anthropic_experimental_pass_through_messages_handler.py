@@ -544,3 +544,132 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+# ---------------------------------------------------------------------------
+# Parity tests: redundant empty-text-block sanitization scan removal.
+# The async wrapper sanitizes once and tells the handler to skip its second
+# (redundant) full-messages scan; the sync entry point still sanitizes.
+# ---------------------------------------------------------------------------
+
+
+def _empty_block_msgs():
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "   "},  # whitespace-only -> stripped
+                {"type": "tool_use", "id": "t", "name": "B", "input": {}},
+            ],
+        }
+    ]
+
+
+def test_handler_strips_when_no_presanitized_flag():
+    """Sync entry point (no async wrapper): handler must still sanitize."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    with patch.object(
+        handler,
+        "strip_empty_text_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+    ) as spy:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response="hi there",
+        )
+    assert spy.call_count == 1  # sanitized exactly once here
+    assert result is not None
+
+
+def test_handler_skips_strip_when_presanitized():
+    """Async wrapper already sanitized -> handler must NOT rescan."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    with patch.object(
+        handler,
+        "strip_empty_text_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+    ) as spy:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response="hi there",
+            _litellm_messages_presanitized=True,
+        )
+    assert spy.call_count == 0  # skipped the redundant scan
+    assert result is not None
+
+
+def test_presanitized_flag_not_leaked_to_provider_params():
+    """The private sentinel must be popped, never forwarded as a request param."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_base_handler(*args, **kwargs):
+        captured.update(kwargs)
+        captured["optional"] = kwargs.get(
+            "anthropic_messages_optional_request_params", {}
+        )
+        return "stub"
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+        side_effect=fake_base_handler,
+    ):
+        handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            _litellm_messages_presanitized=True,
+        )
+
+    assert "_litellm_messages_presanitized" not in captured.get("optional", {})
+    assert "_litellm_messages_presanitized" not in captured.get("kwargs", {})
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
+    """End-to-end: wrapper sanitizes (once) AND signals the handler to skip."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        captured["presanitized"] = kwargs.get("_litellm_messages_presanitized")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+        patch.object(
+            handler,
+            "strip_empty_text_blocks_from_anthropic_messages",
+            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        ) as spy,
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=_empty_block_msgs(),
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    # Wrapper stripped exactly once (the handler is faked, so its skipped
+    # call never runs anyway -- the point is the wrapper still sanitizes).
+    assert spy.call_count == 1
+    assert captured["presanitized"] is True
+    assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]

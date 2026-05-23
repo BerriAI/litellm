@@ -5127,6 +5127,24 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "oci":
+            if headers is None:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
         elif custom_llm_provider == "cohere" or custom_llm_provider == "cohere_chat":
             cohere_key = (
                 api_key
@@ -5806,22 +5824,6 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
-            )
-        elif custom_llm_provider == "oci":
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params=litellm_params_dict,
-                headers=headers,
             )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
@@ -6613,8 +6615,7 @@ def transcription(
         api_key=api_key,
     )  # type: ignore
 
-    if dynamic_api_key is not None:
-        api_key = dynamic_api_key
+    api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
     optional_params = get_optional_params_transcription(
         model=model,
@@ -6654,7 +6655,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure":
+    if custom_llm_provider == "azure" and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
