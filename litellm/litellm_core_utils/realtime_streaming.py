@@ -865,25 +865,10 @@ class RealTimeStreaming:
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
                         item = msg_obj.get("item", {})
-                        if item.get("role") == "user":
-                            content_list = item.get("content", [])
-                            texts = [
-                                c.get("text", "")
-                                for c in content_list
-                                if isinstance(c, dict) and c.get("type") == "input_text"
-                            ]
-                            combined_text = " ".join(texts)
-                            if combined_text:
-                                blocked = await self.run_realtime_guardrails(
-                                    combined_text
-                                )
-                                if blocked:
-                                    # Store the guardrail reason so the next response.create
-                                    # (sent automatically by the client) is rewritten to
-                                    # include it as response instructions.
-                                    self._pending_guardrail_message = combined_text
-                                    continue  # don't forward the original blocked message
-                        elif item.get("type") == "function_call_output":
+                        # Check function_call_output first so a client cannot
+                        # bypass the tool-result guardrail by also setting
+                        # role="user" on a function_call_output item.
+                        if item.get("type") == "function_call_output":
                             # Tool results are client-controlled and fed to the
                             # model; check them with the same guardrail used for
                             # user text so an attacker cannot smuggle blocked
@@ -925,6 +910,24 @@ class RealTimeStreaming:
                                     await self._send_to_backend(sanitized_msg)
                                     self._pending_guardrail_message = output_text
                                     continue
+                        elif item.get("role") == "user":
+                            content_list = item.get("content", [])
+                            texts = [
+                                c.get("text", "")
+                                for c in content_list
+                                if isinstance(c, dict) and c.get("type") == "input_text"
+                            ]
+                            combined_text = " ".join(texts)
+                            if combined_text:
+                                blocked = await self.run_realtime_guardrails(
+                                    combined_text
+                                )
+                                if blocked:
+                                    # Store the guardrail reason so the next response.create
+                                    # (sent automatically by the client) is rewritten to
+                                    # include it as response instructions.
+                                    self._pending_guardrail_message = combined_text
+                                    continue  # don't forward the original blocked message
 
                     if (
                         msg_type == "response.create"
