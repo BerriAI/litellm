@@ -1259,24 +1259,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
             # If serverContent only contained transcription(s) and no model
-            # content, return early — the main loop would fail on unknown keys.
+            # content, mark it as already handled so the main loop skips it
+            # (map_openai_event would raise on an unknown serverContent
+            # subkey). Fall through so sibling top-level keys such as
+            # ``toolCall`` are still processed in the main loop.
             _model_content_keys = {
                 "modelTurn",
                 "turnComplete",
                 "interrupted",
                 "generationComplete",
             }
-            if not any(k in server_content for k in _model_content_keys):
-                return {
-                    "response": returned_message,
-                    "current_output_item_id": current_output_item_id,
-                    "current_response_id": current_response_id,
-                    "current_delta_chunks": current_delta_chunks,
-                    "current_conversation_id": current_conversation_id,
-                    "current_item_chunks": current_item_chunks,
-                    "current_delta_type": current_delta_type,
-                    "session_configuration_request": session_configuration_request,
-                }
+            server_content_handled = not any(
+                k in server_content for k in _model_content_keys
+            )
+        else:
+            server_content_handled = False
 
         for key, value in json_message.items():
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
@@ -1284,6 +1281,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             # ``map_openai_event`` raises ValueError on unknown keys, which
             # would otherwise terminate the WebSocket session.
             if key not in _KNOWN_GEMINI_TOP_LEVEL_KEYS:
+                continue
+            # serverContent was a transcription-only payload already emitted
+            # above; skip it here so map_openai_event doesn't raise on the
+            # missing model-content subkeys.
+            if key == "serverContent" and server_content_handled:
                 continue
             # Check if this key or any nested key matches our mapping
             openai_event = self.map_openai_event(
@@ -1534,7 +1536,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             # to forward to the OpenAI-shaped client. Returning the
             # unchanged state keeps the WebSocket alive; raising would
             # terminate the session for a benign no-op frame.
-            if not any(key in _KNOWN_GEMINI_TOP_LEVEL_KEYS for key in json_message):
+            # serverContent already consumed by the transcription handler is
+            # a benign no-op for downstream — treat it like a metadata-only
+            # key when deciding whether to raise.
+            unhandled_known_keys = [
+                key
+                for key in json_message
+                if key in _KNOWN_GEMINI_TOP_LEVEL_KEYS
+                and not (key == "serverContent" and server_content_handled)
+            ]
+            if not unhandled_known_keys:
                 return {
                     "response": returned_message,
                     "current_output_item_id": current_output_item_id,
