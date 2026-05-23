@@ -146,6 +146,27 @@ class SensitiveDataMasker:
         return masked_data
 
 
+_default_masker = SensitiveDataMasker()
+
+
+def mask_sensitive_keys(
+    data: Dict[str, Any], sensitive_fields: Set[str]
+) -> Dict[str, Any]:
+    """Return a new dict with values masked for keys listed in ``sensitive_fields``.
+
+    Unlike :meth:`SensitiveDataMasker.mask_dict`, this does exact key-name
+    matching (not segment matching), so callers explicitly enumerate which
+    fields to mask. Non-string and None values are passed through unchanged.
+    """
+    masked: Dict[str, Any] = {}
+    for key, value in data.items():
+        if value is not None and key in sensitive_fields and isinstance(value, str):
+            masked[key] = _default_masker._mask_value(value)
+        else:
+            masked[key] = value
+    return masked
+
+
 # Usage example:
 """
 masker = SensitiveDataMasker()
