@@ -305,6 +305,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
+from litellm.proxy.prometheus_cleanup import cleanup_stale_worker_files
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
@@ -926,6 +927,14 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await _ar.load_state_from_db(prisma_client)
             _ar._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
+
+    # Periodically sweep PROMETHEUS_MULTIPROC_DIR for .db files whose PIDs are
+    # no longer alive.  mark_worker_exit() already runs on every gunicorn
+    # child_exit event, but this loop is a safety net for crashed workers
+    # (where child_exit never fires) and for any files carried over from a
+    # previous process group.
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        asyncio.create_task(_prometheus_multiproc_cleanup_loop())
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -2965,6 +2974,30 @@ def _write_health_state_to_router_cache(
 
 
 _ADAPTIVE_ROUTER_FLUSH_INTERVAL_SECONDS = 10
+_PROMETHEUS_CLEANUP_INTERVAL_SECONDS = 600  # 10 minutes
+
+
+async def _prometheus_multiproc_cleanup_loop() -> None:
+    """Periodically remove prometheus .db files for dead worker PIDs.
+
+    mark_worker_exit() handles graceful exits via gunicorn's child_exit hook,
+    but workers killed with SIGKILL or crashing unexpectedly skip that hook.
+    This loop sweeps the directory every _PROMETHEUS_CLEANUP_INTERVAL_SECONDS
+    and removes any .db file whose embedded PID is no longer alive.
+    """
+    while True:
+        try:
+            await asyncio.sleep(_PROMETHEUS_CLEANUP_INTERVAL_SECONDS)
+            multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+            if not multiproc_dir:
+                return
+            cleanup_stale_worker_files(multiproc_dir)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            verbose_proxy_logger.exception(
+                "prometheus_multiproc_cleanup_loop iteration failed"
+            )
 
 
 async def _adaptive_router_flusher_loop():

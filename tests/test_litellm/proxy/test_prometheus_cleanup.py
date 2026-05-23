@@ -1,5 +1,6 @@
 """
-Tests for litellm.proxy.prometheus_cleanup.wipe_directory and
+Tests for litellm.proxy.prometheus_cleanup.wipe_directory,
+cleanup_stale_worker_files, and
 ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir.
 """
 
@@ -10,7 +11,12 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.prometheus_cleanup import mark_worker_exit, wipe_directory
+from litellm.proxy.prometheus_cleanup import (
+    _is_pid_alive,
+    cleanup_stale_worker_files,
+    mark_worker_exit,
+    wipe_directory,
+)
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
@@ -110,6 +116,155 @@ class TestMarkWorkerExit:
                 mark_worker_exit(77)
 
         assert not live_file.exists()
+
+
+class TestIsPidAlive:
+    def test_current_process_is_alive(self):
+        assert _is_pid_alive(os.getpid()) is True
+
+    def test_nonexistent_pid_is_dead(self):
+        with patch("os.kill", side_effect=ProcessLookupError):
+            assert _is_pid_alive(999999) is False
+
+    def test_permission_error_means_alive(self):
+        # EPERM means process exists but we can't signal it.
+        with patch("os.kill", side_effect=PermissionError):
+            assert _is_pid_alive(1) is True
+
+
+class TestCleanupStaleWorkerFiles:
+    """
+    Test matrix for cleanup_stale_worker_files():
+
+    | Filename pattern            | PID state | Expected action  |
+    |-----------------------------|-----------|------------------|
+    | counter_{pid}.db            | dead      | deleted          |
+    | histogram_{pid}.db          | dead      | deleted          |
+    | summary_{pid}.db            | dead      | deleted          |
+    | gauge_all_{pid}.db          | dead      | deleted          |
+    | gauge_livesum_{pid}.db      | dead      | deleted          |
+    | counter_{pid}.db            | alive     | kept             |
+    | gauge_livesum_{pid}.db      | alive     | kept             |
+    | no_pid_here.db              | n/a       | kept (no match)  |
+    | mixed alive+dead in dir     | both      | only dead removed|
+    """
+
+    DEAD_PID = 99999899  # very unlikely to be a live PID
+
+    def _make_file(self, tmp_path, name: str):
+        f = tmp_path / name
+        f.touch()
+        return f
+
+    def test_counter_file_for_dead_pid_is_deleted(self, tmp_path):
+        f = self._make_file(tmp_path, f"counter_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not f.exists()
+
+    def test_histogram_file_for_dead_pid_is_deleted(self, tmp_path):
+        f = self._make_file(tmp_path, f"histogram_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not f.exists()
+
+    def test_summary_file_for_dead_pid_is_deleted(self, tmp_path):
+        f = self._make_file(tmp_path, f"summary_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not f.exists()
+
+    def test_gauge_all_file_for_dead_pid_is_deleted(self, tmp_path):
+        f = self._make_file(tmp_path, f"gauge_all_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not f.exists()
+
+    def test_gauge_livesum_file_for_dead_pid_is_deleted(self, tmp_path):
+        f = self._make_file(tmp_path, f"gauge_livesum_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not f.exists()
+
+    def test_file_for_alive_pid_is_kept(self, tmp_path):
+        alive_pid = os.getpid()
+        f = self._make_file(tmp_path, f"counter_{alive_pid}.db")
+        count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 0
+        assert f.exists()
+
+    def test_gauge_livesum_file_for_alive_pid_is_kept(self, tmp_path):
+        alive_pid = os.getpid()
+        f = self._make_file(tmp_path, f"gauge_livesum_{alive_pid}.db")
+        count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 0
+        assert f.exists()
+
+    def test_file_without_pid_pattern_is_kept(self, tmp_path):
+        f = self._make_file(tmp_path, "no_pid_here.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 0
+        assert f.exists()
+
+    def test_mixed_alive_and_dead_pids(self, tmp_path):
+        alive_pid = os.getpid()
+        dead_file = self._make_file(tmp_path, f"counter_{self.DEAD_PID}.db")
+        alive_file = self._make_file(tmp_path, f"counter_{alive_pid}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive",
+            side_effect=lambda p: p == alive_pid,
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 1
+        assert not dead_file.exists()
+        assert alive_file.exists()
+
+    def test_multiple_dead_files_all_deleted(self, tmp_path):
+        files = [
+            self._make_file(tmp_path, f"counter_{self.DEAD_PID}.db"),
+            self._make_file(tmp_path, f"histogram_{self.DEAD_PID}.db"),
+            self._make_file(tmp_path, f"gauge_livesum_{self.DEAD_PID}.db"),
+            self._make_file(tmp_path, f"gauge_all_{self.DEAD_PID}.db"),
+            self._make_file(tmp_path, f"summary_{self.DEAD_PID}.db"),
+        ]
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 5
+        for f in files:
+            assert not f.exists()
+
+    def test_oserror_on_remove_is_caught(self, tmp_path):
+        self._make_file(tmp_path, f"counter_{self.DEAD_PID}.db")
+        with patch(
+            "litellm.proxy.prometheus_cleanup._is_pid_alive", return_value=False
+        ):
+            with patch("os.remove", side_effect=OSError("disk full")):
+                count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 0
+
+    def test_empty_directory_returns_zero(self, tmp_path):
+        count = cleanup_stale_worker_files(str(tmp_path))
+        assert count == 0
 
 
 class TestMaybeSetupPrometheusMultiprocDir:
