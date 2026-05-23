@@ -123,18 +123,6 @@ def update_db_model(
 
         merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
 
-        # Honor explicit-null pricing-clears: SPECIAL_MODEL_INFO_PARAMS are mirrored
-        # into model_info by Deployment.__init__, so the clear must propagate to both.
-        # Restricted to SPECIAL_MODEL_INFO_PARAMS so a team admin cannot use this path
-        # to null out privileged model_info fields (team_id, access groups, etc.).
-        for field in updated_patch.litellm_params.model_fields_set:
-            if (
-                field in SPECIAL_MODEL_INFO_PARAMS
-                and getattr(updated_patch.litellm_params, field) is None
-            ):
-                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
-                merged_deployment_dict.get("model_info", {}).pop(field, None)
-
     # update model info
     if updated_patch.model_info:
         if "model_info" not in merged_deployment_dict:
@@ -143,12 +131,29 @@ def update_db_model(
             updated_patch.model_info.model_dump(exclude_none=True)
         )
 
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
+    # passes through (which today re-sends the OLD pricing on every save) cannot
+    # silently undo a litellm_params clear via .update().
+    #
+    # Restricted to SPECIAL_MODEL_INFO_PARAMS (the 4 pricing fields) so this path
+    # cannot be used to null out privileged model_info fields like team_id or access
+    # groups. SPECIAL_MODEL_INFO_PARAMS are mirrored between litellm_params and
+    # model_info by Deployment.__init__, so the clear propagates to both blobs.
+    if updated_patch.litellm_params:
+        for field in updated_patch.litellm_params.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("model_info", {}).pop(field, None)
+    if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if (
                 field in SPECIAL_MODEL_INFO_PARAMS
                 and getattr(updated_patch.model_info, field) is None
             ):
-                merged_deployment_dict["model_info"].pop(field, None)
+                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
     # convert to prisma compatible format

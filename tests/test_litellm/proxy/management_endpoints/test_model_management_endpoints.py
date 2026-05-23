@@ -1634,6 +1634,36 @@ class TestUpdateDBModelClearPricing:
         # team_id must survive
         assert info.get("team_id") == "team-keep-me"
 
+    def test_clear_survives_model_info_passthrough_with_old_pricing(self):
+        """Realistic UI submit shape: the patch carries BOTH blobs. The
+        model_info portion still has the old pricing because the form
+        re-serializes the source blob. The litellm_params null must beat the
+        model_info merge — i.e. the clear runs after both merges, not between.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None),
+                # The UI passes the OLD model_info blob through unchanged.
+                model_info=ModelInfo(
+                    id="dep-pricing-0",
+                    input_cost_per_token=0.000001,  # stale value from the page state
+                ),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert (
+            "input_cost_per_token" not in info
+        ), "model_info passthrough must not resurrect the cleared override"
+
     def test_clear_via_model_info_clears_both_blobs(self):
         """The mirror works in the reverse direction too: nulling a pricing field
         via the model_info patch should clear it from litellm_params as well."""
