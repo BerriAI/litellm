@@ -334,12 +334,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _apply_reasoning_replay_settings(responses_kwargs: Dict[str, Any]) -> None:
-        """Force ``store=False`` and append ``reasoning.encrypted_content`` to
-        ``include`` so the upstream returns the encrypted reasoning blob and
-        we can replay it verbatim on the next turn. Only kicks in when
-        reasoning is actually in play — either the client requested thinking,
-        or the inbound history carries a reasoning item from a prior turn —
-        so non-reasoning callers are not silently affected.
+        """Append ``reasoning.encrypted_content`` to ``include`` so the
+        upstream returns the encrypted reasoning blob and we can replay it
+        verbatim on the next turn. Only kicks in when reasoning is actually
+        in play — either the client requested thinking, or the inbound
+        history carries a reasoning item from a prior turn — so
+        non-reasoning callers are not affected. Does not modify ``store``;
+        the caller's storage preference (or OpenAI's default) is preserved.
         """
         has_reasoning_request = isinstance(responses_kwargs.get("reasoning"), dict)
         has_reasoning_input = any(
@@ -348,12 +349,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
         if not (has_reasoning_request or has_reasoning_input):
             return
-        # Only force store=False when the caller hasn't expressed a preference.
-        # Users who rely on OpenAI response storage (audit, cost attribution,
-        # later retrieval) can pass store=True explicitly to keep it on; they
-        # accept that they must replay encrypted_content themselves.
-        if "store" not in responses_kwargs:
-            responses_kwargs["store"] = False
         responses_kwargs.setdefault("include", [])
         if "reasoning.encrypted_content" not in responses_kwargs["include"]:
             responses_kwargs["include"].append("reasoning.encrypted_content")

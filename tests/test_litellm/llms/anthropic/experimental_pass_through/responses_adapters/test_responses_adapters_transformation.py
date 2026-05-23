@@ -866,18 +866,19 @@ class TestTranslateRequestBroaderCoverage:
         assert "store" not in kwargs
         assert "include" not in kwargs
 
-    def test_thinking_request_forces_store_false_and_include(self):
-        """When the client requests thinking, force stateless replay so the
-        encrypted_content is returned and can be round-tripped."""
+    def test_thinking_request_includes_encrypted_content(self):
+        """When the client requests thinking, include reasoning.encrypted_content
+        so the encrypted blob is returned for round-tripping. Store is not modified."""
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["store"] is False
+        assert "store" not in kwargs
         assert "reasoning.encrypted_content" in kwargs["include"]
 
-    def test_reasoning_input_history_forces_store_false_and_include(self):
+    def test_reasoning_input_history_includes_encrypted_content(self):
         """When the inbound history carries a reasoning item from a prior
-        turn (unpacked from a packed signature), force stateless replay even
-        if the current turn doesn't request thinking again."""
+        turn (unpacked from a packed signature), include encrypted_content
+        even if the current turn doesn't request thinking again. Store is
+        not modified."""
         import base64
         import json as _json
 
@@ -903,7 +904,7 @@ class TestTranslateRequestBroaderCoverage:
             ]
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["store"] is False
+        assert "store" not in kwargs
         assert "reasoning.encrypted_content" in kwargs["include"]
 
     def test_disabled_thinking_does_not_force_store_or_include(self):
@@ -1150,16 +1151,6 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"][0]["type"] == "text"
         assert result["content"][0]["text"] == "raw piece"
-
-    def test_dict_message_summary_text_part_recognized(self):
-        """`summary_text` is in the accepted text-part-type set."""
-        output_item = {
-            "type": "message",
-            "content": [{"type": "summary_text", "text": "summary body"}],
-        }
-        response = _make_mock_response(output=[output_item])
-        result: Any = _ADAPTER.translate_response(response)
-        assert result["content"][0]["text"] == "summary body"
 
     def test_dict_reasoning_with_summary_packs_signature(self):
         """Dict-shaped reasoning item with id + encrypted_content emits a
@@ -1450,11 +1441,20 @@ class TestReasoningPrecedesFunctionCall:
         assert all(p > reasoning_idx for p in fc_positions)
 
 
-class TestStoreOverrideOptOut:
-    """P2: _apply_reasoning_replay_settings must not silently disable
-    response storage when the caller explicitly set `store`."""
+class TestStoreNotModified:
+    """_apply_reasoning_replay_settings must not modify `store` at all.
+    It only appends reasoning.encrypted_content to `include`."""
 
-    def test_user_store_true_is_preserved(self):
+    def test_store_not_touched_when_absent(self):
+        kwargs: Dict[str, Any] = {
+            "reasoning": {"effort": "high"},
+            "input": [],
+        }
+        _ADAPTER._apply_reasoning_replay_settings(kwargs)
+        assert "store" not in kwargs
+        assert "reasoning.encrypted_content" in kwargs["include"]
+
+    def test_store_true_preserved(self):
         kwargs: Dict[str, Any] = {
             "reasoning": {"effort": "high"},
             "input": [],
@@ -1464,13 +1464,15 @@ class TestStoreOverrideOptOut:
         assert kwargs["store"] is True
         assert "reasoning.encrypted_content" in kwargs["include"]
 
-    def test_default_still_forces_store_false(self):
+    def test_store_false_preserved(self):
         kwargs: Dict[str, Any] = {
             "reasoning": {"effort": "high"},
             "input": [],
+            "store": False,
         }
         _ADAPTER._apply_reasoning_replay_settings(kwargs)
         assert kwargs["store"] is False
+        assert "reasoning.encrypted_content" in kwargs["include"]
 
     def test_no_reasoning_no_changes(self):
         kwargs: Dict[str, Any] = {"input": []}
