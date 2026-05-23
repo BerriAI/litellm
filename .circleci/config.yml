@@ -2541,7 +2541,6 @@ jobs:
           paths:
             - litellm-docker-database.tar.zst
 
-
   test_bad_database_url:
     machine:
       image: ubuntu-2204:2024.04.1
