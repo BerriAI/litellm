@@ -1,17 +1,21 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
+import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
+import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
+import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
+import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, LockOutlined } from "@ant-design/icons";
 import { Input, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
   accessToken,
   auth_type,
+  tokenUrl,
   userRole,
   userID,
   serverAlias,
@@ -21,29 +25,85 @@ const MCPToolsViewer = ({
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
-  
+
   // State for passthrough headers
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
+
+  // OAuth session token (sessionStorage-backed, cleared on tab/browser close).
+  // Only the interactive (authorization_code/PKCE) flow needs a user-facing
+  // auth gate. M2M (client_credentials) servers are also `auth_type === "oauth2"`,
+  // but the backend fetches their token internally — gating tool listing on
+  // them would force users through a non-existent authorization endpoint.
+  // We detect M2M via the presence of `tokenUrl`, matching the heuristic in
+  // `mcp_server_edit.tsx`.
+  const isOAuth = auth_type === "oauth2" && !tokenUrl;
+  const [oauthToken, setOauthToken] = useState<string | null>(() =>
+    isOAuth && isTokenValid(serverId, userID)
+      ? (getToken(serverId, userID)?.access_token ?? null)
+      : null
+  );
+
+  // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
+  useEffect(() => {
+    if (!isOAuth) {
+      setOauthToken(null);
+      return;
+    }
+    setOauthToken(
+      isTokenValid(serverId, userID)
+        ? (getToken(serverId, userID)?.access_token ?? null)
+        : null
+    );
+  }, [serverId, userID, isOAuth]);
+
+  const { startOAuthFlow, status: oauthStatus, error: oauthError } = useToolsOAuthFlow({
+    accessToken: accessToken ?? "",
+    serverId,
+    serverAlias,
+    userId: userID,
+    onSuccess: setOauthToken,
+  });
 
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
 
   // Build custom headers for MCP server requests
   const buildCustomHeaders = () => {
-    if (!serverAlias || !hasExtraHeaders) return undefined;
-    
     const customHeaders: Record<string, string> = {};
-    
-    // Add passthrough headers with server-specific prefix
-    Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
-      if (headerValue && headerValue.trim()) {
-        // Format: x-mcp-{alias}-{header_name}
-        const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
-        customHeaders[mcpHeaderName] = headerValue;
+
+    // Include the session OAuth token using MCP-specific headers so it doesn't
+    // conflict with the Authorization header used by the LiteLLM proxy itself.
+    // The backend's _get_mcp_server_auth_headers_from_headers() picks up the
+    // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
+    // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
+    if (oauthToken) {
+      if (serverAlias) {
+        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
+        if (safeAlias) {
+          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
+        } else {
+          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
+        }
+      } else {
+        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
       }
-    });
-    
+    }
+
+    // Add passthrough headers with server-specific prefix
+    if (serverAlias && hasExtraHeaders) {
+      const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
+      if (safeAlias) {
+        Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
+          if (headerValue && headerValue.trim()) {
+            // Format: x-mcp-{alias}-{header_name}
+            const mcpHeaderName = `x-mcp-${safeAlias}-${headerName.toLowerCase()}`;
+            customHeaders[mcpHeaderName] = headerValue;
+          }
+        });
+      }
+    }
+
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
@@ -54,14 +114,54 @@ const MCPToolsViewer = ({
     error: mcpToolsError,
     refetch: refetchTools,
   } = useQuery({
-    queryKey: ["mcpTools", serverId, passthroughHeaders],
-    queryFn: () => {
+    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken],
+    queryFn: async () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId, buildCustomHeaders());
+      const result = await listMCPTools(accessToken, serverId, buildCustomHeaders());
+      // listMCPTools never throws — surface error responses as thrown errors
+      // here so useQuery's retry/onError can react (e.g. clear the cached
+      // OAuth token on 401).
+      if (result?.error) {
+        const status = (result as { status?: number }).status;
+        if (status === 401) {
+          removeToken(serverId, userID);
+        }
+        const enhancedError = new Error(
+          result.message || result.error || "Failed to fetch MCP tools",
+        ) as Error & {
+          status?: number;
+          statusText?: string;
+          details?: any;
+        };
+        enhancedError.status = status;
+        enhancedError.statusText = (result as any).statusText;
+        enhancedError.details = (result as any).details;
+        throw enhancedError;
+      }
+      return result;
     },
-    enabled: !!accessToken,
+    // For OAuth servers, block the query until a session token is available
+    enabled: !!accessToken && (!isOAuth || oauthToken !== null),
     staleTime: 30000, // Consider data fresh for 30 seconds
+    retry: (failureCount, error: any) => {
+      // Don't retry on 401 — token is invalid, user must re-authenticate
+      if (error?.status === 401 || error?.response?.status === 401) return false;
+      return failureCount < 2;
+    },
   });
+
+  // If the tools query fails with 401, the cached OAuth token is invalid —
+  // clear it so the auth gate is shown again and the user can re-authenticate.
+  useEffect(() => {
+    const err = mcpToolsError as
+      | (Error & { status?: number; response?: { status?: number } })
+      | null;
+    const status = err?.status ?? err?.response?.status;
+    if (status === 401) {
+      removeToken(serverId, userID);
+      setOauthToken(null);
+    }
+  }, [mcpToolsError, serverId, userID]);
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
@@ -85,9 +185,14 @@ const MCPToolsViewer = ({
       setToolResult(data.content);
       setToolError(null);
     },
-    onError: (error: Error) => {
+    onError: (error: Error & { status?: number; response?: { status?: number } }) => {
       setToolError(error);
       setToolResult(null);
+      // On 401, clear the cached token so the auth gate is shown again
+      if (error?.status === 401 || (error as any)?.response?.status === 401) {
+        removeToken(serverId, userID);
+        setOauthToken(null);
+      }
     },
   });
 
@@ -197,7 +302,31 @@ const MCPToolsViewer = ({
                   )}
                 </Text>
 
-                {/* Search Bar */}
+                {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
+                {isOAuth && !oauthToken && (
+                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                    <LockOutlined className="text-2xl text-gray-400 mb-2" />
+                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Authenticate to view available tools
+                    </p>
+                    <AntdButton
+                      size="small"
+                      type="primary"
+                      loading={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
+                      onClick={startOAuthFlow}
+                      disabled={!accessToken}
+                    >
+                      Authorize
+                    </AntdButton>
+                    {oauthError && (
+                      <p className="text-xs text-red-500 mt-2">{oauthError}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Search Bar — only shown when tools are loaded */}
+                {!isOAuth || oauthToken ? <>
                 {toolsData.length > 0 && (
                   <div className="mb-3">
                     <Input
@@ -224,14 +353,16 @@ const MCPToolsViewer = ({
                 )}
 
                 {/* Error State */}
-                {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
+                {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
                   <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
-                    <p className="font-medium">Error: {mcpToolsResponse.message}</p>
+                    <p className="font-medium">
+                      Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
+                    </p>
                   </div>
                 )}
 
                 {/* No Tools State */}
-                {!isLoadingTools && !mcpToolsResponse?.error && (!toolsData || toolsData.length === 0) && (
+                {!isLoadingTools && !mcpToolsResponse?.error && !mcpToolsError && (!toolsData || toolsData.length === 0) && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
                       <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -315,6 +446,7 @@ const MCPToolsViewer = ({
                     )}
                   </>
                 )}
+                </> : null}
               </div>
             </div>
           </div>

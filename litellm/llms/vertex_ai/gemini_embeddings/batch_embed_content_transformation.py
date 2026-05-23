@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batchEmbedContents format. 
+Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batchEmbedContents format.
 
 Why separate file? Make it easy to see how transformation works
 """

@@ -62,20 +62,16 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
     ) -> Optional[Union[Dict[str, str], str]]:
         """Helper function to get server-specific auth header with case-insensitive matching."""
-        if mcp_server_auth_headers and server.alias:
-            normalized_server_alias = server.alias.lower()
-            normalized_headers = {
-                k.lower(): v for k, v in mcp_server_auth_headers.items()
-            }
-            server_auth = normalized_headers.get(normalized_server_alias)
-            if server_auth is not None:
-                return server_auth
-        elif mcp_server_auth_headers and server.server_name:
-            normalized_server_name = server.server_name.lower()
-            normalized_headers = {
-                k.lower(): v for k, v in mcp_server_auth_headers.items()
-            }
-            server_auth = normalized_headers.get(normalized_server_name)
+        from litellm.proxy._experimental.mcp_server.utils import (
+            lookup_mcp_server_auth_in_headers,
+        )
+
+        if mcp_server_auth_headers:
+            server_auth = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=getattr(server, "alias", None),
+                server_name=getattr(server, "server_name", None),
+            )
             if server_auth is not None:
                 return server_auth
         return mcp_auth_header
