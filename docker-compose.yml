@@ -1,10 +1,23 @@
 services:
-  litellm:
+  ui:
     build:
       context: .
-      args:
-        target: runtime
-    image: docker.litellm.ai/berriai/litellm:main-stable
+      dockerfile: ui/Dockerfile
+    image: docker.litellm.ai/berriai/litellm-ui:main-stable
+    ports:
+      - "3000:3000" # Map the container port to the host, change the host port if necessary
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: docker.litellm.ai/berriai/litellm-gateway:main-stable
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
     # volumes:

@@ -4,4 +4,4 @@ global:
 scrape_configs:
   - job_name: 'litellm'
     static_configs:
-      - targets: ['litellm:4000']  # Assuming Litellm exposes metrics at port 4000
+      - targets: ['gateway:4000']  # gateway service exposes metrics at port 4000
