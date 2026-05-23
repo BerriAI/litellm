@@ -1210,10 +1210,10 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     headers = exc.headers
     error_dict = exc.to_dict()
+    status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+    _close_dangling_otel_server_span(request, status_code)
     return JSONResponse(
-        status_code=(
-            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-        ),
+        status_code=status_code,
         content={"error": error_dict},
         headers=headers,
     )

@@ -702,6 +702,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 },
             )
 
+            # _record_exception_on_span only stamps when error_code is set;
+            # bare TypeError etc. has none, and the span is about to be ended.
+            error_code = (
+                error_information.get("error_code") if error_information else None
+            )
+            if not error_code:
+                self.set_response_status_code_attribute(parent_otel_span, 500)
+
             # Pre-request latency (request_data carries the propagated
             # metadata on the failure path; omitted if it failed before handoff).
             self.set_preprocessing_duration_attribute(parent_otel_span, request_data)
@@ -749,11 +757,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # Pre-request latency on the SERVER span (success path).
             self.set_preprocessing_duration_attribute(parent_span, kwargs)
-
-            # http.response.status_code on the SERVER span (success path).
-            # A successful proxy response is HTTP 200; the failure path sets
-            # this from the error code in _record_exception_on_span.
-            self.set_response_status_code_attribute(parent_span, 200)
 
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -937,7 +940,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and hasattr(proxy_span, "is_recording")
             and proxy_span.is_recording()
         ):
-            proxy_span.end(end_time=self._to_ns(end_time))
+            self._close_proxy_span_ok(proxy_span, end_time)
+
+    def _close_proxy_span_ok(self, span: Span, end_time) -> None:
+        """Stamp http.response.status_code=200 + status=OK, then end the span."""
+        from opentelemetry.trace import Status, StatusCode
+
+        self.set_response_status_code_attribute(span, 200)
+        span.set_status(Status(StatusCode.OK))
+        span.end(end_time=self._to_ns(end_time))
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
         """Create the litellm_request span then close the proxy span."""
@@ -1023,8 +1034,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             parent_span is not None
             and hasattr(parent_span, "name")
             and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            and hasattr(parent_span, "is_recording")
+            and parent_span.is_recording()
         ):
-            parent_span.end(end_time=self._to_ns(end_time))
+            self._close_proxy_span_ok(parent_span, end_time)
 
         # Stamp team attributes onto the SERVER (root) span before it is
         # closed, so the trace root carries them like every child span.

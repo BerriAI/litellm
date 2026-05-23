@@ -129,6 +129,54 @@ def test_chat_completions_success_path_stamps_200(
     )
 
 
+# /v1/responses ends the proxy span before async_post_call_success_hook fires,
+# so the 200 stamp must happen at span close (here), not in the hook.
+@pytest.mark.parametrize(
+    "path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
+)
+def test_end_proxy_span_from_kwargs_stamps_200(
+    path, otel_with_exporter, server_span_factory
+):
+    from datetime import datetime
+
+    otel, exporter = otel_with_exporter
+    server_span = server_span_factory(path)
+    kwargs = {"litellm_params": {"metadata": {"litellm_parent_otel_span": server_span}}}
+    otel._end_proxy_span_from_kwargs(kwargs, datetime.now())
+
+    assert_server_span_attrs(
+        exporter,
+        expected_status=200,
+        expected_url_path=path,
+        where=f"{path} _end_proxy_span_from_kwargs",
+    )
+
+
+# Bare TypeError has no .code/.status_code, so error_information.error_code is
+# empty and _record_exception_on_span skips the stamp — must default to 500.
+def test_async_post_call_failure_hook_defaults_to_500(
+    otel_with_exporter, server_span_factory
+):
+    otel, exporter = otel_with_exporter
+    server_span = server_span_factory("/v1/responses")
+    uakd = _real_user_api_key_dict(server_span)
+
+    asyncio.run(
+        otel.async_post_call_failure_hook(
+            request_data={},
+            original_exception=TypeError("missing required argument"),
+            user_api_key_dict=uakd,
+        )
+    )
+
+    assert_server_span_attrs(
+        exporter,
+        expected_status=500,
+        expected_url_path="/v1/responses",
+        where="async_post_call_failure_hook (TypeError) defaults to 500",
+    )
+
+
 SMOKE_ENDPOINTS = [
     "/v1/embeddings",
     "/v1/completions",

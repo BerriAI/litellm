@@ -10,8 +10,10 @@ from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 
 import litellm.proxy.proxy_server as proxy_server_module
+from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import (
     _close_dangling_otel_server_span,
+    openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
 )
@@ -99,3 +101,36 @@ def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_fac
                 request, HTTPException(status_code=403, detail="forbidden")
             )
         )
+
+
+# Covers ProxyException raised after auth stashed the span (e.g., invalid-JSON
+# body via _read_request_body) — handler must close the dangling SERVER span.
+@pytest.mark.parametrize(
+    "code,path",
+    [
+        (400, "/v1/chat/completions"),
+        (400, "/v1/messages"),
+        (400, "/v1/responses"),
+        (429, "/v1/chat/completions"),
+        (503, "/v1/chat/completions"),
+    ],
+)
+def test_openai_exception_handler_closes_span(
+    wired_otel, server_span_factory, code, path
+):
+    request = _fake_request(parent_otel_span=server_span_factory(path))
+    exc = ProxyException(
+        message="boom",
+        type="invalid_request_error",
+        param="request_body",
+        code=code,
+    )
+    response = asyncio.run(openai_exception_handler(request, exc))
+    assert response.status_code == code
+    assert_server_span_attrs(
+        wired_otel,
+        expected_status=code,
+        expected_url_path=path,
+        where=f"openai_exception_handler ({path} code={code})",
+    )
+    assert request.state.parent_otel_span is None
