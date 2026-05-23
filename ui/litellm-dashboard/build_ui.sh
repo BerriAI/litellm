@@ -49,13 +49,11 @@ if [ $? -eq 0 ]; then
   # Specify the destination directory
   destination_dir="../../litellm/proxy/_experimental/out"
 
-  # Remove existing files in the destination directory
-  rm -rf "$destination_dir"/*
-
-  # Copy the contents of the output directory to the specified destination
-  cp -r ./out/* "$destination_dir"
-
-  rm -rf ./out
+  # Replace destination atomically so it works whether or not the directory
+  # previously existed (rm+mv avoids the cp-as-child issue when the dest dir
+  # is pre-existing, and avoids "no such file" when it does not exist).
+  rm -rf "$destination_dir"
+  mv ./out "$destination_dir"
 
   echo "Deployment completed."
 else
