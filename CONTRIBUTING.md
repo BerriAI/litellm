@@ -38,17 +38,82 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
-# Create a new branch for your feature
-git checkout -b your-feature-branch
+# Create a new branch for your feature (see "Branch naming" below)
+git checkout -b feature/your-feature
 
 # Install development dependencies
 make install-dev
+
+# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+make install-hooks
 
 # Verify your setup works
 make help
 ```
 
 That's it! Your local development environment is ready.
+
+## Commit and Branch Conventions
+
+LiteLLM enforces two community specs:
+
+- **Commits** follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) — `<type>(<scope>)!: <description>`
+- **Branches** follow [Conventional Branches](https://conventional-branch.github.io/) — `<type>/<description>`
+
+### Commit message format
+
+```
+<type>(<optional scope>)!: <description>
+
+<optional body>
+
+<optional footer>
+```
+
+Allowed `<type>` values: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Add `!` before `:` for breaking changes.
+
+Examples:
+```
+feat(router): add weighted round-robin strategy
+fix(bedrock): decouple STS region from aws_region_name
+chore(deps): bump black to 26.3.1
+refactor!: drop Python 3.8 support
+```
+
+PR titles must follow the same format — squash-merge uses the PR title as the commit subject, and a CI check validates it.
+
+### Branch naming
+
+Format: `<type>/<short-description>` where `<type>` is one of `feature`, `bugfix`, `hotfix`, `release`, `chore`.
+
+Examples:
+```
+feature/weighted-round-robin
+bugfix/streaming-empty-chunks
+chore/bump-black
+hotfix/auth-bypass
+```
+
+Branches always allowed (bypass the check): `main`, `litellm_internal_staging`, `dependabot/*`, `gh-readonly-queue/*`.
+
+### Installing the hooks
+
+The hooks live in `.githooks/` and are opt-in. Run once per clone:
+
+```bash
+make install-hooks
+```
+
+This sets `core.hooksPath=.githooks` for the local repository. The hooks run on `git commit` (subject validation) and `git push` (branch validation).
+
+In a rare emergency you can bypass them per-command:
+
+```bash
+git commit --no-verify -m "..."
+git push   --no-verify
+```
+
+To uninstall: `git config --unset core.hooksPath`.
 
 ### 2. Development Workflow
 
@@ -67,12 +132,12 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes
+# Commit your changes (must follow Conventional Commits — see below)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR
-git push origin your-feature-branch
+# Push and create a PR (branch must follow Conventional Branches — see below)
+git push origin feature/your-feature
 ```
 
 ## Adding Testing
