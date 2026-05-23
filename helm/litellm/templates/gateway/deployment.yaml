@@ -22,7 +22,7 @@ spec:
       labels:
         {{- include "litellm.gateway.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      serviceAccountName: {{ include "litellm.gateway.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
