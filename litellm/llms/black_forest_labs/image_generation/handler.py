@@ -176,6 +176,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     async def async_image_generation(
@@ -278,6 +282,10 @@ class BlackForestLabsImageGeneration:
             raw_response=final_response,
             model_response=model_response,
             logging_obj=logging_obj,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            encoding=None,
         )
 
     def _poll_for_result_sync(
