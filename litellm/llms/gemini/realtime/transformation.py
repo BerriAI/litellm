@@ -1276,6 +1276,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             server_content_handled = False
 
+        tool_call_handled = False
         for key, value in json_message.items():
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
@@ -1306,21 +1307,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 # Handle toolCall from Gemini. If the payload has no function
                 # calls, emit nothing — an orphaned response.created/done pair
                 # with no output items would confuse OpenAI-compatible clients.
-                # Return rather than ``continue`` so a toolCall that is the
-                # only key in the message doesn't leave ``returned_message``
-                # empty and trip the "Unknown message type" guard below
-                # (which would terminate the WebSocket session).
+                # Mark the key as intentionally consumed (mirroring
+                # ``server_content_handled``) so any sibling keys in the same
+                # frame are still processed by the rest of the loop and the
+                # post-loop guard doesn't treat the no-op as fatal.
                 if not value.get("functionCalls"):
-                    return {
-                        "response": returned_message,
-                        "current_output_item_id": current_output_item_id,
-                        "current_response_id": current_response_id,
-                        "current_delta_chunks": current_delta_chunks,
-                        "current_conversation_id": current_conversation_id,
-                        "current_item_chunks": current_item_chunks,
-                        "current_delta_type": current_delta_type,
-                        "session_configuration_request": session_configuration_request,
-                    }
+                    tool_call_handled = True
+                    continue
 
                 if current_conversation_id is None:
                     current_conversation_id = f"conv_{uuid.uuid4()}"
@@ -1565,6 +1558,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 for key in json_message
                 if key in _KNOWN_GEMINI_TOP_LEVEL_KEYS
                 and not (key == "serverContent" and server_content_handled)
+                and not (key == "toolCall" and tool_call_handled)
             ]
             if not unhandled_known_keys:
                 return {

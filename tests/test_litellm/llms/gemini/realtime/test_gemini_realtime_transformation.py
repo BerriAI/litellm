@@ -870,6 +870,41 @@ def test_gemini_empty_tool_call_does_not_crash_websocket():
     assert result["current_output_item_id"] is None
 
 
+def test_gemini_empty_tool_call_with_sibling_usage_metadata_does_not_crash():
+    """A toolCall with empty functionCalls alongside a sibling key (e.g.
+    ``usageMetadata``) must still be handled as a benign no-op: the empty
+    toolCall is consumed and the metadata sibling is skipped, without
+    raising ``Unknown message type``."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_empty_tool_call_with_sibling"
+
+    result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {"functionCalls": []},
+                "usageMetadata": {"totalTokenCount": 7},
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_existing",
+            "current_response_id": "resp_existing",
+            "current_conversation_id": "conv_existing",
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    assert result["response"] == []
+    # In-flight response IDs must survive the benign no-op.
+    assert result["current_response_id"] == "resp_existing"
+    assert result["current_output_item_id"] == "item_existing"
+
+
 def test_gemini_function_call_output_includes_name():
     """Verify function_call_output includes name field from stored mapping."""
     config = GeminiRealtimeConfig()
