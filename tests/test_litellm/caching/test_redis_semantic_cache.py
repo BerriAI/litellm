@@ -890,7 +890,73 @@ def test_cache_get_cache_passes_responses_input_to_backend_cache():
         "test_key",
         input="What is the capital of France?",
         metadata=metadata,
-        cache={},
+    )
+
+
+def test_cache_get_cache_filters_sensitive_kwargs_from_backend_cache():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.cache = MagicMock()
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+
+    def _cache_hit(_cache_key, **cache_kwargs):
+        cache_kwargs["metadata"]["semantic-similarity"] = 0.7
+        return {"content": "Paris"}
+
+    cache.cache.get_cache = MagicMock(side_effect=_cache_hit)
+
+    metadata = {"user_api_key": "sk-secret", "trace_id": "trace-id"}
+    result = cache.get_cache(
+        input="What is the capital of France?",
+        metadata=metadata,
+        cache={"s-maxage": 10},
+        api_key="sk-secret",
+        headers={"authorization": "Bearer sk-secret"},
+    )
+
+    assert result == {"content": "Paris"}
+    assert metadata == {
+        "user_api_key": "sk-secret",
+        "trace_id": "trace-id",
+        "semantic-similarity": 0.7,
+    }
+
+    forwarded_kwargs = cache.cache.get_cache.call_args.kwargs
+    assert forwarded_kwargs == {
+        "input": "What is the capital of France?",
+        "metadata": {"semantic-similarity": 0.7},
+    }
+    assert forwarded_kwargs["metadata"] is not metadata
+    cache._get_cache_logic.assert_called_once_with(
+        cached_result={"content": "Paris"},
+        max_age=10,
+    )
+
+
+def test_cache_get_cache_filters_sensitive_kwargs_without_metadata():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.cache = MagicMock()
+    cache.cache.get_cache = MagicMock(return_value={"content": "Paris"})
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+
+    result = cache.get_cache(
+        input="What is the capital of France?",
+        cache={"s-maxage": 10},
+        api_key="sk-secret",
+        headers={"authorization": "Bearer sk-secret"},
+    )
+
+    assert result == {"content": "Paris"}
+    cache.cache.get_cache.assert_called_once_with(
+        "test_key",
+        input="What is the capital of France?",
     )
 
 
@@ -917,7 +983,6 @@ def test_cache_get_cache_passes_responses_input_to_dynamic_cache():
         "test_key",
         input="What is the capital of France?",
         metadata=metadata,
-        cache={},
     )
     cache._get_cache_logic.assert_called_once_with(
         cached_result={"content": "Paris"},

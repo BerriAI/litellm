@@ -497,6 +497,34 @@ class Cache:
             return cached_response
         return cached_result
 
+    @staticmethod
+    def _get_safe_cache_lookup_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        cache_lookup_kwargs: Dict[str, Any] = {}
+        for prompt_kwarg in ("messages", "input"):
+            if prompt_kwarg in kwargs:
+                cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
+
+        if isinstance(kwargs.get("metadata"), dict):
+            cache_lookup_kwargs["metadata"] = {}
+
+        return cache_lookup_kwargs
+
+    @staticmethod
+    def _update_metadata_from_cache_lookup_kwargs(
+        original_kwargs: Dict[str, Any], cache_lookup_kwargs: Dict[str, Any]
+    ) -> None:
+        original_metadata = original_kwargs.get("metadata")
+        cache_lookup_metadata = cache_lookup_kwargs.get("metadata")
+        if not isinstance(original_metadata, dict) or not isinstance(
+            cache_lookup_metadata, dict
+        ):
+            return
+
+        if "semantic-similarity" in cache_lookup_metadata:
+            original_metadata["semantic-similarity"] = cache_lookup_metadata[
+                "semantic-similarity"
+            ]
+
     def get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
@@ -522,10 +550,19 @@ class Cache:
                     or cache_control_args.get("s-max-age")
                     or float("inf")
                 )
+                cache_lookup_kwargs = self._get_safe_cache_lookup_kwargs(kwargs)
                 if dynamic_cache_object is not None:
-                    cached_result = dynamic_cache_object.get_cache(cache_key, **kwargs)
+                    cached_result = dynamic_cache_object.get_cache(
+                        cache_key, **cache_lookup_kwargs
+                    )
                 else:
-                    cached_result = self.cache.get_cache(cache_key, **kwargs)
+                    cached_result = self.cache.get_cache(
+                        cache_key, **cache_lookup_kwargs
+                    )
+                self._update_metadata_from_cache_lookup_kwargs(
+                    original_kwargs=kwargs,
+                    cache_lookup_kwargs=cache_lookup_kwargs,
+                )
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
