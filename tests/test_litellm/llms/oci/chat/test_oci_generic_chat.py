@@ -339,9 +339,11 @@ class TestOCIStreamWrapperChunkCreator:
 
 @pytest.fixture
 def _register_oci_gpt5_in_catalog():
-    """Ensure OCI GPT-5 catalog entries exist for tests run against the live
-    remote map. The bundled backup already contains them — this is a no-op for
-    most environments and only patches in entries when the loaded map omits them.
+    """Guarantee OCI GPT-5 catalog entries with supports_reasoning=True are
+    present for the duration of the test, regardless of whether
+    ``litellm.model_cost`` was populated from the bundled
+    ``model_prices_and_context_window.json`` (which ships them) or from a
+    remote map that may lag behind.
     """
     import litellm
 
