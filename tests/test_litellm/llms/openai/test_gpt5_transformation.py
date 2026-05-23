@@ -1309,3 +1309,87 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+# ---------------------------------------------------------------------------
+# Regression: gpt-5.1-mini / gpt-5.1-nano temperature support (issue #27351)
+# These tests confirm the bug: both models must allow temperature when
+# reasoning_effort is omitted (defaults to "none" for the gpt-5.1 family).
+# They fail before the registry entries are added and pass afterwards.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", ["gpt-5.1-mini", "gpt-5.1-nano"])
+def test_gpt5_1_mini_nano_support_none_reasoning_effort(
+    gpt5_config: OpenAIGPT5Config, model: str
+):
+    """gpt-5.1-mini and gpt-5.1-nano must have supports_none_reasoning_effort=True."""
+    assert gpt5_config._supports_reasoning_effort_level(
+        model, "none"
+    ), f"Expected {model!r} to support reasoning_effort='none'"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.1-mini", "gpt-5.1-nano"])
+def test_gpt5_1_mini_nano_allow_temperature_without_reasoning_effort(
+    config: OpenAIConfig, model: str
+):
+    """gpt-5.1-mini / gpt-5.1-nano must accept any temperature when reasoning_effort
+    is not specified (defaults to 'none' for the gpt-5.1 family).
+
+    Regression for https://github.com/BerriAI/litellm/issues/27351 — models were
+    missing from the registry so supports_none_reasoning_effort resolved to False,
+    causing a spurious 400 UnsupportedParamsError.
+    """
+    for temp in [0.0, 0.7, 1.0, 1.5]:
+        params = config.map_openai_params(
+            non_default_params={"temperature": temp},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert params["temperature"] == temp, (
+            f"{model}: expected temperature={temp} to pass through, got {params}"
+        )
+
+
+@pytest.mark.parametrize("model", ["gpt-5.1-mini", "gpt-5.1-nano"])
+def test_gpt5_1_mini_nano_allow_temperature_with_reasoning_effort_none(
+    config: OpenAIConfig, model: str
+):
+    """Explicit reasoning_effort='none' must also allow flexible temperature."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.7, "reasoning_effort": "none"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.7
+    assert params["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.1-mini", "gpt-5.1-nano"])
+def test_gpt5_1_mini_nano_reject_temperature_with_high_reasoning_effort(
+    config: OpenAIConfig, model: str
+):
+    """When reasoning_effort is non-none, only temperature=1 is allowed."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.7, "reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("model", ["gpt-5.1-mini", "gpt-5.1-nano"])
+def test_gpt5_1_mini_nano_provider_prefixed_allows_temperature(
+    config: OpenAIConfig, model: str
+):
+    """openai/<model> prefix must be normalised before registry lookup."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.7},
+        optional_params={},
+        model=f"openai/{model}",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.7
