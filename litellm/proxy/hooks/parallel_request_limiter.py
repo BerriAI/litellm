@@ -16,6 +16,8 @@ from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAP
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_tag_rpm_limit,
+    get_key_tag_tpm_limit,
 )
 
 if TYPE_CHECKING:
@@ -63,7 +65,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         rpm_limit: int,
         current: Optional[dict],
         request_count_api_key: str,
-        rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
+        rate_limit_type: Literal[
+            "key", "model_per_key", "user", "customer", "team", "tag"
+        ],
         values_to_update_in_cache: List[Tuple[Any, Any]],
     ) -> dict:
         verbose_proxy_logger.info(
@@ -345,6 +349,35 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 data["metadata"] = {}
             data["metadata"].update(_remaining_limits_data)
 
+        # Check per-tag rate limits (tag_rpm_limit / tag_tpm_limit on the key)
+        if api_key is not None:
+            request_tags: List[str] = data.get("metadata", {}).get("tags") or []
+            for _tag in request_tags:
+                _tag_rpm = get_key_tag_rpm_limit(user_api_key_dict, _tag)
+                _tag_tpm = get_key_tag_tpm_limit(user_api_key_dict, _tag)
+                if _tag_rpm is None and _tag_tpm is None:
+                    continue
+                request_count_tag_key = (
+                    f"{api_key}::tag::{_tag}::{precise_minute}::request_count"
+                )
+                tag_current = await self.internal_usage_cache.async_get_cache(
+                    key=request_count_tag_key,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                await self.check_key_in_limits(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data=data,
+                    call_type=call_type,
+                    max_parallel_requests=sys.maxsize,
+                    current=tag_current,
+                    request_count_api_key=request_count_tag_key,
+                    tpm_limit=_tag_tpm if _tag_tpm is not None else sys.maxsize,
+                    rpm_limit=_tag_rpm if _tag_rpm is not None else sys.maxsize,
+                    rate_limit_type="tag",
+                    values_to_update_in_cache=values_to_update_in_cache,
+                )
+
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
@@ -590,6 +623,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
                 values_to_update_in_cache.append((request_count_api_key, new_val))
+
+            # ------------
+            # Update usage - per-tag
+            # ------------
+            if user_api_key is not None:
+                _success_tags: List[str] = (
+                    kwargs["litellm_params"]["metadata"].get("tags") or []
+                )
+                _tag_rpm_map: dict = user_api_key_metadata.get("tag_rpm_limit") or {}
+                _tag_tpm_map: dict = user_api_key_metadata.get("tag_tpm_limit") or {}
+                for _tag in _success_tags:
+                    if _tag not in _tag_rpm_map and _tag not in _tag_tpm_map:
+                        continue
+                    request_count_tag_key = (
+                        f"{user_api_key}::tag::{_tag}::{precise_minute}::request_count"
+                    )
+                    current = await self.internal_usage_cache.async_get_cache(
+                        key=request_count_tag_key,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    ) or {
+                        "current_requests": 1,
+                        "current_tpm": 0,
+                        "current_rpm": 0,
+                    }
+                    new_val = {
+                        "current_requests": max(current["current_requests"] - 1, 0),
+                        "current_tpm": current["current_tpm"] + total_tokens,
+                        "current_rpm": current["current_rpm"],
+                    }
+                    values_to_update_in_cache.append((request_count_tag_key, new_val))
 
             # ------------
             # Update usage - User

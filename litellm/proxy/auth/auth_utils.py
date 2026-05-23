@@ -903,6 +903,30 @@ def get_model_rate_limit_from_metadata(
     return None
 
 
+def get_key_tag_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    tag: str,
+) -> Optional[int]:
+    """Return the per-tag RPM limit for `tag`, or None if not configured."""
+    if user_api_key_dict.metadata:
+        tag_rpm_limit = user_api_key_dict.metadata.get("tag_rpm_limit")
+        if tag_rpm_limit and isinstance(tag_rpm_limit, dict):
+            return tag_rpm_limit.get(tag)
+    return None
+
+
+def get_key_tag_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    tag: str,
+) -> Optional[int]:
+    """Return the per-tag TPM limit for `tag`, or None if not configured."""
+    if user_api_key_dict.metadata:
+        tag_tpm_limit = user_api_key_dict.metadata.get("tag_tpm_limit")
+        if tag_tpm_limit and isinstance(tag_tpm_limit, dict):
+            return tag_tpm_limit.get(tag)
+    return None
+
+
 def get_team_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:

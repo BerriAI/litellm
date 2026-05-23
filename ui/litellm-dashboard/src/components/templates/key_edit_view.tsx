@@ -14,6 +14,7 @@ import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import { TagRateLimitEditor } from "../common_components/TagRateLimitEditor";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
@@ -107,6 +108,13 @@ export function KeyEditView({
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
   );
+  const [tagRateLimits, setTagRateLimits] = useState<{
+    tag_rpm_limit: Record<string, number>;
+    tag_tpm_limit: Record<string, number>;
+  }>({
+    tag_rpm_limit: keyData.metadata?.tag_rpm_limit ?? {},
+    tag_tpm_limit: keyData.metadata?.tag_tpm_limit ?? {},
+  });
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -294,6 +302,14 @@ export function KeyEditView({
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
       values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
+
+      // Include per-tag rate limits
+      if (Object.keys(tagRateLimits.tag_rpm_limit).length > 0) {
+        values.tag_rpm_limit = tagRateLimits.tag_rpm_limit;
+      }
+      if (Object.keys(tagRateLimits.tag_tpm_limit).length > 0) {
+        values.tag_tpm_limit = tagRateLimits.tag_tpm_limit;
+      }
 
       await onSubmit(values);
     } finally {
@@ -485,6 +501,22 @@ export function KeyEditView({
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Per-Tag Rate Limits{" "}
+            <Tooltip title="Set independent RPM/TPM limits per request tag. Requests that include a matching tag are tracked in a separate counter. Requests without a matching tag fall back to the key-level limits.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <TagRateLimitEditor
+          value={tagRateLimits}
+          onChange={setTagRateLimits}
+        />
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">

@@ -1040,6 +1040,8 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    tag_rpm_limit: Optional[Dict[str, int]] = None
+    tag_tpm_limit: Optional[Dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
@@ -4267,6 +4269,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "tag_rpm_limit",
+    "tag_tpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",
