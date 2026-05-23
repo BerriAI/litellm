@@ -32,7 +32,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -64,6 +64,13 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+# Datadog streaming spans are a no-op when ddtrace is not enabled, but the
+# ``with tracer.trace(...)`` context manager still allocates a NullSpan and
+# runs __enter__/__exit__ for every streamed chunk. Resolve once at import so
+# the per-chunk hot path can skip the context manager entirely when tracing
+# is off (the default).
+_DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
 
 
 def _serialize_http_exception_detail(
@@ -231,7 +238,7 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
-async def create_response(
+async def create_response(  # noqa: PLR0915
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
@@ -336,6 +343,13 @@ async def create_response(
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
+        if not _DD_STREAMING_TRACE_ENABLED:
+            # Fast path: no per-chunk span object / context-manager overhead.
+            if first_chunk_value is not None:
+                yield first_chunk_value
+            async for chunk in generator:
+                yield chunk
+            return
         if first_chunk_value is not None:
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
@@ -1900,6 +1914,23 @@ class ProxyBaseLLMRequestProcessing:
         failure hook and yields via serialize_error. Use for SSE or NDJSON.
         """
         verbose_proxy_logger.debug("inside generator")
+        # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
+        # is needed. When no callback overrides ``async_post_call_streaming_hook``,
+        # no CustomGuardrail is active, and cost injection is disabled, the
+        # per-chunk hook returns the chunk unchanged, ``str_so_far`` is never
+        # consumed, and cost injection is a no-op -- so the per-chunk coroutine
+        # await, response-string materialization, and cost-injection call are
+        # pure overhead on the streaming hot path (the default config).
+        caps = ProxyLogging._callback_capabilities()
+        cost_injection_enabled = bool(
+            getattr(litellm, "include_cost_in_streaming_usage", False)
+        )
+        fast_path = (
+            not caps.has_streaming_chunk_override
+            and not caps.has_guardrail
+            and not cost_injection_enabled
+        )
+        debug_enabled = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         try:
             str_so_far = ""
             async for (
@@ -1909,9 +1940,17 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 request_data=request_data,
             ):
-                verbose_proxy_logger.debug(
-                    "async_data_generator: received streaming chunk - {}".format(chunk)
-                )
+                # ``.format(chunk)`` was previously evaluated for every chunk
+                # regardless of log level; gate it behind the level check.
+                if debug_enabled:
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: received streaming chunk - %s", chunk
+                    )
+
+                if fast_path:
+                    yield serialize_chunk(chunk)
+                    continue
+
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
@@ -1969,7 +2008,7 @@ class ProxyBaseLLMRequestProcessing:
             yield serialize_error(proxy_exception)
 
     @staticmethod
-    async def async_sse_data_generator(
+    def async_sse_data_generator(
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
@@ -1977,17 +2016,20 @@ class ProxyBaseLLMRequestProcessing:
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
-        Delegates to async_streaming_data_generator with SSE serializers.
+
+        Returns the underlying ``async_streaming_data_generator`` configured with
+        SSE serializers directly (rather than re-wrapping it in another
+        ``async for: yield`` trampoline), so a streamed chunk traverses one
+        fewer async-generator layer / coroutine resume on the hot path.
         """
-        async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
             serialize_error=lambda proxy_exc: f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n",
-        ):
-            yield chunk
+        )
 
     @staticmethod
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
