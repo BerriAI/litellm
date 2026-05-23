@@ -61,18 +61,23 @@ class PassThroughStreamingHandler:
                     raw_bytes.append(chunk)
                     yield chunk
             else:
+                # ``cost_injection_active`` already requires ``model_name`` to
+                # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
+                # -> ``str`` for the per-chunk call site.
+                assert model_name is not None
+                resolved_model_name: str = model_name
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     if endpoint_type == EndpointType.VERTEX_AI:
                         if "streamRawPredict" in url_route or "rawPredict" in url_route:
                             modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                                chunk, model_name
+                                chunk, resolved_model_name
                             )
                             if modified_chunk is not None:
                                 chunk = modified_chunk
                     else:  # EndpointType.ANTHROPIC
                         modified_chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
-                            chunk, model_name
+                            chunk, resolved_model_name
                         )
                         if modified_chunk is not None:
                             chunk = modified_chunk
