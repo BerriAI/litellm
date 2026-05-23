@@ -8,6 +8,10 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+    _pack_signature,
+    _unpack_signature,
+)
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -147,6 +151,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     asst_parts: List[Dict[str, Any]] = []
+                    reasoning_items: List[Dict[str, Any]] = []
+                    function_call_items: List[Dict[str, Any]] = []
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -156,8 +162,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 {"type": "output_text", "text": block.get("text", "")}
                             )
                         elif btype == "tool_use":
-                            # tool_use becomes a top-level function_call item
-                            input_items.append(
+                            # Defer until after reasoning_items so they precede
+                            # the function_calls they generated, per OpenAI's
+                            # Responses API ordering requirement.
+                            function_call_items.append(
                                 {
                                     "type": "function_call",
                                     "call_id": block.get("id", ""),
@@ -166,11 +174,40 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 }
                             )
                         elif btype == "thinking":
-                            thinking_text = block.get("thinking", "")
-                            if thinking_text:
-                                asst_parts.append(
-                                    {"type": "output_text", "text": thinking_text}
+                            sig = block.get("signature")
+                            rs_id, enc = _unpack_signature(sig)
+                            if enc:
+                                # Reasoning items belong at the top level of the
+                                # Responses `input` array, immediately preceding
+                                # the assistant message they summarize. OpenAI
+                                # silently ignores reasoning items in any other
+                                # position.
+                                reasoning_items.append(
+                                    {
+                                        "type": "reasoning",
+                                        "id": rs_id,
+                                        "encrypted_content": enc,
+                                        "summary": (
+                                            [
+                                                {
+                                                    "type": "summary_text",
+                                                    "text": block["thinking"],
+                                                }
+                                            ]
+                                            if block.get("thinking")
+                                            else []
+                                        ),
+                                    }
                                 )
+                            # If no usable signature: drop silently. Do NOT
+                            # downgrade to output_text (causes OpenAI 400
+                            # "unexpected output_text in assistant input").
+                    # Emit reasoning items first so they precede any
+                    # function_calls and the assistant message they summarize.
+                    if reasoning_items:
+                        input_items.extend(reasoning_items)
+                    if function_call_items:
+                        input_items.extend(function_call_items)
                     if asst_parts:
                         input_items.append(
                             {
@@ -295,6 +332,32 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             result["summary"] = "detailed"
         return result
 
+    @staticmethod
+    def _apply_reasoning_replay_settings(responses_kwargs: Dict[str, Any]) -> None:
+        """Force ``store=False`` and append ``reasoning.encrypted_content`` to
+        ``include`` so the upstream returns the encrypted reasoning blob and
+        we can replay it verbatim on the next turn. Only kicks in when
+        reasoning is actually in play — either the client requested thinking,
+        or the inbound history carries a reasoning item from a prior turn —
+        so non-reasoning callers are not silently affected.
+        """
+        has_reasoning_request = isinstance(responses_kwargs.get("reasoning"), dict)
+        has_reasoning_input = any(
+            isinstance(it, dict) and it.get("type") == "reasoning"
+            for it in responses_kwargs.get("input", [])
+        )
+        if not (has_reasoning_request or has_reasoning_input):
+            return
+        # Only force store=False when the caller hasn't expressed a preference.
+        # Users who rely on OpenAI response storage (audit, cost attribution,
+        # later retrieval) can pass store=True explicitly to keep it on; they
+        # accept that they must replay encrypted_content themselves.
+        if "store" not in responses_kwargs:
+            responses_kwargs["store"] = False
+        responses_kwargs.setdefault("include", [])
+        if "reasoning.encrypted_content" not in responses_kwargs["include"]:
+            responses_kwargs["include"].append("reasoning.encrypted_content")
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -406,11 +469,90 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(metadata, dict) and "user_id" in metadata:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
+        self._apply_reasoning_replay_settings(responses_kwargs)
+
         return responses_kwargs
 
     # ------------------------------------------------------------------ #
     # Response translation: Responses API -> Anthropic                    #
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _translate_dict_output_item(
+        item: Dict[str, Any],
+        text_part_types: tuple,
+        content: List[Dict[str, Any]],
+        stop_reason: AnthropicFinishReason,
+    ) -> AnthropicFinishReason:
+        """Translate a dict-shaped output item (reached when the upstream
+        response is reconstructed via ResponsesAPIResponse.model_construct,
+        which skips pydantic type coercion). Appends content blocks to
+        ``content`` in place and returns the possibly-updated stop_reason.
+        """
+        item_type = item.get("type")
+        if item_type == "message":
+            raw_content = item.get("content", [])
+            if isinstance(raw_content, str):
+                if raw_content:
+                    content.append(
+                        AnthropicResponseContentBlockText(
+                            type="text", text=raw_content
+                        ).model_dump()
+                    )
+            else:
+                for part in raw_content:
+                    if isinstance(part, dict):
+                        part_type = part.get("type")
+                        text_val = part.get("text", "") or ""
+                        if part_type in text_part_types and text_val:
+                            content.append(
+                                AnthropicResponseContentBlockText(
+                                    type="text", text=text_val
+                                ).model_dump()
+                            )
+                    elif isinstance(part, str) and part:
+                        content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=part
+                            ).model_dump()
+                        )
+        elif item_type == "reasoning":
+            packed = _pack_signature(item.get("id"), item.get("encrypted_content"))
+            emitted = False
+            for summary in item.get("summary") or []:
+                text = (
+                    summary.get("text", "")
+                    if isinstance(summary, dict)
+                    else getattr(summary, "text", "")
+                ) or ""
+                if text:
+                    content.append(
+                        AnthropicResponseContentBlockThinking(
+                            type="thinking", thinking=text, signature=packed
+                        ).model_dump()
+                    )
+                    emitted = True
+            if not emitted and packed:
+                content.append(
+                    AnthropicResponseContentBlockThinking(
+                        type="thinking", thinking="", signature=packed
+                    ).model_dump()
+                )
+        elif item_type == "function_call":
+            try:
+                input_data = json.loads(item.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                input_data = {}
+            content.append(
+                AnthropicResponseContentBlockToolUse(
+                    type="tool_use",
+                    id=item.get("call_id") or item.get("id", ""),
+                    name=item.get("name", ""),
+                    input=input_data,
+                ).model_dump()
+            )
+            stop_reason = "tool_use"
+        return stop_reason
 
     def translate_response(
         self,
@@ -430,8 +572,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         content: List[Dict[str, Any]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
+        # Text-bearing content-part types we accept inside a message item.
+        # The Responses API canonically uses `output_text`, but some backends
+        # (notably the chatgpt subscription/Codex Responses backend) emit
+        # `text` parts, and dict-shaped items may also carry plain `text`
+        # fields when reconstructed via model_construct.
+        _TEXT_PART_TYPES = ("output_text", "text", "summary_text")
+
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
+                enc = getattr(item, "encrypted_content", None)
+                rs_id = getattr(item, "id", None)
+                packed = _pack_signature(rs_id, enc)
+                emitted = False
                 for summary in item.summary:
                     text = getattr(summary, "text", "")
                     if text:
@@ -439,18 +592,33 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
                                 thinking=text,
-                                signature=None,
+                                signature=packed,
                             ).model_dump()
                         )
+                        emitted = True
+                if not emitted and packed:
+                    # No summary text but we still have encrypted content —
+                    # emit a signature-only thinking block so the next turn
+                    # can resume reasoning continuity.
+                    content.append(
+                        AnthropicResponseContentBlockThinking(
+                            type="thinking",
+                            thinking="",
+                            signature=packed,
+                        ).model_dump()
+                    )
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
-                        content.append(
-                            AnthropicResponseContentBlockText(
-                                type="text", text=getattr(part, "text", "")
-                            ).model_dump()
-                        )
+                    part_type = getattr(part, "type", None)
+                    if part_type in _TEXT_PART_TYPES:
+                        text_val = getattr(part, "text", "") or ""
+                        if text_val:
+                            content.append(
+                                AnthropicResponseContentBlockText(
+                                    type="text", text=text_val
+                                ).model_dump()
+                            )
 
             elif isinstance(item, ResponseFunctionToolCall):
                 try:
@@ -468,29 +636,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 stop_reason = "tool_use"
 
             elif isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(
-                                    type="text", text=part.get("text", "")
-                                ).model_dump()
-                            )
-                elif item_type == "function_call":
-                    try:
-                        input_data = json.loads(item.get("arguments", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        input_data = {}
-                    content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=item.get("call_id") or item.get("id", ""),
-                            name=item.get("name", ""),
-                            input=input_data,
-                        ).model_dump()
-                    )
-                    stop_reason = "tool_use"
+                stop_reason = self._translate_dict_output_item(
+                    item, _TEXT_PART_TYPES, content, stop_reason
+                )
 
         # status -> stop_reason override
         if response.status == "incomplete":

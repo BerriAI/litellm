@@ -3,10 +3,13 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+    _pack_signature,
+)
 
 
 class AnthropicResponsesStreamWrapper:
@@ -41,6 +44,13 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
+        # Track per-reasoning-item state so we can emit a
+        # `signature_delta` carrying the packed (id + encrypted_content)
+        # blob immediately before the reasoning block's content_block_stop.
+        # Keyed by item_id because output_item.added/done both carry it
+        # and we want to keep state isolated when multiple reasoning items
+        # appear in a single response.
+        self._reasoning_items: Dict[str, Dict[str, Optional[str]]] = {}
 
     def _make_message_start(self) -> Dict[str, Any]:
         return {
@@ -137,6 +147,13 @@ class AnthropicResponsesStreamWrapper:
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
+                    # Track this reasoning item so we can pair its
+                    # encrypted_content (arriving in output_item.done)
+                    # with the right block on close.
+                    self._reasoning_items[item_id] = {
+                        "id": item_id,
+                        "encrypted_content": None,
+                    }
                 self._chunk_queue.append(
                     {
                         "type": "content_block_start",
@@ -223,11 +240,45 @@ class AnthropicResponsesStreamWrapper:
                 if item
                 else None
             )
+            item_type = (
+                getattr(item, "type", None)
+                or (item.get("type") if isinstance(item, dict) else None)
+                if item
+                else None
+            )
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
                 else self._current_block_index
             )
+            # For reasoning items, emit a signature_delta containing the
+            # packed (id + encrypted_content) blob BEFORE the content_block_stop.
+            # Anthropic's wire protocol supports `signature_delta` on a
+            # content_block_delta; Claude Code's clear_thinking edit preserves
+            # the signature field on round-trip, which is how we replay the
+            # reasoning item to OpenAI on the next turn.
+            if item_type == "reasoning" and item_id:
+                enc = (
+                    getattr(item, "encrypted_content", None)
+                    if not isinstance(item, dict)
+                    else item.get("encrypted_content")
+                )
+                state = self._reasoning_items.get(item_id)
+                if state is not None:
+                    state["encrypted_content"] = enc
+                rs_id = state["id"] if state else item_id
+                packed = _pack_signature(rs_id, enc)
+                if packed:
+                    self._chunk_queue.append(
+                        {
+                            "type": "content_block_delta",
+                            "index": block_idx,
+                            "delta": {
+                                "type": "signature_delta",
+                                "signature": packed,
+                            },
+                        }
+                    )
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",
