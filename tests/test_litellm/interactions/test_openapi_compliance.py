@@ -179,7 +179,7 @@ class TestResponseCompliance:
         # `status` is an output-only field; validate against the response schema.
         schema = spec_dict["components"]["schemas"]["Interaction"]
         status_prop = schema["properties"]["status"]
-        # Google Interactions API uses lowercase status values (updated Feb 2026)
+        # Google Interactions API uses lowercase status values (updated May 2026)
         expected_statuses = [
             "in_progress",
             "requires_action",
@@ -187,6 +187,7 @@ class TestResponseCompliance:
             "failed",
             "cancelled",
             "incomplete",
+            "budget_exceeded",
         ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
