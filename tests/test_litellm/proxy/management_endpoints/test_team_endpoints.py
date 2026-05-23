@@ -1582,6 +1582,11 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
     existing_team.model_dump.return_value = {
         "team_id": "team-1234",
         "models": ["bedrock-claude-sonnet-4", "openai/*"],
+        "object_permission_id": "op-1234",
+        "object_permission": {
+            "object_permission_id": "op-1234",
+            "search_tools": ["allowed-tool-A"],
+        },
     }
 
     updated_team = MagicMock()
@@ -1589,6 +1594,14 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
     updated_team.model_dump.return_value = {
         "team_id": "team-1234",
         "models": ["bedrock-claude-sonnet-4", "openai/*", "team-byok-1"],
+        # The Prisma update must come back with `object_permission` populated
+        # (via `include={"object_permission": True}`), otherwise the cache
+        # write below would null it out — see LIT-3244 follow-up.
+        "object_permission_id": "op-1234",
+        "object_permission": {
+            "object_permission_id": "op-1234",
+            "search_tools": ["allowed-tool-A"],
+        },
     }
 
     with (
@@ -1638,6 +1651,24 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             "openai/*",
             "team-byok-1",
         ]
+        # And the cached object MUST carry the `object_permission` relation
+        # (LIT-3244 follow-up). If the Prisma update were missing
+        # `include={"object_permission": True}`, the cached team would have
+        # object_permission=None, and downstream consumers like
+        # `validate_key_search_tools_against_team` would treat that as
+        # "no team-level restriction" and stop enforcing the team's
+        # search-tool allowlist on key issuance.
+        assert call_kwargs["team_table"].object_permission is not None
+        assert call_kwargs["team_table"].object_permission.search_tools == [
+            "allowed-tool-A"
+        ]
+        # Pin the Prisma call shape too — the regression is in *what the
+        # update returns*, so the contract that the update asks for
+        # `object_permission` belongs in this test.
+        update_call_kwargs = (
+            mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
+        )
+        assert update_call_kwargs.get("include", {}).get("object_permission") is True
 
 
 @pytest.mark.asyncio

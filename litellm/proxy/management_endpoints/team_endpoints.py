@@ -1879,7 +1879,13 @@ async def update_team(  # noqa: PLR0915
             await prisma_client.db.litellm_teamtable.update(
                 where={"team_id": data.team_id},
                 data=updated_kv,
-                include={"litellm_model_table": True},  # type: ignore
+                # `object_permission` is included so `_refresh_cached_team`
+                # doesn't write a cached team with the relation nulled out —
+                # see team_model_add for the full rationale.
+                include={
+                    "litellm_model_table": True,
+                    "object_permission": True,
+                },  # type: ignore
             )
         )
 
@@ -4624,9 +4630,15 @@ async def team_model_add(
         )
 
     updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
-    # Update team
+    # Update team. `include` mirrors the relations the auth path consumes
+    # off the cached team object so that `_refresh_cached_team` doesn't
+    # null them out — see object_permission_utils.validate_key_search_tools_against_team
+    # and the MCP/agent authz paths, which treat a missing object_permission
+    # as "no team-level restriction".
     updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"models": updated_models}
+        where={"team_id": data.team_id},
+        data={"models": updated_models},
+        include={"object_permission": True},  # type: ignore
     )
 
     await _refresh_cached_team(
@@ -4710,9 +4722,11 @@ async def team_model_delete(
     # Remove specified models
     updated_models = [m for m in current_models if m not in data.models]
 
-    # Update team
+    # Update team. See team_model_add for the rationale on `include`.
     updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"models": updated_models}
+        where={"team_id": data.team_id},
+        data={"models": updated_models},
+        include={"object_permission": True},  # type: ignore
     )
 
     await _refresh_cached_team(
