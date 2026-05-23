@@ -7028,6 +7028,20 @@
         "output_cost_per_token": 0.0,
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-cohere-rerank-4-0-in-microsoft-foundry/4477076"
     },
+    "azure_ai/command-a-plus-05-2026": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure_ai/deepseek-v3.2": {
         "input_cost_per_token": 5.8e-07,
         "litellm_provider": "azure_ai",
@@ -9234,6 +9248,27 @@
             "/v1/images/generations"
         ]
     },
+    "c4ai-aya-expanse-32b": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://cohere.com/pricing"
+    },
+    "c4ai-aya-vision-32b": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://cohere.com/pricing",
+        "supports_vision": true
+    },
     "cerebras/llama-3.3-70b": {
         "input_cost_per_token": 8.5e-07,
         "litellm_provider": "cerebras",
@@ -10144,6 +10179,56 @@
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true
+    },
+    "command-a-plus-05-2026": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "command-a-reasoning-08-2025": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "command-a-translate-08-2025": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.cohere.com/docs/models"
+    },
+    "command-a-vision-07-2025": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "command-light": {
         "input_cost_per_token": 3e-07,
@@ -13274,6 +13359,17 @@
         "max_tokens": 1024,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "supports_embedding_image_input": true
+    },
+    "embed-v4.0": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536,
+        "source": "https://docs.cohere.com/docs/models",
         "supports_embedding_image_input": true
     },
     "eu.amazon.nova-lite-v1:0": {
@@ -29400,6 +29496,30 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+    "rerank-v4.0-fast": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/models"
+    },
+    "rerank-v4.0-pro": {
+        "input_cost_per_query": 0.0025,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/models"
+    },
     "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": {
         "input_cost_per_query": 0.0,
         "input_cost_per_token": 0.0,
@@ -30358,6 +30478,46 @@
         "mode": "completion",
         "output_cost_per_token": 2.8e-05,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "tiny-aya-earth": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-08,
+        "source": "https://docs.cohere.com/docs/tiny-aya"
+    },
+    "tiny-aya-fire": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-08,
+        "source": "https://docs.cohere.com/docs/tiny-aya"
+    },
+    "tiny-aya-global": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-08,
+        "source": "https://docs.cohere.com/docs/tiny-aya"
+    },
+    "tiny-aya-water": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.75e-08,
+        "source": "https://docs.cohere.com/docs/tiny-aya"
     },
     "together-ai-21.1b-41b": {
         "input_cost_per_token": 8e-07,
