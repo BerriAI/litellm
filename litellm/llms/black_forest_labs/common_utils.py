@@ -40,10 +40,10 @@ def assert_bfl_polling_url(polling_url: str) -> None:
     parsed = urlparse(polling_url)
     host = (parsed.hostname or "").lower()
 
-    if parsed.scheme not in ("https", "http"):
+    if parsed.scheme != "https":
         raise BlackForestLabsError(
             status_code=502,
-            message="Rejected polling URL: scheme is not allowed",
+            message="Rejected polling URL: scheme must be https",
         )
 
     if host != _BFL_REGISTERED_DOMAIN and not host.endswith(

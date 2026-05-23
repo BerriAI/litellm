@@ -4,7 +4,7 @@ Tests for Black Forest Labs common_utils — specifically assert_bfl_polling_url
 BFL uses regional subdomains (e.g. gateway.bfl.ai) for polling URLs that
 differ from the submission host (api.bfl.ai). These tests verify that the
 domain-aware check accepts legitimate BFL subdomains while still rejecting
-off-domain URLs.
+off-domain and non-HTTPS URLs.
 """
 
 import pytest
@@ -34,11 +34,12 @@ class TestAssertBflPollingUrl:
     def test_deep_subdomain(self):
         assert_bfl_polling_url("https://region.gateway.bfl.ai/poll?id=xyz")
 
-    def test_http_scheme_allowed(self):
-        # http is permitted (not ideal, but matches allowed_schemes in url_utils)
-        assert_bfl_polling_url("http://api.bfl.ai/v1/get_result?id=abc")
-
     # --- should raise BlackForestLabsError ---
+
+    def test_rejects_http_scheme(self):
+        # HTTP must be rejected — x-key would be forwarded in plaintext
+        with pytest.raises(BlackForestLabsError, match="scheme must be https"):
+            assert_bfl_polling_url("http://api.bfl.ai/v1/get_result?id=abc")
 
     def test_rejects_off_domain(self):
         with pytest.raises(BlackForestLabsError, match="host is not within"):
@@ -58,9 +59,9 @@ class TestAssertBflPollingUrl:
             assert_bfl_polling_url("https://evil.com/bfl.ai/steal")
 
     def test_rejects_ftp_scheme(self):
-        with pytest.raises(BlackForestLabsError, match="scheme is not allowed"):
+        with pytest.raises(BlackForestLabsError, match="scheme must be https"):
             assert_bfl_polling_url("ftp://api.bfl.ai/v1/get_result?id=abc")
 
     def test_rejects_javascript_scheme(self):
-        with pytest.raises(BlackForestLabsError, match="scheme is not allowed"):
+        with pytest.raises(BlackForestLabsError, match="scheme must be https"):
             assert_bfl_polling_url("javascript://api.bfl.ai/alert(1)")

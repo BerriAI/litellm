@@ -15,10 +15,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import (
-    SSRFError,
-    assert_same_origin,
-)  # noqa: F401 — kept for other callers
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
