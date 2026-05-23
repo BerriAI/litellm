@@ -389,11 +389,18 @@ async def _import_keys_section(
         return
 
     # Phase 2 — batch-fetch existing rows (avoids N+1 queries).
+    # Also count occurrences per alias: key_alias is not @unique in the schema,
+    # so multiple tokens can share the same alias.  Updating all of them would
+    # silently apply imported auth fields to unrelated keys — skip duplicates.
     aliases = [r["key_alias"] for r in importable]
     existing_rows = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"key_alias": {"in": aliases}}
     )
-    existing_aliases: set = {row.key_alias for row in existing_rows if row.key_alias}
+    alias_counts: Dict[str, int] = {}
+    for row in existing_rows:
+        if row.key_alias:
+            alias_counts[row.key_alias] = alias_counts.get(row.key_alias, 0) + 1
+    existing_aliases: set = set(alias_counts.keys())
     existing_by_alias: Dict[str, Any] = {
         row.key_alias: row for row in existing_rows if row.key_alias
     }
@@ -413,6 +420,16 @@ async def _import_keys_section(
 
         if conflict == "skip":
             section_result.skipped += 1
+            continue
+
+        # key_alias is not @unique — multiple tokens can share the same alias.
+        # Updating all of them would apply imported auth fields to unrelated keys.
+        if alias_counts.get(alias, 0) > 1:
+            section_result.skipped += 1
+            section_result.warnings.append(
+                f"Skipped key '{alias}' — {alias_counts[alias]} tokens share this alias. "
+                "Assign a unique alias before importing."
+            )
             continue
 
         if dry_run:
