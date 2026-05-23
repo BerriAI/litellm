@@ -18,7 +18,7 @@ Excluded: `_rotate_master_key` (lines 3997–4123) — deferred per plan §6.
 """
 
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pytest
 from prisma import Json
@@ -38,9 +38,9 @@ async def _seed_token(
     suffix: str = "tok",
     user_id: str,
     spend: float = 0.0,
-    max_budget: float = None,
-    metadata: dict = None,
-    team_id: str = None,
+    max_budget: Optional[float] = None,
+    metadata: Optional[dict] = None,
+    team_id: Optional[str] = None,
 ) -> str:
     cleartext = "sk-" + uuid.uuid4().hex
     data: Dict[str, Any] = {
@@ -110,8 +110,10 @@ async def test_key_health_with_missing_callback_name_rejected(
         "/key/health",
         headers={"Authorization": f"Bearer {cleartext}"},
     )
-    # The outer handler wraps the inner ValueError as a 500.
-    assert resp.status_code == 500, resp.text
+    # The outer handler currently wraps the inner ValueError as a 500;
+    # accept any rejection envelope so a future 400/422 conversion doesn't
+    # trip this test. The named-guard substring is the real pin.
+    assert resp.status_code in (400, 422, 500), resp.text
     assert "callback_name" in resp.text
 
 
@@ -372,9 +374,9 @@ async def test_generate_with_invalid_model_max_budget_rejected(
         },
     )
     # validate_model_max_budget raises ValueError, which the outer handler
-    # wraps as a 500. Pin the observed shape — the helper's exception path
-    # is the regression-risk surface, not the status code envelope.
-    assert resp.status_code == 500, resp.text
+    # currently wraps as a 500. Pin only the named-guard substring; accept
+    # 400/422/500 so a future error-envelope improvement doesn't trip this.
+    assert resp.status_code in (400, 422, 500), resp.text
     assert "Invalid model_max_budget" in resp.text, resp.text
 
 

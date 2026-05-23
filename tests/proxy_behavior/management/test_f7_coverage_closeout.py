@@ -238,21 +238,25 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
     assert (
         budget_id is not None
     ), f"team_member_budget_id not stamped on team metadata: {team_row.metadata!r}"
-    budget_row = await prisma.db.litellm_budgettable.find_unique(
-        where={"budget_id": budget_id}
-    )
-    assert budget_row is not None, "team_member_budget row was not created"
-    assert budget_row.max_budget == 10.0
-    assert budget_row.rpm_limit == 100
-    assert budget_row.tpm_limit == 1000
-    # Manual cleanup: this budget row was created by the handler under a
-    # non-scratch budget_id pattern (`team-<alias>-budget-<uuid>`), so the
-    # scratch teardown's prefix sweep won't reclaim it.
-    await prisma.db.litellm_teamtable.update(
-        where={"team_id": team_id},
-        data={"metadata": Json({})},
-    )
-    await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
+
+    # The handler writes the per-member budget row under a non-scratch id
+    # pattern (`team-<alias>-budget-<uuid>`), so the prefix sweep can't
+    # reclaim it. Cleanup must run even when a downstream assertion fires;
+    # otherwise orphan rows accumulate across CI re-runs.
+    try:
+        budget_row = await prisma.db.litellm_budgettable.find_unique(
+            where={"budget_id": budget_id}
+        )
+        assert budget_row is not None, "team_member_budget row was not created"
+        assert budget_row.max_budget == 10.0
+        assert budget_row.rpm_limit == 100
+        assert budget_row.tpm_limit == 1000
+    finally:
+        await prisma.db.litellm_teamtable.update(
+            where={"team_id": team_id},
+            data={"metadata": Json({})},
+        )
+        await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
 async def test_team_update_team_member_budget_upserts(
@@ -277,12 +281,20 @@ async def test_team_update_team_member_budget_upserts(
     assert team_row is not None
     budget_id = (team_row.metadata or {}).get("team_member_budget_id")
     assert budget_id is not None, "team_member_budget_id not upserted"
-    # Manual cleanup of the non-prefixed budget row (see comment above).
-    await prisma.db.litellm_teamtable.update(
-        where={"team_id": team_id},
-        data={"metadata": Json({})},
-    )
-    await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
+
+    # See comment on the sibling test — non-prefixed budget row, cleanup
+    # must survive an assertion failure to avoid orphan accumulation.
+    try:
+        # (No further assertions today, but the try/finally keeps the
+        # cleanup contract uniform with the sibling test and is robust to
+        # future asserts being added here.)
+        pass
+    finally:
+        await prisma.db.litellm_teamtable.update(
+            where={"team_id": team_id},
+            data={"metadata": Json({})},
+        )
+        await prisma.db.litellm_budgettable.delete(where={"budget_id": budget_id})
 
 
 async def test_key_team_change_accepted_by_target_team_admin(
