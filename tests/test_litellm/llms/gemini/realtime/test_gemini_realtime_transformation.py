@@ -735,8 +735,8 @@ def test_gemini_tool_call_emits_response_created_preamble():
     )
 
     responses = result["response"]
-    # Should have: response.created, output_item.added, function_call_arguments.done, output_item.done, conversation.item.created, response.done
-    assert len(responses) >= 6
+    # Should have: response.created, output_item.added, function_call_arguments.delta, function_call_arguments.done, output_item.done, conversation.item.created, response.done
+    assert len(responses) >= 7
     assert responses[0]["type"] == "response.created"
     assert "response" in responses[0]
     assert responses[0]["response"]["status"] == "in_progress"
@@ -749,17 +749,20 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[1]["type"] == "response.output_item.added"
     assert responses[1]["item"]["type"] == "function_call"
     assert responses[1]["item"]["status"] == "in_progress"
-    assert responses[2]["type"] == "response.function_call_arguments.done"
-    assert responses[3]["type"] == "response.output_item.done"
-    assert responses[3]["item"]["type"] == "function_call"
-    assert responses[3]["item"]["status"] == "completed"
-    assert responses[4]["type"] == "conversation.item.created"
+    assert responses[2]["type"] == "response.function_call_arguments.delta"
+    assert responses[2]["call_id"] == "call_123"
+    assert responses[2]["delta"] == responses[3]["arguments"]
+    assert responses[3]["type"] == "response.function_call_arguments.done"
+    assert responses[4]["type"] == "response.output_item.done"
     assert responses[4]["item"]["type"] == "function_call"
     assert responses[4]["item"]["status"] == "completed"
-    assert responses[5]["type"] == "response.done"
-    assert responses[5]["response"]["status"] == "completed"
-    assert len(responses[5]["response"]["output"]) == 1
-    assert responses[5]["response"]["output"][0]["type"] == "function_call"
+    assert responses[5]["type"] == "conversation.item.created"
+    assert responses[5]["item"]["type"] == "function_call"
+    assert responses[5]["item"]["status"] == "completed"
+    assert responses[6]["type"] == "response.done"
+    assert responses[6]["response"]["status"] == "completed"
+    assert len(responses[6]["response"]["output"]) == 1
+    assert responses[6]["response"]["output"][0]["type"] == "function_call"
     assert result["current_output_item_id"] is None
     assert result["current_response_id"] is None
 
