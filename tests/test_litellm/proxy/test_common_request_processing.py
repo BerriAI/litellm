@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -1316,8 +1317,17 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "chunk 3"}\n\n'
             yield "data: [DONE]\n\n"
 
-        # Patch the tracer in the common_request_processing module
-        with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
+        # Patch the tracer in the common_request_processing module. The
+        # per-chunk span is gated on _DD_STREAMING_TRACE_ENABLED (resolved at
+        # import from the real tracer, a NullTracer by default), so enable it
+        # explicitly to exercise the tracing path.
+        with (
+            patch("litellm.proxy.common_request_processing.tracer", mock_tracer),
+            patch(
+                "litellm.proxy.common_request_processing._DD_STREAMING_TRACE_ENABLED",
+                True,
+            ),
+        ):
             response = await create_response(mock_generator(), "text/event-stream", {})
 
             assert response.status_code == 200
@@ -1344,6 +1354,40 @@ class TestCommonRequestProcessingHelpers:
                 assert (
                     args[0] == "streaming.chunk.yield"
                 ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+
+    async def test_create_streaming_response_skips_dd_trace_when_disabled(self):
+        """When DD tracing is disabled (the default), the per-chunk span
+        context manager is skipped entirely but all chunks still stream."""
+        from unittest.mock import patch
+
+        mock_tracer = MagicMock()
+
+        async def mock_generator():
+            yield 'data: {"content": "chunk 1"}\n\n'
+            yield 'data: {"content": "chunk 2"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        with (
+            patch("litellm.proxy.common_request_processing.tracer", mock_tracer),
+            patch(
+                "litellm.proxy.common_request_processing._DD_STREAMING_TRACE_ENABLED",
+                False,
+            ),
+        ):
+            response = await create_response(mock_generator(), "text/event-stream", {})
+
+            assert response.status_code == 200
+
+            content = await self.consume_stream(response)
+
+            # All chunks stream through unchanged ...
+            assert content == [
+                'data: {"content": "chunk 1"}\n\n',
+                'data: {"content": "chunk 2"}\n\n',
+                "data: [DONE]\n\n",
+            ]
+            # ... but no per-chunk span was created.
+            assert mock_tracer.trace.call_count == 0
 
     async def test_create_streaming_response_dd_trace_with_error_chunk(self):
         """
@@ -2199,3 +2243,77 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+class TestAsyncStreamingDataGeneratorFastPath:
+    """Fast/slow path branching in async_streaming_data_generator."""
+
+    @staticmethod
+    async def _aiter(items):
+        for item in items:
+            yield item
+
+    @pytest.mark.asyncio
+    async def test_fast_path_skips_per_chunk_hook(self, monkeypatch):
+        """With no callbacks/guardrails/cost-injection, chunks pass through
+        unchanged and the per-chunk hook is NOT awaited."""
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        monkeypatch.setattr(
+            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
+        )
+
+        chunks = [b"event: a\ndata: {}\n\n", b"event: b\ndata: {}\n\n"]
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert out == chunks  # bytes pass through return_sse_chunk untouched
+        hook_spy.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_slow_path_runs_per_chunk_hook(self, monkeypatch):
+        """A callback that overrides async_post_call_streaming_hook forces the
+        slow path and the per-chunk hook is invoked."""
+
+        class _StreamingCb(CustomLogger):
+            async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+                return response
+
+        cb = _StreamingCb()
+        monkeypatch.setattr(litellm, "callbacks", [cb])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        hook_spy = AsyncMock(side_effect=lambda **kw: kw["response"])
+        monkeypatch.setattr(
+            proxy_logging_obj, "async_post_call_streaming_hook", hook_spy
+        )
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter([{"type": "message_stop"}]),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert len(out) == 1
+        hook_spy.assert_awaited_once()
+
+        ProxyLogging._callback_capabilities_cache.clear()
