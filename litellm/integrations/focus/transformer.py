@@ -9,7 +9,6 @@ import polars as pl
 
 from .schema import FOCUS_NORMALIZED_SCHEMA
 
-
 _TAG_KEYS = (
     "team_id",
     "team_alias",

@@ -2361,6 +2361,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_connection_timeout: Optional[float] = Field(
         60, description="default timeout for a connection to the database"
     )
+    database_connect_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `connect_timeout` URL param (seconds). Bounds how long the "
+            "engine waits to establish a new connection before failing. Defaults "
+            "to Prisma's built-in value when unset."
+        ),
+    )
+    database_socket_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
+            "connection that has not produced data within this window is closed. "
+            "This is the main knob for capping idle DB connections from LiteLLM."
+        ),
+    )
+    database_extra_connection_params: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Escape hatch: extra key/value pairs appended verbatim to the Prisma "
+            "DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, "
+            "`statement_cache_size`). Keys here override any default LiteLLM sets."
+        ),
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )

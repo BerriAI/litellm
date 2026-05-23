@@ -36,9 +36,13 @@ from litellm.types.interactions.generated import (
     GoogleSearchResultContent,
     ImageContent,
     Interaction,
+    InteractionCompleted,
+    InteractionCreated,
     InteractionEvent,
     InteractionEnvironment,
+    InteractionInProgress,
     InteractionInput,
+    InteractionRequiresAction,
     InteractionsAPIOptionalRequestParams,
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -50,6 +54,9 @@ from litellm.types.interactions.generated import (
     McpServerToolResultContent,
     ModelOption,
     ResponseModality,
+    StepDelta,
+    StepStart,
+    StepStop,
 )
 from litellm.types.interactions.generated import (
     Status3 as InteractionStatus,  # Main request/response types; Content types; Turn for multi-turn conversations; Tool types; Config types; Usage; Status enum; Events for streaming; Agent configs; Model/Agent options; Response modality; Annotation; LiteLLM types; Backwards compat aliases
@@ -115,6 +122,14 @@ __all__ = [
     "AgentOption",
     "ResponseModality",
     "Annotation",
+    # New schema SSE event types (Api-Revision: 2026-05-20)
+    "StepStart",
+    "StepDelta",
+    "StepStop",
+    "InteractionCreated",
+    "InteractionInProgress",
+    "InteractionCompleted",
+    "InteractionRequiresAction",
     # LiteLLM types
     "InteractionEnvironment",
     "InteractionInput",

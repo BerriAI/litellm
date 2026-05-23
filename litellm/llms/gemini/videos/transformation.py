@@ -55,7 +55,7 @@ def _convert_image_to_gemini_format(image_file) -> Dict[str, str]:
 
 
 def _usage_video_resolution_from_parameters(
-    parameters: Dict[str, Any]
+    parameters: Dict[str, Any],
 ) -> Optional[str]:
     """Normalize Veo ``parameters.resolution`` for usage and cost tracking."""
     res = parameters.get("resolution")

@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
@@ -16,9 +19,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
-    AktoConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
@@ -93,6 +93,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
@@ -100,6 +101,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
+    RUBRIK = "rubrik"
 
 
 class Role(Enum):

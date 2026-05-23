@@ -101,10 +101,14 @@ class BaseInteractionsAPIStreamingIterator:
                     )
                 )
 
-                # Store the completed response (check for status=completed)
-                if (
-                    streaming_response
-                    and getattr(streaming_response, "status", None) == "completed"
+                # Store the completed response.
+                # Legacy schema signals completion via status="completed".
+                # New schema (Api-Revision: 2026-05-20) uses event_type="interaction.completed".
+                # Remove the legacy check after June 8, 2026.
+                if streaming_response and (
+                    getattr(streaming_response, "status", None) == "completed"
+                    or getattr(streaming_response, "event_type", None)
+                    == "interaction.completed"
                 ):
                     self.completed_response = streaming_response
                     self._handle_logging_completed_response()

@@ -12,7 +12,7 @@ import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -44,6 +44,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
+    resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
@@ -333,8 +334,22 @@ def _apply_budget_limits_to_end_user_params(
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
-    scope_headers = list(websocket.scope.get("headers") or [])
-    request = Request(scope={"type": "http", "headers": scope_headers})
+    ws_scope = websocket.scope or {}
+    scope_headers = list(ws_scope.get("headers") or [])
+    # ``get_request_route`` falls back to ``request.url.path`` when
+    # ``scope["path"]`` is absent. On WebSockets that fallback reads
+    # ``websocket.url``, which Starlette reconstructs from the (poisonable)
+    # Host header. Carry the ASGI scope's path / root_path so the lookup
+    # never reaches the fallback.
+    synthetic_scope: Dict[str, Any] = {
+        "type": "http",
+        "headers": scope_headers,
+        "path": ws_scope.get("path", ""),
+    }
+    for key in ("root_path", "app_root_path"):
+        if key in ws_scope:
+            synthetic_scope[key] = ws_scope[key]
+    request = Request(scope=synthetic_scope)
 
     request._url = websocket.url
 
@@ -1057,8 +1072,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(
+        raw_end_user_id = get_end_user_id_from_request_body(
             request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
         )
         if end_user_id:
             try:
@@ -1745,7 +1768,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
 
 
 @tracer.wrap()
-async def _run_centralized_common_checks(
+async def _run_centralized_common_checks(  # noqa: PLR0915
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
     request_data: dict,
@@ -1823,9 +1846,23 @@ async def _run_centralized_common_checks(
         return
 
     parent_otel_span = user_api_key_auth_obj.parent_otel_span
-    end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
+    # In the integrated auth flow ``_user_api_key_auth_builder`` has already
+    # resolved the end-user id and attached it here. Reuse that to avoid a
+    # second extraction pass; fall back to extracting locally when the
+    # function is invoked in isolation (e.g. in direct unit tests).
+    end_user_id = user_api_key_auth_obj.end_user_id
+    if end_user_id is None:
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
 
     fetch_coros = []
     if user_api_key_auth_obj.team_id is not None:
@@ -2156,11 +2193,33 @@ async def user_api_key_auth(
             api_key=api_key,
         )
 
-    end_user_id = get_end_user_id_from_request_body(
-        request_data, _safe_get_request_headers(request)
-    )
-    if end_user_id is not None:
-        user_api_key_auth_obj.end_user_id = end_user_id
+    # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
+    # paths (no master key, /user/auth route, JWT short-circuits) that bypass
+    # the end-user resolution block. If those paths produced an auth obj
+    # without an ``end_user_id`` set, fall back to extracting from the request
+    # body so spend logs are still attributed correctly. Validation honours
+    # ``litellm.validate_end_user_id_in_db``.
+    if user_api_key_auth_obj.end_user_id is None:
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        if raw_end_user_id is not None:
+            resolved_end_user_id = await resolve_and_validate_end_user_id(
+                raw_end_user_id=raw_end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
+            if resolved_end_user_id is not None:
+                user_api_key_auth_obj.end_user_id = resolved_end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj

@@ -44,6 +44,12 @@ else:
 # (e.g. "us-east-1", "eu-west-2", "us-gov-west-1", "cn-north-1").
 _VALID_AWS_REGION_PATTERN = re.compile(r"\A[a-z0-9-]+\Z")
 
+# Regional STS hostnames, e.g. sts.eu-west-1.amazonaws.com or
+# vpce-xxx.sts.eu-west-1.vpce.amazonaws.com
+_STS_REGION_FROM_ENDPOINT_PATTERN = re.compile(
+    r"(?:^|\.)sts(?:-fips)?\.([a-z0-9-]+)\.(?:amazonaws\.com(?:\.cn)?|vpce\.amazonaws\.com)"
+)
+
 
 class Boto3CredentialsInfo(BaseModel):
     credentials: Credentials
@@ -450,6 +456,24 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
         else:
             model_id = model
+            # Strip LiteLLM routing prefixes (e.g. "bedrock/", "invoke/",
+            # "bedrock/invoke/", "bedrock/converse/") that are not part of the
+            # actual Bedrock model ID.  The converse path already does this; the
+            # invoke path must do the same so that ARN models such as
+            #   bedrock/arn:aws:bedrock:…:inference-profile/global.anthropic.…
+            # are not forwarded verbatim to the Bedrock API, which would produce
+            # a malformed URL and cause botocore's EventStreamBuffer to receive
+            # a JSON error body instead of a binary event-stream — surfaced as a
+            # misleading ChecksumMismatch (0x223a7b22 == ':{"').
+            # Use strip_bedrock_routing_prefix (no break) so compound prefixes
+            # like "bedrock/invoke/arn:..." are fully stripped in one call.
+            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+
+            model_id = strip_bedrock_routing_prefix(model_id)
+            # URL-encode ARNs so colons and slashes are safe in the URL path.
+            if model_id.startswith("arn:"):
+                model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
+                return model_id
 
         model_id = model_id.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in model_id:
@@ -633,6 +657,40 @@ class BaseAWSLLM:
                 "Region names must contain only lowercase letters, digits, and hyphens."
             )
 
+    @staticmethod
+    def _parse_sts_region_from_endpoint(
+        aws_sts_endpoint: Optional[str],
+    ) -> Optional[str]:
+        """Extract region from sts.{region}.amazonaws.com or vpce-x.sts.{region}.vpce.amazonaws.com."""
+        if not aws_sts_endpoint:
+            return None
+        host = urllib.parse.urlparse(aws_sts_endpoint).hostname or ""
+        match = _STS_REGION_FROM_ENDPOINT_PATTERN.search(host)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _resolve_sts_region(aws_sts_endpoint: Optional[str] = None) -> Optional[str]:
+        """STS signing region: parsed from aws_sts_endpoint else AWS_REGION / AWS_DEFAULT_REGION."""
+        return (
+            BaseAWSLLM._parse_sts_region_from_endpoint(aws_sts_endpoint)
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
+
+    def _build_sts_client_kwargs(
+        self,
+        aws_sts_endpoint: Optional[str] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
+    ) -> dict:
+        """STS client kwargs with aligned endpoint_url and region_name (SigV4)."""
+        kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
+        if aws_sts_endpoint is not None:
+            kwargs["endpoint_url"] = aws_sts_endpoint
+        sts_region = self._resolve_sts_region(aws_sts_endpoint)
+        if sts_region is not None:
+            kwargs["region_name"] = sts_region
+        return kwargs
+
     def get_aws_region_name_for_non_llm_api_calls(
         self,
         aws_region_name: Optional[str] = None,
@@ -787,11 +845,6 @@ class BaseAWSLLM:
             f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
         )
 
-        if aws_sts_endpoint is None:
-            sts_endpoint = f"https://sts.{aws_region_name}.amazonaws.com"
-        else:
-            sts_endpoint = aws_sts_endpoint
-
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -800,13 +853,13 @@ class BaseAWSLLM:
                 status_code=401,
             )
 
+        sts_client_kwargs = self._build_sts_client_kwargs(
+            aws_sts_endpoint=aws_sts_endpoint,
+            ssl_verify=ssl_verify,
+        )
+
         with tracer.trace("boto3.client(sts)"):
-            sts_client = boto3.client(
-                "sts",
-                region_name=aws_region_name,
-                endpoint_url=sts_endpoint,
-                verify=self._get_ssl_verify(ssl_verify),
-            )
+            sts_client = boto3.client("sts", **sts_client_kwargs)
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
@@ -847,7 +900,6 @@ class BaseAWSLLM:
         irsa_role_arn: str,
         aws_role_name: str,
         aws_session_name: str,
-        region: str,
         web_identity_token_file: str,
         aws_external_id: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
@@ -862,12 +914,10 @@ class BaseAWSLLM:
         with open(web_identity_token_file, "r") as f:
             web_identity_token = f.read().strip()
 
-        irsa_sts_kwargs: dict = {
-            "region_name": region,
-            "verify": self._get_ssl_verify(ssl_verify),
-        }
-        if aws_sts_endpoint is not None:
-            irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
+        irsa_sts_kwargs = self._build_sts_client_kwargs(
+            aws_sts_endpoint=aws_sts_endpoint,
+            ssl_verify=ssl_verify,
+        )
 
         # Create an STS client without credentials
         with tracer.trace("boto3.client(sts) for manual IRSA"):
@@ -924,7 +974,6 @@ class BaseAWSLLM:
         self,
         aws_role_name: str,
         aws_session_name: str,
-        region: str,
         aws_external_id: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
@@ -932,12 +981,10 @@ class BaseAWSLLM:
         """Handle same-account role assumption for IRSA."""
         import boto3
 
-        irsa_sts_kwargs: dict = {
-            "region_name": region,
-            "verify": self._get_ssl_verify(ssl_verify),
-        }
-        if aws_sts_endpoint is not None:
-            irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
+        irsa_sts_kwargs = self._build_sts_client_kwargs(
+            aws_sts_endpoint=aws_sts_endpoint,
+            ssl_verify=ssl_verify,
+        )
 
         verbose_logger.debug("Same account role assumption, using automatic IRSA")
         with tracer.trace("boto3.client(sts) with automatic IRSA"):
@@ -1010,12 +1057,6 @@ class BaseAWSLLM:
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
         irsa_role_arn = os.getenv("AWS_ROLE_ARN")
 
-        region = (
-            aws_region_name
-            or os.getenv("AWS_REGION")
-            or os.getenv("AWS_DEFAULT_REGION")
-        )
-
         # If we have IRSA environment variables and no explicit credentials,
         # we need to use the web identity token flow
         if (
@@ -1031,16 +1072,12 @@ class BaseAWSLLM:
             )
 
             try:
-                # Use passed-in region when set, else env, else default (align with AssumeRole path)
-                region = region or "us-east-1"
-
                 # Check if we need to do cross-account role assumption
                 if aws_role_name != irsa_role_arn:
                     sts_response = self._handle_irsa_cross_account(
                         irsa_role_arn,
                         aws_role_name,
                         aws_session_name,
-                        region,
                         web_identity_token_file,
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
@@ -1050,7 +1087,6 @@ class BaseAWSLLM:
                     sts_response = self._handle_irsa_same_account(
                         aws_role_name,
                         aws_session_name,
-                        region,
                         aws_external_id,
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
@@ -1074,11 +1110,10 @@ class BaseAWSLLM:
 
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
-        sts_client_kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
-        if region is not None:
-            sts_client_kwargs["region_name"] = region
-        if aws_sts_endpoint is not None:
-            sts_client_kwargs["endpoint_url"] = aws_sts_endpoint
+        sts_client_kwargs = self._build_sts_client_kwargs(
+            aws_sts_endpoint=aws_sts_endpoint,
+            ssl_verify=ssl_verify,
+        )
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client("sts", **sts_client_kwargs)

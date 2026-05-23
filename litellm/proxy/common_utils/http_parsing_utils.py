@@ -12,6 +12,33 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
+_FORM_CONTENT_TYPES: frozenset[str] = frozenset(
+    {"application/x-www-form-urlencoded", "multipart/form-data"}
+)
+
+
+def _normalize_media_type(content_type: str) -> str:
+    """Return the bare media type per RFC 7231: strip params, trim, lowercase."""
+    if not content_type:
+        return ""
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def _is_form_content_type(content_type: str) -> bool:
+    """
+    True iff Starlette's ``request.form()`` will actually parse this body.
+
+    Substring matching ``"form"`` is unsafe: ``request.form()`` returns empty
+    ``FormData`` for non-canonical types without consuming the body, leaving
+    the auth-time pre-read and the handler's read seeing different payloads.
+    """
+    return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
+
+
+def _is_json_content_type(content_type: str) -> bool:
+    """True iff the body should be parsed as JSON."""
+    return _normalize_media_type(content_type) == "application/json"
+
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
@@ -37,8 +64,24 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
 
-        if "form" in content_type:
-            parsed_body = dict(await request.form())
+        if _is_form_content_type(content_type):
+            try:
+                form_data = await request.form()
+            except Exception as e:
+                # ``request.form()`` raises on malformed multipart (missing
+                # boundary, malformed chunk encoding, …). Surface as 400 so
+                # the auth-time pre-read does not silently cache ``{}`` while
+                # a later raw-body re-read sees the original payload —
+                # banned-param checks must see the same body the handler
+                # acts on.
+                verbose_proxy_logger.error(f"Invalid form payload: {e}")
+                raise ProxyException(
+                    message=f"Invalid form payload: {e}",
+                    type="invalid_request_error",
+                    param="request_body",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            parsed_body = dict(form_data)
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
@@ -257,7 +300,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any]
+    form_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -306,18 +349,13 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     Read the request body and parse it as JSON.
     """
     if request.method == "POST":
-        if request.headers.get("content-type", "") == "application/json":
+        content_type = request.headers.get("content-type", "")
+        if _is_json_content_type(content_type):
             return await _read_request_body(request)
-        elif "multipart/form-data" in request.headers.get(
-            "content-type", ""
-        ) or "application/x-www-form-urlencoded" in request.headers.get(
-            "content-type", ""
-        ):
+        elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
-            raise ValueError(
-                f"Unsupported content type: {request.headers.get('content-type')}"
-            )
+            raise ValueError(f"Unsupported content type: {content_type}")
     return {}
 
 

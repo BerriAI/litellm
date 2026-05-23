@@ -21,7 +21,7 @@ class VectorStoreFileRequestUtils:
 
     @staticmethod
     def get_create_request_params(
-        params: Dict[str, Any]
+        params: Dict[str, Any],
     ) -> VectorStoreFileCreateRequest:
         filtered = VectorStoreFileRequestUtils._filter_params(
             params=params, model=VectorStoreFileCreateRequest
@@ -37,7 +37,7 @@ class VectorStoreFileRequestUtils:
 
     @staticmethod
     def get_update_request_params(
-        params: Dict[str, Any]
+        params: Dict[str, Any],
     ) -> VectorStoreFileUpdateRequest:
         filtered = VectorStoreFileRequestUtils._filter_params(
             params=params, model=VectorStoreFileUpdateRequest

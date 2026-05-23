@@ -208,6 +208,15 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseInputParam,
+        ResponsesAPIResponse,
+    )
 
     Span = Union[_Span, Any]
 else:
@@ -839,7 +848,7 @@ class Router:
 
     @staticmethod
     def _normalize_strategy(
-        strategy: Union[RoutingStrategy, str, None]
+        strategy: Union[RoutingStrategy, str, None],
     ) -> Optional[str]:
         if strategy is None:
             return None
@@ -2245,6 +2254,388 @@ class Router:
                             )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
+
+    @staticmethod
+    def _extract_partial_responses_usage(
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+    ) -> Optional["ResponseAPIUsage"]:
+        """
+        Best-effort: pull partial token usage from a Responses-API streaming
+        iterator that errored mid-stream, normalized to ResponseAPIUsage so
+        the caller can combine without crossing token-naming conventions.
+
+        Two sources, in priority order:
+          1. The bridge path (LiteLLMCompletionStreamingIterator) accumulates
+             chat-completion chunks while streaming — feed them through
+             stream_chunk_builder to recover chat Usage, then translate
+             (prompt_tokens → input_tokens, completion_tokens → output_tokens).
+          2. The native path (ResponsesAPIStreamingIterator) only has a
+             completed_response object if the stream reached
+             RESPONSE_COMPLETED before erroring — uncommon mid-stream but
+             worth checking. Already ResponseAPIUsage-shaped.
+
+        Returns None when no partial usage is recoverable.
+        """
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.types.llms.openai import (
+            ResponseAPIUsage,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        # Bridge subclass is the only iterator that accumulates chat-completion
+        # chunks. isinstance narrows the type so we can read the attribute
+        # directly instead of getattr-ing on the base class.
+        if isinstance(source_iterator, LiteLLMCompletionStreamingIterator):
+            chunks = source_iterator.collected_chat_completion_chunks
+            if chunks:
+                try:
+                    from litellm.main import stream_chunk_builder
+
+                    built = stream_chunk_builder(chunks=chunks)
+                    # stream_chunk_builder returns ModelResponse |
+                    # TextCompletionResponse | None. ModelResponse sets .usage
+                    # in __init__ rather than declaring it as a class field, so
+                    # static narrowing doesn't expose it. Mirror the sync path
+                    # (_completion_streaming_iterator) and pull via getattr.
+                    chat = getattr(built, "usage", None) if built is not None else None
+                    if chat is not None:
+                        # getattr-with-default because the test path may
+                        # substitute a SimpleNamespace lacking some fields;
+                        # real Usage instances always have them.
+                        prompt = int(getattr(chat, "prompt_tokens", 0) or 0)
+                        completion = int(getattr(chat, "completion_tokens", 0) or 0)
+                        total = int(
+                            getattr(chat, "total_tokens", prompt + completion)
+                            or (prompt + completion)
+                        )
+                        return ResponseAPIUsage(
+                            input_tokens=prompt,
+                            output_tokens=completion,
+                            total_tokens=total,
+                        )
+                except Exception:
+                    # Builder is best-effort — fall through to native path.
+                    pass
+
+        # Native path: completed_response is set only if RESPONSE_COMPLETED
+        # arrived before the error (uncommon mid-stream but worth checking).
+        # Already ResponseAPIUsage-shaped — return as-is.
+        completed = source_iterator.completed_response
+        if isinstance(
+            completed,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
+            return completed.response.usage
+        return None
+
+    @staticmethod
+    def _combine_responses_fallback_usage(
+        fallback_item: "BaseLiteLLMOpenAIResponseObject",
+        partial_usage: "ResponseAPIUsage",
+    ) -> None:
+        """
+        Merge partial-stream usage with fallback-stream usage on a
+        Responses-API streaming event.
+
+        Only mutates events that carry a `response` with a `usage` field
+        (response.completed / response.failed / response.incomplete). Other
+        events pass through unchanged.
+
+        Both inputs are ResponseAPIUsage-shaped (see
+        _extract_partial_responses_usage which normalizes the bridge path),
+        so we can sum input_tokens / output_tokens / total_tokens directly
+        and produce a clean ResponseAPIUsage — no token-naming split, no
+        setattr bypass.
+        """
+        from litellm.types.llms.openai import (
+            ResponseAPIUsage,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        if not isinstance(
+            fallback_item,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
+            return
+        response = fallback_item.response
+        if response.usage is None:
+            return
+
+        fb = response.usage
+        response.usage = ResponseAPIUsage(
+            input_tokens=(partial_usage.input_tokens or 0) + (fb.input_tokens or 0),
+            output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
+            total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
+        )
+
+    @staticmethod
+    def _build_responses_continuation_input(
+        input_val: Optional[Union[str, "ResponseInputParam"]],
+        generated_content: str,
+    ) -> "ResponseInputParam":
+        """
+        Convert Responses-API input + partial assistant output into a
+        continuation input that asks the fallback model to pick up where the
+        prior assistant message stopped.
+
+        Best effort across providers. The chat-completions path uses
+        Anthropic's `prefix: True` prefill trick on the assistant message;
+        the Responses-API input schema has no direct equivalent, so we
+        append an instruction (developer role) plus a prior assistant
+        message containing the partial output. Providers without prefill
+        semantics (OpenAI, Vertex) treat this as conversational context
+        and may regenerate — same trade-off as the chat-completions path
+        for non-Anthropic fallbacks.
+        """
+        # base/continuation are List[Any] because ResponseInputParam items
+        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
+        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
+        # rejects the list() spread of input_val. We cast the combined list to
+        # ResponseInputParam at the return.
+        base: List[Any]
+        if isinstance(input_val, str):
+            base = [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_val}],
+                }
+            ]
+        elif isinstance(input_val, list):
+            base = list(input_val)
+        else:
+            base = []
+        continuation: List[Any] = [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "The previous assistant response was interrupted "
+                            "mid-stream. Continue exactly where it stopped — "
+                            "do not repeat any of its content. Your response "
+                            "must read as a seamless continuation."
+                        ),
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": generated_content}],
+            },
+        ]
+        return cast("ResponseInputParam", base + continuation)
+
+    async def _aresponses_streaming_iterator(
+        self,
+        response: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: Dict[str, Any],
+    ) -> "BaseResponsesAPIStreamingIterator":
+        """
+        Wrap a Responses-API streaming iterator so MidStreamFallbackError
+        triggers the Router's fallback chain (parity with
+        _acompletion_streaming_iterator for the chat-completions path).
+
+        The Responses-API streaming path goes through
+        _ageneric_api_call_with_fallbacks rather than _acompletion, so the
+        returned iterator is never wrapped by the chat completions
+        fallback handler. Without this wrapper, MidStreamFallbackError
+        raised mid-stream from the underlying CustomStreamWrapper (used by
+        LiteLLMCompletionStreamingIterator when the Responses API is
+        served via the completion bridge) propagates unhandled and the
+        configured cross-provider fallback never fires.
+
+        Full parity with the chat-completions path:
+          - Pre-first-chunk: retry with the original input unchanged.
+          - Partial content: inject a developer instruction + prior
+            assistant message carrying the generated text so the fallback
+            model continues rather than restarts.
+          - Usage combining: merge partial-stream usage onto the fallback's
+            response.completed event so accounting reflects both attempts.
+          - Stream cleanup: shielded aclose() on both source and fallback
+            iterators on terminate.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.responses.streaming_iterator import (
+            BaseResponsesAPIStreamingIterator,
+        )
+
+        source_iterator = response
+
+        class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
+            """
+            Subclasses BaseResponsesAPIStreamingIterator only for isinstance
+            compatibility (proxy + interactions code paths check the type).
+            Bypasses the parent constructor and delegates iteration to an
+            async generator.
+            """
+
+            def __init__(self, async_generator: AsyncGenerator):
+                import time
+                from datetime import datetime
+
+                self._async_generator = async_generator
+                # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
+                # would have set. The wrapper bypasses super().__init__ (it has no
+                # httpx.Response of its own and no provider config to drive), so
+                # we copy from source_iterator where applicable and use safe
+                # defaults elsewhere. This keeps inherited methods (e.g.
+                # _check_max_streaming_duration, _handle_failure) safe to call.
+                #
+                # The bridge path (LiteLLMCompletionStreamingIterator used by
+                # Anthropic/Bedrock/Vertex) does not call super().__init__ and
+                # is missing many of these attributes — use getattr fallbacks
+                # so wrapper construction never raises AttributeError. The
+                # bridge stores the logging object as `litellm_logging_obj`.
+                self.response = getattr(source_iterator, "response", None)
+                self.model = getattr(source_iterator, "model", None)
+                self.logging_obj = getattr(
+                    source_iterator,
+                    "logging_obj",
+                    getattr(source_iterator, "litellm_logging_obj", None),
+                )
+                self.finished = False
+                self.responses_api_provider_config = getattr(
+                    source_iterator, "responses_api_provider_config", None
+                )
+                self.completed_response = None
+                self.start_time = getattr(source_iterator, "start_time", datetime.now())
+                self._failure_handled = False
+                self._completed_response_cached = False
+                self._completed_response_logged = False
+                self._completed_response_cache_hit = None
+                self._persist_completed_response_before_logging = True
+                self._stream_created_time = time.time()
+                self.litellm_metadata = getattr(
+                    source_iterator, "litellm_metadata", None
+                )
+                self.custom_llm_provider = getattr(
+                    source_iterator, "custom_llm_provider", None
+                )
+                self.request_data = getattr(source_iterator, "request_data", {}) or {}
+                self.call_type = getattr(source_iterator, "call_type", None)
+                # Preserve hidden params so response headers (model_id,
+                # api_base, additional_headers) keep flowing.
+                self._hidden_params = dict(
+                    getattr(source_iterator, "_hidden_params", None) or {}
+                )
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return await self._async_generator.__anext__()
+
+            async def aclose(self):
+                # async generators always expose aclose — no defensive check needed.
+                await self._async_generator.aclose()
+
+        async def stream_with_fallbacks():
+            fallback_response = None
+            try:
+                async for item in source_iterator:
+                    yield item
+            except MidStreamFallbackError as e:
+                partial_usage = Router._extract_partial_responses_usage(source_iterator)
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks", self.context_window_fallbacks
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks", self.content_policy_fallbacks
+                    )
+                    # Re-enter via the per-attempt helper so the fallback chain
+                    # picks deployments through
+                    # _ageneric_api_call_with_fallbacks_helper.
+                    # original_generic_function is preserved by the caller so
+                    # the helper knows what underlying API to invoke per attempt.
+                    initial_kwargs["original_function"] = (
+                        self._ageneric_api_call_with_fallbacks_helper
+                    )
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content generated before the error — retry with the
+                        # original input. Adding a continuation prompt would
+                        # waste tokens and confuse the model.
+                        pass
+                    else:
+                        initial_kwargs["input"] = (
+                            Router._build_responses_continuation_input(
+                                initial_kwargs.get("input"),
+                                e.generated_content,
+                            )
+                        )
+                    # The Responses-API path stores observability metadata
+                    # under "litellm_metadata" (not the default "metadata") —
+                    # see _ageneric_api_call_with_fallbacks. Mirroring that
+                    # here ensures model_group, model_group_alias, and trace
+                    # ids land in the same key litellm.aresponses reads from.
+                    self._update_kwargs_before_fallbacks(
+                        model=model_group,
+                        kwargs=initial_kwargs,
+                        metadata_variable_name="litellm_metadata",
+                    )
+                    fallback_response = (
+                        await self.async_function_with_fallbacks_common_utils(
+                            e=e,
+                            disable_fallbacks=False,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                            args=(),
+                            kwargs=initial_kwargs,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__aiter__"):
+                        async for fallback_item in fallback_response:  # type: ignore
+                            if partial_usage is not None:
+                                Router._combine_responses_fallback_usage(
+                                    fallback_item, partial_usage
+                                )
+                            yield fallback_item
+                    else:
+                        yield fallback_response
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Responses streaming fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
+            finally:
+                with anyio.CancelScope(shield=True):
+                    if hasattr(source_iterator, "aclose"):
+                        try:
+                            await source_iterator.aclose()  # type: ignore[func-returns-value]
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(aresponses): error closing source: %s",
+                                exc,
+                            )
+                    if fallback_response is not None and hasattr(
+                        fallback_response, "aclose"
+                    ):
+                        try:
+                            await fallback_response.aclose()
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(aresponses): error closing fallback: %s",
+                                exc,
+                            )
+
+        return FallbackResponsesStreamWrapper(stream_with_fallbacks())
 
     def _completion_streaming_iterator(  # noqa: PLR0915
         self,
@@ -4292,6 +4683,61 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def _aresponses_with_streaming_fallbacks(
+        self, original_function: Callable, **kwargs: Any
+    ) -> Union["ResponsesAPIResponse", "BaseResponsesAPIStreamingIterator"]:
+        """
+        _ageneric_api_call_with_fallbacks for the Responses API, with the
+        addition of mid-stream fallback handling.
+
+        When stream=True and the underlying call returns a
+        BaseResponsesAPIStreamingIterator, wrap it with
+        _aresponses_streaming_iterator so MidStreamFallbackError raised
+        during iteration triggers the Router's cross-provider fallback chain.
+        """
+        from litellm.responses.streaming_iterator import (
+            BaseResponsesAPIStreamingIterator,
+        )
+
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
+        # mutates them. A shallow copy alone is not enough: the primary
+        # attempt mutates nested dicts in place — notably `litellm_metadata`,
+        # which `_update_kwargs_with_deployment` populates with
+        # deployment-specific fields (`deployment`, `model_info`, `api_base`,
+        # tags, etc.). Without an explicit copy of that dict, the shallow
+        # copy would still share its reference, leaking primary-deployment
+        # metadata into the mid-stream fallback request.
+        #
+        # We avoid deep-copying the full kwargs because it can contain
+        # non-deepcopyable objects (logging handles, async clients, etc.);
+        # `safe_deep_copy` deep-copies the metadata dicts key-by-key with a
+        # fallback to the original reference for any non-picklable value.
+        # The original_generic_function is preserved so the per-attempt
+        # helper knows which underlying API to call on fallback.
+        fallback_kwargs: Dict[str, Any] = kwargs.copy()
+        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(
+                fallback_kwargs["litellm_metadata"]
+            )
+        if isinstance(fallback_kwargs.get("metadata"), dict):
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
+        fallback_kwargs["original_generic_function"] = original_function
+
+        response = await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function, **kwargs
+        )
+
+        if kwargs.get("stream") and isinstance(
+            response, BaseResponsesAPIStreamingIterator
+        ):
+            return await self._aresponses_streaming_iterator(
+                response=response,
+                initial_kwargs=fallback_kwargs,
+            )
+        return response
+
     def _generic_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -5511,9 +5957,13 @@ class Router:
                     custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
+            elif call_type == "aresponses":
+                return await self._aresponses_with_streaming_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
                 "anthropic_messages",
-                "aresponses",
                 "_arealtime",
                 "_aresponses_websocket",
                 "acreate_fine_tuning_job",
@@ -5670,6 +6120,7 @@ class Router:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         container_id = kwargs.get("container_id")
+        _forwarded_model_id = kwargs.get("model_id")
         if isinstance(container_id, str):
             decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
             original_id = decoded.get("response_id", container_id)
@@ -5678,7 +6129,14 @@ class Router:
             decoded_provider = decoded.get("custom_llm_provider")
             if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
                 kwargs["custom_llm_provider"] = decoded_provider
-            model_id = decoded.get("model_id")
+            # Fall back to the model_id forwarded by the proxy when the container_id
+            # is a native upstream ID (e.g. Azure hex cntr_) that carries no LiteLLM
+            # routing payload, so deployment credentials (api_base, api_key) are applied.
+            model_id = decoded.get("model_id") or (
+                _forwarded_model_id.strip()
+                if isinstance(_forwarded_model_id, str) and _forwarded_model_id.strip()
+                else None
+            )
             if model_id:
                 kwargs["model"] = model_id
                 return await self._ageneric_api_call_with_fallbacks(
@@ -7320,6 +7778,38 @@ class Router:
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
+            _existing_shared_mode = (
+                cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
+            ).get("mode")
+            _deployment_mode = _shared_model_info.get("mode")
+            # Keep the built-in bridge mode stable for shared backend keys.
+            # Multiple aliases can point at the same provider/model backend,
+            # but their deployment-level overrides should not downgrade the
+            # backend from responses -> chat via last-write-wins registration.
+            # Only preserve in that specific direction so legitimate upgrades
+            # (e.g. chat -> responses) and unrelated mode changes still apply,
+            # and so a missing deployment mode does not silently clear the
+            # existing shared backend mode.
+            _is_responses_to_chat_downgrade = (
+                _existing_shared_mode == "responses" and _deployment_mode == "chat"
+            )
+            _would_clear_existing_mode = (
+                _existing_shared_mode is not None and _deployment_mode is None
+            )
+            if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
+                if _deployment_mode is not None:
+                    verbose_router_logger.warning(
+                        "Router: preserving existing mode=%s for shared backend "
+                        "key %s instead of the deployment-specified mode=%s "
+                        "(prevents alias registration from downgrading the "
+                        "shared backend mode).",
+                        _existing_shared_mode,
+                        _model_name,
+                        _deployment_mode,
+                    )
+                _shared_model_info["mode"] = _existing_shared_mode
+
+            # Always register the (possibly mode-preserved) shared backend info.
             _backend_alias_cost = {_model_name: _shared_model_info}
             if "responses/" in _model_name:
                 _stripped_model_name = _model_name.replace("responses/", "")

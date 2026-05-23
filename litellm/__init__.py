@@ -225,6 +225,10 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
+use_legacy_interactions_schema: bool = (
+    os.getenv("LITELLM_USE_LEGACY_INTERACTIONS_SCHEMA", "false").lower() == "true"
+)  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
+# schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -409,6 +413,12 @@ internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
+# When True, end-user IDs extracted from requests are validated against
+# LiteLLM_EndUserTable / LiteLLM_UserTable. Values that do not resolve to a
+# known row are dropped before reaching spend logs. Defaults to False for
+# backwards compatibility — arbitrary client-supplied identifiers still
+# pass through unchanged.
+validate_end_user_id_in_db: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -632,6 +642,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
 
@@ -899,6 +910,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "reducto":
+            reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
@@ -1010,6 +1023,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
+    | reducto_models
     | bedrock_mantle_models
     | set(clarifai_models)
 )
@@ -1116,6 +1130,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
 }
 

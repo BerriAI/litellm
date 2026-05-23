@@ -4,11 +4,14 @@ from typing import Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-from litellm.types.router import LiteLLM_Params
+from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.utils import get_valid_models
+
+_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -178,6 +181,7 @@ def get_complete_model_list(
     model_access_groups: Dict[str, List[str]] = {},
     include_model_access_groups: Optional[bool] = False,
     only_model_access_groups: Optional[bool] = False,
+    team_id: Optional[str] = None,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -222,11 +226,35 @@ def get_complete_model_list(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
+        team_id=team_id,
     )
 
     complete_model_list = unique_models + all_wildcard_models
 
     return complete_model_list
+
+
+def _hydrate_litellm_credential_name(
+    litellm_params: Optional[LiteLLM_Params],
+) -> Optional[LiteLLM_Params]:
+    if litellm_params is None or litellm_params.litellm_credential_name is None:
+        return litellm_params
+
+    credential_values = CredentialAccessor.get_credential_values(
+        litellm_params.litellm_credential_name
+    )
+    if not credential_values:
+        return litellm_params
+
+    litellm_params = litellm_params.model_copy()
+    for key, value in credential_values.items():
+        if (
+            key in _CREDENTIAL_LITELLM_PARAM_FIELDS
+            and getattr(litellm_params, key, None) is None
+        ):
+            setattr(litellm_params, key, value)
+    litellm_params.litellm_credential_name = None
+    return litellm_params
 
 
 def get_known_models_from_wildcard(
@@ -247,7 +275,7 @@ def get_known_models_from_wildcard(
     else:
         provider = wildcard_provider_prefix
 
-    # get all known provider models
+    litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
     wildcard_models = get_provider_models(
         provider=provider, litellm_params=litellm_params
@@ -285,6 +313,7 @@ def _get_wildcard_models(
     unique_models: List[str],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
+    team_id: Optional[str] = None,
 ) -> List[str]:
     models_to_remove = set()
     all_wildcard_models = []
@@ -297,7 +326,9 @@ def _get_wildcard_models(
 
             ## get litellm params from model
             if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model)
+                model_list = llm_router.get_model_list(
+                    model_name=model, team_id=team_id
+                )
                 if model_list:
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(

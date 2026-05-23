@@ -289,6 +289,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return True
         return False
 
+    @staticmethod
+    def _forward_gemini_function_call_id(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """
+        Whether to include `id` on function_call / function_response parts.
+
+        Gemini 3+ on Google AI Studio accepts (and returns) `id` for strict
+        tool-call matching. Vertex AI rejects the field with HTTP 400.
+        """
+        if custom_llm_provider != "gemini":
+            return False
+        return VertexGeminiConfig._is_gemini_3_or_newer(model)
+
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -2649,7 +2663,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
         return _gemini_convert_messages_with_history(
-            messages=messages, model=model, litellm_params=litellm_params
+            messages=messages,
+            model=model,
+            litellm_params=litellm_params,
+            custom_llm_provider="vertex_ai",
         )
 
     def get_error_class(

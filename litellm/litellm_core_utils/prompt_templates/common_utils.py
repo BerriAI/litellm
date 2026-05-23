@@ -1204,12 +1204,8 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         {"role": "assistant", "content": "I'm good, thank you!"},
         {"role": "user", "content": "What is the weather in Tokyo?"},
     ]
-    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    get_last_user_message(messages) -> "What is the weather in Tokyo?"
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        convert_content_list_to_str,
-    )
-
     if not messages:
         return None
 

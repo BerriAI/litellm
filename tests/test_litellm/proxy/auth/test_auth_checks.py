@@ -127,6 +127,23 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
+def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_values):
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values,
+        team_id="team-123",
+        team_alias="test-team",
+    )
+
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["team_id"] == "team-123"
+    assert token_data["team_alias"] == "test-team"
+
+
 def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
     valid_sso_user_defined_values,
 ):
@@ -3016,3 +3033,340 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+# --- resolve_and_validate_end_user_id ---------------------------------------
+
+
+@pytest.fixture
+def _validate_flag_on(monkeypatch):
+    """Enable opt-in DB validation for the duration of a test."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+
+
+def _validation_cache():
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return cache
+
+
+def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=None):
+    """Stub out the DB helpers resolve_and_validate_end_user_id delegates to."""
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(
+        auth_checks, "get_end_user_object", AsyncMock(return_value=end_user)
+    )
+    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        auth_checks, "_get_fuzzy_user_object", AsyncMock(return_value=fuzzy)
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_returns_none_for_none_input(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    assert (
+        await resolve_and_validate_end_user_id(
+            raw_end_user_id=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_passes_through_when_flag_disabled(monkeypatch):
+    """Default behaviour: flag is off, arbitrary ids pass through untouched."""
+    import litellm
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="codex-session-abc",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "codex-session-abc"
+    cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_passes_through_when_no_prisma_client(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=None,
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="customer-123",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "customer-123"
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["key"] == "end_user_validation:customer-123"
+    assert kwargs["value"] == "valid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_user_id(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "user-xyz"
+    # email fallback should not run for a non-email input
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_email(
+    _validate_flag_on, monkeypatch
+):
+    """Email-shaped ids route through get_user_object with user_email set.
+
+    The fuzzy lookup must happen inside get_user_object so it shares the
+    _should_check_db throttle and user_api_key_cache — no direct raw
+    Prisma calls on the auth path.
+    """
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="Alice@Example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "Alice@Example.com"
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_id"] == "Alice@Example.com"
+    assert user_kwargs["user_email"] == "Alice@Example.com"
+    # email branch must not bypass the cached helper with a raw fuzzy call
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
+    _validate_flag_on, monkeypatch
+):
+    """Non-email ids skip the email fuzzy path to avoid a pointless DB hit."""
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, user=MagicMock())
+    cache = _validation_cache()
+
+    await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    auth_checks.get_user_object.assert_awaited_once()
+    user_kwargs = auth_checks.get_user_object.await_args.kwargs
+    assert user_kwargs["user_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_codex_opaque_identifier(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)  # all helpers return None
+    cache = _validation_cache()
+
+    codex_id = (
+        "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
+        "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
+    )
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id=codex_id,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["value"] == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_preserves_id_when_default_budget_configured(
+    _validate_flag_on, monkeypatch
+):
+    """Don't drop unregistered ids when litellm.max_end_user_budget_id is set.
+
+    The default end-user budget is applied downstream when the id is present
+    but not found in the db — dropping the id here would bypass those limits.
+    """
+    import litellm
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-budget")
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="new-customer",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "new-customer"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="stranger@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_valid_result(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value="valid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+    auth_checks.get_end_user_object.assert_not_awaited()
+    auth_checks.get_user_object.assert_not_awaited()
+    auth_checks._get_fuzzy_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_invalid_result(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch, end_user=MagicMock())
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value="invalid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="bogus",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    # Despite a matching row configured, helpers aren't called — cache wins.
+    auth_checks.get_end_user_object.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_swallows_db_errors_and_returns_none(
+    _validate_flag_on, monkeypatch
+):
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(
+        auth_checks,
+        "get_end_user_object",
+        AsyncMock(side_effect=Exception("db down")),
+    )
+    monkeypatch.setattr(
+        auth_checks,
+        "get_user_object",
+        AsyncMock(side_effect=Exception("db down")),
+    )
+    cache = _validation_cache()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    # DB errors shouldn't raise through the auth path — treat as unknown.
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_reraises_budget_exceeded(
+    _validate_flag_on, monkeypatch
+):
+    """BudgetExceededError from get_end_user_object must bubble up so the
+    auth path enforces spend limits instead of silently dropping the id."""
+    import litellm
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    monkeypatch.setattr(
+        auth_checks,
+        "get_end_user_object",
+        AsyncMock(
+            side_effect=litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+        ),
+    )
+    cache = _validation_cache()
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await resolve_and_validate_end_user_id(
+            raw_end_user_id="customer-over-budget",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+        )

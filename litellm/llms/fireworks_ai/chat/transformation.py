@@ -4,6 +4,7 @@ from typing import Any, List, Literal, Optional, Tuple, Union, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,6 +27,7 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
+    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -112,6 +114,19 @@ class FireworksAIConfig(OpenAIGPTConfig):
         # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
+            supported_params.append("parallel_tool_calls")
+        else:
+            # Historically every Fireworks model advertised tool support, so a
+            # JSON entry that flips `supports_function_calling` to false will
+            # silently drop `tools` from requests. Surface this so users can
+            # tell why their tool calls suddenly stop working.
+            verbose_logger.debug(
+                "fireworks_ai model %r is marked as not supporting "
+                "function calling in model_prices_and_context_window.json; "
+                "`tools` and `parallel_tool_calls` will be dropped from the "
+                "request.",
+                model,
+            )
 
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
@@ -251,34 +266,100 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         return messages
 
-    def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        # Models that support reasoning_effort
-        reasoning_supported_models = [
-            "qwen3-8b",
-            "qwen3-32b",
-            "qwen3-coder-480b-a35b-instruct",
-            "deepseek-v3p1",
-            "deepseek-v3p2",
-            "glm-4p5",
-            "glm-4p5-air",
-            "glm-4p6",
-            "gpt-oss-120b",
-            "gpt-oss-20b",
+    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
+    # this index requires a full scan of model_cost (tens of thousands of
+    # entries), so we memoize it. The cache key is (id(model_cost),
+    # mutation_generation): the generation counter is bumped on every
+    # register_model / reload path, so add+remove or in-place value
+    # replacement (which can leave id and len unchanged) still invalidates.
+    _fireworks_index_cache: Optional[Tuple[int, int, List[Tuple[str, dict]]]] = None
+
+    @classmethod
+    def _get_fireworks_index(cls) -> List[Tuple[str, dict]]:
+        model_cost = litellm.model_cost
+        signature = (id(model_cost), get_model_cost_mutation_generation())
+        cached = cls._fireworks_index_cache
+        if (
+            cached is not None
+            and cached[0] == signature[0]
+            and cached[1] == signature[1]
+        ):
+            return cached[2]
+
+        index: List[Tuple[str, dict]] = []
+        for key, model_info in model_cost.items():
+            if not key.startswith("fireworks_ai/"):
+                continue
+            if not isinstance(model_info, dict):
+                continue
+            key_short = key[len("fireworks_ai/") :]
+            if key_short.startswith("accounts/fireworks/models/"):
+                key_short = key_short[len("accounts/fireworks/models/") :]
+            if not key_short:
+                continue
+            index.append((key_short, model_info))
+
+        cls._fireworks_index_cache = (signature[0], signature[1], index)
+        return index
+
+    @staticmethod
+    def _matches_on_hyphen_boundary(short_name: str, key_short: str) -> bool:
+        """Return True if `key_short` appears in `short_name` aligned to
+        hyphen-separated word boundaries (or end-of-string). This avoids
+        spurious substring matches like `"some-model"` matching
+        `"awesome-model"`."""
+        if short_name == key_short:
+            return True
+        if short_name.startswith(key_short + "-"):
+            return True
+        if short_name.endswith("-" + key_short):
+            return True
+        return ("-" + key_short + "-") in short_name
+
+    def _get_model_cost_capability(self, model: str, capability: str) -> Optional[bool]:
+        short_name = model
+        if short_name.startswith("fireworks_ai/"):
+            short_name = short_name[len("fireworks_ai/") :]
+        if short_name.startswith("accounts/fireworks/models/"):
+            short_name = short_name[len("accounts/fireworks/models/") :]
+
+        candidate_keys = [
+            model,
+            f"fireworks_ai/{short_name}",
+            f"fireworks_ai/accounts/fireworks/models/{short_name}",
         ]
 
-        # Normalize model name - remove prefix if present
-        normalized_model = model
-        if model.startswith("fireworks_ai/"):
-            normalized_model = model.replace("fireworks_ai/", "")
-        if normalized_model.startswith("accounts/fireworks/models/"):
-            normalized_model = normalized_model.replace(
-                "accounts/fireworks/models/", ""
-            )
+        for candidate_key in candidate_keys:
+            model_info = litellm.model_cost.get(candidate_key)
+            if model_info is not None and model_info.get(capability) is not None:
+                return cast(Optional[bool], model_info.get(capability))
 
-        # Check if model supports reasoning
-        supports_reasoning_value = any(
-            reasoning_model in normalized_model
-            for reasoning_model in reasoning_supported_models
+        # Fallback: preserve historical substring matching for model name
+        # variants (e.g. fine-tuned or regionally-suffixed versions of a
+        # known model). Pick the *longest* matching entry so a more specific
+        # known model (e.g. "qwen3-8b-instruct") wins over a less specific
+        # one (e.g. "qwen3-8b") when the query model is more specific still.
+        # Use hyphen-aligned matching to avoid false positives where a short
+        # known model name is an unrelated substring of a longer one.
+        best_match_short: Optional[str] = None
+        best_match_value: Optional[bool] = None
+        for key_short, model_info in self._get_fireworks_index():
+            if model_info.get(capability) is None:
+                continue
+            if not self._matches_on_hyphen_boundary(short_name, key_short):
+                continue
+            if best_match_short is None or len(key_short) > len(best_match_short):
+                best_match_short = key_short
+                best_match_value = cast(Optional[bool], model_info.get(capability))
+
+        return best_match_value
+
+    def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
+        supports_function_calling_value = self._get_model_cost_capability(
+            model=model, capability="supports_function_calling"
+        )
+        supports_reasoning_value = self._get_model_cost_capability(
+            model=model, capability="supports_reasoning"
         )
 
         provider_specific_model_info: ProviderSpecificModelInfo = {
@@ -288,9 +369,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "supports_vision": True,  # via document inlining
         }
 
+        if supports_function_calling_value is not None:
+            provider_specific_model_info["supports_function_calling"] = (
+                supports_function_calling_value
+            )
+
         # Only include supports_reasoning if True
         if supports_reasoning_value:
-            provider_specific_model_info["supports_reasoning"] = True
+            provider_specific_model_info["supports_reasoning"] = (
+                supports_reasoning_value
+            )
 
         return provider_specific_model_info
 

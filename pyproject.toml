@@ -33,12 +33,14 @@ Homepage = "https://litellm.ai"
 Repository = "https://github.com/BerriAI/litellm"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from the published `litellm[proxy]==1.83.0` resolution.
-# Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
+# Optional extras retain exact pins because they are consumed by Docker images
+# where exact reproducibility matters. The core SDK uses ranges so downstream
+# consumers can coexist with other packages without forced downgrades.
 [project.optional-dependencies]
 proxy = [
     "gunicorn==23.0.0",
     "uvicorn==0.33.0",
+    "granian==2.5.7",
     "uvloop==0.21.0; sys_platform != 'win32'",
     "fastapi==0.124.4",
     "backoff==2.2.1",
@@ -131,7 +133,7 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
-    "black==24.10.0",
+    "black==26.3.1",
     "mypy==1.19.0",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
@@ -287,6 +289,7 @@ paths_to_mutate = [
 ]
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
+    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
@@ -312,3 +315,4 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+
