@@ -264,21 +264,26 @@ class AnthropicResponsesStreamWrapper:
                     else item.get("encrypted_content")
                 )
                 state = self._reasoning_items.get(item_id)
-                if state is not None:
+                if state is None:
+                    # output_item.added was never seen for this reasoning
+                    # item — we don't have a reliable id. Skip the
+                    # signature entirely rather than packing a potentially
+                    # wrong rs_id from the event header.
+                    pass
+                else:
                     state["encrypted_content"] = enc
-                rs_id = state["id"] if state else item_id
-                packed = _pack_signature(rs_id, enc)
-                if packed:
-                    self._chunk_queue.append(
-                        {
-                            "type": "content_block_delta",
-                            "index": block_idx,
-                            "delta": {
-                                "type": "signature_delta",
-                                "signature": packed,
-                            },
-                        }
-                    )
+                    packed = _pack_signature(state["id"], enc)
+                    if packed:
+                        self._chunk_queue.append(
+                            {
+                                "type": "content_block_delta",
+                                "index": block_idx,
+                                "delta": {
+                                    "type": "signature_delta",
+                                    "signature": packed,
+                                },
+                            }
+                        )
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",
