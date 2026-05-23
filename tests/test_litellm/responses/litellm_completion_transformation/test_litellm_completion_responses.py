@@ -1964,8 +1964,28 @@ class TestDeveloperRoleTranslation:
             ],
             responses_api_request={"store": False},
             extra_headers=None,
+            custom_llm_provider="hosted_vllm",
         )
         roles = [self._role(m) for m in result["messages"]]
         assert "developer" not in roles
         assert "system" in roles
+        assert "user" in roles
+
+    def test_developer_role_preserved_for_openai_provider(self):
+        """OpenAI's Chat Completions API distinguishes `developer` from
+        `system` (higher trust priority for o-series models). The bridge
+        must not collapse them when the downstream is OpenAI.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="openai/gpt-5.4",
+            input=[
+                {"role": "developer", "content": "You are helpful."},
+                {"role": "user", "content": "Hi"},
+            ],
+            responses_api_request={"store": False},
+            extra_headers=None,
+            custom_llm_provider="openai",
+        )
+        roles = [self._role(m) for m in result["messages"]]
+        assert "developer" in roles
         assert "user" in roles

@@ -195,6 +195,7 @@ class LiteLLMCompletionResponsesConfig:
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -240,6 +241,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_input_to_messages(
         input: Union[str, ResponseInputParam],
         responses_api_request: Union[ResponsesAPIOptionalRequestParams, dict],
+        custom_llm_provider: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -271,6 +273,7 @@ class LiteLLMCompletionResponsesConfig:
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
+                custom_llm_provider=custom_llm_provider,
             )
         )
 
@@ -351,6 +354,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
         input: Union[str, ResponseInputParam],
+        custom_llm_provider: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -377,7 +381,8 @@ class LiteLLMCompletionResponsesConfig:
             existing_tool_call_ids: Set[str] = set()
             for _input in input:
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                    input_item=_input
+                    input_item=_input,
+                    custom_llm_provider=custom_llm_provider,
                 )
 
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
@@ -942,6 +947,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_input_item_to_chat_completion_message(
         input_item: Any,
+        custom_llm_provider: Optional[str] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -984,8 +990,11 @@ class LiteLLMCompletionResponsesConfig:
             # Chat Completions ``system`` role. Non-OpenAI providers (vLLM,
             # sglang, etc.) only recognize ``system``/``user``/``assistant``/
             # ``tool`` and reject ``developer`` with "Unexpected message role".
+            # OpenAI's Chat Completions API distinguishes ``developer`` from
+            # ``system`` (higher trust priority for o-series models), so leave
+            # the role untouched when the downstream is OpenAI.
             role = input_item.get("role") or "user"
-            if role == "developer":
+            if role == "developer" and custom_llm_provider != "openai":
                 role = "system"
             return [
                 GenericChatCompletionMessage(
