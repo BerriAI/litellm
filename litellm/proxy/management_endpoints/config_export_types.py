@@ -186,23 +186,32 @@ def _redact_mcp_credentials(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
-def _redact_params_dict(params: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
-    """Redact sensitive keys in a litellm_params dict, recursing into nested dicts.
+def _redact_params_dict(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact sensitive keys in a litellm_params dict, iterating into nested dicts.
 
-    Depth is bounded by DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER to
-    satisfy the repo's recursive-function checker.
+    Uses an explicit stack to avoid recursion (the repo's CPU-spike checker
+    flags recursive functions as unacceptable — see recursive_detector.py).
+    Depth is bounded by DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER.
+    Each stack frame carries (target_dict, source_dict, depth).
     """
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
-        return {"__redacted__": True}
-    out: Dict[str, Any] = {}
-    for k, v in params.items():
-        if _MASKER.is_sensitive_key(k) and v is not None:
-            out[k] = "__redacted__"
-        elif isinstance(v, dict):
-            out[k] = _redact_params_dict(v, depth + 1)
-        else:
-            out[k] = v
-    return out
+    result: Dict[str, Any] = {}
+    stack: List[Tuple[Dict[str, Any], Dict[str, Any], int]] = [(result, params, 0)]
+    while stack:
+        target, source, depth = stack.pop()
+        if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+            for k in source:
+                target[k] = "__redacted__"
+            continue
+        for k, v in source.items():
+            if _MASKER.is_sensitive_key(k) and v is not None:
+                target[k] = "__redacted__"
+            elif isinstance(v, dict):
+                nested: Dict[str, Any] = {}
+                target[k] = nested
+                stack.append((nested, v, depth + 1))
+            else:
+                target[k] = v
+    return result
 
 
 def _redact_litellm_params(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -403,11 +412,6 @@ def _validate_dependencies(data: LiteLLMExportEnvelope) -> None:
             status_code=400,
             detail={"message": "Dependency validation failed", "errors": errors},
         )
-
-
-# ---------------------------------------------------------------------------
-# Deep merge
-# ---------------------------------------------------------------------------
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
