@@ -256,14 +256,24 @@ export default function ModelInfoView({
         tags: values.tags,
       };
 
-      if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
-        updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // Explicit null signals the backend to remove the pricing override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
       }
-      if (form.isFieldTouched("output_cost") && values.output_cost !== undefined && values.output_cost !== null) {
-        updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.output_cost_per_token = null;
+        }
       }
 
       // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).
+      // Guard the fallback against null — a cleared input cost must not silently wipe cache-read too.
       if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
         if (
           values.cache_read_cost !== undefined &&
@@ -271,7 +281,10 @@ export default function ModelInfoView({
           values.cache_read_cost !== ""
         ) {
           updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
-        } else if (updatedLitellmParams.input_cost_per_token !== undefined) {
+        } else if (
+          updatedLitellmParams.input_cost_per_token !== undefined &&
+          updatedLitellmParams.input_cost_per_token !== null
+        ) {
           updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
         }
       }

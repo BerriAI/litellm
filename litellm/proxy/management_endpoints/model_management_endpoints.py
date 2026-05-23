@@ -51,6 +51,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
@@ -122,6 +123,18 @@ def update_db_model(
 
         merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
 
+        # Honor explicit-null pricing-clears: SPECIAL_MODEL_INFO_PARAMS are mirrored
+        # into model_info by Deployment.__init__, so the clear must propagate to both.
+        # Restricted to SPECIAL_MODEL_INFO_PARAMS so a team admin cannot use this path
+        # to null out privileged model_info fields (team_id, access groups, etc.).
+        for field in updated_patch.litellm_params.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("model_info", {}).pop(field, None)
+
     # update model info
     if updated_patch.model_info:
         if "model_info" not in merged_deployment_dict:
@@ -129,6 +142,14 @@ def update_db_model(
         merged_deployment_dict["model_info"].update(
             updated_patch.model_info.model_dump(exclude_none=True)
         )
+
+        for field in updated_patch.model_info.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.model_info, field) is None
+            ):
+                merged_deployment_dict["model_info"].pop(field, None)
+                merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
     # convert to prisma compatible format
 
