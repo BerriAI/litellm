@@ -79,6 +79,18 @@ class _PreRequestHookLogger(CustomLogger):
 
 
 # ---------------------------------------------------------------------------
+# Logger that inherits async_pre_request_hook from _PreRequestHookLogger
+# without re-declaring it in its own __dict__.  Used to verify MRO detection.
+# ---------------------------------------------------------------------------
+
+
+class _InheritedPreRequestHookLogger(_PreRequestHookLogger):
+    """Inherits async_pre_request_hook from parent — not in own __dict__."""
+
+    pass
+
+
+# ---------------------------------------------------------------------------
 # WebSearch interceptor duck-type (has try_short_circuit_search)
 # ---------------------------------------------------------------------------
 
@@ -142,6 +154,11 @@ class TestCallbackCapabilitiesNewFlags:
     def test_has_pre_request_hook_false_for_empty(self):
         caps = self._caps([])
         assert caps.has_pre_request_hook is False
+
+    def test_has_pre_request_hook_true_for_inherited_hook(self):
+        """MRO traversal must detect hooks inherited from an intermediate parent."""
+        caps = self._caps([_InheritedPreRequestHookLogger()])
+        assert caps.has_pre_request_hook is True
 
     # has_websearch_interceptor ------------------------------------------------
 
@@ -445,6 +462,19 @@ class TestHandlerCapabilityCache:
             has_pre, has_ws = _get_handler_capabilities()
         assert has_pre is False
         assert has_ws is True
+
+    def test_detects_inherited_pre_request_hook(self):
+        """MRO traversal must detect hooks inherited from intermediate parents."""
+        with patch("litellm.callbacks", [_InheritedPreRequestHookLogger()]):
+            from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+                _get_handler_capabilities,
+                _handler_capability_cache,
+            )
+
+            _handler_capability_cache.clear()
+            has_pre, has_ws = _get_handler_capabilities()
+        assert has_pre is True
+        assert has_ws is False
 
     def test_cache_hit_on_same_callbacks(self):
         cb = CustomLogger()

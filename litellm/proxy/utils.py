@@ -1645,7 +1645,20 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
-            if "async_pre_request_hook" in cls_attrs:
+            # Use MRO traversal for async_pre_request_hook — same rationale as
+            # async_post_call_streaming_hook above: a callback that inherits the
+            # hook from an intermediate parent without re-declaring it in its own
+            # __dict__ would be missed by a leaf-class check, silently bypassing
+            # the entire pre-request hook loop for every request.
+            base_pre_request_hook = CustomLogger.async_pre_request_hook
+            cls_pre_request_hook = getattr(
+                cls,
+                "async_pre_request_hook",
+                base_pre_request_hook,
+            )
+            if getattr(
+                cls_pre_request_hook, "__func__", cls_pre_request_hook
+            ) is not getattr(base_pre_request_hook, "__func__", base_pre_request_hook):
                 has_pre_request_hook = True
 
         caps = _CallbackCapabilities(

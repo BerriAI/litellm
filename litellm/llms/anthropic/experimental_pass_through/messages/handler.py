@@ -35,6 +35,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
 from litellm.utils import ProviderConfigManager, client
 
 from ..utils import is_reasoning_auto_summary_enabled
@@ -71,7 +72,14 @@ def _get_handler_capabilities() -> Tuple[bool, bool]:
         if isinstance(cb, str):
             continue
         cls = type(cb)
-        if "async_pre_request_hook" in cls.__dict__:
+        # MRO-aware check: identity-compare against the base CustomLogger method
+        # so that a callback inheriting the hook from an intermediate parent
+        # (not re-declaring in its own __dict__) is still detected.
+        _base_pre = _CustomLogger.async_pre_request_hook
+        _cls_pre = getattr(cls, "async_pre_request_hook", _base_pre)
+        if getattr(_cls_pre, "__func__", _cls_pre) is not getattr(
+            _base_pre, "__func__", _base_pre
+        ):
             has_pre_request_hook = True
         if hasattr(cb, "try_short_circuit_search"):
             has_websearch_interceptor = True
@@ -155,8 +163,6 @@ async def _execute_pre_request_hooks(
 
     if not litellm.callbacks:
         return request_kwargs
-
-    from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
 
     # Skip the scan when no registered callback overrides async_pre_request_hook.
     # _has_pre_request_hooks() uses the same cached capability flags as the proxy
