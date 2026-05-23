@@ -218,6 +218,15 @@ class ResponsesAPIRequestUtils:
         else:
             responses_api_response.id = updated_id
 
+        responses_api_response = (
+            ResponsesAPIRequestUtils._envelope_encode_output_item_ids(
+                response=responses_api_response,
+                raw_response_id=response_id,
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+        )
+
         if litellm_metadata.get("encrypted_content_affinity_enabled"):
             responses_api_response = (
                 ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
@@ -227,6 +236,95 @@ class ResponsesAPIRequestUtils:
             )
 
         return responses_api_response
+
+    @staticmethod
+    def _encode_item_envelope(
+        raw_response_id: str,
+        *,
+        prefix: str,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> str:
+        """Wrap a raw upstream id (e.g. ``chatcmpl-*``) as ``rs_<env>`` or
+        ``msg_<env>`` so the value carries the same response_id payload as
+        ``response.id`` but with an item-type prefix that clients recognize.
+
+        The envelope reuses
+        :meth:`_build_responses_api_response_id` and swaps the leading
+        ``resp_`` for the requested item prefix, so the result round-trips
+        through :meth:`_decode_item_envelope` plus
+        :meth:`_decode_responses_api_response_id` back to ``raw_response_id``.
+        """
+        resp_form = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=custom_llm_provider,
+            model_id=model_id,
+            response_id=raw_response_id,
+        )
+        return f"{prefix}_" + resp_form[len("resp_") :]
+
+    @staticmethod
+    def _decode_item_envelope(item_id: str) -> Optional[str]:
+        """Decode ``rs_<env>`` / ``msg_<env>`` back to the ``resp_<env>`` form
+        that :meth:`_decode_responses_api_response_id` understands.
+
+        Returns ``None`` on missing prefix or empty input. All other validation
+        is delegated to the existing response-id decoder.
+        """
+        if not item_id:
+            return None
+        for prefix in ("rs_", "msg_"):
+            if item_id.startswith(prefix):
+                return "resp_" + item_id[len(prefix) :]
+        return None
+
+    @staticmethod
+    def _envelope_encode_output_item_ids(
+        response: Union["ResponsesAPIResponse", Dict[str, Any]],
+        raw_response_id: str,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> Union["ResponsesAPIResponse", Dict[str, Any]]:
+        """Rewrite output item IDs that leak raw upstream forms (e.g.
+        ``chatcmpl-*``) as ``msg_<env>`` so downstream clients see a stable,
+        item-typed identifier instead of a chat-completions artifact.
+
+        Only items whose ``id`` is missing or does not already start with the
+        expected typed prefix (``msg_``, ``rs_``, ``encitem_``) are rewritten.
+        Function-call items keep their ``call_id``-based id (untouched).
+        """
+        if isinstance(response, dict):
+            output = response.get("output")
+        else:
+            output = getattr(response, "output", None)
+        if not output:
+            return response
+
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                current_id = item.get("id")
+            else:
+                item_type = getattr(item, "type", None)
+                current_id = getattr(item, "id", None)
+            if item_type != "message":
+                continue
+            if isinstance(current_id, str) and (
+                current_id.startswith("msg_")
+                or current_id.startswith("rs_")
+                or current_id.startswith("encitem_")
+            ):
+                continue
+            new_id = ResponsesAPIRequestUtils._encode_item_envelope(
+                raw_response_id,
+                prefix="msg",
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+            if isinstance(item, dict):
+                item["id"] = new_id
+            else:
+                item.id = new_id
+        return response
 
     @staticmethod
     def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
