@@ -905,6 +905,100 @@ def test_gemini_empty_tool_call_with_sibling_usage_metadata_does_not_crash():
     assert result["current_output_item_id"] == "item_existing"
 
 
+def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
+    """A ``toolCall`` frame with a sibling ``usageMetadata`` must propagate the
+    real token counts onto the emitted ``response.done`` so spend/budget
+    accounting records tokens consumed by the tool-call turn — otherwise an
+    authenticated client can repeatedly drive tool calls with zero spend."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_tool_call_usage"
+
+    result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_usage",
+                            "name": "get_weather",
+                            "args": {"location": "NYC"},
+                        }
+                    ]
+                },
+                "usageMetadata": {
+                    "promptTokenCount": 17,
+                    "responseTokenCount": 4,
+                    "totalTokenCount": 21,
+                },
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    response_done = next(
+        ev for ev in result["response"] if ev.get("type") == "response.done"
+    )
+    usage = response_done["response"]["usage"]
+    assert usage["input_tokens"] == 17
+    assert usage["output_tokens"] == 4
+    assert usage["total_tokens"] == 21
+
+
+def test_gemini_tool_call_response_done_falls_back_to_empty_usage():
+    """Without sibling ``usageMetadata`` the tool-call ``response.done`` still
+    carries a valid empty usage block so OpenAI-compatible clients (which
+    expect ``usage`` on every ``response.done``) don't break."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_tool_call_no_usage"
+
+    result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_no_usage",
+                            "name": "get_weather",
+                            "args": {"location": "NYC"},
+                        }
+                    ]
+                }
+            }
+        ),
+        "gemini-2.5-flash",
+        logging_obj,
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    response_done = next(
+        ev for ev in result["response"] if ev.get("type") == "response.done"
+    )
+    usage = response_done["response"]["usage"]
+    assert usage["input_tokens"] == 0
+    assert usage["output_tokens"] == 0
+    assert usage["total_tokens"] == 0
+
+
 def test_gemini_function_call_output_includes_name():
     """Verify function_call_output includes name field from stored mapping."""
     config = GeminiRealtimeConfig()

@@ -1450,12 +1450,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                     )
 
-                # response.done - close the response so clients can submit tool results.
-                # Include an empty usage block for parity with the non-tool-call
-                # response.done path; OpenAI-compatible clients expect `usage`
-                # to always be present on response.done events.
+                # response.done - close the response so clients can submit tool
+                # results. Mirror the non-tool-call RESPONSE_DONE path: if Gemini
+                # delivered ``usageMetadata`` alongside this ``toolCall`` frame,
+                # propagate the real token counts so spend/budget accounting
+                # records the tokens consumed by the tool-call turn. Otherwise
+                # fall back to an empty usage block (OpenAI-compatible clients
+                # expect ``usage`` to always be present on response.done).
+                if "usageMetadata" in json_message:
+                    _tool_call_chat_completion_usage = (
+                        VertexGeminiConfig._calculate_usage(
+                            completion_response=cast(
+                                BidiGenerateContentServerMessage, json_message
+                            ),
+                        )
+                    )
+                else:
+                    _tool_call_chat_completion_usage = get_empty_usage()
                 tool_call_responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
-                    get_empty_usage(),
+                    _tool_call_chat_completion_usage,
                 )
                 tool_call_done_event = OpenAIRealtimeDoneEvent(
                     type="response.done",
