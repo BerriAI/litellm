@@ -546,7 +546,6 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
-            kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
