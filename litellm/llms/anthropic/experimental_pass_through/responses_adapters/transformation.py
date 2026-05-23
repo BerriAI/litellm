@@ -577,7 +577,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # (notably the chatgpt subscription/Codex Responses backend) emit
         # `text` parts, and dict-shaped items may also carry plain `text`
         # fields when reconstructed via model_construct.
-        _TEXT_PART_TYPES = ("output_text", "text", "summary_text")
+        _TEXT_PART_TYPES = ("output_text", "text")
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
