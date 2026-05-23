@@ -436,3 +436,35 @@ async def test_team_member_budget_check_personal_key_not_team():
         # Should pass and get_team_membership should not be called
         assert result is True
         mock_get_team_membership.assert_not_called()
+
+
+def test_team_membership_without_budget_table_deserializes():
+    """Regression test for issue #28689.
+
+    When a user's budget_id is set to null via /team/member_update,
+    the Prisma join returns a membership row without a litellm_budget_table key.
+    Before the fix, LiteLLM_TeamMembership had no default on litellm_budget_table,
+    causing Pydantic to raise ``ValidationError: Field required`` on every
+    subsequent auth check (→ 401 for all requests by that user).
+    """
+    # Simulates CacheCodec.deserialize processing a membership whose
+    # budget_id was nulled out — litellm_budget_table key is absent.
+    membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        budget_id=None,
+        # litellm_budget_table intentionally omitted
+    )
+    assert membership.litellm_budget_table is None
+    assert membership.safe_get_team_member_rpm_limit() is None
+    assert membership.safe_get_team_member_tpm_limit() is None
+
+
+def test_team_membership_explicit_none_budget_table():
+    """litellm_budget_table=None can also be passed explicitly (e.g. from JSON null)."""
+    membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        litellm_budget_table=None,
+    )
+    assert membership.litellm_budget_table is None
