@@ -152,6 +152,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 elif isinstance(content, list):
                     asst_parts: List[Dict[str, Any]] = []
                     reasoning_items: List[Dict[str, Any]] = []
+                    function_call_items: List[Dict[str, Any]] = []
                     for block in content:
                         if not isinstance(block, dict):
                             continue
@@ -161,8 +162,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 {"type": "output_text", "text": block.get("text", "")}
                             )
                         elif btype == "tool_use":
-                            # tool_use becomes a top-level function_call item
-                            input_items.append(
+                            # Defer until after reasoning_items so they precede
+                            # the function_calls they generated, per OpenAI's
+                            # Responses API ordering requirement.
+                            function_call_items.append(
                                 {
                                     "type": "function_call",
                                     "call_id": block.get("id", ""),
@@ -199,10 +202,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             # If no usable signature: drop silently. Do NOT
                             # downgrade to output_text (causes OpenAI 400
                             # "unexpected output_text in assistant input").
-                    # Emit reasoning items immediately before the assistant
-                    # message they summarize.
+                    # Emit reasoning items first so they precede any
+                    # function_calls and the assistant message they summarize.
                     if reasoning_items:
                         input_items.extend(reasoning_items)
+                    if function_call_items:
+                        input_items.extend(function_call_items)
                     if asst_parts:
                         input_items.append(
                             {
@@ -343,7 +348,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
         if not (has_reasoning_request or has_reasoning_input):
             return
-        responses_kwargs["store"] = False
+        # Only force store=False when the caller hasn't expressed a preference.
+        # Users who rely on OpenAI response storage (audit, cost attribution,
+        # later retrieval) can pass store=True explicitly to keep it on; they
+        # accept that they must replay encrypted_content themselves.
+        if "store" not in responses_kwargs:
+            responses_kwargs["store"] = False
         responses_kwargs.setdefault("include", [])
         if "reasoning.encrypted_content" not in responses_kwargs["include"]:
             responses_kwargs["include"].append("reasoning.encrypted_content")

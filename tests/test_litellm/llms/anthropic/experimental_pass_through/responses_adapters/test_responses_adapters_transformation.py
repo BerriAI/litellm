@@ -1363,3 +1363,117 @@ class TestEdgeCaseInputCoverage:
         )
         # Only the well-formed entry survives.
         assert result == [{"type": "compaction", "compact_threshold": 150000}]
+
+
+class TestReasoningPrecedesFunctionCall:
+    """Regression guard for the P1 ordering defect: when an assistant message
+    in history carries both a thinking block (with packed signature) and a
+    tool_use block, the resulting Responses API `input` must place the
+    reasoning item BEFORE the function_call. Otherwise OpenAI returns
+    `Item with id 'rs_...' not found`."""
+
+    def test_reasoning_emitted_before_function_call(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+            _pack_signature,
+        )
+
+        rs_id = "rs_mixed_1"
+        enc = "ENC-BLOB-MIXED"
+        sig = _pack_signature(rs_id, enc)
+        req: Any = {
+            "model": "gpt-5.5",
+            "max_tokens": 16,
+            "messages": [
+                {"role": "user", "content": "look up the weather"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "", "signature": sig},
+                        {
+                            "type": "tool_use",
+                            "id": "call_w1",
+                            "name": "get_weather",
+                            "input": {"city": "SF"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_w1",
+                            "content": "72F",
+                        }
+                    ],
+                },
+            ],
+        }
+        kwargs = _ADAPTER.translate_request(req)
+        items = kwargs["input"]
+        types_in_order = [it.get("type") for it in items]
+        reasoning_idx = types_in_order.index("reasoning")
+        fc_idx = types_in_order.index("function_call")
+        assert (
+            reasoning_idx < fc_idx
+        ), f"reasoning must precede function_call; got {types_in_order}"
+        # And the reasoning item must carry the unpacked id + encrypted_content.
+        assert items[reasoning_idx]["id"] == rs_id
+        assert items[reasoning_idx]["encrypted_content"] == enc
+
+    def test_multiple_tool_uses_all_follow_reasoning(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters._signature_codec import (
+            _pack_signature,
+        )
+
+        sig = _pack_signature("rs_multi", "ENC-MULTI")
+        req: Any = {
+            "model": "gpt-5.5",
+            "max_tokens": 16,
+            "messages": [
+                {"role": "user", "content": "do two things"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "", "signature": sig},
+                        {"type": "tool_use", "id": "c1", "name": "a", "input": {}},
+                        {"type": "tool_use", "id": "c2", "name": "b", "input": {}},
+                    ],
+                },
+            ],
+        }
+        kwargs = _ADAPTER.translate_request(req)
+        types_in_order = [it.get("type") for it in kwargs["input"]]
+        reasoning_idx = types_in_order.index("reasoning")
+        fc_positions = [i for i, t in enumerate(types_in_order) if t == "function_call"]
+        assert fc_positions, "expected function_call items"
+        assert all(p > reasoning_idx for p in fc_positions)
+
+
+class TestStoreOverrideOptOut:
+    """P2: _apply_reasoning_replay_settings must not silently disable
+    response storage when the caller explicitly set `store`."""
+
+    def test_user_store_true_is_preserved(self):
+        kwargs: Dict[str, Any] = {
+            "reasoning": {"effort": "high"},
+            "input": [],
+            "store": True,
+        }
+        _ADAPTER._apply_reasoning_replay_settings(kwargs)
+        assert kwargs["store"] is True
+        assert "reasoning.encrypted_content" in kwargs["include"]
+
+    def test_default_still_forces_store_false(self):
+        kwargs: Dict[str, Any] = {
+            "reasoning": {"effort": "high"},
+            "input": [],
+        }
+        _ADAPTER._apply_reasoning_replay_settings(kwargs)
+        assert kwargs["store"] is False
+
+    def test_no_reasoning_no_changes(self):
+        kwargs: Dict[str, Any] = {"input": []}
+        _ADAPTER._apply_reasoning_replay_settings(kwargs)
+        assert "store" not in kwargs
+        assert "include" not in kwargs

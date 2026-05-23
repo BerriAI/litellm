@@ -252,26 +252,28 @@ async def anthropic_messages(
     # Code's clear_thinking edit clears it), so the cleanest fix is to drop
     # them entirely.
     if custom_llm_provider == "anthropic" and isinstance(messages, list):
-        messages = [
-            (
-                {
-                    **_m,
-                    "content": [
-                        _c
-                        for _c in _m["content"]
-                        if not (
-                            isinstance(_c, dict)
-                            and _c.get("type") == "thinking"
-                            and isinstance(_c.get("signature"), str)
-                            and _c["signature"].startswith(_SIG_PREFIX)
-                        )
-                    ],
-                }
-                if isinstance(_m, dict) and isinstance(_m.get("content"), list)
-                else _m
-            )
-            for _m in messages
-        ]
+        _stripped: List[Any] = []
+        for _m in messages:
+            if not (isinstance(_m, dict) and isinstance(_m.get("content"), list)):
+                _stripped.append(_m)
+                continue
+            new_content = [
+                _c
+                for _c in _m["content"]
+                if not (
+                    isinstance(_c, dict)
+                    and _c.get("type") == "thinking"
+                    and isinstance(_c.get("signature"), str)
+                    and _c["signature"].startswith(_SIG_PREFIX)
+                )
+            ]
+            # Anthropic rejects messages with empty content arrays. If stripping
+            # removed every block, drop the whole message — it carried only
+            # foreign reasoning state which is meaningless to native Anthropic.
+            if not new_content:
+                continue
+            _stripped.append({**_m, "content": new_content})
+        messages = _stripped
 
     # Short-circuit web-search-only requests: detect the pattern, execute
     # search directly via Tavily/Perplexity, and return a synthetic response

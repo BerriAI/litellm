@@ -694,3 +694,70 @@ class TestStripForeignSignatures:
         assert assistant_msg["content"] is original_assistant_content
         assert len(original_assistant_content) == 2
         assert original_assistant_content[0]["type"] == "thinking"
+
+    @pytest.mark.asyncio
+    async def test_assistant_message_emptied_by_strip_is_dropped(self):
+        """When an assistant message contains ONLY packed-signature thinking
+        blocks, stripping them would leave `content: []` — which Anthropic
+        rejects. The handler must drop the message entirely instead."""
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        packed = self._packed_sig()
+        messages = [
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": packed},
+                ],
+            },
+            {"role": "user", "content": "next"},
+        ]
+        captured = {}
+
+        def fake_handler(**kw):
+            captured.update(kw)
+            return "ok"
+
+        with patch.object(
+            handler, "anthropic_messages_handler", side_effect=fake_handler
+        ):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="anthropic/claude-opus-4-7",
+                custom_llm_provider="anthropic",
+            )
+        forwarded = captured["messages"]
+        # Assistant message was emptied → dropped. Two user messages remain.
+        assert all(m["role"] == "user" for m in forwarded)
+        assert len(forwarded) == 2
+
+    @pytest.mark.asyncio
+    async def test_non_dict_messages_pass_through_strip_unchanged(self):
+        """The strip's per-message guard must let non-dict / non-list-content
+        entries through unchanged (e.g. a string-content user message)."""
+        from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+        messages = [
+            {"role": "user", "content": "hello"},  # string content
+            "not-a-dict",  # malformed entry — guard must not crash
+        ]
+        captured = {}
+
+        def fake_handler(**kw):
+            captured.update(kw)
+            return "ok"
+
+        with patch.object(
+            handler, "anthropic_messages_handler", side_effect=fake_handler
+        ):
+            await handler.anthropic_messages(
+                max_tokens=100,
+                messages=messages,
+                model="anthropic/claude-opus-4-7",
+                custom_llm_provider="anthropic",
+            )
+        forwarded = captured["messages"]
+        assert forwarded[0]["content"] == "hello"
+        assert "not-a-dict" in forwarded
