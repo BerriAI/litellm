@@ -53,7 +53,9 @@ class GracefulShutdownManager:
             pass
 
     @classmethod
-    async def wait_for_drain(cls, timeout: Optional[float] = None) -> int:
+    async def wait_for_drain(
+        cls, timeout: Optional[float] = None, deduct: int = 0
+    ) -> int:
         """
         Wait for all in-flight HTTP requests to complete.
 
@@ -63,6 +65,12 @@ class GracefulShutdownManager:
         Args:
             timeout: Maximum seconds to wait. Defaults to
                      ``GRACEFUL_SHUTDOWN_TIMEOUT`` env var or 30 s.
+            deduct: Number to subtract from the raw in-flight count when
+                    evaluating whether the queue has drained.  Pass ``1``
+                    when this coroutine is itself running inside an HTTP
+                    handler (e.g. ``/health/drain``) so the handler does
+                    not count itself as an outstanding request and the
+                    loop can reach zero without exhausting the timeout.
 
         Returns:
             Number of requests that drained during the wait.
@@ -80,7 +88,7 @@ class GracefulShutdownManager:
         last_log_elapsed = 0.0
 
         while True:
-            count = get_in_flight_requests()
+            count = get_in_flight_requests() - deduct
             if count <= 0:
                 break
 
@@ -105,9 +113,15 @@ class GracefulShutdownManager:
 
         final_count = get_in_flight_requests()
         drained = max(0, initial_count - final_count)
+        total_elapsed = (
+            time.monotonic() - cls._shutdown_started_at
+            if cls._shutdown_started_at is not None
+            else 0.0
+        )
         verbose_proxy_logger.info(
-            '{"event": "graceful_shutdown_complete", "drained_requests": %d}',
+            '{"event": "graceful_shutdown_complete", "drained_requests": %d, "elapsed_s": %.1f}',
             drained,
+            total_elapsed,
         )
         return drained
 

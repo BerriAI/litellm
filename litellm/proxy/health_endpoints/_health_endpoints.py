@@ -1647,6 +1647,7 @@ async def health_liveliness(response: Response):
 @router.get(
     "/health/drain",
     tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_drain():
     """
@@ -1654,22 +1655,37 @@ async def health_drain():
     or the ``GRACEFUL_SHUTDOWN_TIMEOUT`` expires (default 30 s).
 
     Designed for use in Kubernetes ``preStop`` lifecycle hooks so that the
-    pod is quiesced before ``SIGTERM`` is delivered:
+    pod is quiesced before ``SIGTERM`` is delivered.
+
+    **Authentication**: when a ``master_key`` is configured this endpoint
+    requires a valid API key.  Kubernetes ``httpGet`` preStop hooks cannot
+    set request headers, so use an ``exec`` hook with ``curl`` instead:
 
     ```yaml
     lifecycle:
       preStop:
-        httpGet:
-          path: /health/drain
-          port: 4000
+        exec:
+          command:
+            - sh
+            - -c
+            - >
+              curl -sf http://localhost:4000/health/drain
+              -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
-    Setting this together with a ``terminationGracePeriodSeconds`` that is
-    at least ``GRACEFUL_SHUTDOWN_TIMEOUT + 5`` seconds ensures the process
-    exits cleanly before Kubernetes sends ``SIGKILL``.
+    When no ``master_key`` is set the endpoint is accessible
+    unauthenticated (suitable for internal/cluster-only deployments
+    protected by network policy).
+
+    Set ``terminationGracePeriodSeconds`` to at least
+    ``GRACEFUL_SHUTDOWN_TIMEOUT + 5`` so the process exits cleanly before
+    Kubernetes sends ``SIGKILL``.
     """
     GracefulShutdownManager.start_shutdown()
-    drained = await GracefulShutdownManager.wait_for_drain()
+    # deduct=1 so this handler does not count itself as an outstanding
+    # request — without this the poll loop would never reach zero and would
+    # always exhaust the full GRACEFUL_SHUTDOWN_TIMEOUT.
+    drained = await GracefulShutdownManager.wait_for_drain(deduct=1)
     return {
         "status": "drained",
         "drained_requests": drained,

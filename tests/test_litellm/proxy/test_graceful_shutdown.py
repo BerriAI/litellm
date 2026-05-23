@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     health_drain,
     health_liveliness,
@@ -288,30 +289,71 @@ async def test_health_drain_returns_drained_count():
 
 @pytest.mark.asyncio
 async def test_health_drain_waits_for_in_flight_requests():
-    """/health/drain blocks until the in-flight counter reaches zero."""
-    InFlightRequestsMiddleware._in_flight = 1
+    """/health/drain blocks until real in-flight requests complete.
+
+    _in_flight is pre-set to 2 to simulate the drain endpoint itself (1,
+    subtracted via deduct=1) plus one real in-flight request (1).  Once
+    the real request finishes the adjusted count reaches 0 and drain returns.
+    """
+    InFlightRequestsMiddleware._in_flight = 2  # drain(1) + real in-flight(1)
 
     async def _release():
         await asyncio.sleep(0.15)
-        InFlightRequestsMiddleware._in_flight = 0
+        InFlightRequestsMiddleware._in_flight = (
+            1  # real request done; drain still running
+        )
 
     asyncio.create_task(_release())
     result = await health_drain()
 
     assert result["status"] == "drained"
-    assert result["in_flight_requests"] == 0
 
 
 def test_health_drain_accessible_via_http(monkeypatch):
-    """/health/drain responds over HTTP (no auth required)."""
+    """/health/drain responds over HTTP when auth dependency is satisfied."""
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
+
+    async def _no_auth():
+        return None
+
+    app.dependency_overrides[user_api_key_auth] = _no_auth
     client = TestClient(app)
 
     response = client.get("/health/drain")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "drained"
+
+
+def test_health_drain_does_not_self_count_via_http(monkeypatch):
+    """drain subtracts itself from in-flight so it completes without exhausting the timeout.
+
+    Without the deduct=1 fix the drain endpoint counts itself as an in-flight
+    request, the poll loop never reaches zero, and the call blocks for the full
+    GRACEFUL_SHUTDOWN_TIMEOUT before returning.
+    """
+    import time
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "2")
+
+    app = FastAPI()
+    app.add_middleware(InFlightRequestsMiddleware)
+    app.include_router(_health_endpoints_module.router)
+
+    async def _no_auth():
+        return None
+
+    app.dependency_overrides[user_api_key_auth] = _no_auth
+    client = TestClient(app)
+
+    start = time.monotonic()
+    response = client.get("/health/drain")
+    elapsed = time.monotonic() - start
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "drained"
+    assert elapsed < 1.0, f"drain self-counted: blocked {elapsed:.2f}s (expected < 1s)"
 
 
 # ---------------------------------------------------------------------------
