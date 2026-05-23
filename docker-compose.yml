@@ -38,7 +38,8 @@ services:
     env_file:
       - .env # Load local .env file
     depends_on:
-      - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+      db:
+        condition: service_healthy  # Wait for Postgres to pass pg_isready before starting gateway
     healthcheck:  # Defines the health check configuration for the container
       test:
         - CMD-SHELL

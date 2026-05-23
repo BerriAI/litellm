@@ -91,16 +91,16 @@ def test_gateway_builds_from_gateway_dockerfile(services):
 
 
 def test_ui_exposes_port_3000(services):
-    ports = services["ui"].get("ports", [])
-    assert any("3000" in str(p) for p in ports), (
-        f"ui service should expose port 3000, got ports={ports}"
+    ports = [str(p) for p in services["ui"].get("ports", [])]
+    assert "3000:3000" in ports, (
+        f"ui service should expose port mapping 3000:3000, got ports={ports}"
     )
 
 
 def test_gateway_exposes_port_4000(services):
-    ports = services["gateway"].get("ports", [])
-    assert any("4000" in str(p) for p in ports), (
-        f"gateway service should expose port 4000, got ports={ports}"
+    ports = [str(p) for p in services["gateway"].get("ports", [])]
+    assert "4000:4000" in ports, (
+        f"gateway service should expose port mapping 4000:4000, got ports={ports}"
     )
 
 
@@ -142,8 +142,15 @@ def test_ui_healthcheck_configured(services):
 
 
 def test_gateway_depends_on_db(services):
-    depends_on = services["gateway"].get("depends_on", [])
-    assert "db" in depends_on, "gateway service must depend on the 'db' service"
+    depends_on = services["gateway"].get("depends_on", {})
+    # depends_on can be a list or a dict (service_healthy condition form)
+    if isinstance(depends_on, dict):
+        assert "db" in depends_on, "gateway service must depend on the 'db' service"
+        assert depends_on["db"].get("condition") == "service_healthy", (
+            "gateway should wait for db to be healthy before starting"
+        )
+    else:
+        assert "db" in depends_on, "gateway service must depend on the 'db' service"
 
 
 # ---------------------------------------------------------------------------
