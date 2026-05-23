@@ -1541,6 +1541,99 @@ def test_add_new_models_to_team_with_existing_models():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name",
+    ["team_model_add", "team_model_delete"],
+)
+async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
+    """
+    Regression pin for LIT-3244 vector-store BYOK 403.
+
+    `team_model_add` and `team_model_delete` mutate `team.models` in the
+    DB. Without a cache refresh, the in-memory `LiteLLM_TeamTableCachedObj`
+    used by `common_checks` stays stale and team members 403 on a model
+    the DB has just granted (or, symmetrically, keep using a model the DB
+    has just revoked).
+
+    Pin: after the DB update, the endpoint must call `_cache_team_object`
+    with the updated team row so the cached team stays in sync.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        TeamModelAddRequest,
+        TeamModelDeleteRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        team_model_add,
+        team_model_delete,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    existing_team = MagicMock()
+    existing_team.model_dump.return_value = {
+        "team_id": "team-1234",
+        "models": ["bedrock-claude-sonnet-4", "openai/*"],
+    }
+
+    updated_team = MagicMock()
+    updated_team.team_id = "team-1234"
+    updated_team.model_dump.return_value = {
+        "team_id": "team-1234",
+        "models": ["bedrock-claude-sonnet-4", "openai/*", "team-byok-1"],
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+        ) as mock_cache_team,
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+            return_value=updated_team
+        )
+        mock_cache_team.return_value = None
+
+        if endpoint_name == "team_model_add":
+            await team_model_add(
+                data=TeamModelAddRequest(team_id="team-1234", models=["team-byok-1"]),
+                http_request=mock_request,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+        else:
+            await team_model_delete(
+                data=TeamModelDeleteRequest(team_id="team-1234", models=["openai/*"]),
+                http_request=mock_request,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        # The pin: cache refresh must run with the updated team row.
+        assert mock_cache_team.await_count == 1, (
+            f"{endpoint_name} must call _cache_team_object exactly once "
+            f"after the DB update (LIT-3244 regression pin); "
+            f"got await_count={mock_cache_team.await_count}"
+        )
+        call_kwargs = mock_cache_team.await_args.kwargs
+        assert call_kwargs["team_id"] == "team-1234"
+        # The cached object must be built from the *updated* row, not the
+        # pre-mutation `existing_team` — that's the whole point.
+        assert call_kwargs["team_table"].team_id == "team-1234"
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_member_budget_not_passed_to_db():
     """
     Test that 'team_member_budget' is never passed to prisma_client.db.litellm_teamtable.update
@@ -1568,7 +1661,9 @@ async def test_update_team_team_member_budget_not_passed_to_db():
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch("litellm.proxy.auth.auth_checks._cache_team_object") as mock_cache_team,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+        ) as mock_cache_team,
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
@@ -1999,7 +2094,9 @@ async def test_update_team_with_team_member_budget_duration():
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch("litellm.proxy.auth.auth_checks._cache_team_object") as mock_cache_team,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+        ) as mock_cache_team,
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
