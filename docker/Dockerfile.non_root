@@ -23,7 +23,6 @@ RUN for i in 1 2 3; do \
         coreutils \
         curl \
         openssl \
-        libatomic \
         libsndfile \
         nodejs \
         npm && break || sleep 5; \
