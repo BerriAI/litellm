@@ -1418,15 +1418,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     # clients accumulate ``delta.delta`` and rely on at least
                     # one delta before ``.done``.
                     returned_message.append(
-                        {
-                            "type": "response.function_call_arguments.delta",
-                            "event_id": f"event_{uuid.uuid4()}",
-                            "response_id": current_response_id,
-                            "item_id": item_id,
-                            "output_index": idx,
-                            "call_id": tool_call["call_id"],
-                            "delta": tool_call["arguments"],
-                        }
+                        cast(
+                            OpenAIRealtimeEvents,
+                            {
+                                "type": "response.function_call_arguments.delta",
+                                "event_id": f"event_{uuid.uuid4()}",
+                                "response_id": current_response_id,
+                                "item_id": item_id,
+                                "output_index": idx,
+                                "call_id": tool_call["call_id"],
+                                "delta": tool_call["arguments"],
+                            },
+                        )
                     )
                     # response.function_call_arguments.done
                     returned_message.append(tool_call)
