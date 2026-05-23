@@ -992,6 +992,15 @@ _OPENAPI_HTTP_METHODS = {
 }
 
 
+# Credentials surfaced by `/get/config/callbacks` in the alerting block: the
+# full Slack incoming-webhook URL is itself a credential, and the SMTP
+# password is a service password. Masked on read so plaintext never reaches
+# the UI. Kept here at module scope to match the analogous
+# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
+# and cache endpoint files.
+_ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+
+
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
     base, separator, suffix = operation_id.rpartition("_")
     if separator and suffix in _OPENAPI_HTTP_METHODS:
@@ -14637,11 +14646,6 @@ async def get_config():  # noqa: PLR0915
                 )
             )
 
-        # Credentials in the alerting block: the webhook URL (full Slack
-        # incoming-webhook URL is itself a credential) and the SMTP password.
-        # Masked on read so plaintext never reaches the UI.
-        _alerting_sensitive_vars = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
-
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
         alerting_data = []
@@ -14662,7 +14666,7 @@ async def get_config():  # noqa: PLR0915
                     )
                     _slack_env_vars[_var] = _decrypted_value
             _slack_env_vars = mask_sensitive_keys(
-                _slack_env_vars, _alerting_sensitive_vars
+                _slack_env_vars, _ALERTING_SENSITIVE_VARS
             )
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
@@ -14700,7 +14704,7 @@ async def get_config():  # noqa: PLR0915
                 # decode + decrypt the value
                 _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
-        _email_env_vars = mask_sensitive_keys(_email_env_vars, _alerting_sensitive_vars)
+        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
             {
