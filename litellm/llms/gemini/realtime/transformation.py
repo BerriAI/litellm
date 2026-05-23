@@ -295,7 +295,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         extracted_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
             normalized
         )
-        if extracted_turn_detection is not None and "turn_detection" not in normalized:
+        if extracted_turn_detection is not None and not isinstance(
+            normalized.get("turn_detection"), dict
+        ):
             normalized["turn_detection"] = extracted_turn_detection
 
         return normalized
