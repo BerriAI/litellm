@@ -258,6 +258,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     milvus_db_name: Optional[str] = None
     milvus_partition_names: Optional[List[str]] = None
 
+    # hosted_vllm passthrough: skip Anthropic→OpenAI translation and send raw Anthropic payload
+    disable_anthropic_translation: Optional[bool] = None
+
     @model_validator(mode="before")
     @classmethod
     def preprocess_input_data(cls, data: Any) -> Any:
@@ -375,6 +378,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     num_retries: Optional[int]
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
+
+    ## TRANSLATION CONTROL ##
+    disable_anthropic_translation: Optional[bool]
 
     # routing params
     # use this for tag-based routing
