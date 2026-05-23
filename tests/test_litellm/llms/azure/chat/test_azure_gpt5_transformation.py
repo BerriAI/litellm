@@ -16,7 +16,6 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
     )
-    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
