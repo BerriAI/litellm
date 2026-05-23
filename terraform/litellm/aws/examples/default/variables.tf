@@ -5,24 +5,30 @@
 # per-variable docs live in ../../variables.tf — the module is the source
 # of truth; descriptions here are intentionally terse.
 
+# Defaults make a bare `terraform apply` bring up a working trial instance
+# (no tfvars required). Override any of them for a real deployment.
 variable "region" {
   description = "AWS region to deploy into."
   type        = string
+  default     = "us-west-2"
 }
 
 variable "tenant" {
   description = "Tenant slug — prefix for every resource (<tenant>-litellm-<env>)."
   type        = string
+  default     = "litellm"
 }
 
 variable "env" {
   description = "Environment suffix (stage, prod, dev)."
   type        = string
+  default     = "trial"
 }
 
 variable "azs" {
-  description = "Availability zones for subnets. At least 2 (RDS + ALB)."
+  description = "Availability zones for subnets. At least 2 (RDS + ALB). Empty (default) auto-picks the first two AZs in the region."
   type        = list(string)
+  default     = []
 }
 
 # Sensitive — prefer TF_VAR_litellm_master_key / TF_VAR_litellm_license /
@@ -56,9 +62,9 @@ variable "acm_certificate_arn" {
 }
 
 variable "allow_plaintext_alb" {
-  description = "Opt into HTTP-only ALB (trial/dev only)."
+  description = "Opt into HTTP-only ALB (trial/dev only). Defaults true in this trial root so a zero-config apply succeeds; set acm_certificate_arn (and flip this to false) for a real deployment."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "s3_force_destroy" {

@@ -17,10 +17,20 @@
 # Knobs not surfaced as variables here (per-component sizing/instances,
 # Cloud SQL tier/edition, Memorystore tier, per-component image overrides)
 # can be set directly on this block — see ../../variables.tf.
+
+# Resolve the effective project: explicit var.project wins, otherwise fall
+# back to whatever the provider inferred from gcloud / ADC (Cloud Shell sets
+# this). The module needs a concrete project ID for project-scoped IAM.
+data "google_client_config" "current" {}
+
+locals {
+  project = var.project != "" ? var.project : data.google_client_config.current.project
+}
+
 module "litellm" {
   source = "../../"
 
-  project = var.project
+  project = local.project
   region  = var.region
   tenant  = var.tenant
   env     = var.env

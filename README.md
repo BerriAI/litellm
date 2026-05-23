@@ -10,7 +10,11 @@
         <a href="https://railway.com/deploy/RhvhdC?referralCode=7mRv9K&utm_medium=integration&utm_source=template&utm_campaign=generic">
           <img src="https://railway.com/button.svg" alt="Deploy on Railway">
         </a>
+        <a href="https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/BerriAI/litellm&cloudshell_workspace=terraform/litellm/gcp/examples/default&cloudshell_tutorial=tutorial.md" target="_blank" rel="nofollow"><img src="https://gstatic.com/cloudssh/images/open-btn.svg" alt="Deploy on GCP (Cloud Shell)"></a>
+        <a href="https://console.aws.amazon.com/cloudshell/home" target="_blank" rel="nofollow"><img src="https://img.shields.io/badge/Deploy%20on-AWS-FF9900?logo=amazonaws&logoColor=white" alt="Deploy on AWS (CloudShell)"></a>
         </p>
+        <p align="center"><sub>One-click cloud deploys (Terraform) →
+          <a href="https://github.com/BerriAI/litellm/tree/main/terraform/litellm">terraform/litellm</a></sub></p>
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (AI Gateway)</a> | <a href="https://docs.litellm.ai/docs/enterprise#hosted-litellm-proxy" target="_blank"> Hosted Proxy</a> | <a href="https://litellm.ai/enterprise"target="_blank">Enterprise Tier</a> | <a href="https://www.litellm.ai/ai-gateway" target="_blank">Website</a></h4>
 <h4 align="center">

@@ -1,5 +1,14 @@
 # LiteLLM on GCP (Cloud Run)
 
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/BerriAI/litellm&cloudshell_workspace=terraform/litellm/gcp/examples/default&cloudshell_tutorial=tutorial.md)
+
+> **One-click trial:** the button above opens Cloud Shell with a guided
+> walkthrough that deploys this stack into your active project. A bare
+> `terraform apply` from `examples/default/` also works with **no tfvars** —
+> it serves plain HTTP, auto-generates a master key, and auto-creates an
+> Artifact Registry proxy so Cloud Run can pull the images. Add `lb_domains`
+> (TLS) and `proxy_config` (models) for a real deployment.
+
 Deploys the componentized LiteLLM proxy on GCP:
 
 - **VPC** + Private Services Access range + a Serverless VPC Access connector
@@ -27,11 +36,21 @@ Bump them together when bumping LiteLLM.
 
 Cloud Run only accepts images from Artifact Registry, `[region.]gcr.io`,
 or `docker.io` — `ghcr.io` URIs are rejected at apply time. The four
-images are published to GHCR upstream, so any real deploy needs an
-Artifact Registry remote repository pointed at GHCR.
+images are published to GHCR upstream, so a remote Artifact Registry
+repository is needed to proxy them.
 
-**One-time setup (per project):** create a remote repo and let Cloud Run
-pull through it.
+**By default the stack creates this for you.** With
+`create_image_proxy_repo = true` (the default), Terraform provisions an
+Artifact Registry remote repository pointed at `https://ghcr.io`, grants
+the project's serverless agent read on it, and — when `image_registry` is
+left empty — composes the four image URIs from it automatically:
+`<region>-docker.pkg.dev/<project>/<tenant>-litellm-<env>-ghcr/berriai/litellm-<component>:<image_tag>`.
+That's what makes the zero-config deploy work end-to-end with no manual
+mirroring step.
+
+**To use your own registry instead**, set `create_image_proxy_repo = false`
+and point `image_registry` at an existing Artifact Registry path. The
+manual equivalent of the auto-created repo is:
 
 ```bash
 gcloud artifacts repositories create litellm \
@@ -42,11 +61,10 @@ gcloud artifacts repositories create litellm \
   --remote-docker-repo=https://ghcr.io
 ```
 
-Then point the stack at it via `image_registry`:
-
 ```hcl
-image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
-image_tag      = "v1.86.0-dev"
+create_image_proxy_repo = false
+image_registry          = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
+image_tag               = "v1.86.0-dev"
 ```
 
 The four `litellm-<component>:${image_tag}` URIs are composed from those
@@ -54,15 +72,8 @@ two vars. Set `gateway_image` / `backend_image` / `ui_image` /
 `migrations_image` only if you need a per-component override (custom
 build, different tag).
 
-Two further notes:
-
-- The runtime SAs the stack creates do **not** need
-  `roles/artifactregistry.reader` — Cloud Run pulls images using the
-  per-project serverless agent
-  (`service-<project-num>@serverless-robot-prod.iam.gserviceaccount.com`),
-  not the runtime SA.
-- For a fully air-gapped option, mirror the images into a regular AR
-  repository instead of a remote repo:
+For a fully air-gapped option, mirror the images into a regular AR
+repository instead of a remote repo:
 
   ```bash
   for c in gateway backend ui migrations; do
@@ -204,12 +215,21 @@ example files.
 
 ## Quick start
 
+Zero-config trial (no tfvars needed — project is inferred from your active
+gcloud/ADC project):
+
 ```bash
 cd terraform/litellm/gcp/examples/default
-cp terraform.tfvars.example terraform.tfvars
-# Edit: project, region, tenant, env, image_registry, proxy_config, gateway_extra_secrets.
-
 terraform init
+terraform apply
+```
+
+To customize, drop in a tfvars file first:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+# Optional edits: project, region, tenant, env, lb_domains (TLS),
+# proxy_config (models), gateway_extra_secrets (provider keys).
 terraform apply
 ```
 

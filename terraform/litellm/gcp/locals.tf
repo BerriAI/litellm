@@ -69,11 +69,22 @@ locals {
     { name = "CONFIG_FILE_PATH", value = "/tmp/litellm-config.yaml" },
   ] : []
 
+  # Effective registry prefix. An explicit image_registry wins; otherwise,
+  # when the ghcr.io proxy repo is created, images resolve to it (mirrors the
+  # upstream `berriai/litellm-*` path under the remote repo). Falling all the
+  # way through to ghcr.io is only reachable when the operator both clears
+  # image_registry and disables the proxy — Cloud Run rejects it, so the
+  # per-service precondition (cloudrun.tf) fails fast with guidance.
+  image_registry = (
+    var.image_registry != "" ? var.image_registry :
+    var.create_image_proxy_repo ? "${var.region}-docker.pkg.dev/${var.project}/${google_artifact_registry_repository.ghcr_proxy[0].repository_id}/berriai" :
+    "ghcr.io/berriai"
+  )
+
   # Resolved image URIs: per-component override wins, otherwise compose
-  # from image_registry + image_tag. Cloud Run only accepts AR / gcr.io /
-  # docker.io paths — see variables.tf for the full constraint list.
-  gateway_image    = var.gateway_image != "" ? var.gateway_image : "${var.image_registry}/litellm-gateway:${var.image_tag}"
-  backend_image    = var.backend_image != "" ? var.backend_image : "${var.image_registry}/litellm-backend:${var.image_tag}"
-  ui_image         = var.ui_image != "" ? var.ui_image : "${var.image_registry}/litellm-ui:${var.image_tag}"
-  migrations_image = var.migrations_image != "" ? var.migrations_image : "${var.image_registry}/litellm-migrations:${var.image_tag}"
+  # from the effective registry + image_tag.
+  gateway_image    = var.gateway_image != "" ? var.gateway_image : "${local.image_registry}/litellm-gateway:${var.image_tag}"
+  backend_image    = var.backend_image != "" ? var.backend_image : "${local.image_registry}/litellm-backend:${var.image_tag}"
+  ui_image         = var.ui_image != "" ? var.ui_image : "${local.image_registry}/litellm-ui:${var.image_tag}"
+  migrations_image = var.migrations_image != "" ? var.migrations_image : "${local.image_registry}/litellm-migrations:${var.image_tag}"
 }

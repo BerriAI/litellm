@@ -16,13 +16,24 @@
 #
 # Knobs not surfaced as variables here (per-component sizing, autoscaling,
 # RDS/Redis tuning) can be set directly on this block — see ../../variables.tf.
+
+# When azs is left empty, pick the first two AZs in the region so a
+# zero-config apply works in any region without the caller naming them.
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+locals {
+  azs = length(var.azs) > 0 ? var.azs : slice(data.aws_availability_zones.available.names, 0, 2)
+}
+
 module "litellm" {
   source = "../../"
 
   region = var.region
   tenant = var.tenant
   env    = var.env
-  azs    = var.azs
+  azs    = local.azs
 
   litellm_master_key = var.litellm_master_key
   litellm_license    = var.litellm_license

@@ -1,12 +1,19 @@
-region = "us-west-2"
-azs    = ["us-west-2a", "us-west-2b"]
+# EVERYTHING in this file is optional. With no tfvars at all, `terraform
+# apply` brings up a working HTTP-only trial instance: region defaults to
+# us-west-2, the first two AZs in the region are picked automatically,
+# tenant/env default to litellm/trial, and a master key is auto-generated.
+# Override any of the values below for a real deployment.
+
+# region = "us-west-2"
+# azs    = ["us-west-2a", "us-west-2b"]   # empty → first two AZs in the region
 
 # Resource naming: every AWS resource the stack creates is named
 # `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
 # tenant="acme" + env="stage" → ALB `acme-litellm-stage`, ECS service
-# `acme-litellm-stage-gateway`, etc.
-tenant = "acme"
-env    = "stage"
+# `acme-litellm-stage-gateway`, etc. Keep length(tenant)+length(env) <= 15
+# (AWS caps ELB/target-group names at 32 chars).
+# tenant = "acme"
+# env    = "stage"
 
 # Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
 # TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
@@ -17,10 +24,10 @@ env    = "stage"
 # litellm_license    = "lic-..."
 # ui_password        = "..."
 
-# TLS: provide an ACM cert for production. Without one, plan fails unless
-# allow_plaintext_alb = true is set explicitly (trial/dev only).
+# TLS: this trial root defaults to HTTP-only (allow_plaintext_alb = true).
+# For a real deployment, provide an ACM cert and turn plaintext back off.
 # acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
-# allow_plaintext_alb = true
+# allow_plaintext_alb = false
 
 # Storage retention: false (default) makes `terraform destroy` refuse on a
 # non-empty bucket. Flip to true only for ephemeral / CI stacks.

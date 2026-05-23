@@ -1,5 +1,22 @@
 # LiteLLM on AWS (ECS Fargate)
 
+[![Open in AWS CloudShell](https://img.shields.io/badge/Open%20in-AWS%20CloudShell-FF9900?logo=amazonaws&logoColor=white)](https://console.aws.amazon.com/cloudshell/home)
+
+> **One-click trial:** open [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home)
+> (your credentials are already there) and paste:
+>
+> ```bash
+> git clone --depth 1 https://github.com/BerriAI/litellm.git
+> cd litellm/terraform/litellm/aws/examples/default && ./deploy.sh
+> ```
+>
+> `deploy.sh` installs a pinned, checksum-verified Terraform and applies the
+> stack. A bare `terraform apply` from `examples/default/` also works with
+> **no tfvars** — it picks the first two AZs in `us-west-2`, serves plain
+> HTTP, and auto-generates a master key. Add `acm_certificate_arn` (TLS) and
+> `proxy_config` (models) for a real deployment. Full steps:
+> [examples/default/tutorial.md](examples/default/tutorial.md).
+
 Deploys the componentized LiteLLM proxy on AWS:
 
 - **VPC** with public + private subnets across the AZs you pass in, one NAT gateway
@@ -175,12 +192,21 @@ example files.
 
 ## Quick start
 
+Zero-config trial (no tfvars needed — defaults to `us-west-2`, first two AZs,
+auto-generated master key, HTTP-only):
+
 ```bash
 cd terraform/litellm/aws/examples/default
-cp terraform.tfvars.example terraform.tfvars
-# Edit: region, tenant, env, azs, proxy_config, gateway_extra_secrets.
-
 terraform init
+terraform apply
+```
+
+To customize, drop in a tfvars file first:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+# Optional edits: region, tenant, env, azs, acm_certificate_arn (TLS),
+# proxy_config (models), gateway_extra_secrets (provider keys).
 terraform apply
 ```
 

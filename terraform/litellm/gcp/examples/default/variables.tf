@@ -5,9 +5,13 @@
 # main.tf, or call the module from your own root config. Full per-variable
 # docs live in ../../variables.tf — the module is the source of truth.
 
+# Defaults make a bare `terraform apply` bring up a working trial instance.
+# `project` is the one value that has no safe default — empty means "infer
+# from the active gcloud/ADC project" (which Cloud Shell sets for you).
 variable "project" {
-  description = "GCP project ID."
+  description = "GCP project ID. Empty (default) infers the active gcloud / ADC project (set automatically in Cloud Shell)."
   type        = string
+  default     = ""
 }
 
 variable "region" {
@@ -19,11 +23,13 @@ variable "region" {
 variable "tenant" {
   description = "Tenant slug — prefix for every resource (<tenant>-litellm-<env>)."
   type        = string
+  default     = "litellm"
 }
 
 variable "env" {
   description = "Environment suffix (stage, prod, dev)."
   type        = string
+  default     = "trial"
 }
 
 # Sensitive — prefer TF_VAR_litellm_master_key / TF_VAR_litellm_license /
@@ -49,13 +55,14 @@ variable "ui_password" {
   sensitive   = true
 }
 
-# Image source. Cloud Run rejects ghcr.io, so a real deploy must point
-# image_registry at an Artifact Registry remote repo (see README "Image
-# pulls"). Per-component overrides live in ../../variables.tf.
+# Image source. Empty (default) makes the module auto-create an Artifact
+# Registry remote repo proxying ghcr.io (Cloud Run rejects ghcr.io directly),
+# so images pull with no manual setup. Set this to your own Artifact Registry
+# path to bypass the proxy. Per-component overrides live in ../../variables.tf.
 variable "image_registry" {
-  description = "Registry path prefix; images composed as <image_registry>/litellm-<component>:<image_tag>."
+  description = "Registry path prefix; images composed as <image_registry>/litellm-<component>:<image_tag>. Empty → auto ghcr.io proxy repo."
   type        = string
-  default     = "ghcr.io/berriai"
+  default     = ""
 }
 
 variable "image_tag" {
@@ -72,9 +79,9 @@ variable "lb_domains" {
 }
 
 variable "allow_plaintext_lb" {
-  description = "Opt into HTTP-only LB (trial/dev only)."
+  description = "Opt into HTTP-only LB (trial/dev only). Defaults true in this trial root so a zero-config apply succeeds; set lb_domains (and flip this to false) for a real deployment."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "cloudsql_deletion_protection" {

@@ -38,6 +38,18 @@ resource "aws_lb_target_group" "gateway" {
 
   deregistration_delay = 30
 
+  # AWS caps ELB / target-group names at 32 chars. local.name plus the
+  # longest per-resource suffix ("-gateway", 8 chars) must fit, i.e.
+  # length(tenant) + length(env) <= 15 (local.name = "<tenant>-litellm-<env>").
+  # Checked here so a too-long tenant/env fails at plan with a clear message
+  # instead of an opaque AWS API error deep into apply.
+  lifecycle {
+    precondition {
+      condition     = length(local.name) <= 24
+      error_message = "Resource-name prefix '${local.name}' is ${length(local.name)} chars; with an 8-char suffix it exceeds the 32-char AWS load-balancer/target-group limit. Keep length(tenant) + length(env) <= 15."
+    }
+  }
+
   tags = local.tags
 }
 

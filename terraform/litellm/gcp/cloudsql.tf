@@ -25,6 +25,7 @@ resource "google_sql_database_instance" "writer" {
     availability_type = "REGIONAL"
     disk_size         = 20
     disk_autoresize   = true
+    user_labels       = var.labels
 
     backup_configuration {
       enabled                        = true
@@ -69,6 +70,7 @@ resource "google_sql_database_instance" "reader" {
     tier              = var.db_tier
     availability_type = "ZONAL"
     disk_autoresize   = true
+    user_labels       = var.labels
 
     ip_configuration {
       ipv4_enabled    = false

@@ -30,7 +30,7 @@ variable "env" {
 }
 
 variable "labels" {
-  description = "Resource labels merged into every label-supporting resource."
+  description = "Resource labels applied to the billable / filterable resources: the three Cloud Run services, the migrations job, Cloud SQL (writer + reader), Memorystore, the GCS bucket, and the image-proxy Artifact Registry repo. (Compute networking and Secret Manager resources don't carry labels.)"
   type        = map(string)
   default = {
     "managed-by" = "terraform"
@@ -104,19 +104,35 @@ variable "vpc_connector_cidr" {
 # pointed at ghcr.io (e.g. `us-central1-docker.pkg.dev/my-proj/litellm/berriai`)
 # or override the per-component `*_image` vars individually with full URIs.
 
+variable "create_image_proxy_repo" {
+  description = <<-EOT
+    Create an Artifact Registry remote repository that proxies
+    `https://ghcr.io`, so Cloud Run (which rejects ghcr.io URIs) can pull
+    the upstream LiteLLM images without a manual mirroring step. Default
+    true — this is what lets a zero-config deploy run end-to-end. When true
+    and `image_registry` is left empty, the four image URIs resolve to the
+    proxy repo automatically (see locals.tf). Set false if you supply your
+    own `image_registry` / `*_image` (e.g. a standard AR repo you mirror
+    into). Requires the `artifactregistry.googleapis.com` API.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "image_registry" {
   description = <<-EOT
     Registry path prefix used to compose the four LiteLLM image URIs as
-    `<image_registry>/litellm-<component>:<image_tag>`. The default
-    (`ghcr.io/berriai`) only works on registries Cloud Run accepts — for
-    GHCR-backed deploys, create an Artifact Registry remote repository
-    pointed at `https://ghcr.io` and set this to that repo's path
-    (e.g. `us-central1-docker.pkg.dev/<project>/<remote-repo>/berriai`).
+    `<image_registry>/litellm-<component>:<image_tag>`. Empty (default)
+    resolves to the auto-created ghcr.io proxy repo when
+    `create_image_proxy_repo = true`; otherwise it falls back to
+    `ghcr.io/berriai` (which Cloud Run rejects — a precondition catches
+    this). For a custom registry, set this to an Artifact Registry path
+    (e.g. `us-central1-docker.pkg.dev/<project>/<repo>/berriai`).
     Per-component overrides (`gateway_image`, `backend_image`, `ui_image`,
     `migrations_image`) bypass this entirely when set.
   EOT
   type        = string
-  default     = "ghcr.io/berriai"
+  default     = ""
 }
 
 variable "image_tag" {

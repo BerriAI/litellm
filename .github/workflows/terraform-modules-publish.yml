@@ -1,0 +1,98 @@
+# Publishes the LiteLLM Terraform modules to the public Terraform Registry.
+#
+# The registry only indexes a module that lives at the ROOT of a repo named
+# `terraform-<PROVIDER>-<NAME>`, so the two modules in this monorepo
+# (terraform/litellm/aws, terraform/litellm/gcp) can't be published in place.
+# This workflow mirrors each module subtree out to its own dedicated repo and
+# tags it, so the registry picks up the new version.
+#
+# ── One-time setup ───────────────────────────────────────────────────────────
+#  1. Create two empty GitHub repos:
+#       BerriAI/terraform-aws-litellm
+#       BerriAI/terraform-google-litellm
+#  2. Connect each to the Terraform Registry (registry.terraform.io → Publish →
+#     Module) once; subsequent tags are ingested automatically.
+#  3. Add a repo secret `TERRAFORM_REGISTRY_SYNC_TOKEN` — a PAT (or fine-grained
+#     token) with `contents:write` on both mirror repos. Without it this
+#     workflow no-ops.
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#  Actions → "Publish Terraform modules" → Run workflow, enter the version
+#  (e.g. v1.86.0). Leave dry_run checked first to see what it would push.
+name: Publish Terraform modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Module version tag to publish (semver, e.g. v1.86.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Print actions without pushing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - prefix: terraform/litellm/aws
+            repo: terraform-aws-litellm
+          - prefix: terraform/litellm/gcp
+            repo: terraform-google-litellm
+    steps:
+      - name: Validate version input
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${{ inputs.version }}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "version must be semver with a leading v (e.g. v1.86.0)" >&2
+            exit 1
+          fi
+
+      - name: Checkout (full history for subtree split)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror ${{ matrix.prefix }} → BerriAI/${{ matrix.repo }}
+        env:
+          TOKEN: ${{ secrets.TERRAFORM_REGISTRY_SYNC_TOKEN }}
+          PREFIX: ${{ matrix.prefix }}
+          REPO: ${{ matrix.repo }}
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "TERRAFORM_REGISTRY_SYNC_TOKEN not set — skipping (see workflow header for setup)."
+            exit 0
+          fi
+
+          git config user.name "litellm-release-bot"
+          git config user.email "release-bot@litellm.ai"
+
+          # Split the module subdirectory into a standalone commit graph whose
+          # root is the module itself (what the registry expects).
+          split_sha="$(git subtree split --prefix="$PREFIX" HEAD)"
+          echo "subtree split for $PREFIX -> $split_sha"
+
+          remote="https://x-access-token:${TOKEN}@github.com/BerriAI/${REPO}.git"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[dry-run] would push $split_sha to ${REPO}:main and tag $VERSION"
+            exit 0
+          fi
+
+          # Publish the split as the mirror's main branch + the version tag.
+          git push --force "$remote" "${split_sha}:refs/heads/main"
+          git tag -f "$VERSION" "$split_sha"
+          git push --force "$remote" "refs/tags/${VERSION}"
+          echo "Published BerriAI/${REPO}@${VERSION}"

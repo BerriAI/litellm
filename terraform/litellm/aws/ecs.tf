@@ -135,7 +135,13 @@ locals {
     command = [
       "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\" && exec uvicorn backend.main:app ${local.backend_uvicorn_args}"
     ]
-  } : {}
+    } : {
+    # Pin the backend listener to 0.0.0.0:4001 even without a proxy_config,
+    # so it always matches the target-group health check and container_port.
+    # Mirrors the gateway's no-config branch above.
+    entryPoint = ["uvicorn", "backend.main:app"]
+    command    = split(" ", local.backend_uvicorn_args)
+  }
 }
 
 # ---------- Gateway ----------

@@ -1,12 +1,19 @@
-project = "my-gcp-project"
-region  = "us-central1"
+# EVERYTHING in this file is optional. With no tfvars at all, `terraform
+# apply` brings up a working HTTP-only trial instance: project is inferred
+# from your active gcloud/ADC project, region defaults to us-central1,
+# tenant/env default to litellm/trial, and the module auto-creates an
+# Artifact Registry proxy so Cloud Run can pull the ghcr.io images. Override
+# any of the values below for a real deployment.
+
+# project = "my-gcp-project"   # empty → inferred from gcloud / ADC
+# region  = "us-central1"
 
 # Resource naming: every GCP resource the stack creates is named
 # `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
 # tenant="acme" + env="stage" → Cloud Run service `acme-litellm-stage-gateway`,
 # Cloud SQL instance `acme-litellm-stage`, etc.
-tenant = "acme"
-env    = "stage"
+# tenant = "acme"
+# env    = "stage"
 
 # Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
 # TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
@@ -17,23 +24,23 @@ env    = "stage"
 # litellm_license    = "lic-..."
 # ui_password        = "..."
 
-# TLS: provide DNS names already pointing at the LB IP for a Google-managed
-# cert. Without one, plan fails unless allow_plaintext_lb = true is set
-# explicitly (trial/dev only).
+# TLS: this trial root defaults to HTTP-only (allow_plaintext_lb = true).
+# For a real deployment, provide DNS names already pointing at the LB IP for
+# a Google-managed cert and turn plaintext back off.
 # lb_domains         = ["proxy.example.com"]
-# allow_plaintext_lb = true
+# allow_plaintext_lb = false
 
 # Storage and database retention. Defaults are safe — destroy preserves
 # data. Flip these only for ephemeral / CI stacks.
 # cloudsql_deletion_protection = true   # default: refuse destroy on the DB
 # gcs_force_destroy            = false  # default: refuse destroy on a non-empty bucket
 
-# Images. Cloud Run rejects ghcr.io, so a real deploy must point
-# image_registry at an Artifact Registry remote repo (see README "Image
-# pulls"); image_tag is applied to all four litellm-* images. Per-component
-# *_image overrides are NOT exposed here — set them directly on the
-# `module "litellm"` block in main.tf (see ../../variables.tf) if you need
-# to mix-and-match versions.
+# Images. Left empty, the module auto-creates an Artifact Registry remote
+# repo proxying ghcr.io (Cloud Run rejects ghcr.io directly), so the default
+# images pull with no setup. Point image_registry at your own Artifact
+# Registry repo to bypass the proxy; image_tag applies to all four litellm-*
+# images. Per-component *_image overrides are NOT exposed here — set them on
+# the `module "litellm"` block in main.tf (see ../../variables.tf).
 # image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
 # image_tag      = "v1.86.0-dev"
 

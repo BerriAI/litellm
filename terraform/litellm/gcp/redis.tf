@@ -3,6 +3,7 @@ resource "google_redis_instance" "this" {
   tier           = var.redis_tier
   memory_size_gb = var.redis_memory_size_gb
   region         = var.region
+  labels         = var.labels
 
   authorized_network = google_compute_network.this.id
   connect_mode       = "PRIVATE_SERVICE_ACCESS"

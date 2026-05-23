@@ -117,6 +117,16 @@ resource "google_cloud_run_v2_service" "gateway" {
   name     = "${local.name}-gateway"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = var.labels
+
+  # Cloud Run rejects ghcr.io images. Catch the one misconfiguration that
+  # otherwise fails deep into apply: registry cleared AND proxy disabled.
+  lifecycle {
+    precondition {
+      condition     = !startswith(local.gateway_image, "ghcr.io/") && !startswith(local.backend_image, "ghcr.io/") && !startswith(local.ui_image, "ghcr.io/") && !startswith(local.migrations_image, "ghcr.io/")
+      error_message = "Cloud Run cannot pull from ghcr.io. Keep create_image_proxy_repo = true (default) to auto-create an Artifact Registry remote repo, or set image_registry to an Artifact Registry path."
+    }
+  }
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -197,6 +207,9 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.extras,
     google_sql_user.app,
+    # The serverless agent needs read on the image-proxy repo before the
+    # first pull (no-op when create_image_proxy_repo = false).
+    google_artifact_registry_repository_iam_member.serverless_agent_reader,
     # Don't go live until the schema is migrated; otherwise the proxy boots,
     # fails on missing tables, and Cloud Run keeps cold-restarting.
     terraform_data.migration,
@@ -208,6 +221,7 @@ resource "google_cloud_run_v2_service" "backend" {
   name     = "${local.name}-backend"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = var.labels
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -289,6 +303,7 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.ui_password,
     google_secret_manager_secret_iam_member.extras,
     google_sql_user.app,
+    google_artifact_registry_repository_iam_member.serverless_agent_reader,
     terraform_data.migration,
   ]
 }
@@ -301,6 +316,7 @@ resource "google_cloud_run_v2_service" "ui" {
   name     = "${local.name}-ui"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = var.labels
 
   template {
     service_account                  = google_service_account.ui_runtime.email
@@ -337,6 +353,10 @@ resource "google_cloud_run_v2_service" "ui" {
       }
     }
   }
+
+  depends_on = [
+    google_artifact_registry_repository_iam_member.serverless_agent_reader,
+  ]
 }
 
 # Allow the LB (any unauthenticated traffic from the configured serverless
@@ -374,6 +394,7 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 resource "google_cloud_run_v2_job" "migrations" {
   name     = "${local.name}-migrations"
   location = var.region
+  labels   = var.labels
 
   template {
     template {
@@ -426,5 +447,6 @@ resource "google_cloud_run_v2_job" "migrations" {
   depends_on = [
     google_secret_manager_secret_iam_member.db_password,
     google_sql_user.app,
+    google_artifact_registry_repository_iam_member.serverless_agent_reader,
   ]
 }
