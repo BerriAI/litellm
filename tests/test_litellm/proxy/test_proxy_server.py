@@ -5513,6 +5513,89 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
         mock_proxy_config.add_deployment.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_get_config_list_prefers_db_value_for_boolean_field():
+    """
+    Regression test: /config/list must return the DB value for a field that
+    is stored in the DB, even when the in-memory ``general_settings`` dict
+    holds a stale ``False`` (or any non-None value).
+
+    Without this guarantee, "Store Prompts in Spend Logs" — and any other
+    boolean toggle — could display the wrong state in the admin UI right
+    after a write from another replica, or before the periodic
+    ``add_deployment`` sync refreshed in-memory state.
+    """
+    from litellm.proxy.proxy_server import get_config_list
+
+    mock_db_record = MagicMock()
+    mock_db_record.param_value = {"store_prompts_in_spend_logs": True}
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_record
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": False},
+        ),
+    ):
+        result = await get_config_list(
+            config_type="general_settings",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    by_name = {entry.field_name: entry for entry in result}
+    field = by_name["store_prompts_in_spend_logs"]
+
+    assert field.field_value is True
+    assert field.stored_in_db is True
+
+
+@pytest.mark.asyncio
+async def test_get_config_list_falls_back_to_in_memory_when_not_in_db():
+    """
+    When a general_settings field is set via YAML/config file only (not
+    written to the DB), /config/list should still report the in-memory
+    value so the UI sees the runtime state.
+    """
+    from litellm.proxy.proxy_server import get_config_list
+
+    mock_db_record = MagicMock()
+    mock_db_record.param_value = {}
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_record
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_prompts_in_spend_logs": True},
+        ),
+    ):
+        result = await get_config_list(
+            config_type="general_settings",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    by_name = {entry.field_name: entry for entry in result}
+    field = by_name["store_prompts_in_spend_logs"]
+
+    assert field.field_value is True
+    assert field.stored_in_db is False
+
+
 # =====================================================================
 # Spend counter tests (v2 — Redis-backed spend counters)
 # =====================================================================
@@ -5859,15 +5942,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
