@@ -1114,10 +1114,16 @@ if MCP_AVAILABLE:
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
         """Build auth and extra headers for a server."""
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and server.alias is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.alias)
-        elif mcp_server_auth_headers and server.server_name is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.server_name)
+        if mcp_server_auth_headers:
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
+
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=server.alias,
+                server_name=server.server_name,
+            )
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
@@ -1159,7 +1165,7 @@ if MCP_AVAILABLE:
     def _merge_gateway_initialize_instructions(
         allowed_mcp_servers: List[MCPServer],
     ) -> Optional[str]:
-        """YAML/DB override, else in-memory upstream text from list_tools / health_check / call_tool."""
+        """YAML/DB override, else upstream text (prefetch on init, or list_tools / health_check / call_tool cache)."""
         if not allowed_mcp_servers:
             return None
 
@@ -1200,6 +1206,20 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        if allowed:
+            # return_exceptions=True: a per-server probe failure (incl. CancelledError
+            # bubbled from anyio task group teardown on connection refused) must not
+            # cancel sibling probes or 500 the gateway initialize request.
+            await asyncio.gather(
+                *[
+                    global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                        s
+                    )
+                    for s in allowed
+                    if s is not None
+                ],
+                return_exceptions=True,
+            )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
         tok = _mcp_gateway_initialize_instructions.set(merged)
         try:
