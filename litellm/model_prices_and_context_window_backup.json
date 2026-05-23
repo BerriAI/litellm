@@ -10215,7 +10215,9 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "source": "https://docs.cohere.com/docs/models"
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "command-a-vision-07-2025": {
         "input_cost_per_token": 2.5e-06,
