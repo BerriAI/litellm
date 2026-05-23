@@ -244,15 +244,21 @@ class ResponsesAPIRequestUtils:
         prefix: str,
         custom_llm_provider: Optional[str],
         model_id: Optional[str],
+        item_position: Optional[int] = None,
     ) -> str:
         """Wrap a raw upstream id (e.g. ``chatcmpl-*``) as ``rs_<env>`` or
         ``msg_<env>`` so the value carries the same response_id payload as
         ``response.id`` but with an item-type prefix that clients recognize.
 
-        The envelope reuses
-        :meth:`_build_responses_api_response_id` and swaps the leading
-        ``resp_`` for the requested item prefix, so the result round-trips
-        through :meth:`_decode_item_envelope` plus
+        ``item_position`` distinguishes multiple items of the same type that
+        share a response_id (e.g. parallel ``n>1`` choices). The position is
+        appended as ``.{n}`` after the base64 payload and stripped by
+        :meth:`_decode_item_envelope` before the inner payload reaches the
+        existing response-id decoder.
+
+        The envelope reuses :meth:`_build_responses_api_response_id` and swaps
+        the leading ``resp_`` for the requested item prefix, so the result
+        round-trips through :meth:`_decode_item_envelope` plus
         :meth:`_decode_responses_api_response_id` back to ``raw_response_id``.
         """
         resp_form = ResponsesAPIRequestUtils._build_responses_api_response_id(
@@ -260,21 +266,32 @@ class ResponsesAPIRequestUtils:
             model_id=model_id,
             response_id=raw_response_id,
         )
-        return f"{prefix}_" + resp_form[len("resp_") :]
+        suffix = "" if item_position is None else f".{item_position}"
+        return f"{prefix}_" + resp_form[len("resp_") :] + suffix
 
     @staticmethod
     def _decode_item_envelope(item_id: str) -> Optional[str]:
         """Decode ``rs_<env>`` / ``msg_<env>`` back to the ``resp_<env>`` form
         that :meth:`_decode_responses_api_response_id` understands.
 
-        Returns ``None`` on missing prefix or empty input. All other validation
-        is delegated to the existing response-id decoder.
+        Returns ``None`` on missing prefix, empty input, or an empty payload
+        after the prefix (``"msg_"`` / ``"rs_"``). Strips the optional
+        ``.{position}`` item-position suffix before returning, so the inner
+        base64 payload is the same regardless of which item the envelope
+        belonged to.
         """
         if not item_id:
             return None
         for prefix in ("rs_", "msg_"):
             if item_id.startswith(prefix):
-                return "resp_" + item_id[len(prefix) :]
+                payload = item_id[len(prefix) :]
+                # Strip optional ".{position}" suffix used to disambiguate
+                # multiple items of the same type sharing a response_id.
+                if "." in payload:
+                    payload = payload.rsplit(".", 1)[0]
+                if not payload:
+                    return None
+                return "resp_" + payload
         return None
 
     @staticmethod
@@ -299,6 +316,7 @@ class ResponsesAPIRequestUtils:
         if not output:
             return response
 
+        message_position = 0
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -313,17 +331,24 @@ class ResponsesAPIRequestUtils:
                 or current_id.startswith("rs_")
                 or current_id.startswith("encitem_")
             ):
+                message_position += 1
                 continue
+            # ``item_position`` keeps each message item's id distinct when a
+            # response carries multiple ``message`` items sharing a single
+            # response_id (parallel ``n>1`` choices). All ids still decode to
+            # the same response_id payload via :meth:`_decode_item_envelope`.
             new_id = ResponsesAPIRequestUtils._encode_item_envelope(
                 raw_response_id,
                 prefix="msg",
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
+                item_position=message_position,
             )
             if isinstance(item, dict):
                 item["id"] = new_id
             else:
                 item.id = new_id
+            message_position += 1
         return response
 
     @staticmethod

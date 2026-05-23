@@ -66,15 +66,46 @@ def test_decode_item_envelope_returns_none_for_empty_input():
     assert ResponsesAPIRequestUtils._decode_item_envelope("") is None
 
 
-def test_decode_item_envelope_empty_payload_is_resp_passthrough():
-    """A ``msg_`` prefix with no payload decodes to ``resp_``, which the
-    response-id decoder treats as raw passthrough rather than crashing.
+def test_decode_item_envelope_returns_none_for_empty_payload():
+    """A degenerate ``msg_`` or ``rs_`` prefix with no payload must decode to
+    ``None`` so callers (e.g. the item_reference resolver) can fall through
+    to first-turn behavior instead of propagating an empty response_id to
+    the session handler.
     """
-    result = ResponsesAPIRequestUtils._decode_item_envelope("msg_")
-    assert result == "resp_"
-    decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(result)
-    assert decoded["custom_llm_provider"] is None
-    assert decoded["model_id"] is None
+    assert ResponsesAPIRequestUtils._decode_item_envelope("msg_") is None
+    assert ResponsesAPIRequestUtils._decode_item_envelope("rs_") is None
+
+
+def test_encode_decode_round_trip_with_item_position():
+    """Distinct item positions yield distinct encoded ids but decode back to
+    the same response_id payload.
+    """
+    raw = "chatcmpl-multi"
+    first = ResponsesAPIRequestUtils._encode_item_envelope(
+        raw,
+        prefix="msg",
+        custom_llm_provider="hosted_vllm",
+        model_id="m-1",
+        item_position=0,
+    )
+    second = ResponsesAPIRequestUtils._encode_item_envelope(
+        raw,
+        prefix="msg",
+        custom_llm_provider="hosted_vllm",
+        model_id="m-1",
+        item_position=1,
+    )
+    assert first != second
+    assert first.endswith(".0")
+    assert second.endswith(".1")
+    for envelope in (first, second):
+        decoded_resp_form = ResponsesAPIRequestUtils._decode_item_envelope(envelope)
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            decoded_resp_form
+        )
+        assert decoded["response_id"] == raw
+        assert decoded["custom_llm_provider"] == "hosted_vllm"
+        assert decoded["model_id"] == "m-1"
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +183,53 @@ def test_envelope_encode_skips_encitem_prefixed_message_id():
         model_id=None,
     )
     assert encoded.output[0]["id"] == "encitem_abc123"
+
+
+def test_envelope_encode_multiple_message_items_get_distinct_ids():
+    """When a response carries multiple ``message`` items (parallel ``n>1``
+    choices), each rewritten id must be distinct so downstream clients can
+    address them individually. All ids still decode to the same response_id
+    payload via :meth:`_decode_item_envelope`.
+    """
+    response = ResponsesAPIResponse(
+        id="chatcmpl-multi",
+        object="response",
+        created_at=0,
+        model="hosted_vllm/test-model",
+        output=[
+            {"type": "message", "id": "chatcmpl-multi"},
+            {"type": "message", "id": "chatcmpl-multi"},
+            {"type": "message", "id": "chatcmpl-multi"},
+        ],
+        parallel_tool_calls=False,
+        temperature=0,
+        tool_choice="auto",
+        tools=[],
+        top_p=None,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text={},
+        truncation=None,
+        usage=None,
+        user=None,
+    )
+    encoded = ResponsesAPIRequestUtils._envelope_encode_output_item_ids(
+        response=response,
+        raw_response_id="chatcmpl-multi",
+        custom_llm_provider="hosted_vllm",
+        model_id=None,
+    )
+    ids = [item["id"] for item in encoded.output]
+    assert len(set(ids)) == 3
+    for new_id in ids:
+        assert new_id.startswith("msg_")
+        resp_form = ResponsesAPIRequestUtils._decode_item_envelope(new_id)
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            resp_form
+        )
+        assert decoded["response_id"] == "chatcmpl-multi"
 
 
 def test_envelope_encode_leaves_function_call_items_untouched():
