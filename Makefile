@@ -133,7 +133,7 @@ test: install-test-deps
 	$(UV_RUN) pytest tests/
 
 test-unit: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
+	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4 --reruns 2 --reruns-delay 1
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps

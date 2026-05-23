@@ -157,15 +157,14 @@ class TestResponseCompliance:
         # Check CreateModelInteractionParams which includes output fields
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
 
-        # Output fields (readOnly). Google renamed `outputs` → `steps` in the
-        # upstream spec; keep this list aligned with the live schema.
+        # Output fields that are present in the live schema (readOnly / server-generated).
+        # Note: `outputs` / `steps` do not appear in the current live spec.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
             "role",
-            "steps",
             "usage",
         ]
 
@@ -185,6 +184,7 @@ class TestResponseCompliance:
             "failed",
             "cancelled",
             "incomplete",
+            "budget_exceeded",
         ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")

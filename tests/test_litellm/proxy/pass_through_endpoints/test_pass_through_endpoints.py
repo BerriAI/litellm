@@ -2471,7 +2471,7 @@ def test_get_registered_pass_through_route_with_custom_root():
     _registered_pass_through_routes.clear()
 
 
-def test_mapped_pass_through_routes_with_server_root_path():
+def test_mapped_pass_through_routes_with_server_root_path(monkeypatch):
     """
     Mapped passthrough routes (vertex_ai, bedrock, etc) should match
     even when SERVER_ROOT_PATH is set and the incoming route is prefixed.
@@ -2482,30 +2482,35 @@ def test_mapped_pass_through_routes_with_server_root_path():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.utils.get_server_root_path") as mock_get_root:
-        mock_get_root.return_value = "/litellm"
+    # Use setenv so all code paths (regardless of which module imported
+    # get_server_root_path) see the same value.  A function-level patch on
+    # litellm.proxy.utils.get_server_root_path is fragile when another test
+    # (e.g. test_custom_proxy.py) has already set SERVER_ROOT_PATH in
+    # os.environ at import time, because pass_through_endpoints.py holds its
+    # own reference to the original function object.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
 
-        # prefixed route should match mapped routes like /vertex_ai
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/litellm/vertex_ai/v1/projects/foo"
-            )
-            is True
+    # prefixed route should match mapped routes like /vertex_ai
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/vertex_ai/v1/projects/foo"
         )
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/litellm/bedrock/model/invoke"
-            )
-            is True
+        is True
+    )
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/bedrock/model/invoke"
         )
+        is True
+    )
 
-        # bare route without prefix should not match when root is set
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/vertex_ai/v1/projects/foo"
-            )
-            is False
+    # bare route without prefix should not match when root is set
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/foo"
         )
+        is False
+    )
 
 
 @pytest.mark.asyncio
