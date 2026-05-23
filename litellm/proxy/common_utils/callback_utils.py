@@ -321,6 +321,16 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
         else:
             litellm.callbacks = imported_list  # type: ignore
 
+        # Also register CustomLogger instances into the dedicated
+        # input/success/failure (sync + async) callback lists.
+        # The pass-through endpoint logging chain reads
+        # ``litellm._async_success_callback`` (see ``litellm_logging.py``
+        # ~line 2640) rather than ``litellm.callbacks``, so a CustomLogger
+        # registered only via ``litellm_settings.callbacks`` would silently
+        # not fire for pass-through requests. Same goes for ``log_pre_api_call``
+        # (uses ``litellm.input_callback``). See issue #17310.
+        _register_custom_loggers_into_all_callback_lists(imported_list)
+
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger
 
@@ -332,9 +342,38 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 config_file_path=config_file_path,
             )
         ]
+        _register_custom_loggers_into_all_callback_lists(litellm.callbacks)
     verbose_proxy_logger.debug(
         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
     )
+
+
+def _register_custom_loggers_into_all_callback_lists(
+    callbacks: Iterable[Any],
+) -> None:
+    """Ensure every CustomLogger instance is in all six callback lists.
+
+    LiteLLM maintains separate lists for input / success / failure callbacks,
+    each with sync and async variants. Different code paths read different
+    lists (e.g. pass-through endpoints read ``_async_success_callback``,
+    ``log_pre_api_call`` reads ``input_callback``). Registering only into
+    ``litellm.callbacks`` is not enough for those paths to fire the callback.
+
+    Idempotent: callbacks already present in a list are not added again.
+    """
+    for callback in callbacks:
+        if not isinstance(callback, CustomLogger):
+            continue
+        for parent_list in (
+            litellm.input_callback,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_input_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            if callback not in parent_list:
+                parent_list.append(callback)
 
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
