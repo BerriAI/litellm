@@ -1207,6 +1207,8 @@ class BaseLLMHTTPHandler:
 
         data = transformed_result.data
         files = transformed_result.files
+        if transformed_result.content_type is not None:
+            headers["Content-Type"] = transformed_result.content_type
 
         ## LOGGING
         logging_obj.pre_call(

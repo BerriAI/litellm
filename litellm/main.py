@@ -6615,8 +6615,7 @@ def transcription(
         api_key=api_key,
     )  # type: ignore
 
-    if dynamic_api_key is not None:
-        api_key = dynamic_api_key
+    api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
     optional_params = get_optional_params_transcription(
         model=model,
@@ -6656,7 +6655,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure":
+    if custom_llm_provider == "azure" and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
