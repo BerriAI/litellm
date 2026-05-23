@@ -951,10 +951,17 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
         and json.loads(m).get("type") == "conversation.item.create"
         and json.loads(m).get("item", {}).get("type") == "function_call_output"
     ]
-    assert len(forwarded_tool_outputs) == 0, (
-        f"Blocked function_call_output should not be forwarded, got: "
+    # A sanitized placeholder must reach the backend so providers that pair
+    # every toolCall with a toolResponse (Gemini/Vertex Live) exit their
+    # pending-tool-call state instead of stalling. The placeholder must NOT
+    # contain any of the blocked content.
+    assert len(forwarded_tool_outputs) == 1, (
+        f"Sanitized function_call_output should be forwarded, got: "
         f"{forwarded_tool_outputs}"
     )
+    sanitized_item = forwarded_tool_outputs[0]["item"]
+    assert sanitized_item["call_id"] == "call_123"
+    assert "test@example.com" not in sanitized_item["output"]
 
     litellm.callbacks = []  # cleanup
 

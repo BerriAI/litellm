@@ -899,6 +899,30 @@ class RealTimeStreaming:
                                     output_text
                                 )
                                 if blocked:
+                                    # Forward a sanitized function_call_output so
+                                    # providers that pair every toolCall with a
+                                    # toolResponse (e.g. Gemini/Vertex Live) exit
+                                    # their pending-tool-call state. Dropping the
+                                    # blocked item outright would leave such
+                                    # providers waiting indefinitely while the
+                                    # subsequent guardrail clientContent is
+                                    # ignored. The sanitized payload carries no
+                                    # blocked content — only a generic policy
+                                    # marker.
+                                    sanitized_msg = json.dumps(
+                                        {
+                                            **msg_obj,
+                                            "item": {
+                                                **item,
+                                                "output": json.dumps(
+                                                    {
+                                                        "error": "Tool output blocked by content policy",
+                                                    }
+                                                ),
+                                            },
+                                        }
+                                    )
+                                    await self._send_to_backend(sanitized_msg)
                                     self._pending_guardrail_message = output_text
                                     continue
 
