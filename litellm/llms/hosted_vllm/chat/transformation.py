@@ -89,8 +89,52 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         params = super().get_supported_openai_params(model)
-        params.extend(["reasoning_effort", "thinking"])
+        params.extend(
+            [
+                "reasoning_effort",
+                "thinking",
+                # Bug #28580: Support Anthropic prefill via vLLM's continue_final_message
+                "continue_final_message",
+                "add_generation_prompt",
+            ]
+        )
         return params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Detect Anthropic prefill pattern (trailing assistant message with prefix:true)
+        and inject vLLM's continue_final_message / add_generation_prompt flags.
+
+        Bug #28580: When a client uses Anthropic /v1/messages protocol with a trailing
+        assistant message (prefill), and the backend is hosted_vllm, vLLM must receive
+        continue_final_message=True to properly continue the assistant's response.
+        Without this, vLLM treats the prefill as a completed turn and starts fresh.
+        """
+        # First apply the base OpenAI transformation
+        request = super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
+
+        # Detect prefix:true marker (LiteLLM's unified prefill API from #4881)
+        # Auto-stamp for trailing assistant messages from Anthropic /v1/messages adapter
+        messages = request.get("messages", [])
+        if messages and isinstance(messages[-1], dict):
+            last_msg = messages[-1]
+            if last_msg.get("role") == "assistant" and last_msg.get("prefix") is True:
+                eb = request.setdefault("extra_body", {})
+                eb.setdefault("continue_final_message", True)
+                eb.setdefault("add_generation_prompt", False)
+                # Remove the marker so it doesn't leak to the backend
+                last_msg.pop("prefix", None)
+
+        return request
 
     def map_openai_params(
         self,

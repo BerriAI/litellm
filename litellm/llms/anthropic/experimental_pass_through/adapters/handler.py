@@ -288,6 +288,17 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             thinking=thinking,
         )
 
+        # Bug #28580: Auto-stamp prefix:true for trailing assistant messages.
+        # Anthropic prefill spec requires honoring trailing assistant content by default.
+        # The downstream provider config (e.g., HostedVLLMChatConfig.transform_request)
+        # translates this to the provider's native continuation flags
+        # (continue_final_message=True for vLLM).
+        messages = completion_kwargs.get("messages", [])
+        if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "assistant":
+            # Only stamp if not already set and message has non-empty content
+            if messages[-1].get("prefix") is None and messages[-1].get("content"):
+                messages[-1]["prefix"] = True
+
         return completion_kwargs, tool_name_mapping
 
     @staticmethod
@@ -333,20 +344,38 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         completion_response = await litellm.acompletion(**completion_kwargs)
 
         if stream:
+            # Extract litellm_call_id from kwargs for spend log correlation
+            # (Bug #28568/#28562: response.id must match spend_logs.request_id)
+            litellm_call_id = None
+            if completion_kwargs:
+                litellm_call_id = completion_kwargs.get("litellm_call_id")
+            if not litellm_call_id and metadata:
+                litellm_call_id = metadata.get("litellm_call_id")
+
             transformed_stream = (
                 ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    litellm_call_id=litellm_call_id,
                 )
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            # Extract litellm_call_id from response for spend log correlation
+            # (Bug #28568/#28562: response.id must match spend_logs.request_id)
+            litellm_call_id = None
+            if hasattr(completion_response, "_hidden_params"):
+                litellm_call_id = completion_response._hidden_params.get("litellm_call_id")
+            if not litellm_call_id and hasattr(completion_response, "litellm_call_id"):
+                litellm_call_id = completion_response.litellm_call_id
+
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                litellm_call_id=litellm_call_id,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -419,20 +448,38 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         completion_response = litellm.completion(**completion_kwargs)
 
         if stream:
+            # Extract litellm_call_id from kwargs for spend log correlation
+            # (Bug #28568/#28562: response.id must match spend_logs.request_id)
+            litellm_call_id = None
+            if completion_kwargs:
+                litellm_call_id = completion_kwargs.get("litellm_call_id")
+            if not litellm_call_id and metadata:
+                litellm_call_id = metadata.get("litellm_call_id")
+
             transformed_stream = (
                 ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    litellm_call_id=litellm_call_id,
                 )
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            # Extract litellm_call_id from response for spend log correlation
+            # (Bug #28568/#28562: response.id must match spend_logs.request_id)
+            litellm_call_id = None
+            if hasattr(completion_response, "_hidden_params"):
+                litellm_call_id = completion_response._hidden_params.get("litellm_call_id")
+            if not litellm_call_id and hasattr(completion_response, "litellm_call_id"):
+                litellm_call_id = completion_response.litellm_call_id
+
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                litellm_call_id=litellm_call_id,
             )
             if anthropic_response is not None:
                 return anthropic_response
