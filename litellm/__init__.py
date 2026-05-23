@@ -1882,6 +1882,9 @@ if TYPE_CHECKING:
     from .llms.azure.completion.transformation import (
         AzureOpenAITextConfig as AzureOpenAITextConfig,
     )
+    from .llms.azure.audio_transcription.transformation import (
+        AzureSpeechAudioTranscriptionConfig as AzureSpeechAudioTranscriptionConfig,
+    )
     from .llms.hosted_vllm.chat.transformation import (
         HostedVLLMChatConfig as HostedVLLMChatConfig,
     )
