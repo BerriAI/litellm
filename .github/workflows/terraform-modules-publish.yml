@@ -50,17 +50,20 @@ jobs:
             repo: terraform-google-litellm
     steps:
       - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "${{ inputs.version }}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "version must be semver with a leading v (e.g. v1.86.0)" >&2
             exit 1
           fi
 
       - name: Checkout (full history for subtree split)
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Mirror ${{ matrix.prefix }} → BerriAI/${{ matrix.repo }}
         env:
