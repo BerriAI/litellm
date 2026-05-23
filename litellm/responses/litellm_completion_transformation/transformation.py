@@ -15,6 +15,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.responses.litellm_completion_transformation.think_tag_parser import (
+    extract_think_from_text,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -1622,10 +1625,53 @@ class LiteLLMCompletionResponsesConfig:
         return tool_call_dict
 
     @staticmethod
+    def _should_parse_think_tags(litellm_metadata: Optional[dict]) -> bool:
+        """Opt-in flag: ``model_info.parse_think_tags = true`` enables the bridge
+        to extract ``<think>...</think>`` blocks from chat-completions ``content``
+        and surface them as Responses-API ``reasoning`` items.
+
+        Needed for providers that emit reasoning inline in ``content`` instead
+        of populating the canonical ``reasoning_content`` field (sglang's
+        ``--reasoning-parser minimax-append-think``, Fireworks AI streaming,
+        some MiniMax / DeepSeek-R1 / Kimi-K2 deployments).
+        """
+        if not litellm_metadata:
+            return False
+        model_info = litellm_metadata.get("model_info") or {}
+        return bool(model_info.get("parse_think_tags", False))
+
+    @staticmethod
+    def _apply_think_tag_split_in_place(choices: List[Choices]) -> None:
+        """For each choice whose message has ``<think>...</think>`` in ``content``
+        but no native ``reasoning_content``, lift the reasoning out into the
+        ``reasoning_content`` field and replace ``content`` with the cleaned
+        text. Downstream extractors then produce the correct output items.
+
+        No-op when ``reasoning_content`` is already set (native field wins) or
+        when ``content`` contains no ``<think>`` tag.
+        """
+        for choice in choices:
+            message = getattr(choice, "message", None)
+            if message is None:
+                continue
+            existing_reasoning = getattr(message, "reasoning_content", None)
+            if existing_reasoning:
+                continue
+            content = getattr(message, "content", None)
+            if not isinstance(content, str) or "<think>" not in content:
+                continue
+            reasoning, cleaned = extract_think_from_text(content)
+            if not reasoning:
+                continue
+            message.reasoning_content = reasoning
+            message.content = cleaned
+
+    @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
         chat_completion_response: Union[ModelResponse, dict],
+        litellm_metadata: Optional[dict] = None,
     ) -> ResponsesAPIResponse:
         """
         Transform a Chat Completion response into a Responses API response
@@ -1637,6 +1683,9 @@ class LiteLLMCompletionResponsesConfig:
         choices: List[Choices] = getattr(chat_completion_response, "choices", [])
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
+
+        if LiteLLMCompletionResponsesConfig._should_parse_think_tags(litellm_metadata):
+            LiteLLMCompletionResponsesConfig._apply_think_tag_split_in_place(choices)
 
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,

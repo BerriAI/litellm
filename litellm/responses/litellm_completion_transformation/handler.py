@@ -72,6 +72,7 @@ class LiteLLMCompletionTransformationHandler:
                 chat_completion_response=litellm_completion_response,
                 request_input=input,
                 responses_api_request=responses_api_request,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
             return responses_api_response
@@ -120,6 +121,7 @@ class LiteLLMCompletionTransformationHandler:
                 chat_completion_response=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
             return responses_api_response
