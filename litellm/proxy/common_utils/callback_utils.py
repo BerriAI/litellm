@@ -409,11 +409,15 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
 
 
 def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
-    _metadata = request_data.get("metadata", None)
-    if not _metadata:
-        _metadata = request_data.get("litellm_metadata", None)
-    if not isinstance(_metadata, dict):
-        _metadata = {}
+    _metadata: Dict = {}
+    metadata_bucket = request_data.get("metadata")
+    litellm_metadata_bucket = request_data.get("litellm_metadata")
+    if isinstance(metadata_bucket, dict):
+        _metadata.update(metadata_bucket)
+    if isinstance(litellm_metadata_bucket, dict):
+        # Batch/file routes store proxy tracking in litellm_metadata while
+        # user-facing metadata stays in metadata; merge both for headers.
+        _metadata.update(litellm_metadata_bucket)
     headers = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(
@@ -529,6 +533,12 @@ def sanitize_openai_provider_metadata(
             continue
         if isinstance(value, str):
             sanitized[key] = value
+        else:
+            verbose_proxy_logger.debug(
+                "sanitize_openai_provider_metadata: dropping key %r with non-string value of type %s",
+                key,
+                type(value).__name__,
+            )
     return sanitized or None
 
 
