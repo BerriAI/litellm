@@ -472,10 +472,25 @@ class BaseAzureLLM(BaseOpenAILLM):
             # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
             # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
             if self._is_azure_v1_api_version(api_version):
-                # Extract only params that OpenAI client accepts
+                # The OpenAI client only sends `api_key` as `Authorization: Bearer <key>`;
+                # it does not understand Azure's `azure_ad_token` / `azure_ad_token_provider`.
+                # When the caller authenticates via Azure AD (no api_key set), resolve the
+                # token here so the bearer header is populated. Without this, every Azure AD
+                # request on a v1 api_version raises "The api_key client option must be set".
+                resolved_api_key = azure_client_params.get("api_key")
+                if not resolved_api_key:
+                    ad_token_provider = azure_client_params.get(
+                        "azure_ad_token_provider"
+                    )
+                    ad_token = azure_client_params.get("azure_ad_token")
+                    if callable(ad_token_provider):
+                        resolved_api_key = ad_token_provider()
+                    elif ad_token is not None:
+                        resolved_api_key = ad_token
+
                 # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
                 v1_params = {
-                    "api_key": azure_client_params.get("api_key"),
+                    "api_key": resolved_api_key,
                     "base_url": f"{api_base}/openai/v1/",
                 }
                 if "timeout" in azure_client_params:

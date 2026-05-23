@@ -1703,3 +1703,123 @@ def test_azure_traditional_api_uses_azure_openai_client():
         assert isinstance(
             async_client, AsyncAzureOpenAI
         ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_resolves_ad_token_provider_when_no_api_key(api_version):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/27945.
+
+    When api_version routes through the Azure v1 (OpenAI-style) client and the
+    caller is authenticating via Azure AD (no api_key), the resolved
+    azure_ad_token_provider must be called and its result used as the bearer
+    api_key. Otherwise AsyncOpenAI raises "The api_key client option must be
+    set" because it does not understand azure_ad_token_provider.
+    """
+    from openai import AsyncOpenAI, OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    provider_calls = {"count": 0}
+
+    def ad_token_provider():
+        provider_calls["count"] += 1
+        return "ad-token-from-provider"
+
+    azure_client_params = {
+        "api_key": None,
+        "azure_endpoint": api_base,
+        "api_version": api_version,
+        "azure_ad_token": None,
+        "azure_ad_token_provider": ad_token_provider,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = azure_client_params
+        sync_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+    assert isinstance(sync_client, OpenAI)
+    assert sync_client.api_key == "ad-token-from-provider"
+    assert "/openai/v1/" in str(sync_client.base_url)
+    assert provider_calls["count"] == 1
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = azure_client_params
+        async_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+    assert isinstance(async_client, AsyncOpenAI)
+    assert async_client.api_key == "ad-token-from-provider"
+    assert provider_calls["count"] == 2
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_uses_static_ad_token_when_no_provider(api_version):
+    """
+    When the caller supplies a static azure_ad_token (no api_key, no provider),
+    the v1 OpenAI client should send that token as the bearer api_key.
+    """
+    from openai import AsyncOpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": "static-ad-token",
+            "azure_ad_token_provider": None,
+        }
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+    assert isinstance(client, AsyncOpenAI)
+    assert client.api_key == "static-ad-token"
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_prefers_api_key_over_ad_token(api_version):
+    """
+    A caller-supplied api_key takes precedence over Azure AD fallbacks even
+    when a token provider is also present in azure_client_params.
+    """
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def unexpected_provider():
+        raise AssertionError("provider should not be called when api_key is set")
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "explicit-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": "static-ad-token",
+            "azure_ad_token_provider": unexpected_provider,
+        }
+        client = base_llm.get_azure_openai_client(
+            api_key="explicit-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+    assert isinstance(client, OpenAI)
+    assert client.api_key == "explicit-key"
