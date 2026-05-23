@@ -16,23 +16,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
-
-
-# Responses-API-only tool types that have no Chat Completions equivalent.
-# Downstream chat-completions providers (DeepSeek, GLM/Z.AI, MiniMax, ...) reject
-# them with "unknown variant" errors. The bridge drops them so the surrounding
-# `function` and `mcp` tools still reach the provider.
-_RESPONSES_ONLY_TOOL_TYPES: frozenset = frozenset(
-    {
-        "custom",
-        "shell",
-        "file_search",
-        "code_interpreter",
-        "image_generation",
-        "computer_use_preview",
-        "local_shell",
-    }
-)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -77,6 +60,22 @@ from litellm.types.utils import (
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
+
+# Responses-API-only tool types that have no Chat Completions equivalent.
+# Downstream chat-completions providers (DeepSeek, GLM/Z.AI, MiniMax, ...) reject
+# them with "unknown variant" errors. The bridge drops them so the surrounding
+# `function` and `mcp` tools still reach the provider.
+_RESPONSES_ONLY_TOOL_TYPES: frozenset = frozenset(
+    {
+        "custom",
+        "shell",
+        "file_search",
+        "code_interpreter",
+        "image_generation",
+        "computer_use_preview",
+        "local_shell",
+    }
+)
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -1438,9 +1437,10 @@ class LiteLLMCompletionResponsesConfig:
                 # code_interpreter, image_generation, computer_use_preview,
                 # local_shell) have no Chat Completions equivalent. Downstream
                 # providers (DeepSeek, GLM/Z.AI, MiniMax) reject them with
-                # ``unknown variant``. Drop them silently with a debug log;
-                # the assistant simply will not have access to those tools.
-                verbose_logger.debug(
+                # ``unknown variant``. Drop them with an info-level log so
+                # operators can see the loss in production without raising
+                # the verbose-logger threshold.
+                verbose_logger.info(
                     "responses-bridge: dropping unsupported tool type '%s' "
                     "with no Chat Completions equivalent",
                     tool.get("type"),

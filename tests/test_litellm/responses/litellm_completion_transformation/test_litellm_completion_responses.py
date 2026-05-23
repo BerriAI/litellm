@@ -1352,6 +1352,39 @@ class TestToolTransformation:
         assert len(result_tools) == 1
         assert result_tools[0] == vertex_tool
 
+    def test_transform_function_tool_nested_strict_falls_back_when_top_level_missing(
+        self,
+    ):
+        """When the top-level lacks ``strict`` and the nested ``function`` object
+        provides it, the nested value is used."""
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "fn",
+                "parameters": {"type": "object"},
+                "strict": True,
+            },
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )
+        assert result_tools[0]["function"]["strict"] is True
+
+    def test_transform_function_tool_with_explicit_strict_false_top_level(self):
+        """An explicit top-level ``strict=False`` is honoured (not overridden by
+        a nested ``strict=True``)."""
+        tool = {
+            "type": "function",
+            "name": "fn",
+            "parameters": {"type": "object"},
+            "strict": False,
+            "function": {"strict": True},
+        }
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[tool]
+        )
+        assert result_tools[0]["function"]["strict"] is False
+
 
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""
