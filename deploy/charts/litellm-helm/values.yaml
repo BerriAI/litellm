@@ -10,7 +10,7 @@ image:
   repository: ghcr.io/berriai/litellm-database
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  # tag: "main-latest"
+  # tag: "latest"
   tag: ""
 
 imagePullSecrets: []
