@@ -104,6 +104,13 @@ def test_commit_msg_accepts_conventional_subjects(tmp_path, subject):
         "ux: thing",                          # unknown type
         "Feat(router): capital type",         # types are lowercase
         "feat(router):",                      # empty description
+        # Description must start with a lowercase letter — kept in sync with
+        # the CI workflow's subjectPattern so the local hook never accepts a
+        # subject that CI will later reject.
+        "feat: Add thing",
+        "fix(router): Decouple something",
+        "chore: BUMP deps",
+        "feat: A",
     ],
 )
 def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
@@ -113,6 +120,25 @@ def test_commit_msg_rejects_invalid_subjects(tmp_path, subject):
         f"  stderr: {result.stderr}"
     )
     assert "Conventional Commits" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        # Lowercase letter — the common case.
+        "feat: lowercase start is fine",
+        # The CI's `^(?![A-Z]).+$` rejects only uppercase A-Z, so digits and
+        # symbols are still allowed; mirror that behavior here.
+        "feat: 1-based indexing now works",
+        "fix(deps): @types/node bump",
+    ],
+)
+def test_commit_msg_accepts_non_uppercase_starts(tmp_path, subject):
+    result = _run_commit_msg(subject, tmp_path)
+    assert result.returncode == 0, (
+        f"hook rejected a valid non-uppercase-start subject:\n"
+        f"  subject: {subject!r}\n  stderr: {result.stderr}"
+    )
 
 
 @pytest.mark.parametrize(

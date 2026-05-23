@@ -43,7 +43,11 @@ case "$subject" in
 esac
 
 ALLOWED_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
-PATTERN="^(${ALLOWED_TYPES})(\([^)]+\))?!?: .+"
+# Description must not start with an uppercase letter — kept in sync with the
+# subjectPattern in .github/workflows/conventional-commits.yml so the local
+# hook is the strictly tighter of the two gates. (Without this guard, a commit
+# like "feat: Add thing" passes locally but fails the PR-title CI check.)
+PATTERN="^(${ALLOWED_TYPES})(\([^)]+\))?!?: [^A-Z].*"
 
 if printf '%s' "$subject" | grep -Eq "$PATTERN"; then
     exit 0
@@ -55,6 +59,7 @@ cat >&2 <<EOF
   Got:      $subject
 
   Expected: <type>(<scope>)!: <description>
+            (description must start with a lowercase letter)
 
   Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
   Examples:
