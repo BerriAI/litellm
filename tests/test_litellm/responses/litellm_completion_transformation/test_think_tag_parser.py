@@ -362,3 +362,27 @@ def test_end_to_end_opt_in_disabled_passes_think_tags_through_to_content():
     assert len(message_items) == 1
     rendered_text = message_items[0]["content"][0]["text"]
     assert "<think>internal</think>" in rendered_text
+
+
+def test_native_reasoning_with_empty_string_content_still_emits_message_item():
+    """Regression guard: providers that natively populate reasoning_content
+    alongside ``content=""`` (DeepSeek-R1, Qwen3) must keep their message
+    output item. The skip path triggers only when ``content`` is explicitly
+    None (cleared by this module's think-tag splitter), not for empty strings
+    that the provider returned directly.
+    """
+    choice = _build_choice(content="")
+    choice.message.reasoning_content = "native reasoning from provider"
+    chat_response = ModelResponse(
+        id="chatcmpl-native",
+        choices=[choice],
+    )
+    responses_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hi",
+        responses_api_request={},
+        chat_completion_response=chat_response,
+        litellm_metadata=None,
+    )
+    output_types = [item.get("type") for item in responses_response.output]
+    assert "reasoning" in output_types
+    assert "message" in output_types

@@ -1986,9 +1986,15 @@ class LiteLLMCompletionResponsesConfig:
             # `_apply_think_tag_split_in_place`) and nothing remains, skip the
             # message item so clients don't render a blank assistant turn
             # alongside the reasoning item.
+            #
+            # The check is intentionally `content is None` (not `not content`):
+            # providers that natively return reasoning_content alongside
+            # ``content=""`` (DeepSeek-R1, Qwen3) keep their existing message
+            # item. Only callers whose ``content`` was explicitly cleared to
+            # ``None`` by this module's think-tag splitter trigger the skip.
             content = getattr(choice.message, "content", None)
             has_reasoning = bool(getattr(choice.message, "reasoning_content", None))
-            if not content and has_reasoning:
+            if content is None and has_reasoning:
                 continue
             # Regular message output
             message_output_items.append(
