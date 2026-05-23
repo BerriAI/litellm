@@ -1647,6 +1647,11 @@ class LiteLLMCompletionResponsesConfig:
         ``reasoning_content`` field and replace ``content`` with the cleaned
         text. Downstream extractors then produce the correct output items.
 
+        When the entire ``content`` was wrapped in ``<think>`` tags (so the
+        cleaned text is empty), ``message.content`` is set to ``None`` instead
+        of ``""`` so that ``_extract_message_output_items`` can skip emitting
+        a blank assistant message item alongside the reasoning item.
+
         No-op when ``reasoning_content`` is already set (native field wins) or
         when ``content`` contains no ``<think>`` tag.
         """
@@ -1664,7 +1669,7 @@ class LiteLLMCompletionResponsesConfig:
             if not reasoning:
                 continue
             message.reasoning_content = reasoning
-            message.content = cleaned
+            message.content = cleaned if cleaned else None
 
     @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
@@ -1976,23 +1981,31 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            else:
-                # Regular message output
-                message_output_items.append(
-                    GenericResponseOutputItem(
-                        type="message",
-                        id=chat_completion_response.id,
-                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                            choice.finish_reason
-                        ),
-                        role=choice.message.role,
-                        content=[
-                            LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                                choice.message
-                            )
-                        ],
-                    )
+                continue
+            # When reasoning was lifted out of `content` (e.g. by
+            # `_apply_think_tag_split_in_place`) and nothing remains, skip the
+            # message item so clients don't render a blank assistant turn
+            # alongside the reasoning item.
+            content = getattr(choice.message, "content", None)
+            has_reasoning = bool(getattr(choice.message, "reasoning_content", None))
+            if not content and has_reasoning:
+                continue
+            # Regular message output
+            message_output_items.append(
+                GenericResponseOutputItem(
+                    type="message",
+                    id=chat_completion_response.id,
+                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        choice.finish_reason
+                    ),
+                    role=choice.message.role,
+                    content=[
+                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+                            choice.message
+                        )
+                    ],
                 )
+            )
         return message_output_items
 
     @staticmethod

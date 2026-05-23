@@ -12,7 +12,7 @@ from litellm.responses.litellm_completion_transformation.think_tag_parser import
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.utils import Choices, Message
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ def test_extract_think_multiple_blocks_concatenated():
 # ---------------------------------------------------------------------------
 
 
-def _build_choice(content: str, reasoning_content: str = "") -> Choices:
+def _build_choice(content: str) -> Choices:
     return Choices(
         finish_reason="stop",
         index=0,
@@ -286,3 +286,79 @@ def test_apply_think_tag_split_handles_multiple_choices():
     assert choice_b.message.content == "plain text, no tags"
     assert choice_c.message.reasoning_content == "r3"
     assert choice_c.message.content == "text3"
+
+
+def test_apply_think_tag_split_sets_content_to_none_when_entirely_reasoning():
+    """When the entire content is wrapped in <think> tags, the cleaned text
+    is empty. message.content must become None (not ``""``) so the downstream
+    message extractor can skip emitting a blank message item.
+    """
+    choice = _build_choice(content="<think>only reasoning, no answer</think>")
+    LiteLLMCompletionResponsesConfig._apply_think_tag_split_in_place([choice])
+    assert choice.message.reasoning_content == "only reasoning, no answer"
+    assert choice.message.content is None
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: transform_chat_completion_response_to_responses_api_response
+# ---------------------------------------------------------------------------
+
+
+def test_end_to_end_no_blank_message_item_when_entire_content_is_think_block():
+    """Regression: when the model emits only a <think> block, the bridge must
+    not emit both a reasoning item AND a blank message item.
+    """
+    chat_response = ModelResponse(
+        id="chatcmpl-abc123",
+        choices=[_build_choice(content="<think>just thinking, no text reply</think>")],
+    )
+    responses_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hello",
+        responses_api_request={},
+        chat_completion_response=chat_response,
+        litellm_metadata={"model_info": {"parse_think_tags": True}},
+    )
+    output_types = [item.get("type") for item in responses_response.output]
+    assert "reasoning" in output_types
+    assert "message" not in output_types
+
+
+def test_end_to_end_emits_both_reasoning_and_message_when_text_remains():
+    """When some text remains after extracting <think>, both items are emitted."""
+    chat_response = ModelResponse(
+        id="chatcmpl-xyz789",
+        choices=[
+            _build_choice(content="<think>internal reasoning</think>Hello there!")
+        ],
+    )
+    responses_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hi",
+        responses_api_request={},
+        chat_completion_response=chat_response,
+        litellm_metadata={"model_info": {"parse_think_tags": True}},
+    )
+    output_types = [item.get("type") for item in responses_response.output]
+    assert output_types.count("reasoning") == 1
+    assert output_types.count("message") == 1
+
+
+def test_end_to_end_opt_in_disabled_passes_think_tags_through_to_content():
+    """When opt-in is off (the default), <think> tags remain in message text."""
+    chat_response = ModelResponse(
+        id="chatcmpl-def456",
+        choices=[_build_choice(content="<think>internal</think>Hello!")],
+    )
+    responses_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hi",
+        responses_api_request={},
+        chat_completion_response=chat_response,
+        litellm_metadata=None,
+    )
+    output_types = [item.get("type") for item in responses_response.output]
+    assert "reasoning" not in output_types
+    message_items = [
+        item for item in responses_response.output if item.get("type") == "message"
+    ]
+    assert len(message_items) == 1
+    rendered_text = message_items[0]["content"][0]["text"]
+    assert "<think>internal</think>" in rendered_text
