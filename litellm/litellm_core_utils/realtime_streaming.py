@@ -879,6 +879,24 @@ class RealTimeStreaming:
                                     # include it as response instructions.
                                     self._pending_guardrail_message = combined_text
                                     continue  # don't forward the original blocked message
+                        elif item.get("type") == "function_call_output":
+                            # Tool results are client-controlled and fed to the
+                            # model; check them with the same guardrail used for
+                            # user text so an attacker cannot smuggle blocked
+                            # content into a function_call_output.
+                            output = item.get("output", "")
+                            output_text = (
+                                output
+                                if isinstance(output, str)
+                                else json.dumps(output)
+                            )
+                            if output_text:
+                                blocked = await self.run_realtime_guardrails(
+                                    output_text
+                                )
+                                if blocked:
+                                    self._pending_guardrail_message = output_text
+                                    continue
 
                     if (
                         msg_type == "response.create"
