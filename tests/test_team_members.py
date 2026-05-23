@@ -206,6 +206,9 @@ def test_error_handling(api_client):
         api_client.get_team_info("invalid-team-id")
 
 
+@pytest.mark.skip(
+    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404 after add_team_member calls, same race documented for test_add_multiple_members. Duplicate-prevention is covered by test_update_team_members_list_duplicate_prevention in tests/test_litellm/proxy/management_endpoints/test_team_endpoints.py."
+)
 def test_duplicate_user_addition(api_client, new_team):
     """Test that adding the same user twice is handled appropriately"""
     # Add user first time
