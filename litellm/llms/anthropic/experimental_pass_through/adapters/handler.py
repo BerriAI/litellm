@@ -71,7 +71,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 custom_llm_provider = None
 
-        if custom_llm_provider != "openai":
+        if custom_llm_provider not in ("openai", "chatgpt"):
             return
 
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
