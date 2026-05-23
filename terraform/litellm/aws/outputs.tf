@@ -43,12 +43,17 @@ output "db_master_password_secret_arn" {
   value       = aws_secretsmanager_secret.db_master_password.arn
 }
 
-# Pre-baked SQL to run once as the master user, creating the IAM-authed
-# application user that gateway/backend/migration tasks will authenticate as.
+# Pre-baked SQL to run as the master user — idempotent, so safe to re-run.
+# bootstrap.tf executes this automatically on `terraform apply` via a
+# local-exec provisioner; expose it here for break-glass manual re-runs.
 output "db_bootstrap_sql" {
-  description = "Run this once as the master DB user (after the first apply) to create the IAM-authed app user."
+  description = "Idempotent SQL to run as the Aurora master user to create (or re-create) the IAM-authed app user. bootstrap.tf runs this automatically; use as a break-glass manual re-run."
   value       = <<-SQL
-    CREATE USER ${var.db_username};
+    DO $$
+    BEGIN
+      CREATE USER ${var.db_username};
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
     GRANT rds_iam TO ${var.db_username};
     GRANT ALL PRIVILEGES ON DATABASE ${var.db_name} TO ${var.db_username};
     GRANT ALL ON SCHEMA public TO ${var.db_username};
