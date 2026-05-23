@@ -3,6 +3,7 @@ TODO: DELETE FILE. Bedrock LLM is no longer used. Goto `litellm/llms/bedrock/cha
 """
 
 import copy
+import logging
 import time
 import types
 from functools import partial
@@ -1662,7 +1663,8 @@ class AWSEventStreamDecoder:
             # and use it as the consistent ID for all subsequent chunks.
             self._initialize_converse_response_id(chunk_data)
 
-            verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
+            if verbose_logger.isEnabledFor(logging.DEBUG):
+                verbose_logger.debug("raw bedrock converse chunk: %s", chunk_data)
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
@@ -1756,11 +1758,38 @@ class AWSEventStreamDecoder:
             or "metrics" in chunk_data
             or "trace" in chunk_data
         ):
+            # Fast path: pure text delta — skip Pydantic construction entirely.
+            # Covers the vast majority of output chunks in non-tool-use streams.
+            # Excludes trace chunks (need provider_specific_fields on the response).
+            raw_delta = chunk_data.get("delta")
+            if (
+                raw_delta is not None
+                and "trace" not in chunk_data
+                and "text" in raw_delta
+                and len(raw_delta) == 1
+            ):
+                return GChunk(
+                    text=raw_delta["text"],
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                )
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######### /bedrock/invoke nova mappings ###############
         elif "contentBlockDelta" in chunk_data:
             # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
             _chunk_data = chunk_data.get("contentBlockDelta", {})
+            # Fast path: pure text delta for nova invoke streaming.
+            raw_delta = _chunk_data.get("delta")
+            if raw_delta is not None and "text" in raw_delta and len(raw_delta) == 1:
+                return GChunk(
+                    text=raw_delta["text"],
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                )
             return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
