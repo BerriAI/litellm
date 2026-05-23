@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
@@ -250,6 +251,10 @@ class MCPServerManager:
         }
         """
         self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+        # Per-server monotonic timestamp of last upstream prefetch attempt (success,
+        # empty result, or failure). Used to throttle re-probes for servers that do
+        # not return instructions, and to apply a short cooldown after failures.
+        self._upstream_initialize_instructions_probed_at: Dict[str, float] = {}
 
     def _remember_upstream_initialize_instructions(
         self, server: MCPServer, client: MCPClient
@@ -259,6 +264,80 @@ class MCPServerManager:
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
                 raw
             ).strip()
+
+    async def _ensure_upstream_initialize_instructions_cached(
+        self, server: MCPServer
+    ) -> None:
+        """
+        Open one upstream session and cache InitializeResult.instructions if missing.
+
+        No-op when:
+          - YAML/DB instructions are set on the server record,
+          - server is OpenAPI (spec_path),
+          - non-empty upstream instructions are already cached,
+          - auth preconditions match health_check_server's skip rules
+            (per-user auth / missing static auth token),
+          - a prior probe attempt for this server is within
+            MCP_HEALTH_CHECK_TIMEOUT seconds (the probe is a health-check-shaped
+            op and already uses this knob for its inner call timeout; reusing it
+            as the cooldown avoids reconnecting on every gateway initialize when
+            upstream returns empty or fails).
+        """
+        if server.spec_path:
+            return
+        if server.instructions and server.instructions.strip():
+            return
+        if self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+            return
+        if server.requires_per_user_auth:
+            return
+        if (
+            server.auth_type
+            and server.auth_type != MCPAuth.none
+            and server.auth_type != MCPAuth.aws_sigv4
+            and not server.authentication_token
+        ):
+            return
+
+        last_probed_at = self._upstream_initialize_instructions_probed_at.get(
+            server.server_id
+        )
+        if (
+            last_probed_at is not None
+            and (time.monotonic() - last_probed_at) < MCP_HEALTH_CHECK_TIMEOUT
+        ):
+            return
+
+        # Record the attempt up-front so that a failure / empty response does not
+        # cause every subsequent initialize request to re-open the upstream session.
+        self._upstream_initialize_instructions_probed_at[server.server_id] = (
+            time.monotonic()
+        )
+
+        try:
+            extra_headers: Optional[Dict[str, str]] = (
+                dict(server.static_headers) if server.static_headers else None
+            )
+            client = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=None,
+                extra_headers=extra_headers,
+                stdio_env=None,
+            )
+
+            async def _noop(_session):
+                return "ok"
+
+            await asyncio.wait_for(
+                client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+            )
+            self._remember_upstream_initialize_instructions(server, client)
+        except Exception as e:
+            verbose_logger.debug(
+                "Upstream initialize instructions prefetch failed for %s: %s",
+                server.name,
+                e,
+            )
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -280,6 +359,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
@@ -1212,11 +1292,17 @@ class MCPServerManager:
                 return []
 
             # Get server-specific auth header if available
-            server_auth_header = None
-            if mcp_server_auth_headers and server.alias:
-                server_auth_header = mcp_server_auth_headers.get(server.alias)
-            elif mcp_server_auth_headers and server.server_name:
-                server_auth_header = mcp_server_auth_headers.get(server.server_name)
+            server_auth_header: Optional[Union[str, Dict[str, str]]] = None
+            if mcp_server_auth_headers:
+                from litellm.proxy._experimental.mcp_server.utils import (
+                    lookup_mcp_server_auth_in_headers,
+                )
+
+                server_auth_header = lookup_mcp_server_auth_in_headers(
+                    mcp_server_auth_headers,
+                    alias=server.alias,
+                    server_name=server.server_name,
+                )
 
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
@@ -2707,16 +2793,15 @@ class MCPServerManager:
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers:
             # Normalize keys for case-insensitive lookup
-            normalized_headers = {
-                k.lower(): v for k, v in mcp_server_auth_headers.items()
-            }
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
 
-            if mcp_server.alias:
-                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
-            if server_auth_header is None and mcp_server.server_name:
-                server_auth_header = normalized_headers.get(
-                    mcp_server.server_name.lower()
-                )
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=mcp_server.alias,
+                server_name=mcp_server.server_name,
+            )
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:
@@ -3136,6 +3221,7 @@ class MCPServerManager:
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(

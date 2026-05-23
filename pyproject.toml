@@ -40,6 +40,7 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn==23.0.0",
     "uvicorn==0.33.0",
+    "granian==2.5.7",
     "uvloop==0.21.0; sys_platform != 'win32'",
     "fastapi==0.124.4",
     "backoff==2.2.1",
@@ -132,7 +133,7 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
-    "black==24.10.0",
+    "black==26.3.1",
     "mypy==1.19.0",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
@@ -288,11 +289,6 @@ paths_to_mutate = [
 ]
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
-    # PR1 (key Tier-1) behavior-pinning suite. Manual mutmut runs
-    # (.github/workflows/mutation-test.yml) include this directory so the
-    # behavior matrix contributes to mutation-score signal alongside the
-    # legacy mock suite. See tests/proxy_behavior/management/README.md
-    # for the G5 triage protocol.
     "tests/proxy_behavior/management/",
 ]
 also_copy = [

@@ -2768,6 +2768,20 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: Optional[float]
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
+    violation_categories: Optional[List[str]]
+    """Names of the policy items that intervened on this request (e.g. Bedrock
+    topic-policy topic names, content-policy filter types, PII entity types).
+    Populated by the provider hook before redaction so downstream loggers
+    (OTEL, Langfuse, ...) can filter by violation category without parsing
+    the raw guardrail_response blob. Empty/absent when the guardrail allowed
+    the request through."""
+
+    guardrail_action: Optional[str]
+    """Provider's raw top-level action string (e.g. Bedrock's ``GUARDRAIL_INTERVENED``
+    or ``NONE``). Populated by the provider hook so the OTEL integration can
+    surface it as a queryable span attribute without parsing the raw
+    guardrail_response blob."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -2809,6 +2823,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: Optional[int]
     alert_recipients: Optional[List[str]]
     risk_score: Optional[float]
+    violation_categories: Optional[List[str]]
+    guardrail_action: Optional[str]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
