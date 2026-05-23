@@ -1138,7 +1138,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         key: str,
         value: dict,
         current_delta_type: Optional[ALL_DELTA_TYPES],
-        json_message: dict,
     ) -> Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]:
         model_turn_event = value.get("modelTurn")
         generation_complete_event = value.get("generationComplete")
@@ -1292,7 +1291,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 key=key,
                 value=value,
                 current_delta_type=current_delta_type,
-                json_message=json_message,
             )
 
             if openai_event == OpenAIRealtimeEventTypes.SESSION_CREATED:
