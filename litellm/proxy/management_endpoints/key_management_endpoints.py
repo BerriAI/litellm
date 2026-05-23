@@ -3226,6 +3226,7 @@ async def info_key_fn_v2(
 @router.get(
     "/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def info_key_fn(
     key: Optional[str] = fastapi.Query(
         default=None, description="Key in the request parameters"
