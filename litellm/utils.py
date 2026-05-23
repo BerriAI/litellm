@@ -8146,6 +8146,35 @@ def validate_openai_optional_params(
     return stop
 
 
+@lru_cache(maxsize=1)
+def _get_bundled_model_cost_map() -> Dict[str, Any]:
+    try:
+        model_cost_path = resources.files("litellm").joinpath(
+            "model_prices_and_context_window_backup.json"
+        )
+        return json.loads(model_cost_path.read_text())
+    except Exception:
+        return {}
+
+
+def _get_model_cost_entry_for_provider_config(
+    model: str,
+    provider: LlmProviders,
+) -> Dict[str, Any]:
+    candidate_keys = (model, f"{provider.value}/{model}")
+    for model_key in candidate_keys:
+        model_info = litellm.model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+
+    bundled_model_cost = _get_bundled_model_cost_map()
+    for model_key in candidate_keys:
+        model_info = bundled_model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+    return {}
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8621,6 +8650,19 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAudioTranscriptionConfig]:
+        model_cost_entry = _get_model_cost_entry_for_provider_config(
+            model=model,
+            provider=provider,
+        )
+        if (
+            litellm.LlmProviders.AZURE == provider
+            and model_cost_entry.get("audio_transcription_config") == "azure_speech"
+        ):
+            from litellm.llms.azure.audio_transcription.transformation import (
+                AzureSpeechAudioTranscriptionConfig,
+            )
+
+            return AzureSpeechAudioTranscriptionConfig()
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
