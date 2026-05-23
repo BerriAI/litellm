@@ -410,6 +410,7 @@ from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_upd
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -938,6 +939,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     # End of startup event
     yield
+
+    # Shutdown event - set shutdown flag immediately so health probes return 503
+    # and Kubernetes stops routing traffic to this pod while we drain.
+    GracefulShutdownManager.start_shutdown()
+    await GracefulShutdownManager.wait_for_drain()
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:

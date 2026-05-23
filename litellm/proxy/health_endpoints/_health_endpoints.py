@@ -39,6 +39,7 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 #### Health ENDPOINTS ####
 
@@ -1576,7 +1577,15 @@ async def health_readiness(response: Response):
     external probes can distinguish "healthy" from "DB unreachable" without a
     credential. Admins can opt into the legacy detailed payload with
     general_settings.allow_public_health_readiness_details.
+
+    Returns 503 immediately when the proxy is shutting down so that Kubernetes
+    removes the pod from the Service endpoints before in-flight requests are
+    drained.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down", "db": "Not connected"}
+
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
@@ -1621,11 +1630,51 @@ async def health_backlog():
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
 )
-async def health_liveliness():
+async def health_liveliness(response: Response):
     """
-    Unprotected endpoint for checking if worker is alive
+    Unprotected endpoint for checking if worker is alive.
+
+    Returns 503 when the proxy is shutting down so that Kubernetes schedules
+    a replacement pod and eventually sends SIGKILL once the drain timeout
+    elapses.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
     return "I'm alive!"
+
+
+@router.get(
+    "/health/drain",
+    tags=["health"],
+)
+async def health_drain():
+    """
+    Trigger graceful drain and block until all in-flight requests complete
+    or the ``GRACEFUL_SHUTDOWN_TIMEOUT`` expires (default 30 s).
+
+    Designed for use in Kubernetes ``preStop`` lifecycle hooks so that the
+    pod is quiesced before ``SIGTERM`` is delivered:
+
+    ```yaml
+    lifecycle:
+      preStop:
+        httpGet:
+          path: /health/drain
+          port: 4000
+    ```
+
+    Setting this together with a ``terminationGracePeriodSeconds`` that is
+    at least ``GRACEFUL_SHUTDOWN_TIMEOUT + 5`` seconds ensures the process
+    exits cleanly before Kubernetes sends ``SIGKILL``.
+    """
+    GracefulShutdownManager.start_shutdown()
+    drained = await GracefulShutdownManager.wait_for_drain()
+    return {
+        "status": "drained",
+        "drained_requests": drained,
+        "in_flight_requests": get_in_flight_requests(),
+    }
 
 
 @router.options(
