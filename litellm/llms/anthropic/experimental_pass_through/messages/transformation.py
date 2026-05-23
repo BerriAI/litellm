@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, cast
 
 import httpx
 
@@ -342,7 +342,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         """
-        No transformation is needed for Anthropic messages, since we want the response in the Anthropic /v1/messages API spec
+        No transformation is needed for Anthropic messages; the upstream payload
+        is already in the target shape.  Cast the parsed dict directly instead of
+        copying it through ``AnthropicMessagesResponse(**raw_response_json)``
+        (which, since AnthropicMessagesResponse is a TypedDict, is identical to
+        ``dict(**dict)`` — a full shallow copy of every key-value pair).
         """
         try:
             raw_response_json = raw_response.json()
@@ -350,7 +354,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             raise AnthropicError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return AnthropicMessagesResponse(**raw_response_json)
+        return cast(AnthropicMessagesResponse, raw_response_json)
 
     def get_async_streaming_response_iterator(
         self,

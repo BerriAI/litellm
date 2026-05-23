@@ -8,7 +8,17 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -37,6 +47,50 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
+
+# ---------------------------------------------------------------------------
+# Lightweight per-file callback capability cache
+# Mirrors the proxy-layer ProxyLogging._callback_capabilities() cache but
+# lives here so llm-layer code (not importable from proxy/) can use it.
+# Keyed on (len(callbacks), tuple(id(c) for c in callbacks)) — same scheme.
+# ---------------------------------------------------------------------------
+_handler_capability_cache: Dict[Tuple[int, Tuple[int, ...]], Tuple[bool, bool]] = {}
+
+
+def _get_handler_capabilities() -> Tuple[bool, bool]:
+    """Return (has_pre_request_hook, has_websearch_interceptor) from cache."""
+    cbs = litellm.callbacks
+    sig: Tuple[int, Tuple[int, ...]] = (len(cbs), tuple(id(c) for c in cbs))
+    cached = _handler_capability_cache.get(sig)
+    if cached is not None:
+        return cached
+
+    has_pre_request_hook = False
+    has_websearch_interceptor = False
+    for cb in cbs:
+        if isinstance(cb, str):
+            continue
+        cls = type(cb)
+        if "async_pre_request_hook" in cls.__dict__:
+            has_pre_request_hook = True
+        if hasattr(cb, "try_short_circuit_search"):
+            has_websearch_interceptor = True
+        if has_pre_request_hook and has_websearch_interceptor:
+            break
+
+    result = (has_pre_request_hook, has_websearch_interceptor)
+    if len(_handler_capability_cache) >= 32:
+        _handler_capability_cache.clear()
+    _handler_capability_cache[sig] = result
+    return result
+
+
+def _has_pre_request_hooks() -> bool:
+    return _get_handler_capabilities()[0]
+
+
+def _has_websearch_interceptor() -> bool:
+    return _get_handler_capabilities()[1]
 
 
 def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
@@ -104,6 +158,12 @@ async def _execute_pre_request_hooks(
 
     from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
 
+    # Skip the scan when no registered callback overrides async_pre_request_hook.
+    # _has_pre_request_hooks() uses the same cached capability flags as the proxy
+    # layer to avoid a full litellm.callbacks traversal per request.
+    if not _has_pre_request_hooks():
+        return request_kwargs
+
     for callback in litellm.callbacks:
         if not isinstance(callback, _CustomLogger):
             continue
@@ -140,6 +200,10 @@ async def _try_websearch_short_circuit(
     normal processing.
     """
     if not litellm.callbacks:
+        return None
+
+    # Skip scan when no registered callback is a WebSearchInterceptionLogger.
+    if not _has_websearch_interceptor():
         return None
 
     from litellm.integrations.websearch_interception.handler import (

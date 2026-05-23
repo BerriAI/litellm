@@ -352,6 +352,18 @@ class _CallbackCapabilities:
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
     has_pre_call_override: bool = False
+    # True when any CustomGuardrail explicitly registers for post_call events.
+    # Used by non-streaming paths to decide whether to defer async logging until
+    # after guardrails complete — avoids scanning litellm.callbacks per request.
+    has_post_call_guardrail: bool = False
+    # True when any CustomLogger overrides async_pre_request_hook.
+    # Used to short-circuit the per-request callback scan in the
+    # Anthropic messages handler when no hook is registered.
+    has_pre_request_hook: bool = False
+    # True when any callback is a WebSearchInterceptionLogger.
+    # Used to skip the websearch short-circuit scan entirely when no
+    # websearch interceptor is configured.
+    has_websearch_interceptor: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -1562,6 +1574,9 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
+        has_post_call_guardrail = False
+        has_pre_request_hook = False
+        has_websearch_interceptor = False
         iterator_overrides: List[Tuple[Any, str]] = []  # (callback, kind)
         resolved_callbacks: List[Any] = []
 
@@ -1582,6 +1597,21 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
+                # Detect post_call guardrails for deferred-logging gate on the
+                # non-streaming path.  event_hook=None means the guardrail runs
+                # for all event types, so it does NOT include post_call unless
+                # the hook is explicitly registered.
+                if (
+                    resolved.event_hook is not None
+                    and resolved._event_hook_is_event_type(
+                        GuardrailEventHooks.post_call
+                    )
+                ):
+                    has_post_call_guardrail = True
+            # Duck-type check for WebSearchInterceptionLogger — avoids importing
+            # that class here (circular import risk) while reliably detecting it.
+            if hasattr(resolved, "try_short_circuit_search"):
+                has_websearch_interceptor = True
             # Use the same leaf-class ``__dict__`` check as the other hook
             # capabilities: only callbacks that actually override the hook
             # contribute to the flag. Setting this for every ``CustomLogger``
@@ -1615,6 +1645,8 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
+            if "async_pre_request_hook" in cls_attrs:
+                has_pre_request_hook = True
 
         caps = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
@@ -1623,6 +1655,9 @@ class ProxyLogging:
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
+            has_post_call_guardrail=has_post_call_guardrail,
+            has_pre_request_hook=has_pre_request_hook,
+            has_websearch_interceptor=has_websearch_interceptor,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -1636,6 +1671,21 @@ class ProxyLogging:
     @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
         return ProxyLogging._callback_capabilities().has_post_call_response_headers
+
+    @staticmethod
+    def has_post_call_guardrail_callbacks() -> bool:
+        """True when any CustomGuardrail explicitly registers for post_call events."""
+        return ProxyLogging._callback_capabilities().has_post_call_guardrail
+
+    @staticmethod
+    def has_pre_request_hook_callbacks() -> bool:
+        """True when any CustomLogger overrides async_pre_request_hook."""
+        return ProxyLogging._callback_capabilities().has_pre_request_hook
+
+    @staticmethod
+    def has_websearch_interceptor_callbacks() -> bool:
+        """True when any callback is a WebSearchInterceptionLogger."""
+        return ProxyLogging._callback_capabilities().has_websearch_interceptor
 
     @staticmethod
     def has_streaming_callbacks() -> bool:

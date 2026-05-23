@@ -1,8 +1,11 @@
 import asyncio
+import inspect
 import json
 import logging
 import time
 import traceback
+from collections.abc import AsyncGenerator as _AsyncGenerator
+from collections.abc import AsyncIterator as _AsyncIterator
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -1547,15 +1550,12 @@ class ProxyBaseLLMRequestProcessing:
         This uses standard Python inspection to detect streaming/async iterator objects
         rather than relying on specific wrapper classes.
         """
-        import inspect
-        from collections.abc import AsyncGenerator, AsyncIterator
-
         # Check if it's an async generator (most reliable)
         if inspect.isasyncgen(response):
             return True
 
         # Check if it implements the async iterator protocol
-        if isinstance(response, (AsyncIterator, AsyncGenerator)):
+        if isinstance(response, (_AsyncIterator, _AsyncGenerator)):
             return True
 
         return False
@@ -1581,15 +1581,11 @@ class ProxyBaseLLMRequestProcessing:
         True when a guardrail explicitly registers post_call. event_hook=None
         matches all hooks in should_run_guardrail but must not defer async logging
         on non-streaming /chat/completions (no post_call_success_hook flush path).
+
+        Uses the cached ``_CallbackCapabilities`` to avoid scanning
+        ``litellm.callbacks`` on every non-streaming request.
         """
-        for cb in litellm.callbacks:
-            if not isinstance(cb, CustomGuardrail):
-                continue
-            if cb.event_hook is None:
-                continue
-            if cb._event_hook_is_event_type(GuardrailEventHooks.post_call):
-                return True
-        return False
+        return ProxyLogging._callback_capabilities().has_post_call_guardrail
 
     @staticmethod
     def _flush_deferred_async_logging(

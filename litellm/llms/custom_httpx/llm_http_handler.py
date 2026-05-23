@@ -2002,6 +2002,10 @@ class BaseLLMHTTPHandler:
             merged_headers.update(extra_headers_from_kwargs)
         if provider_specific_headers:
             merged_headers.update(provider_specific_headers)
+        # Serialize litellm_params once; callee sites that previously each called
+        # dict(litellm_params) were each paying for a full Pydantic model dump.
+        litellm_params_dict = dict(litellm_params)
+
         (
             headers,
             api_base,
@@ -2010,7 +2014,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=messages,
             optional_params=anthropic_messages_optional_request_params,
-            litellm_params=dict(litellm_params),
+            litellm_params=litellm_params_dict,
             api_key=api_key,
             api_base=api_base,
         )
@@ -2061,18 +2065,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             model=model,
-            optional_params=dict(
-                litellm_params
-            ),  # this uses the invoke config, which expects aws_* params in optional_params
-            litellm_params=dict(litellm_params),
+            optional_params=litellm_params_dict,  # invoke config expects aws_* params here
+            litellm_params=litellm_params_dict,
             stream=stream,
         )
 
         headers, signed_json_body = anthropic_messages_provider_config.sign_request(
             headers=headers,
-            optional_params=dict(
-                litellm_params
-            ),  # dynamic aws_* params are passed under litellm_params
+            optional_params=litellm_params_dict,  # dynamic aws_* params under litellm_params
             request_data=request_body,
             api_base=request_url,
             api_key=api_key,
@@ -4670,11 +4670,28 @@ class BaseLLMHTTPHandler:
             get_custom_logger_compatible_class,
         )
 
+        static_callbacks = litellm.callbacks
+        dynamic = getattr(logging_obj, "dynamic_success_callbacks", None) or []
+
+        # Fast path: nothing to check — avoids list concatenation alloc.
+        if not static_callbacks and not dynamic:
+            return False
+
         base_func = CustomLogger.async_should_run_agentic_loop
-        callbacks = litellm.callbacks + (
-            getattr(logging_obj, "dynamic_success_callbacks", None) or []
-        )
-        for cb in callbacks:
+        for cb in static_callbacks:
+            if isinstance(cb, str):
+                resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
+                if resolved is None:
+                    continue
+                cb = resolved
+            if not isinstance(cb, CustomLogger):
+                continue
+            cb_func = getattr(type(cb), "async_should_run_agentic_loop", base_func)
+            if getattr(cb_func, "__func__", cb_func) is not getattr(
+                base_func, "__func__", base_func
+            ):
+                return True
+        for cb in dynamic:
             if isinstance(cb, str):
                 resolved = get_custom_logger_compatible_class(cb)  # type: ignore[arg-type]
                 if resolved is None:
