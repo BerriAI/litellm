@@ -1899,3 +1899,73 @@ class TestStreamingIDConsistency:
             else getattr(assistant_messages[0], "tool_calls", None)
         )
         assert tool_calls is not None and len(tool_calls) == 1
+
+
+class TestDeveloperRoleTranslation:
+    """The Responses API uses the ``developer`` role as the equivalent of the
+    Chat Completions ``system`` role. Non-OpenAI providers (vLLM, sglang, etc.)
+    only recognize ``system``/``user``/``assistant``/``tool`` and reject
+    ``developer`` with "Unexpected message role". The bridge must translate
+    ``developer`` to ``system`` so the downstream chat-completions call
+    succeeds.
+    """
+
+    def _role(self, msg):
+        return msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+
+    def test_developer_role_translates_to_system(self):
+        input_items = [
+            {"role": "developer", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        roles = [self._role(m) for m in messages]
+        assert "system" in roles
+        assert "developer" not in roles
+        assert "user" in roles
+
+    def test_other_roles_passed_through_unchanged(self):
+        input_items = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        roles = [self._role(m) for m in messages]
+        assert roles == ["system", "user", "assistant"]
+
+    def test_developer_role_with_structured_content_blocks(self):
+        input_items = [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "You are a helpful assistant."}
+                ],
+            }
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        assert len(messages) == 1
+        assert self._role(messages[0]) == "system"
+
+    def test_full_request_transform_drops_developer_role_from_messages(self):
+        """End-to-end: request with `developer` role gets `system` in the
+        downstream chat-completions request."""
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="hosted_vllm/some-model",
+            input=[
+                {"role": "developer", "content": "You are helpful."},
+                {"role": "user", "content": "Hi"},
+            ],
+            responses_api_request={"store": False},
+            extra_headers=None,
+        )
+        roles = [self._role(m) for m in result["messages"]]
+        assert "developer" not in roles
+        assert "system" in roles
+        assert "user" in roles

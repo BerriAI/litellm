@@ -980,9 +980,16 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            # The Responses API uses ``developer`` as the equivalent of the
+            # Chat Completions ``system`` role. Non-OpenAI providers (vLLM,
+            # sglang, etc.) only recognize ``system``/``user``/``assistant``/
+            # ``tool`` and reject ``developer`` with "Unexpected message role".
+            role = input_item.get("role") or "user"
+            if role == "developer":
+                role = "system"
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=role,
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
