@@ -1138,11 +1138,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def map_openai_event(
         self,
         key: str,
-        value: dict,
+        value: Any,
         current_delta_type: Optional[ALL_DELTA_TYPES],
     ) -> Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]:
-        model_turn_event = value.get("modelTurn")
-        generation_complete_event = value.get("generationComplete")
+        if isinstance(value, dict):
+            model_turn_event = value.get("modelTurn")
+            generation_complete_event = value.get("generationComplete")
+        else:
+            model_turn_event = None
+            generation_complete_event = None
         openai_event: Optional[
             Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]
         ] = None
@@ -1399,6 +1403,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     returned_message.append(
                         OpenAIRealtimeStreamResponseOutputItemAdded(
                             type="response.output_item.added",
+                            event_id=f"event_{uuid.uuid4()}",
                             response_id=current_response_id,
                             output_index=idx,
                             item={
@@ -1431,14 +1436,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                     # response.function_call_arguments.done
                     returned_message.append(tool_call)
-                    # response.output_item.done
+                    # response.output_item.done — pass a fresh copy so
+                    # downstream handlers that mutate the item dict (e.g. the
+                    # beta-protocol translator) don't corrupt the references
+                    # used by sibling events sharing the same function_call_item.
                     returned_message.append(
                         OpenAIRealtimeOutputItemDone(
                             type="response.output_item.done",
                             event_id=f"event_{uuid.uuid4()}",
                             response_id=current_response_id,
                             output_index=idx,
-                            item=function_call_item,
+                            item={**function_call_item},
                         )
                     )
                     # conversation.item.created
@@ -1446,7 +1454,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         OpenAIRealtimeConversationItemCreated(
                             type="conversation.item.created",
                             event_id=f"event_{uuid.uuid4()}",
-                            item=function_call_item,
+                            item={**function_call_item},
                         )
                     )
 
