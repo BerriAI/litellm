@@ -47,6 +47,70 @@ class TestMarkWorkerExit:
                 mark_worker_exit(99)
                 mock_mark.assert_called_once_with(99)
 
+    # ------------------------------------------------------------------
+    # Orphaned-file cleanup (LIT-1969)
+    # prometheus_client.mark_process_dead() only removes live gauge files;
+    # counters, histograms, and non-live gauges must be deleted explicitly.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "counter_42.db",
+            "histogram_42.db",
+            "summary_42.db",
+            "gauge_all_42.db",
+            "gauge_min_42.db",
+            "gauge_max_42.db",
+            "gauge_mostrecent_42.db",
+            "gauge_livesum_42.db",  # also deleted even if mark_process_dead already did it
+        ],
+    )
+    def test_deletes_all_db_files_for_dead_pid(self, tmp_path, filename):
+        """All *_{pid}.db file types are removed after worker exit."""
+        dead_file = tmp_path / filename
+        dead_file.touch()
+
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch("prometheus_client.multiprocess.mark_process_dead"):
+                mark_worker_exit(42)
+
+        assert not dead_file.exists(), f"{filename} should have been deleted"
+
+    def test_does_not_delete_files_for_other_pids(self, tmp_path):
+        """Files belonging to still-alive workers must not be touched."""
+        (tmp_path / "counter_42.db").touch()
+        (tmp_path / "counter_99.db").touch()  # different (live) worker
+        (tmp_path / "histogram_99.db").touch()
+
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch("prometheus_client.multiprocess.mark_process_dead"):
+                mark_worker_exit(42)
+
+        assert not (tmp_path / "counter_42.db").exists()
+        assert (tmp_path / "counter_99.db").exists()
+        assert (tmp_path / "histogram_99.db").exists()
+
+    def test_handles_already_deleted_files_gracefully(self, tmp_path):
+        """If mark_process_dead already removed a file, no exception is raised."""
+        # Create a live-gauge file, then simulate mark_process_dead deleting it
+        # before our glob runs (race condition / already cleaned up).
+        live_file = tmp_path / "gauge_livesum_77.db"
+        live_file.touch()
+
+        def side_effect_delete(pid):
+            live_file.unlink()  # simulate prometheus_client removing it
+
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch(
+                "prometheus_client.multiprocess.mark_process_dead",
+                side_effect=side_effect_delete,
+            ):
+                # Should not raise even though the file is already gone
+                mark_worker_exit(77)
+
+        assert not live_file.exists()
+
 
 class TestMaybeSetupPrometheusMultiprocDir:
     def test_respects_existing_env_var(self, tmp_path):
