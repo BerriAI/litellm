@@ -1629,8 +1629,15 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
         call_kwargs = mock_cache_team.await_args.kwargs
         assert call_kwargs["team_id"] == "team-1234"
         # The cached object must be built from the *updated* row, not the
-        # pre-mutation `existing_team` — that's the whole point.
+        # pre-mutation `existing_team` — that's the whole point. Both rows
+        # share team_id, so the only assertion that actually pins this is
+        # against the field that differs between them: `models`.
         assert call_kwargs["team_table"].team_id == "team-1234"
+        assert call_kwargs["team_table"].models == [
+            "bedrock-claude-sonnet-4",
+            "openai/*",
+            "team-byok-1",
+        ]
 
 
 @pytest.mark.asyncio
