@@ -324,7 +324,11 @@ async def _fetch_export_sections(
             ),
         )
         envelope["guardrails"] = [
-            _redact_litellm_params(rec) if redact_secrets else rec
+            (
+                _redact_sensitive_header_fields(_redact_litellm_params(rec))
+                if redact_secrets
+                else rec
+            )
             for rec in [_strip(r, _STRIP_FIELDS["guardrails"]) for r in rows]
         ]
 

@@ -1,10 +1,12 @@
 """Types, constants, and pure helpers shared by the config export/import endpoints."""
 
+import json
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 _MASKER = SensitiveDataMasker()
@@ -59,13 +61,15 @@ _STRIP_FIELDS: Dict[str, List[str]] = {
     "organizations": ["spend"],
     "teams": ["spend"],
     "users": ["spend", "user_api_key_hash", "password"],
-    "keys": ["token", "spend"],
+    # config and metadata are free-form blobs that operators may use to store
+    # callback credentials or webhook secrets; strip them rather than risk leaking.
+    "keys": ["token", "spend", "config", "metadata"],
     "credentials": [],  # credential_values handled separately (redaction)
     "models": [],
     "mcp_servers": [],  # credentials handled separately (redaction)
     "agents": ["spend"],
     "guardrails": [],
-    "tags": [],
+    "tags": ["spend"],
 }
 
 ALL_SECTIONS = list(_STRIP_FIELDS.keys()) + ["general_settings"]
@@ -182,22 +186,51 @@ def _redact_mcp_credentials(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
+def _redact_params_dict(params: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
+    """Redact sensitive keys in a litellm_params dict, recursing into nested dicts.
+
+    Depth is bounded by DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER to
+    satisfy the repo's recursive-function checker.
+    """
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+        return {"__redacted__": True}
+    out: Dict[str, Any] = {}
+    for k, v in params.items():
+        if _MASKER.is_sensitive_key(k) and v is not None:
+            out[k] = "__redacted__"
+        elif isinstance(v, dict):
+            out[k] = _redact_params_dict(v, depth + 1)
+        else:
+            out[k] = v
+    return out
+
+
 def _redact_litellm_params(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Redact credential sub-fields inside a litellm_params dict.
+    """Redact credential sub-fields inside a litellm_params value.
 
     Uses SensitiveDataMasker pattern-based detection to replace secret keys
     with the string sentinel ``"__redacted__"`` while leaving non-secret config
     fields (api_base, region_name, etc.) intact so the export remains useful
     for environment promotion.
+
+    Handles litellm_params stored as a dict or as a JSON-serialised string
+    (used by guardrails and some in-memory registry entries).  Recurses into
+    nested dicts so values like ``headers.Authorization`` are also redacted.
     """
     params = record.get("litellm_params")
-    if not isinstance(params, dict):
+    if params is None:
         return record
-    redacted_params = {
-        k: "__redacted__" if _MASKER.is_sensitive_key(k) and v is not None else v
-        for k, v in params.items()
-    }
-    return {**record, "litellm_params": redacted_params}
+    if isinstance(params, str):
+        try:
+            parsed = json.loads(params)
+        except (TypeError, ValueError):
+            return {**record, "litellm_params": "__redacted__"}
+        if isinstance(parsed, dict):
+            return {**record, "litellm_params": json.dumps(_redact_params_dict(parsed))}
+        return record
+    if isinstance(params, dict):
+        return {**record, "litellm_params": _redact_params_dict(params)}
+    return record
 
 
 def _clean_litellm_params_record(record: Dict[str, Any]) -> Dict[str, Any]:
