@@ -178,6 +178,24 @@ async def test_team_update_org_relocation_gate(
         assert row.organization_id == world.org_a_id, "denied but team relocated"
 
 
+# Phase 4 F6 — explicit pin on the `_verify_team_access` 403 detail string
+# when an org_admin clears the destination route gate but fails the source
+# team's org-membership check. The relocation matrix above covers the
+# status; this guard turns a silent rename of the helper's exception detail
+# into a CI red.
+async def test_team_update_org_b_admin_relocation_rejection_detail(
+    proxy_client, prisma, scratch, world
+):
+    await _seed_target(prisma, world, "alpha", scratch.prefix)
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {world.keys[Actor.ORG_B_ADMIN].cleartext}"},
+        json={"team_id": scratch.prefix, "organization_id": world.org_b_id},
+    )
+    assert resp.status_code == 403, resp.text
+    assert "do not have access to this team" in resp.text, resp.text
+
+
 async def test_team_update_org_relocation_allowed_for_dual_org_admin(
     proxy_client, prisma, scratch, world
 ):
