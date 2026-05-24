@@ -38,11 +38,9 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
 
 # Share constants with the sibling Agent Shin script instead of duplicating
 # them. `AGENT_SHIN_AUTO_CLOSE_MARKER` is the literal phrase the reconsider
@@ -53,23 +51,21 @@ from typing import Iterable
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
+# `extract_greptile_score`, `GREPTILE_BOT_LOGINS`, `SCORE_PATTERN`, and
+# `parse_iso8601` now live in triage_with_llm so the daily sweep and the
+# review gate read the Greptile score through one implementation (drift would
+# silently let one path act on a PR the other would spare).
 from triage_with_llm import (  # noqa: E402
     AGENT_SHIN_AUTO_CLOSE_MARKER,
+    GREPTILE_BOT_LOGINS,
     INTERNAL_ASSOCIATIONS,
+    SCORE_PATTERN,
+    extract_greptile_score,
+    parse_iso8601,
 )
 
-# Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
-# and `greptile-apps` in `gh pr view --json` output. Accept either form.
-GREPTILE_BOT_LOGINS = frozenset({"greptile-apps", "greptile-apps[bot]"})
-
-# Matches lines like:
-#   <h3>Confidence Score: 3/5</h3>
-#   **Confidence Score: 4/5**
-#   Confidence Score: 5 / 5
-SCORE_PATTERN = re.compile(
-    r"confidence\s*score\s*[:\-]?\s*(\d+)\s*/\s*5",
-    re.IGNORECASE,
-)
+# Re-exported above for any caller that imports them from this module.
+__all__ = ["GREPTILE_BOT_LOGINS", "SCORE_PATTERN", "extract_greptile_score"]
 
 # Default labels that exempt a PR from auto-close. Defined at module scope (not
 # as a mutable argparse default) so that `--optout-label foo` REPLACES the
@@ -195,39 +191,6 @@ def fetch_pr_comments(pr_number: int, repo: str | None) -> list[dict]:
         else:
             comments.append(parsed)
     return comments
-
-
-def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
-    """Return (score, comment) for the most recent Greptile-authored comment
-    that contains a "Confidence Score: X/5". Returns None if no such comment.
-
-    "Most recent" is determined by the comment's `updated_at` (falling back to
-    `created_at`), so re-reviews override earlier passes.
-    """
-    candidates: list[tuple[str, int, dict]] = []
-    for comment in comments:
-        user = (comment.get("user") or {}).get("login", "")
-        if user not in GREPTILE_BOT_LOGINS:
-            continue
-        body = comment.get("body") or ""
-        match = SCORE_PATTERN.search(body)
-        if not match:
-            continue
-        score = int(match.group(1))
-        timestamp = comment.get("updated_at") or comment.get("created_at") or ""
-        candidates.append((timestamp, score, comment))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda triple: triple[0])
-    _, score, comment = candidates[-1]
-    return score, comment
-
-
-def parse_iso8601(value: str) -> dt.datetime:
-    """Parse a GitHub ISO-8601 timestamp into a timezone-aware datetime."""
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def has_optout_label(pr: dict, optout_labels: set[str]) -> bool:

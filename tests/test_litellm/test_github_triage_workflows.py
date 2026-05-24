@@ -43,6 +43,7 @@ DESTRUCTIVE_GATE_ENV: dict[str, str] = {
     "triage_pr_with_llm.yml": "DISPATCH_CLOSE",
     "triage_issue_with_llm.yml": "DISPATCH_CLOSE",
     "close_low_quality_prs.yml": "CLOSE_FLAG",
+    "review_gate.yml": "CLOSE_FLAG",
     # The reconsider workflow has no per-run "really do it?" knob — its
     # only kill switch is `AGENT_SHIN_ENABLED`, which already serves as
     # both the destructive gate and the global enablement gate.
