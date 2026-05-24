@@ -97,6 +97,7 @@ class _CiscoAIDefenseMcpMixin:
 
         request_data: Dict[str, Any] = {}
         for key in (
+            "name",
             "litellm_call_id",
             "id",
             "user",
@@ -108,10 +109,12 @@ class _CiscoAIDefenseMcpMixin:
             "server_name",
             "metadata",
             "litellm_metadata",
+            "mcp_tool_call_metadata",
             "guardrails",
         ):
             if key in kwargs and kwargs[key] is not None:
                 request_data[key] = kwargs[key]
+        self._hydrate_mcp_tool_context(request_data)
 
         if not (
             self.should_run_guardrail(
@@ -232,6 +235,14 @@ class _CiscoAIDefenseMcpMixin:
         content = getattr(response_obj, "content", None)
         if isinstance(content, list):
             content[:] = replacement
+            structured_replacement = (
+                _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
+            )
+            if hasattr(response_obj, "structuredContent"):
+                try:
+                    setattr(response_obj, "structuredContent", structured_replacement)
+                except (AttributeError, TypeError, ValueError):
+                    pass
             if hasattr(response_obj, "isError"):
                 try:
                     setattr(response_obj, "isError", True)
@@ -247,11 +258,33 @@ class _CiscoAIDefenseMcpMixin:
             result = response_obj.get("result")
             if isinstance(result, dict):
                 result["content"] = replacement
+                result["structuredContent"] = (
+                    _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
+                )
+                result["isError"] = True
                 return True
-            response_obj["result"] = {"content": replacement}
+            response_obj["result"] = {
+                "content": replacement,
+                "structuredContent": _CiscoAIDefenseMcpMixin._replacement_structured_content(
+                    replacement
+                ),
+                "isError": True,
+            }
             return True
 
         return False
+
+    @staticmethod
+    def _replacement_structured_content(replacement: Any) -> Optional[Dict[str, str]]:
+        if not isinstance(replacement, list) or not replacement:
+            return None
+        first = replacement[0]
+        text = (
+            first.get("text")
+            if isinstance(first, dict)
+            else getattr(first, "text", None)
+        )
+        return {"result": text} if isinstance(text, str) else None
 
     @staticmethod
     def _extract_mcp_tool_call_response(response_obj: Any) -> Any:
@@ -368,7 +401,9 @@ class _CiscoAIDefenseMcpMixin:
                 "params": data.get("params") or {},
             }
 
-        tool_name = data.get("mcp_tool_name") or data.get("tool_name")
+        tool_name = (
+            data.get("mcp_tool_name") or data.get("tool_name") or data.get("name")
+        )
         if not tool_name:
             return None
 
@@ -391,21 +426,55 @@ class _CiscoAIDefenseMcpMixin:
         request_data: dict,
         response: Any,
     ) -> Optional[Dict[str, Any]]:
-        """Build the JSON-RPC response envelope sent to ``/inspect/mcp``.
-
-        Returns the top-level JSON-RPC body — same contract as the request
-        payload: no wrapper, no sibling metadata/config keys. The ``id`` is
-        backfilled from the originating request when the SDK response does
-        not carry one, so Cisco can correlate request/response pairs.
-        """
+        """Build the MCP response-inspection body sent to ``/inspect/mcp``."""
+        request_payload = self._build_mcp_request_payload(data=request_data)
+        if request_payload is None:
+            return None
         normalized = self._normalize_mcp_response(response)
         if normalized is None:
             return None
-        if normalized.get("id") in (None, "litellm-mcp"):
+
+        payload = dict(request_payload)
+        response_id = normalized.get("id")
+        if response_id not in (None, "litellm-mcp"):
+            payload["id"] = response_id
+        elif payload.get("id") in (None, "litellm-mcp"):
             request_id = request_data.get("litellm_call_id") or request_data.get("id")
             if request_id:
-                normalized["id"] = request_id
-        return normalized
+                payload["id"] = request_id
+
+        if "result" in normalized:
+            payload["result"] = normalized["result"]
+        if "error" in normalized:
+            payload["error"] = normalized["error"]
+        return payload
+
+    @staticmethod
+    def _hydrate_mcp_tool_context(request_data: Dict[str, Any]) -> None:
+        metadata = request_data.get("mcp_tool_call_metadata")
+        if metadata is None:
+            nested = request_data.get("metadata") or request_data.get(
+                "litellm_metadata"
+            )
+            if isinstance(nested, dict):
+                metadata = nested.get("mcp_tool_call_metadata")
+        if not isinstance(metadata, dict):
+            return
+
+        name = metadata.get("name")
+        arguments = metadata.get("arguments")
+        server_name = metadata.get("mcp_server_name")
+
+        if name:
+            request_data.setdefault("mcp_tool_name", name)
+            request_data.setdefault("tool_name", name)
+            request_data.setdefault("name", name)
+        if arguments is not None:
+            request_data.setdefault("mcp_arguments", arguments)
+            request_data.setdefault("arguments", arguments)
+        if server_name:
+            request_data.setdefault("mcp_server_name", server_name)
+            request_data.setdefault("server_name", server_name)
 
     @staticmethod
     def _normalize_mcp_response(response: Any) -> Optional[Dict[str, Any]]:

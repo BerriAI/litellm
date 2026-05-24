@@ -797,9 +797,6 @@ class TestCiscoAIDefenseMCPMode:
         post_call is not registered for mcp-mode guardrails, so MCP tool
         output must go through async_post_mcp_tool_call_hook.
 
-        Note: ``during_mcp_call`` must be in the configured modes for
-        response scanning to be enabled (the framework's mode gate). With
-        only ``pre_mcp_call`` the hook is request-only.
         """
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
@@ -836,6 +833,11 @@ class TestCiscoAIDefenseMCPMode:
         sent_payload = post_mock.call_args.kwargs["json"]
         assert sent_payload["jsonrpc"] == "2.0"
         assert sent_payload["id"] == "call-42"
+        assert sent_payload["method"] == "tools/call"
+        assert sent_payload["params"] == {
+            "name": "lookup_secret",
+            "arguments": {"key": "production"},
+        }
         assert sent_payload["result"]["content"][0]["text"] == (
             "Here is the secret API key abc123"
         )
@@ -1039,6 +1041,11 @@ class TestCiscoAIDefenseMCPMode:
             sent_payload = post_mock.call_args.kwargs["json"]
             assert sent_payload["jsonrpc"] == "2.0"
             assert sent_payload["id"] == "call-raw-list"
+            assert sent_payload["method"] == "tools/call"
+            assert sent_payload["params"] == {
+                "name": "lookup_secret",
+                "arguments": {"key": "production"},
+            }
             assert sent_payload["result"]["content"][0]["text"] == text_content
             assert result is None
 
@@ -1131,7 +1138,45 @@ class TestCiscoAIDefenseMCPMode:
         )
         assert content_items[0].get("type") == "text"
         assert sent_payload["id"] == "real-wire-call"
+        assert sent_payload["method"] == "tools/call"
+        assert sent_payload["params"] == {"name": "leak_tool", "arguments": {}}
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_hook_uses_standard_logging_tool_metadata(self):
+        g = CiscoAIDefenseGuardrail(
+            guardrail_name="t",
+            api_key="x",
+            inspection_type="mcp",
+            event_hook="pre_mcp_call",
+            default_on=True,
+        )
+        response_obj = _mcp_response([{"type": "text", "text": "tool output"}])
+
+        post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
+        with patch.object(g.async_handler, "post", new=post_mock):
+            result = await g.async_post_mcp_tool_call_hook(
+                kwargs={
+                    "litellm_call_id": "metadata-call",
+                    "mcp_tool_call_metadata": {
+                        "name": "lookup_secret",
+                        "arguments": {"key": "production"},
+                        "mcp_server_name": "vault",
+                    },
+                },
+                response_obj=response_obj,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+        assert result is None
+        sent_payload = post_mock.call_args.kwargs["json"]
+        assert sent_payload["method"] == "tools/call"
+        assert sent_payload["params"] == {
+            "name": "lookup_secret",
+            "arguments": {"key": "production"},
+        }
+        assert sent_payload["result"]["content"][0]["text"] == "tool output"
 
 
 def _make_streaming_chunks(parts):
@@ -3139,6 +3184,7 @@ class TestCiscoAIDefenseMCPBlockingContract:
         )
         raw_response = CallToolResult(
             content=[TextContent(type="text", text="exfiltrated")],
+            structuredContent={"result": "exfiltrated"},
             isError=False,
         )
         response_obj = MCPPostCallResponseObject(
@@ -3175,6 +3221,9 @@ class TestCiscoAIDefenseMCPBlockingContract:
         )
         assert raw_response.isError is True
         assert "Blocked by Cisco AI Defense" in raw_response.content[0].text
+        assert raw_response.structuredContent is not None
+        assert "Blocked by Cisco AI Defense" in raw_response.structuredContent["result"]
+        assert "exfiltrated" not in raw_response.structuredContent["result"]
         logging_stub = Logging.__new__(Logging)
         logging_stub.model_call_details = {}
         parsed = logging_stub._parse_post_mcp_call_hook_response(response=result)
