@@ -906,6 +906,90 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_resolved_key
 
 
+@pytest.mark.asyncio
+async def test_proxy_lifespan_runs_shutdown_event_on_clean_exit(monkeypatch):
+    """
+    Happy-path coverage for the try/except around `await proxy_shutdown_event()`
+    inside the uvicorn lifespan (BerriAI/litellm#26619). With shutdown
+    mocked to a clean no-op, the lifespan exits without entering the
+    except branch.
+    """
+    import litellm
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    database_url = os.environ.pop("DATABASE_URL", None)
+
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    # Use the existing repo test config that other proxy_startup_event tests use.
+    config_fp = os.path.normpath(
+        os.path.join(
+            filepath,
+            "..",
+            "..",
+            "proxy_unit_tests",
+            "test_configs",
+            "test_config_no_auth.yaml",
+        )
+    )
+    os.environ["WORKER_CONFIG"] = config_fp
+
+    clean_shutdown = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_shutdown_event", clean_shutdown
+    )
+
+    try:
+        async with proxy_startup_event(app=None) as _:
+            pass
+        clean_shutdown.assert_awaited_once()
+    finally:
+        if database_url is not None:
+            os.environ["DATABASE_URL"] = database_url
+
+
+@pytest.mark.asyncio
+async def test_prisma_disconnect_does_not_reraise_on_failure():
+    """
+    Regression test for BerriAI/litellm#26619.
+
+    `PrismaClient.disconnect()` is only ever called from shutdown paths.
+    If it re-raises on failure, the uvicorn lifespan exits with an
+    exception, uvicorn skips the Python-level `atexit`/SIGTERM cleanup,
+    and the Prisma query-engine subprocess is left as an orphan whose
+    Postgres connections sit on the DB side for ~2h. This test pins the
+    "swallow + log + schedule failure_handler" behavior.
+    """
+    from litellm.proxy.utils import PrismaClient
+
+    # Bypass __init__ (which imports prisma binaries) — we're only testing
+    # the disconnect() failure path, which needs `self.db` and
+    # `self.proxy_logging_obj` and nothing else.
+    client = PrismaClient.__new__(PrismaClient)
+
+    boom = AsyncMock(side_effect=RuntimeError("simulated engine disconnect failure"))
+    fake_db = MagicMock()
+    fake_db.disconnect = boom
+    client.db = fake_db
+
+    failure_handler = AsyncMock()
+    fake_proxy_logging = MagicMock()
+    fake_proxy_logging.failure_handler = failure_handler
+    client.proxy_logging_obj = fake_proxy_logging
+
+    # If the fix regresses, this call propagates RuntimeError and the test fails.
+    await client.disconnect()
+
+    boom.assert_awaited()
+    # The failure_handler is scheduled via asyncio.create_task — yield once
+    # to let the scheduled coroutine run before asserting.
+    await asyncio.sleep(0)
+    failure_handler.assert_awaited_once()
+    call_kwargs = failure_handler.await_args.kwargs
+    assert call_kwargs["call_type"] == "disconnect"
+    assert isinstance(call_kwargs["original_exception"], RuntimeError)
+
+
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked
@@ -5859,15 +5943,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio

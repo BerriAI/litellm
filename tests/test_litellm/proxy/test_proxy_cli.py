@@ -581,7 +581,55 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import _build_db_connection_url_params
 
         params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
-        assert params == {"connection_limit": 10, "pool_timeout": 60}
+        assert params == {
+            "connection_limit": 10,
+            "pool_timeout": 60,
+            "keepalives": "1",
+            "keepalives_idle": "60",
+            "keepalives_interval": "10",
+            "keepalives_count": "3",
+        }
+
+    def test_build_db_connection_url_params_includes_keepalives(self):
+        """Default libpq keepalive params are emitted so the kernel reaps dead
+        Postgres sessions from killed Prisma engine subprocesses in ~90s
+        instead of the OS default (~7200s). See BerriAI/litellm#26619."""
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
+        assert params["keepalives"] == "1"
+        assert params["keepalives_idle"] == "60"
+        assert params["keepalives_interval"] == "10"
+        assert params["keepalives_count"] == "3"
+
+    def test_build_db_connection_url_params_keepalives_overridable_via_extras(self):
+        """Operators can opt out of the keepalive defaults by passing
+        `extra_params` because `extra_params.update` runs last."""
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            extra_params={"keepalives": "0"},
+        )
+        assert params["keepalives"] == "0"
+
+    def test_build_db_connection_url_params_respects_existing_url_keepalives(self):
+        """If the DATABASE_URL already has a keepalive value, the default
+        for that key is not emitted — operators who set explicit
+        keepalive values in their URL keep them."""
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            existing_url=("postgresql://u:p@h/db?keepalives=0&keepalives_idle=120"),
+        )
+        assert "keepalives" not in params
+        assert "keepalives_idle" not in params
+        # Keys NOT in the URL still get the default.
+        assert params["keepalives_interval"] == "10"
+        assert params["keepalives_count"] == "3"
 
     def test_build_db_connection_url_params_omits_none_timeouts(self):
         from litellm.proxy.proxy_cli import _build_db_connection_url_params
