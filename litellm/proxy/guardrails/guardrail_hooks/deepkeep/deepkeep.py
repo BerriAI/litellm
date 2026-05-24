@@ -72,7 +72,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         api_base: Optional[str] = None,
         firewall_id: Optional[str] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        extra_headers: Optional[list] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -114,7 +114,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             unreachable_fallback
         )
-        self.extra_headers = extra_headers or []
+        self.extra_headers: Dict[str, str] = extra_headers or {}
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -168,8 +168,8 @@ class DeepKeepGuardrail(CustomGuardrail):
             if value is not None:
                 result_metadata[key] = value
 
-        # Handle the token → hash alias
-        if metadata_dict.get("user_api_key_token") is not None:
+        # Handle the token → hash alias (only when no explicit hash was provided)
+        if metadata_dict.get("user_api_key_token") is not None and "user_api_key_hash" not in result_metadata:
             result_metadata["user_api_key_hash"] = metadata_dict["user_api_key_token"]
 
         return result_metadata
@@ -180,6 +180,8 @@ class DeepKeepGuardrail(CustomGuardrail):
             "Content-Type": "application/json",
             "X-API-Key": self.deepkeep_api_key,
         }
+        if self.extra_headers:
+            headers.update(self.extra_headers)
         return headers
 
     def _fail_open_passthrough(
@@ -339,6 +341,10 @@ class DeepKeepGuardrail(CustomGuardrail):
                 return_inputs["images"] = images
             if tools:
                 return_inputs["tools"] = tools
+            if tool_calls:
+                return_inputs["tool_calls"] = tool_calls
+            if structured_messages:
+                return_inputs["structured_messages"] = structured_messages
             return return_inputs
 
         except GuardrailRaisedException:
