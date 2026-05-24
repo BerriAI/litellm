@@ -38,7 +38,7 @@ async def test_async_create_file():
         file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy",
+        s3_bucket_name="litellm-proxy-941277531214",
     )
 
 
@@ -55,7 +55,7 @@ async def test_async_file_and_batch():
         file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy",
+        s3_bucket_name="litellm-proxy-941277531214",
     )
     print("CREATED FILE RESPONSE=", file_obj)
 
@@ -129,7 +129,7 @@ async def test_mock_bedrock_file_url_mapping():
             ),
             purpose="batch",
             custom_llm_provider="bedrock",
-            s3_bucket_name="litellm-proxy",
+            s3_bucket_name="litellm-proxy-941277531214",
         )
 
         print(f"PUT URL: {captured_put_url}")
