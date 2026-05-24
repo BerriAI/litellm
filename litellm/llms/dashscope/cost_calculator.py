@@ -1,5 +1,5 @@
 """
-Cost calculator for Dashscope Chat models. 
+Cost calculator for Dashscope Chat models.
 
 Handles tiered pricing and prompt caching scenarios.
 """

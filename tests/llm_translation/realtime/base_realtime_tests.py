@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import pytest
 import websockets
@@ -153,8 +153,14 @@ class BaseRealtimeTest(ABC):
         pass
 
     @abstractmethod
-    def get_initial_event_type(self) -> str:
-        """Return the expected initial event type (e.g., 'session.created' or 'conversation.created')"""
+    def get_initial_event_type(self) -> Union[str, Tuple[str, ...]]:
+        """Return the expected initial event type(s).
+
+        May return a single event type (e.g. ``'session.created'``) or a tuple
+        of acceptable types when the upstream provider can legitimately emit
+        more than one initial event (e.g. xAI's Grok Voice Agent has shipped
+        both ``conversation.created`` and ``session.created``).
+        """
         pass
 
     def get_skip_reason(self) -> str:
@@ -229,9 +235,14 @@ class BaseRealtimeTest(ABC):
 
         # Verify initial event
         initial_event = websocket_client.messages_received[0]
+        expected_event_type = self.get_initial_event_type()
+        if isinstance(expected_event_type, str):
+            allowed_event_types: Tuple[str, ...] = (expected_event_type,)
+        else:
+            allowed_event_types = tuple(expected_event_type)
         assert (
-            initial_event["type"] == self.get_initial_event_type()
-        ), f"Expected {self.get_initial_event_type()}, got {initial_event.get('type')}"
+            initial_event["type"] in allowed_event_types
+        ), f"Expected one of {allowed_event_types}, got {initial_event.get('type')}"
 
     @pytest.mark.asyncio
     async def test_realtime_with_query_params(self):

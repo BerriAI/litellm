@@ -1203,6 +1203,51 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"
 
 
+def test_streaming_chunk_with_text_and_empty_tool_calls_returns_text_delta():
+    """
+    Some OpenAI-compatible providers emit `tool_calls: []` on regular text chunks.
+
+    Empty tool_calls should be treated as no tool call so the Anthropic adapter
+    does not shadow text with an empty input_json_delta.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Hello from vLLM",
+                role="assistant",
+                function_call=None,
+                tool_calls=[],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Hello from vLLM"
+
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "text"
+    assert content_block_start == {"type": "text", "text": ""}
+
+
 # ============================================================================
 # Cache Control Transformation Tests
 # ============================================================================
