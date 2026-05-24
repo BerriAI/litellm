@@ -4,9 +4,8 @@ datasource client {
 }
 
 generator client {
-  provider             = "prisma-client-py"
-  binaryTargets        = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
-  recursive_type_depth = 5
+  provider = "prisma-client-py"
+  binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
 // Budget / Rate Limits for an org
@@ -30,8 +29,8 @@ model LiteLLM_BudgetTable {
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
-  team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team
-  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
+  team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
 }
 
 // Models on proxy
@@ -39,7 +38,7 @@ model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
   credential_values Json
-  credential_info Json?
+  credential_info Json? 
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -96,7 +95,7 @@ model LiteLLM_OrganizationTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     updated_by String
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
-    teams LiteLLM_TeamTable[]
+    teams LiteLLM_TeamTable[] 
     users LiteLLM_UserTable[]
     keys LiteLLM_VerificationToken[]
     members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
@@ -115,10 +114,10 @@ model LiteLLM_ModelTable {
 }
 
 
-// Assign prod keys to groups, not individuals
+// Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
 		team_id    String @id @default(uuid())
-    team_alias  String?
+    team_alias  String? 
     organization_id String?
     object_permission_id String?
     admins String[]
@@ -132,7 +131,7 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    budget_duration String?
+    budget_duration String? 
     budget_reset_at DateTime?
     blocked Boolean @default(false)
     created_at    DateTime               @default(now()) @map("created_at")
@@ -176,7 +175,7 @@ model LiteLLM_ProjectTable {
   created_by           String
   updated_at           DateTime @default(now()) @updatedAt @map("updated_at")
   updated_by           String
-
+  
   // Relations
   litellm_team_table   LiteLLM_TeamTable?   @relation(fields: [team_id], references: [team_id])
   litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
@@ -217,13 +216,13 @@ model LiteLLM_DeletedTeamTable {
     // Original timestamps from team creation/updates
     created_at              DateTime? @map("created_at")
     updated_at              DateTime? @map("updated_at")
-
+    
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
     deleted_by              String?   @map("deleted_by") // User who deleted the team
     deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
     litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
-
+    
     @@index([team_id])
     @@index([deleted_at])
     @@index([organization_id])
@@ -234,7 +233,7 @@ model LiteLLM_DeletedTeamTable {
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @id
-    user_alias String?
+    user_alias String? 
     team_id    String?
     sso_user_id String? @unique
     organization_id String?
@@ -250,7 +249,7 @@ model LiteLLM_UserTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    budget_duration String?
+    budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     policies         String[] @default([])
@@ -289,7 +288,7 @@ model LiteLLM_ObjectPermissionTable {
   agents_table          LiteLLM_AgentsTable[]
 }
 
-// Holds the MCP server configuration
+// Holds the MCP server configuration 
 model LiteLLM_MCPServerTable {
   server_id    String         @id @default(uuid())
   server_name  String?
@@ -299,7 +298,7 @@ model LiteLLM_MCPServerTable {
   url          String?
   spec_path    String?
   transport    String         @default("sse")
-  auth_type    String?
+  auth_type    String?        
   credentials  Json?          @default("{}")
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
@@ -386,8 +385,8 @@ model LiteLLM_VerificationToken {
     blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    max_budget Float?
-    budget_duration String?
+    max_budget Float?    
+    budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
@@ -502,13 +501,13 @@ model LiteLLM_DeletedVerificationToken {
     rotation_interval       String?
     last_rotation_at        DateTime?
     key_rotation_at         DateTime?
-
+    
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
     deleted_by              String?   @map("deleted_by") // User who deleted the key
     deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
     litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
-
+    
     @@index([token])
     @@index([deleted_at])
     @@index([user_id])
@@ -574,7 +573,7 @@ model LiteLLM_SpendLogs {
   cache_hit           String?   @default("")
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
-  team_id             String?
+  team_id             String? 
   organization_id     String?
   end_user            String?
   requester_ip_address String?
@@ -582,7 +581,7 @@ model LiteLLM_SpendLogs {
   response            Json?     @default("{}")
   session_id          String?
   status              String?
-  mcp_namespaced_tool_name String?
+  mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
@@ -596,7 +595,7 @@ model LiteLLM_ErrorLogs {
   request_id          String   @id @default(uuid())
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
-  api_base            String   @default("")
+  api_base            String   @default("") 
   model_group         String   @default("")      // public model_name / model_group
   litellm_model_name  String   @default("")      // model passed to litellm
   model_id            String   @default("")      // ID of model in ProxyModelTable
@@ -609,7 +608,7 @@ model LiteLLM_ErrorLogs {
 // Beta - allow team members to request access to a model
 model LiteLLM_UserNotifications {
   request_id          String @id
-  user_id             String
+  user_id             String 
   models              String[]
   justification       String
   status              String // approved, disapproved, pending
@@ -640,8 +639,8 @@ model LiteLLM_OrganizationMembership {
   user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
   organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
-
-
+  
+  
 
   @@id([user_id, organization_id])
   @@unique([user_id, organization_id])
@@ -674,18 +673,18 @@ model LiteLLM_AuditLog {
   action             String      // create, update, delete
   table_name         String      // on of  LitellmTableNames.TEAM_TABLE_NAME, LitellmTableNames.USER_TABLE_NAME, LitellmTableNames.PROXY_MODEL_TABLE_NAME,
   object_id          String      // id of the object being audited. This can be the key id, team id, user id, model id
-  before_value       Json?       // value of the row
+  before_value       Json?       // value of the row 
   updated_values     Json?       // value of the row after change
 }
 
 // Track daily user spend metrics per model and key
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
-  user_id             String?
+  user_id             String? 
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -714,9 +713,9 @@ model LiteLLM_DailyOrganizationSpend {
   id                  String   @id @default(uuid())
   organization_id     String?
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -745,9 +744,9 @@ model LiteLLM_DailyEndUserSpend {
   id                  String   @id @default(uuid())
   end_user_id         String?
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -775,9 +774,9 @@ model LiteLLM_DailyAgentSpend {
   id                  String   @id @default(uuid())
   agent_id            String?
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -805,9 +804,9 @@ model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
   team_id             String?
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -835,11 +834,11 @@ model LiteLLM_DailyTeamSpend {
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
-  tag                 String?
+  tag                 String?   
   date                String
-  api_key             String
+  api_key             String   
   model               String?
-  model_group         String?
+  model_group         String?  
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -945,7 +944,7 @@ model LiteLLM_ManagedVectorStoresTable {
   litellm_params Json?
   team_id String?
   user_id String?
-
+  
   @@index([team_id])
   @@index([user_id])
 }
@@ -1205,7 +1204,7 @@ model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())
   access_group_name  String   @unique
   description        String?
-
+  
   // Resource memberships - explicit arrays per type
   access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
