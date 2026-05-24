@@ -52,6 +52,7 @@ model LiteLLM_ProxyModelTable {
   model_name String
   litellm_params Json
   model_info Json?
+  blocked Boolean @default(false)
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

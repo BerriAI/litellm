@@ -518,19 +518,23 @@ def management_endpoint_wrapper(func):
                         _request_body: dict = await _read_request_body(
                             request=_http_request
                         )
-                        logging_payload = ManagementEndpointLoggingPayload(
-                            route=_route,
-                            request_data=_request_body,
-                            response=None,
-                            start_time=start_time,
-                            end_time=end_time,
-                            exception=e,
-                        )
+                    else:
+                        _route = func.__name__
+                        _request_body = {}
 
-                        await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
-                            logging_payload=logging_payload,
-                            parent_otel_span=parent_otel_span,
-                        )
+                    logging_payload = ManagementEndpointLoggingPayload(
+                        route=_route,
+                        request_data=_request_body,
+                        response=None,
+                        start_time=start_time,
+                        end_time=end_time,
+                        exception=e,
+                    )
+
+                    await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
+                        logging_payload=logging_payload,
+                        parent_otel_span=parent_otel_span,
+                    )
 
             raise e
 

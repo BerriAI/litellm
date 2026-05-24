@@ -36,6 +36,75 @@ SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
+VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
+VCR_DIAG_DIR_DEFAULT = "test-results/vcr-diagnostics"
+
+
+def _vcr_diag_dir() -> str:
+    return os.environ.get(VCR_DIAG_DIR_ENV) or VCR_DIAG_DIR_DEFAULT
+
+
+def vcr_diag_write_line(msg: str) -> None:
+    try:
+        directory = _vcr_diag_dir()
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{os.getpid()}.log")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(msg.rstrip("\n") + "\n")
+    except OSError:
+        pass
+
+
+def reset_vcr_diag_dir() -> None:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    directory = _vcr_diag_dir()
+    if not os.path.isdir(directory):
+        return
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if name.endswith(".log"):
+            try:
+                os.remove(os.path.join(directory, name))
+            except OSError:
+                pass
+
+
+def emit_vcr_diagnostic_log(terminalreporter) -> None:
+    directory = _vcr_diag_dir()
+    if not os.path.isdir(directory):
+        return
+    try:
+        files = sorted(f for f in os.listdir(directory) if f.endswith(".log"))
+    except OSError:
+        return
+    if not files:
+        return
+    terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
+    terminalreporter.write_line(
+        f"  source dir: {directory}  (also archived as a CI artifact)"
+    )
+    for name in files:
+        path = os.path.join(directory, name)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError as exc:
+            terminalreporter.write_line(
+                f"  [failed to read {name}: {type(exc).__name__}: {exc}]"
+            )
+            continue
+        if not content.strip():
+            continue
+        terminalreporter.write_sep("-", name, bold=False)
+        for line in content.splitlines():
+            terminalreporter.write_line(line)
+    terminalreporter.write_sep("=", bold=True)
+
+
 # Intentionally narrower than ``FILTERED_REQUEST_HEADERS``: AWS SigV4 headers
 # carry secrets but their values rotate on every call, so fingerprinting them
 # would defeat caching.
@@ -91,6 +160,32 @@ VCR_IMAGE_B64_PLACEHOLDER = "dGVzdA=="
 VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
 
 
+def pin_httpx_multipart_boundary(monkeypatch) -> None:
+    try:
+        import httpx._multipart as _httpx_multipart
+    except ImportError:
+        return
+
+    _original_init = _httpx_multipart.MultipartStream.__init__
+
+    def _init_with_fixed_boundary(self, data, files, boundary=None, **kwargs):
+        if boundary is None:
+            boundary = VCR_FIXED_MULTIPART_BOUNDARY.encode("ascii")
+        return _original_init(self, data=data, files=files, boundary=boundary, **kwargs)
+
+    monkeypatch.setattr(
+        _httpx_multipart.MultipartStream, "__init__", _init_with_fixed_boundary
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pin_multipart_boundary():
+    monkeypatch = pytest.MonkeyPatch()
+    pin_httpx_multipart_boundary(monkeypatch)
+    yield
+    monkeypatch.undo()
+
+
 def _scrub_response(response):
     if not isinstance(response, dict):
         return response
@@ -139,9 +234,17 @@ def _strip_image_b64_payloads(response):
     preserves all those checks while shrinking cassettes by ~99%.
     """
     if not isinstance(response, dict):
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response is {type(response).__name__!r}, not "
+            "dict; skipping b64 scrub"
+        )
         return response
     body = response.get("body")
     if not isinstance(body, dict):
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response['body'] is {type(body).__name__!r}, "
+            "not dict; skipping b64 scrub"
+        )
         return response
     raw = body.get("string")
     if raw is None:
@@ -151,12 +254,20 @@ def _strip_image_b64_payloads(response):
         try:
             text = bytes(raw).decode("utf-8")
         except UnicodeDecodeError:
+            vcr_diag_write_line(
+                "[vcr-strip-b64] response body bytes are not valid UTF-8; "
+                "skipping b64 scrub"
+            )
             return response
         was_bytes = True
     elif isinstance(raw, str):
         text = raw
         was_bytes = False
     else:
+        vcr_diag_write_line(
+            f"[vcr-strip-b64] response['body']['string'] is "
+            f"{type(raw).__name__!r}, not bytes/str; skipping b64 scrub"
+        )
         return response
 
     try:
@@ -186,6 +297,35 @@ def _before_record_response(response):
     return filter_non_2xx_response(_scrub_response(_strip_image_b64_payloads(response)))
 
 
+def _canonical_body(request) -> tuple[bytes, str]:
+    pre_type = type(getattr(request, "body", None)).__name__
+    _materialize_iterable_body(request)
+    body = getattr(request, "body", None)
+    if body is None:
+        return b"", pre_type
+    if isinstance(body, bytes):
+        return body, pre_type
+    if isinstance(body, bytearray):
+        return bytes(body), pre_type
+    if isinstance(body, str):
+        return body.encode("utf-8"), pre_type
+    if isinstance(body, (dict, list)):
+        try:
+            return (
+                json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                pre_type,
+            )
+        except (TypeError, ValueError):
+            pass
+    method = getattr(request, "method", "?")
+    uri = getattr(request, "uri", getattr(request, "url", "?"))
+    vcr_diag_write_line(
+        f"[vcr-canonical-body] FALLBACK: {method} {uri} body type "
+        f"{type(body).__name__!r} not coerced to bytes; comparing as b''"
+    )
+    return b"", pre_type
+
+
 def _safe_body_matcher(r1, r2) -> None:
     """Compare request bodies as bytes; never invokes ``json.loads``.
 
@@ -195,25 +335,45 @@ def _safe_body_matcher(r1, r2) -> None:
     This matcher is strictly more conservative — the only equivalence
     it gives up vs. the default is "JSON key order doesn't matter".
     """
-    body1 = getattr(r1, "body", None)
-    body2 = getattr(r2, "body", None)
+    body1, pre1 = _canonical_body(r1)
+    body2, pre2 = _canonical_body(r2)
     if body1 == body2:
         return
-
-    def _to_bytes(b):
-        if b is None:
-            return b""
-        if isinstance(b, bytes):
-            return b
-        if isinstance(b, str):
-            return b.encode("utf-8")
-        return None
-
-    n1 = _to_bytes(body1)
-    n2 = _to_bytes(body2)
-    if n1 is not None and n2 is not None and n1 == n2:
-        return
+    _emit_body_mismatch_diagnostic(r1, r2, body1, body2, pre1, pre2)
     raise AssertionError("request bodies differ")
+
+
+def _emit_body_mismatch_diagnostic(r1, r2, body1, body2, pre1, pre2) -> None:
+    def _describe(label, asbytes, pre_type):
+        return (
+            f"  {label}: pre_canonical_type={pre_type!r} length={len(asbytes)} "
+            f"sha256={hashlib.sha256(asbytes).hexdigest()} "
+            f"preview={asbytes[:120]!r}"
+        )
+
+    method_a = getattr(r1, "method", "?")
+    method_b = getattr(r2, "method", "?")
+    url_a = getattr(r1, "uri", getattr(r1, "url", "?"))
+    url_b = getattr(r2, "uri", getattr(r2, "url", "?"))
+    lines = [
+        "[vcr-safe-body-matcher] request body mismatch",
+        f"  request[a]: {method_a} {url_a}",
+        f"  request[b]: {method_b} {url_b}",
+        _describe("body[a]", body1, pre1),
+        _describe("body[b]", body2, pre2),
+    ]
+    if body1 != body2:
+        offset = next(
+            (i for i in range(min(len(body1), len(body2))) if body1[i] != body2[i]),
+            min(len(body1), len(body2)),
+        )
+        start = max(0, offset - 100)
+        end_a = min(len(body1), offset + 100)
+        end_b = min(len(body2), offset + 100)
+        lines.append(f"  first divergent byte offset: {offset}")
+        lines.append(f"  window[a] @ {start}..{end_a}: {body1[start:end_a]!r}")
+        lines.append(f"  window[b] @ {start}..{end_b}: {body2[start:end_b]!r}")
+    vcr_diag_write_line("\n".join(lines))
 
 
 def _iter_header_values(headers, name: str):
@@ -271,6 +431,13 @@ def _compute_key_fingerprint(request) -> str:
             stable = _stable_key_value(header_name, text)
             parts.append(f"{header_name}={stable}")
     if not parts:
+        method = getattr(request, "method", "?")
+        uri = getattr(request, "uri", getattr(request, "url", "?"))
+        vcr_diag_write_line(
+            f"[vcr-key-fingerprint] no API key header found on {method} "
+            f"{uri}; falling back to 'no-key'. If this request should have "
+            "carried auth, something earlier in the pipeline stripped it."
+        )
         return "no-key"
     digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
     return digest[:16]
@@ -360,6 +527,13 @@ def _normalize_multipart_boundary(request) -> None:
     elif isinstance(body, str):
         new_body = body.replace(current_boundary, VCR_FIXED_MULTIPART_BOUNDARY)
     else:
+        vcr_diag_write_line(
+            f"[vcr-multipart-normalize] body normalization SKIPPED: "
+            f"body type {type(body).__name__!r} is not bytes/bytearray/str. "
+            f"content-type={content_type_value!r}. "
+            f"Recorded body will retain the random boundary substring "
+            f"and the safe_body matcher will miss on the next run."
+        )
         return
 
     try:
@@ -389,6 +563,7 @@ def _before_record_request(request):
     headers = getattr(request, "headers", None)
     if headers is None:
         return request
+    _materialize_iterable_body(request)
     if not any(_iter_header_values(headers, KEY_FINGERPRINT_HEADER)):
         fingerprint = _compute_key_fingerprint(request)
         try:
@@ -398,6 +573,56 @@ def _before_record_request(request):
     _strip_headers(headers, FILTERED_REQUEST_HEADERS)
     _normalize_multipart_boundary(request)
     return request
+
+
+def _materialize_iterable_body(request) -> None:
+    body = getattr(request, "body", None)
+    if body is None or isinstance(body, (bytes, bytearray, str)):
+        return
+    if not hasattr(body, "__next__"):
+        return
+    try:
+        chunks = list(body)
+    except TypeError:
+        return
+
+    out = _coalesce_chunks_to_bytes(chunks)
+    if out is None:
+        method = getattr(request, "method", "?")
+        uri = getattr(request, "uri", getattr(request, "url", "?"))
+        first_type = type(chunks[0]).__name__ if chunks else "empty"
+        vcr_diag_write_line(
+            f"[vcr-materialize] FALLBACK: {method} {uri} chunk type "
+            f"{first_type!r} not coerced to bytes; storing b''"
+        )
+        out = b""
+
+    try:
+        request.body = out
+    except (AttributeError, TypeError):
+        pass
+
+    for attr in ("_was_iter", "_was_file"):
+        try:
+            setattr(request, attr, False)
+        except (AttributeError, TypeError):
+            pass
+
+
+def _coalesce_chunks_to_bytes(chunks):
+    if not chunks:
+        return b""
+    first = chunks[0]
+    try:
+        if isinstance(first, int):
+            return bytes(chunks)
+        if isinstance(first, (bytes, bytearray)):
+            return b"".join(c if isinstance(c, bytes) else bytes(c) for c in chunks)
+        if isinstance(first, str):
+            return "".join(chunks).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def _key_fingerprint_matcher(r1, r2) -> None:
@@ -410,7 +635,17 @@ def _key_fingerprint_matcher(r1, r2) -> None:
             return value if isinstance(value, str) else str(value)
         return "no-key"
 
-    if _fp(r1) != _fp(r2):
+    fp1, fp2 = _fp(r1), _fp(r2)
+    if fp1 != fp2:
+        method_a = getattr(r1, "method", "?")
+        method_b = getattr(r2, "method", "?")
+        url_a = getattr(r1, "uri", getattr(r1, "url", "?"))
+        url_b = getattr(r2, "uri", getattr(r2, "url", "?"))
+        vcr_diag_write_line(
+            "[vcr-key-fingerprint-matcher] API key fingerprints differ\n"
+            f"  request[a]: {method_a} {url_a} fingerprint={fp1!r}\n"
+            f"  request[b]: {method_b} {url_b} fingerprint={fp2!r}"
+        )
         raise AssertionError("API key fingerprints differ")
 
 

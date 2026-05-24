@@ -159,9 +159,20 @@ def make_redis_persister(
                 raise CassetteNotFoundError() from exc
             if data is None:
                 raise CassetteNotFoundError()
-            if isinstance(data, bytes):
-                data = data.decode("utf-8")
-            return deserialize(data, serializer)
+            try:
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8")
+                return deserialize(data, serializer)
+            except Exception as exc:
+                _record_cache_failure("load", exc)
+                msg = (
+                    f"VCR redis load failed for {cassette_path}; cached "
+                    f"payload is corrupt, treating as cache miss: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                _log.warning(msg)
+                warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
+                raise CassetteNotFoundError() from exc
 
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):
