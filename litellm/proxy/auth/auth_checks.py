@@ -1644,18 +1644,32 @@ async def _cache_team_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    key = "team_id:{}".format(team_id)
-
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
     await _cache_management_object(
-        key=key,
+        key="team_id:{}".format(team_id),
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=LiteLLM_TeamTableCachedObj,
     )
+
+    # Mirror the write under the alias key too. `get_team_object_by_alias`
+    # (used by the JWT auth path with `team_alias_jwt_field`) reads from
+    # `team_alias:<alias>`, and `_cache_team_object` is the canonical
+    # "refresh this team" primitive — every caller (cache-refreshing team
+    # writes, DB-fetch repopulate, access-group endpoints) needs the
+    # alias-keyed entry to stay in sync, otherwise the alias path keeps
+    # serving stale `team.models` / `object_permission` until cache TTL.
+    if team_table.team_alias:
+        await _cache_management_object(
+            key="team_alias:{}".format(team_table.team_alias),
+            value=team_table,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            model_type=LiteLLM_TeamTableCachedObj,
+        )
 
 
 async def _cache_key_object(
