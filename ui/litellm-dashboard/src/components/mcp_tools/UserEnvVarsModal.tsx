@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Input, Button, Alert, Typography } from "antd";
+import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
 import { MCPServer, MCPUserEnvVarsStatus } from "./types";
 import {
   getMCPUserEnvVars,
@@ -7,7 +7,7 @@ import {
 } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
-const { Text, Title, Paragraph } = Typography;
+const { Text, Title } = Typography;
 
 interface UserEnvVarsModalProps {
   server: MCPServer | null;
@@ -77,7 +77,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
       }
       const saved = await storeMCPUserEnvVars(accessToken, server.server_id, trimmed);
       setStatus(saved);
-      NotificationsManager.success("Environment variables saved");
+      NotificationsManager.success("Credentials saved");
       if (onSaved) onSaved(saved);
       onClose();
     } catch (err) {
@@ -89,86 +89,83 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
     }
   };
 
-  const displayName = server?.alias || server?.server_name || server?.server_id || "MCP Server";
+  const displayName = server?.server_name || server?.alias || server?.server_id || "MCP Server";
+  const required = status?.required ?? [];
 
   return (
     <Modal
-      title={
-        <div>
-          <Title level={4} className="!mb-0">
-            Set your credentials for {displayName}
-          </Title>
-          <Text type="secondary" className="text-sm">
-            These values are stored only for you and are injected into the MCP server&apos;s
-            request headers when you use it.
-          </Text>
-        </div>
-      }
       open={open}
       onCancel={onClose}
       footer={null}
-      width={580}
+      width={520}
       destroyOnHidden
-    >
-      {status && status.required.length === 0 ? (
-        <Alert
-          type="info"
-          showIcon
-          message="This MCP server doesn't require any per-user values."
-        />
-      ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleSave}
-          disabled={isLoading || isSaving}
-        >
-          {status?.missing_count ? (
-            <Alert
-              type="warning"
-              showIcon
-              className="mb-4"
-              message={`${status.missing_count} required field${status.missing_count === 1 ? "" : "s"} missing`}
-            />
-          ) : null}
-
-          {(status?.required ?? []).map((spec) => (
-            <Form.Item
-              key={spec.name}
-              name={spec.name}
-              label={<span className="font-mono text-sm">{spec.name}</span>}
-              extra={spec.description || undefined}
-              rules={[{ required: true, message: `${spec.name} is required` }]}
-            >
-              <Input
-                size="large"
-                placeholder={spec.description || `Enter value for ${spec.name}`}
-                allowClear
-              />
-            </Form.Item>
-          ))}
-
-          {(status?.required ?? []).length === 0 && !isLoading && (
-            <Paragraph type="secondary">
-              No per-user variables required for this server.
-            </Paragraph>
-          )}
-
-          <div className="flex justify-end gap-2 mt-4">
-            <Button onClick={onClose} disabled={isSaving}>
-              Cancel
-            </Button>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={isSaving}
-              disabled={(status?.required ?? []).length === 0}
-            >
-              Save
-            </Button>
+      title={
+        <div>
+          <div className="flex items-center gap-2">
+            <Title level={5} style={{ margin: 0 }}>
+              Set your credentials
+            </Title>
+            <Tag color="blue">Per-user</Tag>
           </div>
-        </Form>
-      )}
+          <Text type="secondary" className="text-xs">
+            {displayName}
+          </Text>
+        </div>
+      }
+    >
+      <div className="space-y-4 mt-2">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Spin />
+          </div>
+        ) : required.length === 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            message="No per-user fields configured for this server."
+          />
+        ) : (
+          <>
+            <Text className="text-sm text-gray-600 block">
+              These values are private to you. Your admin configured this MCP
+              server to require these per-user credentials:
+            </Text>
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={handleSave}
+              disabled={isSaving}
+            >
+              {required.map((spec) => (
+                <Form.Item
+                  key={spec.name}
+                  name={spec.name}
+                  label={
+                    <span className="font-mono text-sm font-semibold">
+                      {spec.name}
+                    </span>
+                  }
+                  extra={spec.description || undefined}
+                  rules={[{ required: true, message: `${spec.name} is required` }]}
+                >
+                  <Input.Password
+                    placeholder={spec.description || `Enter your ${spec.name}`}
+                    visibilityToggle
+                  />
+                </Form.Item>
+              ))}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                <Button onClick={onClose} disabled={isSaving}>
+                  Cancel
+                </Button>
+                <Button type="primary" htmlType="submit" loading={isSaving}>
+                  Save Credentials
+                </Button>
+              </div>
+            </Form>
+          </>
+        )}
+      </div>
     </Modal>
   );
 };

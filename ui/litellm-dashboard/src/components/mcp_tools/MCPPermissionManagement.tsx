@@ -2,7 +2,6 @@ import React, { useEffect } from "react";
 import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer, AUTH_TYPE } from "./types";
-import EnvVarsSection from "./EnvVarsSection";
 const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
@@ -283,8 +282,6 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               )}
             </Form.List>
           </Form.Item>
-
-          <EnvVarsSection />
         </div>
       </Panel>
     </Collapse>

@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { MCPServer, MCPUserEnvVarsStatus } from "./types";
+import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined, ExclamationCircleFilled } from "@ant-design/icons";
+import { CheckOutlined } from "@ant-design/icons";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,8 +92,6 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
-  envVarStatusByServer?: Record<string, MCPUserEnvVarsStatus>,
-  onSetEnvVars?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -115,15 +113,8 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const logoUrl = row.original.mcp_info?.logo_url;
       const name = row.original.server_name;
-      const status = envVarStatusByServer?.[row.original.server_id];
-      const missing = status?.missing_count ?? 0;
-      const showWarning = missing > 0;
       return (
-        <div
-          className={`flex items-center gap-2 ${
-            showWarning ? "border border-red-300 bg-red-50 px-2 py-1 rounded-md" : ""
-          }`}
-        >
+        <div className="flex items-center gap-2">
           {logoUrl ? (
             <img
               src={logoUrl}
@@ -132,23 +123,7 @@ export const mcpServerColumns = (
               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           ) : null}
-          <span className={showWarning ? "text-red-700 font-medium" : ""}>{name}</span>
-          {showWarning && (
-            <Tooltip
-              title={`Set ${missing} required user field${missing === 1 ? "" : "s"} before using this MCP server`}
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onSetEnvVars) onSetEnvVars(row.original);
-                }}
-                className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300 hover:bg-red-200 cursor-pointer"
-              >
-                <ExclamationCircleFilled />
-                {missing} missing field{missing === 1 ? "" : "s"}
-              </button>
-            </Tooltip>
-          )}
+          <span>{name}</span>
         </div>
       );
     },

@@ -9,6 +9,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -1111,6 +1112,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </Form.Item>
               </>
             )}
+
+            {/* Environment Variables Section */}
+            <div className="mt-6">
+              <EnvVarsSection />
+            </div>
 
             {/* Permission Management / Access Control Section */}
             <div className="mt-6">
