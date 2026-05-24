@@ -221,6 +221,36 @@ async def test_resolve_static_headers_raises_when_user_vars_missing(
 
 
 @pytest.mark.asyncio
+async def test_resolve_static_headers_missing_is_non_blocking_for_listing(
+    mock_server, monkeypatch
+):
+    """With raise_on_missing=False (the tool-list path), missing per-user vars
+    must NOT raise. Available vars interpolate; unfilled ${NAME} refs are left
+    untouched so the server's tools still appear in the listing."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+
+    async def fake_load_user_env_vars(server, user_api_key_auth):
+        # User has only filled in one of the two required vars.
+        return {"CORP_USERNAME": "alice"}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    headers = await manager._resolve_static_headers_with_env_vars(
+        mock_server, user_api_key_auth=object(), raise_on_missing=False
+    )
+    # Globals + the supplied user var are interpolated; the still-missing
+    # CORP_PASSWORD reference is left as a literal rather than blocking listing.
+    assert headers == {
+        "X-DB-URL": "postgres://alice:${CORP_PASSWORD}@db.local/db",
+        "X-Other": "literal",
+    }
+
+
+@pytest.mark.asyncio
 async def test_resolve_static_headers_passthrough_when_no_env_vars():
     """Servers without env_vars should keep static_headers untouched."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

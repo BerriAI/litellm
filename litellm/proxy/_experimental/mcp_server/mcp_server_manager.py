@@ -1331,6 +1331,8 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        raise_on_missing: bool = True,
     ) -> Optional[Dict[str, str]]:
         """Return server.static_headers with ``${NAME}`` interpolated.
 
@@ -1338,9 +1340,16 @@ class MCPServerManager:
         Per-user values come from the ``LiteLLM_MCPUserEnvVars`` row for the
         calling user.
 
-        Raises ``MCPMissingUserEnvVarsError`` when ``static_headers`` reference
-        a per-user variable that the calling user has not yet supplied. This
-        is converted into a user-facing 412 by the REST layer.
+        When ``raise_on_missing`` is ``True`` (the tool-*call* path), raises
+        ``MCPMissingUserEnvVarsError`` if ``static_headers`` reference a per-user
+        variable the calling user has not yet supplied — converted into a
+        user-facing 412 by the REST layer.
+
+        When ``raise_on_missing`` is ``False`` (the tool-*list* path), missing
+        per-user vars are non-blocking: we interpolate whatever is available and
+        leave unfilled ``${NAME}`` references untouched, so the server's tools
+        still appear in the listing. The user only hits the friendly error when
+        they actually invoke a tool that needs the missing value.
         """
         static_headers = server.static_headers
         env_vars = getattr(server, "env_vars", None)
@@ -1362,16 +1371,17 @@ class MCPServerManager:
         if referenced_user_vars:
             user_values = await self._load_user_env_vars(server, user_api_key_auth)
 
-            missing = sorted(
-                name for name in referenced_user_vars if not user_values.get(name)
-            )
-            if missing:
-                raise MCPMissingUserEnvVarsError(
-                    server_id=server.server_id,
-                    server_name=server.server_name or server.name,
-                    missing=missing,
-                    setup_url=build_env_var_setup_url(server.server_id),
+            if raise_on_missing:
+                missing = sorted(
+                    name for name in referenced_user_vars if not user_values.get(name)
                 )
+                if missing:
+                    raise MCPMissingUserEnvVarsError(
+                        server_id=server.server_id,
+                        server_name=server.server_name or server.name,
+                        missing=missing,
+                        setup_url=build_env_var_setup_url(server.server_id),
+                    )
 
         merged_vars: Dict[str, str] = {**global_values, **user_values}
         if not static_headers:
@@ -1543,8 +1553,12 @@ class MCPServerManager:
         client = None
 
         try:
+            # Tool *listing* must not be blocked by missing per-user env vars —
+            # the server's tools should still appear so the client connects. The
+            # friendly "missing vars" error is raised only on the tool-*call*
+            # path (see _call_regular_mcp_tool).
             resolved_static_headers = await self._resolve_static_headers_with_env_vars(
-                server, user_api_key_auth
+                server, user_api_key_auth, raise_on_missing=False
             )
             if resolved_static_headers:
                 if extra_headers is None:
