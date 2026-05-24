@@ -1276,6 +1276,13 @@ class JWTAuthManager:
                 else None
             )
 
+        if (
+            user_object is not None
+            and user_object.user_id
+            and user_id != user_object.user_id
+        ):
+            user_id = user_object.user_id
+
         end_user_object: Optional[LiteLLM_EndUserTable] = None
         if end_user_id:
             end_user_object = (
@@ -1755,7 +1762,11 @@ class JWTAuthManager:
         )
 
         # Reconcile to canonical UserTable.user_id if get_objects resolved via sso_user_id/email fuzzy match.
-        if user_object is not None and user_object.user_id and user_id != user_object.user_id:
+        if (
+            user_object is not None
+            and user_object.user_id
+            and user_id != user_object.user_id
+        ):
             user_id = user_object.user_id
 
         # Derive org_id from org_object if resolved by alias

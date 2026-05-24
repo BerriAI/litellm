@@ -2774,9 +2774,7 @@ async def test_auth_builder_reconciles_jwt_email_to_canonical_uuid():
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
-        patch.object(
-            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ),
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
@@ -2852,9 +2850,7 @@ async def test_auth_builder_reconciles_sso_external_id_to_canonical_uuid():
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
-        patch.object(
-            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ),
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
@@ -2930,9 +2926,7 @@ async def test_auth_builder_no_reconciliation_when_jwt_user_id_already_canonical
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
-        patch.object(
-            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ),
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
         patch.object(jwt_handler, "get_rbac_role", return_value=None),
         patch.object(jwt_handler, "get_scopes", return_value=[]),
         patch.object(jwt_handler, "get_object_id", return_value=None),
@@ -2988,3 +2982,67 @@ async def test_auth_builder_no_reconciliation_when_jwt_user_id_already_canonical
 
         assert result["user_id"] == canonical_uuid
         assert result["user_object"] == user_object
+
+
+@pytest.mark.asyncio
+async def test_get_objects_passes_canonical_user_id_to_team_membership():
+    """
+    When get_user_object resolves an SSO email to a canonical UUID, get_team_membership
+    must receive the canonical UUID, not the raw JWT claim.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_email = "user@example.com"
+    canonical_uuid = "uuid-canonical-1234"
+    team_id = "team-abc"
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id=canonical_uuid, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_user_object",
+            new_callable=AsyncMock,
+            return_value=user_obj,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ) as mock_get_membership,
+    ):
+        await JWTAuthManager.get_objects(
+            user_id=jwt_email,
+            user_email=jwt_email,
+            org_id=None,
+            end_user_id=None,
+            team_id=team_id,
+            valid_user_email=True,
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            route="/chat/completions",
+        )
+
+        mock_get_membership.assert_called_once_with(
+            user_id=canonical_uuid,
+            team_id=team_id,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
