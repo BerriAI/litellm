@@ -475,7 +475,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +498,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +537,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +602,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +630,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -2327,7 +2327,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[
             {
                 "role": "user",

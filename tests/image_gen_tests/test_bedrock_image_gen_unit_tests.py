@@ -527,6 +527,9 @@ def test_backward_compatibility_regular_nova_model():
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
 
 
+@pytest.mark.skip(
+    reason="amazon.titan-image-generator is legacy-gated and unavailable on AWS account 941277531214"
+)
 def test_amazon_titan_image_gen():
     """Test Amazon Titan image generation with cost tracking."""
     from litellm import image_generation
