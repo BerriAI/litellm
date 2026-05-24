@@ -30,6 +30,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
 )
 from litellm.proxy.utils import (
     PrismaClient,
+    _is_fips_mode,
     get_server_root_path,
     hash_password,
     verify_password,
@@ -43,8 +44,6 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
 
     In FIPS mode the current algorithm is PBKDF2-HMAC-SHA256; otherwise scrypt.
     """
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import _is_fips_mode
-
     if _is_fips_mode():
         if stored.startswith("pbkdf2:"):
             return

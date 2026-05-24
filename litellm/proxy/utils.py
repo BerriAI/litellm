@@ -5074,6 +5074,11 @@ def hash_token(token: str):
     return hashed_token
 
 
+def _is_fips_mode() -> bool:
+    """Return True when LITELLM_FIPS_MODE is set to a truthy value."""
+    return os.getenv("LITELLM_FIPS_MODE", "").lower() in ("true", "1", "yes")
+
+
 def hash_password(password: str) -> str:
     """Hash a password.
 
@@ -5089,9 +5094,6 @@ def hash_password(password: str) -> str:
     """
     import base64
     import hashlib
-    import os
-
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import _is_fips_mode
 
     salt = os.urandom(16)
     if _is_fips_mode():
