@@ -468,6 +468,7 @@ from litellm.proxy.utils import (
     hash_token,
     invalidate_config_param,
     litellm_config_cache,
+    migrate_passwords_to_pbkdf2_async,
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
@@ -835,7 +836,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
         async def _run_pw_migration():
             try:
-                result = await migrate_passwords_to_scrypt_async(prisma_client)
+                result = await migrate_passwords_to_pbkdf2_async(prisma_client)
                 verbose_proxy_logger.info(f"Password migration: {result}")
             except Exception as e:
                 verbose_proxy_logger.warning(f"Password migration skipped: {e}")

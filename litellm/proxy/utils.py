@@ -5074,23 +5074,38 @@ def hash_token(token: str):
     return hashed_token
 
 
+_PBKDF2_ITERATIONS = 600_000
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
+    """Hash a password using PBKDF2-HMAC-SHA256 (FIPS-compliant) with a random salt."""
     import base64
     import hashlib
     import os
 
     salt = os.urandom(16)
-    dk = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
-    return "scrypt:" + base64.b64encode(salt + dk).decode()
+    dk = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt, _PBKDF2_ITERATIONS, dklen=32
+    )
+    return "pbkdf2:" + base64.b64encode(salt + dk).decode()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    """Verify a password against a stored hash. Supports pbkdf2, scrypt, and SHA256."""
     import base64
     import hashlib
     import secrets
 
+    if stored.startswith("pbkdf2:"):
+        try:
+            raw = base64.b64decode(stored[7:])
+            salt, dk = raw[:16], raw[16:]
+            dk2 = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt, _PBKDF2_ITERATIONS, dklen=32
+            )
+            return secrets.compare_digest(dk, dk2)
+        except Exception:
+            return False
     if stored.startswith("scrypt:"):
         try:
             raw = base64.b64decode(stored[7:])
@@ -5099,6 +5114,14 @@ def verify_password(password: str, stored: str) -> bool:
                 password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32
             )
             return secrets.compare_digest(dk, dk2)
+        except ValueError:
+            # scrypt is unavailable in FIPS-enforced environments.
+            # Log a warning so operators know affected users must reset their password.
+            verbose_proxy_logger.warning(
+                "scrypt password verification is unavailable (FIPS mode). "
+                "User must reset their password to migrate to PBKDF2."
+            )
+            return False
         except Exception:
             return False
     # SHA256 fallback (not vulnerable to pass-the-hash: checks sha256(input) == stored)
@@ -5109,10 +5132,10 @@ def verify_password(password: str, stored: str) -> bool:
     return False
 
 
-async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+async def migrate_passwords_to_pbkdf2_async(prisma_client) -> str:
     """
-    Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
-    are left alone (they migrate on next login via the SHA256 fallback).
+    Migrate plaintext passwords in the DB to PBKDF2. SHA256 and scrypt passwords
+    are left alone (they migrate on next login via the fallback path).
     Skips quickly if no plaintext passwords exist.
     """
     all_with_pw = await prisma_client.db.litellm_usertable.find_many(
@@ -5127,6 +5150,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
         for u in all_with_pw
         if u.password
         and not u.password.startswith("scrypt:")
+        and not u.password.startswith("pbkdf2:")
         and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
@@ -5137,7 +5161,11 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
             where={"user_id": user.user_id},
             data={"password": hash_password(user.password)},
         )
-    return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
+    return f"Migrated {len(plaintext_users)} plaintext passwords to PBKDF2"
+
+
+# Backward-compatibility alias kept for any external code that imports the old name.
+migrate_passwords_to_scrypt_async = migrate_passwords_to_pbkdf2_async
 
 
 def _hash_token_if_needed(token: str) -> str:

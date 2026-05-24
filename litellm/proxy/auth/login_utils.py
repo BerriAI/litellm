@@ -39,8 +39,8 @@ from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
-    """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
+    """Rehash legacy password (scrypt or SHA256) to PBKDF2 on successful login."""
+    if stored.startswith("pbkdf2:"):
         return
     from litellm.proxy.proxy_server import prisma_client
 
