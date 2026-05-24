@@ -58,3 +58,15 @@ class KubectlRunner:
             ["get", "pods", "--selector", selector, "--output", "json"]
         )
         return json.loads(result.stdout).get("items", [])
+
+    async def resource_exists(self, *, kind: str, name: str) -> bool:
+        result = await self._run(
+            ["get", kind, name, "--ignore-not-found", "--output", "name"]
+        )
+        return bool(result.stdout.strip())
+
+    async def count_by_label(self, *, kind: str, selector: str) -> int:
+        result = await self._run(
+            ["get", kind, "--selector", selector, "--output", "json"]
+        )
+        return len(json.loads(result.stdout).get("items", []))

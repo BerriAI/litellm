@@ -133,6 +133,102 @@ async def test_image_registry_override_and_extra_values():
     assert values["gateway"]["image"]["tag"] == "sha"
 
 
+async def test_provision_forces_release_prefix():
+    runner = FakeRunner()
+    provisioner = _provisioner(runner)
+
+    result = await provisioner.provision(
+        ProvisionRequest(
+            repo_url="https://github.com/BerriAI/litellm",
+            revision="abc",
+            release_name="litellm",  # would collide with a real release
+        )
+    )
+
+    assert result["release"] == "litellm-e2e-litellm"
+    values = _helm_values(runner)
+    assert values["fullnameOverride"] == "litellm-e2e-litellm"
+
+
+async def test_provision_rejects_self_service_account():
+    runner = FakeRunner()
+    provisioner = _provisioner(runner)
+    with pytest.raises(ProvisionError, match="own"):
+        await provisioner.provision(
+            ProvisionRequest(
+                repo_url="https://github.com/BerriAI/litellm",
+                revision="abc",
+                service_account="litellm-provisioning-mcp",
+            )
+        )
+
+
+async def test_provision_rejects_disallowed_service_account():
+    runner = FakeRunner()
+    settings = make_settings(allowed_service_accounts=("litellm-workload",))
+    provisioner = Provisioner(
+        settings,
+        helm=HelmRunner(namespace="litellm", runner=runner, wait_timeout=600),
+        kubectl=KubectlRunner(namespace="litellm", runner=runner),
+    )
+    with pytest.raises(ProvisionError, match="not in the allowed list"):
+        await provisioner.provision(
+            ProvisionRequest(
+                repo_url="https://github.com/BerriAI/litellm",
+                revision="abc",
+                service_account="some-other-sa",
+            )
+        )
+
+
+async def test_provision_refuses_existing_unmanaged_release():
+    runner = FakeRunner()
+    runner.helm_releases = ["litellm-e2e-abc"]  # already exists
+    runner.owns_release = False  # but not created by us
+    provisioner = _provisioner(runner)
+    with pytest.raises(ProvisionError, match="refusing to overwrite"):
+        await provisioner.provision(
+            ProvisionRequest(
+                repo_url="https://github.com/BerriAI/litellm",
+                revision="abc",
+            )
+        )
+    with pytest.raises(AssertionError):
+        runner.find("upgrade")
+
+
+async def test_provision_preserves_existing_master_key():
+    runner = FakeRunner()
+    runner.master_key_exists = True
+    provisioner = _provisioner(runner)
+
+    await provisioner.provision(
+        ProvisionRequest(
+            repo_url="https://github.com/BerriAI/litellm",
+            revision="abc123",
+        )
+    )
+
+    # The master-key Secret already exists, so it must not be re-applied
+    # (re-applying would rotate the key and invalidate live API keys).
+    runner.find("get", "secret")  # existence was probed
+    applied = [text for args, text in runner.calls if "apply" in args and text]
+    assert not any("master-key" in payload for payload in applied)
+
+
+async def test_delete_refuses_release_not_owned_by_tool():
+    runner = FakeRunner()
+    runner.owns_release = False
+    provisioner = _provisioner(runner)
+
+    with pytest.raises(ProvisionError, match="refusing to delete"):
+        await provisioner.delete("some-production-release")
+
+    # Must not have attempted a helm uninstall on an unowned release.
+    with pytest.raises(AssertionError):
+        runner.find("uninstall")
+
+
 async def test_delete_uninstalls_and_cleans_datastores():
     runner = FakeRunner()
     provisioner = _provisioner(runner)
@@ -157,10 +253,10 @@ async def test_provision_propagates_helm_failure():
     runner = FakeRunner()
 
     async def failing(args, *, input_text=None, timeout=None):
-        await runner(args, input_text=input_text, timeout=timeout)
+        result = await runner(args, input_text=input_text, timeout=timeout)
         if args[0].endswith("helm") and "upgrade" in args:
             return CommandResult(1, "", "boom: chart not found")
-        return CommandResult(0, "", "")
+        return result
 
     settings = make_settings()
     provisioner = Provisioner(

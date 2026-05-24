@@ -52,6 +52,8 @@ class Settings:
     chart_path: str
     default_image_registry: str
     release_prefix: str
+    provisioning_service_account: str
+    allowed_service_accounts: tuple[str, ...]
     helm_binary: str
     kubectl_binary: str
     command_timeout: int
@@ -84,6 +86,14 @@ class Settings:
                 "LITELLM_IMAGE_REGISTRY", "ghcr.io/berriai"
             ),
             release_prefix=_optional("LITELLM_RELEASE_PREFIX", "litellm-e2e"),
+            provisioning_service_account=_optional(
+                "PROVISIONING_SERVICE_ACCOUNT", "litellm-provisioning-mcp"
+            ),
+            allowed_service_accounts=tuple(
+                sa.strip()
+                for sa in _optional("ALLOWED_SERVICE_ACCOUNTS", "").split(",")
+                if sa.strip()
+            ),
             helm_binary=_optional("HELM_BINARY", "helm"),
             kubectl_binary=_optional("KUBECTL_BINARY", "kubectl"),
             command_timeout=_int("COMMAND_TIMEOUT_SECONDS", 600),

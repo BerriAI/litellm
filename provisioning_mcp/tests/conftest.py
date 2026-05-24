@@ -17,6 +17,8 @@ def make_settings(**overrides: Any) -> Settings:
         chart_path="/app/helm/litellm",
         default_image_registry="ghcr.io/berriai",
         release_prefix="litellm-e2e",
+        provisioning_service_account="litellm-provisioning-mcp",
+        allowed_service_accounts=(),
         helm_binary="helm",
         kubectl_binary="kubectl",
         command_timeout=600,
@@ -33,21 +35,34 @@ class FakeRunner:
 
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], str | None]] = []
+        # Toggles driving the read-only `kubectl get` / `helm list` probes.
+        self.master_key_exists = False
+        self.owns_release = True
+        self.helm_releases = ["litellm-e2e-other"]
 
     async def __call__(self, args, *, input_text=None, timeout=None) -> CommandResult:
         self.calls.append((args, input_text))
         binary = args[0]
         if binary.endswith("kubectl"):
-            if "get" in args and "pods" in args:
-                return CommandResult(0, json.dumps({"items": []}), "")
+            if "get" in args:
+                if "pods" in args:
+                    return CommandResult(0, json.dumps({"items": []}), "")
+                if "--selector" in args:  # count_by_label (ownership check)
+                    items = (
+                        [{"metadata": {"name": "owned"}}] if self.owns_release else []
+                    )
+                    return CommandResult(0, json.dumps({"items": items}), "")
+                # resource_exists: `get <kind> <name> --ignore-not-found -o name`
+                return CommandResult(
+                    0, "secret/x" if self.master_key_exists else "", ""
+                )
             return CommandResult(0, "applied", "")
         # helm
         if "status" in args:
             return CommandResult(0, json.dumps({"info": {"status": "deployed"}}), "")
         if "list" in args:
-            return CommandResult(
-                0, json.dumps([{"name": "litellm-e2e-abc", "status": "deployed"}]), ""
-            )
+            payload = [{"name": n, "status": "deployed"} for n in self.helm_releases]
+            return CommandResult(0, json.dumps(payload), "")
         return CommandResult(0, "ok", "")
 
     def find(self, *needles: str) -> tuple[list[str], str | None]:

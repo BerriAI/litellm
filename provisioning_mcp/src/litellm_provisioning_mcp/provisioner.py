@@ -21,7 +21,12 @@ from .config import Settings
 from .helm import HelmRunner
 from .kubectl import KubectlRunner
 from .naming import derive_image_repos, sanitize_label, sanitize_release_name
-from .resources import DatabaseConnection, RedisConnection
+from .resources import (
+    MANAGED_BY,
+    RELEASE_LABEL,
+    DatabaseConnection,
+    RedisConnection,
+)
 
 _DATASTORE_WAIT_SECONDS = 120
 
@@ -144,25 +149,79 @@ class Provisioner:
             values = _deep_merge(values, request.extra_values)
         return values
 
+    def _resolve_release_name(self, request: ProvisionRequest) -> str:
+        """Force every provisioned release into the ephemeral prefix namespace.
+
+        Without this, a caller could pass ``release_name="litellm"`` and have
+        ``helm upgrade --install`` silently overwrite a real, unmanaged release
+        that shares the namespace.
+        """
+        prefix = self._settings.release_prefix
+        base = request.release_name or request.revision
+        if not base.startswith(prefix):
+            base = f"{prefix}-{base}"
+        release = sanitize_release_name(base)
+        if release != prefix and not release.startswith(f"{prefix}-"):
+            raise ProvisionError(
+                f"release name must start with '{prefix}-'; got '{release}'"
+            )
+        return release
+
+    def _validate_service_account(self, service_account: str) -> None:
+        if service_account == self._settings.provisioning_service_account:
+            raise ProvisionError(
+                "service_account must not be the provisioning server's own "
+                "account (a deployed workload would inherit its permissions)"
+            )
+        allowed = self._settings.allowed_service_accounts
+        if allowed and service_account not in allowed:
+            raise ProvisionError(
+                f"service_account '{service_account}' is not in the allowed list"
+            )
+
+    async def _helm_release_exists(self, release: str) -> bool:
+        releases = await self._helm.list_releases()
+        return any(r.get("name") == release for r in releases)
+
     async def provision(self, request: ProvisionRequest) -> dict:
         if not request.repo_url.strip():
             raise ProvisionError("repo_url is required")
         if not request.revision.strip():
             raise ProvisionError("revision is required")
 
-        release = sanitize_release_name(
-            request.release_name
-            or f"{self._settings.release_prefix}-{request.revision}"
-        )
+        release = self._resolve_release_name(request)
+        if request.service_account:
+            self._validate_service_account(request.service_account)
+
+        # Refuse to touch a release that already exists but wasn't created by
+        # this tool (defense in depth on top of the prefix constraint).
+        if await self._helm_release_exists(release) and not await self._owns_release(
+            release
+        ):
+            raise ProvisionError(
+                f"release '{release}' already exists and was not created by "
+                f"this tool; refusing to overwrite"
+            )
+
         image_repos = derive_image_repos(
             repo_url=request.repo_url,
             registry_override=request.image_registry,
             default_registry=self._settings.default_image_registry,
         )
 
-        mk_manifest, mk_secret = resources.master_key_secret(release)
-        await self._kubectl.apply(mk_manifest)
+        # Create the master-key Secret only if it does not already exist.
+        # Re-provisioning the same release is an in-place upgrade; regenerating
+        # the key here would rotate it and invalidate every API key already
+        # minted against the running deployment.
+        mk_secret = f"{release}-master-key"
+        if not await self._kubectl.resource_exists(kind="secret", name=mk_secret):
+            mk_manifest, _ = resources.master_key_secret(release)
+            await self._kubectl.apply(mk_manifest)
 
+        # Note: auxiliary objects are intentionally left in place if the helm
+        # step below fails — they are release-named (reused on retry, so no
+        # accumulation) and preserved for inspecting failed e2e runs. Use
+        # `delete` to tear a release down.
         if request.enable_postgres:
             pg_manifest, database = resources.postgres(release)
             await self._kubectl.apply(pg_manifest)
@@ -221,8 +280,28 @@ class Provisioner:
             "pods": _summarize_pods(pods),
         }
 
+    async def _owns_release(self, release: str) -> bool:
+        """Whether ``release`` was provisioned by this tool.
+
+        Every provisioned release gets a master-key Secret carrying both the
+        managed-by and release labels, so the presence of such a Secret is
+        proof of ownership. This stops a caller from uninstalling unrelated
+        helm releases (e.g. a real deployment) that happen to share the
+        namespace.
+        """
+        selector = (
+            f"app.kubernetes.io/managed-by={MANAGED_BY},{RELEASE_LABEL}={release}"
+        )
+        count = await self._kubectl.count_by_label(kind="secret", selector=selector)
+        return count > 0
+
     async def delete(self, release_name: str) -> dict:
         release = sanitize_release_name(release_name)
+        if not await self._owns_release(release):
+            raise ProvisionError(
+                f"release '{release}' was not created by this tool "
+                f"(no {MANAGED_BY} resources found); refusing to delete"
+            )
         await self._helm.uninstall(release=release)
         await self._kubectl.delete_by_label(
             selector=resources.selector_label(release),
