@@ -1581,13 +1581,14 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                 elif content_type in ("file", "input_file"):
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
+                    file_id = content.get("file_id", "")
                     if not file_data:
                         file_content = content.get("file", {})
-                        file_data = (
-                            file_content.get("file_data", "")
-                            if isinstance(file_content, dict)
-                            else file_content if isinstance(file_content, str) else ""
-                        )
+                        if isinstance(file_content, dict):
+                            file_data = file_content.get("file_data", "")
+                            file_id = file_content.get("file_id", "") or file_id
+                        elif isinstance(file_content, str):
+                            file_data = file_content
 
                     if file_data:
                         # Convert file to base64 blob format for Gemini
@@ -1605,6 +1606,10 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             verbose_logger.warning(
                                 f"Failed to process file in tool response: {e}"
                             )
+                    elif file_id:
+                        if content_str:
+                            content_str += "\n"
+                        content_str += json.dumps(content)
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls

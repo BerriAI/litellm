@@ -1047,10 +1047,11 @@ class LiteLLMCompletionResponsesConfig:
 
             Some clients/adapters send:
             - output: [{"type": "input_text", "text": "..."}, {"type": "input_image", ...}]
+            - output: [{"type": "input_text", "text": "..."}, {"type": "input_file", ...}]
 
             For chat tool messages we normalize to either:
             - string (preferred)
-            - list of {"type": "text"|"image_url", ...} blocks (for multimodal tool outputs)
+            - list of {"type": "text"|"image_url"|"file", ...} blocks (for multimodal/file tool outputs)
             """
             if output is None:
                 return ""
@@ -1085,10 +1086,16 @@ class LiteLLMCompletionResponsesConfig:
                                     "image_url": {"url": image_url_val},
                                 }
                             )
+                    elif part_type == "input_file":
+                        normalized_blocks.append(
+                            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                                part
+                            )
+                        )
 
-                # Prefer structured blocks if we have images; otherwise return a string.
-                if any(b.get("type") == "image_url" for b in normalized_blocks):
-                    # Ensure we include any accumulated text as text blocks too
+                # Prefer structured blocks if we have non-text content; otherwise return a string.
+                if any(b.get("type") != "text" for b in normalized_blocks):
+                    # Ensure we include any accumulated text as text blocks too.
                     return normalized_blocks
                 if text_acc:
                     return "".join(text_acc)
@@ -1225,7 +1232,8 @@ class LiteLLMCompletionResponsesConfig:
         Transform a Responses API input_file item to a Chat Completion file item
 
         Args:
-            item: Dictionary containing input_file type with file_id, file_data, and/or file_url
+            item: Dictionary containing input_file type with file_id, file_data,
+                filename, and/or file_url
 
         Returns:
             Dictionary with transformed file structure for Chat Completion
@@ -1236,6 +1244,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_id"] = file_id
         if item.get("file_data"):
             file_dict["file_data"] = item["file_data"]
+        if item.get("filename"):
+            file_dict["filename"] = item["filename"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
         if "cache_control" in item:
