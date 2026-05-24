@@ -143,7 +143,21 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Returns True for models with always-on thinking (deepseek-reasoner, R1 variants).
         These models reject reasoning_effort, thinking: {"type": "disabled"}, and
         require reasoning_content on every assistant message unconditionally.
+
+        Uses the litellm model registry (supports_reasoning field) as the primary
+        signal — deepseek-reasoner and R1 variants have supports_reasoning: true while
+        V4 opt-in models (deepseek-chat, deepseek-v3, etc.) do not. Falls back to
+        string-pattern matching for unregistered or custom-deployment model names.
         """
+        # Primary: registry-based check
+        try:
+            from litellm.utils import supports_reasoning
+
+            if supports_reasoning(model=model, custom_llm_provider="deepseek"):
+                return True
+        except Exception:
+            pass
+        # Fallback: string patterns for unregistered variants / custom deployments
         m = model.lower()
         return "reasoner" in m or "-r1" in m or "/r1" in m
 
