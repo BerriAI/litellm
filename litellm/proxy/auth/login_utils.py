@@ -215,7 +215,7 @@ async def authenticate_user(  # noqa: PLR0915
 
         key = response["token"]  # type: ignore
 
-        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+        if get_secret_bool("EXPERIMENTAL_UI_LOGIN", default_value=True):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
             user_info: Optional[LiteLLM_UserTable] = None

@@ -281,6 +281,10 @@ def prompt_team_selection_fallback(
 
 
 # Polling-based authentication - no local server needed
+CLI_POLL_INTERVAL_SECONDS = 1
+CLI_POLL_REQUEST_TIMEOUT = 5
+
+
 def _poll_for_ready_data(
     url: str,
     *,
@@ -331,30 +335,6 @@ def _poll_for_ready_data(
     return None
 
 
-def _normalize_teams(teams, team_details):
-    """If team_details are a
-
-    Args:
-        teams (_type_): _description_
-        team_details (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-    if isinstance(team_details, list) and team_details:
-        return [
-            {
-                "team_id": i.get("team_id") or i.get("id"),
-                "team_alias": i.get("team_alias"),
-            }
-            for i in team_details
-            if isinstance(i, dict) and (i.get("team_id") or i.get("id"))
-        ]
-    if isinstance(teams, list):
-        return [{"team_id": str(t), "team_alias": None} for t in teams]
-    return []
-
-
 def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
     response = requests.post(f"{base_url}/sso/cli/start", timeout=10)
     response.raise_for_status()
@@ -373,7 +353,7 @@ def _poll_for_authentication(
     base_url: str, key_id: str, poll_secret: str
 ) -> Optional[dict]:
     """
-    Poll the server for authentication completion and handle team selection.
+    Poll the server for authentication completion.
 
     Returns:
         Dictionary with authentication data if successful, None otherwise
@@ -382,48 +362,18 @@ def _poll_for_authentication(
     data = _poll_for_ready_data(
         poll_url,
         headers=_get_cli_sso_poll_headers(poll_secret),
+        poll_interval=CLI_POLL_INTERVAL_SECONDS,
+        request_timeout=CLI_POLL_REQUEST_TIMEOUT,
         pending_message="Still waiting for authentication...",
+        pending_log_every=30,
     )
     if not data:
         return None
-    if data.get("requires_team_selection"):
-        teams = data.get("teams", [])
-        team_details = data.get("team_details")
-        user_id = data.get("user_id")
-        normalized_teams: List[Dict[str, Any]] = _normalize_teams(teams, team_details)
-        if not normalized_teams:
-            click.echo("⚠️ No teams available for selection.")
-            return None
 
-        # User has multiple teams - let them select
-        jwt_with_team = _handle_team_selection_during_polling(
-            base_url=base_url,
-            key_id=key_id,
-            poll_secret=poll_secret,
-            teams=normalized_teams,
-        )
-
-        # Use the team-specific JWT if selection succeeded
-        if jwt_with_team:
-            return {
-                "api_key": jwt_with_team,
-                "user_id": user_id,
-                "teams": teams,
-                "team_id": None,  # Set by server in JWT
-            }
-
-        click.echo("❌ Team selection cancelled or JWT generation failed.")
-        return None
-
-    # JWT is ready (single team or team already selected)
     api_key = data.get("key")
     user_id = data.get("user_id")
     teams = data.get("teams", [])
     team_id = data.get("team_id")
-
-    # Show which team was assigned
-    if team_id and len(teams) == 1:
-        click.echo(f"\n✅ Automatically assigned to team: {team_id}")
 
     if api_key:
         return {
@@ -434,108 +384,6 @@ def _poll_for_authentication(
         }
 
     return None
-
-
-def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: List[Dict[str, Any]]
-) -> Optional[str]:
-    """
-    Handle team selection and re-poll with selected team_id.
-
-    Args:
-        teams: List of team IDs (strings)
-
-    Returns:
-        The JWT token with the selected team, or None if selection was skipped
-    """
-    if not teams:
-        click.echo(
-            "ℹ️ No teams found. You can create or join teams using the web interface."
-        )
-        return None
-
-    click.echo("\n" + "=" * 60)
-    click.echo("📋 Select a team for your CLI session...")
-
-    team_id = _render_and_prompt_for_team_selection(teams)
-
-    if not team_id:
-        click.echo("ℹ️ No team selected.")
-        return None
-
-    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
-
-    poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
-    data = _poll_for_ready_data(
-        poll_url,
-        headers=_get_cli_sso_poll_headers(poll_secret),
-        pending_message="Still waiting for team authentication...",
-        other_status_message="Waiting for team authentication to complete...",
-        http_error_log_every=10,
-    )
-    if not data:
-        return None
-    jwt_token = data.get("key")
-    if jwt_token:
-        click.echo(f"✅ Successfully generated JWT for team: {team_id}")
-        return jwt_token
-
-    return None
-
-
-def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Optional[str]:
-    """Render teams table and prompt user for a team selection.
-
-    Returns the selected team_id as a string, or None if selection was
-    cancelled or skipped without any teams available.
-    """
-    # Display teams as a simple list, but prefer showing aliases where
-    # available while still keeping the underlying IDs intact.
-    console = Console()
-    table = Table(title="Available Teams")
-    table.add_column("Index", style="cyan", no_wrap=True)
-    table.add_column("Team Name", style="magenta")
-    table.add_column("Team ID", style="green")
-
-    for i, team in enumerate(teams):
-        team_id = str(team.get("team_id"))
-        team_alias = team.get("team_alias") or team_id
-        table.add_row(str(i + 1), team_alias, team_id)
-
-    console.print(table)
-
-    # Simple selection
-    while True:
-        try:
-            choice = click.prompt(
-                "\nSelect a team by entering the index number (or 'skip' to use first team)",
-                type=str,
-            ).strip()
-
-            if choice.lower() == "skip":
-                # Default to the first team's ID if the user skips an
-                # explicit selection.
-                if teams:
-                    first_team = teams[0]
-                    return str(first_team.get("team_id"))
-                return None
-
-            index = int(choice) - 1
-            if 0 <= index < len(teams):
-                selected_team = teams[index]
-                team_id = str(selected_team.get("team_id"))
-                team_alias = selected_team.get("team_alias") or team_id
-                click.echo(f"\n✅ Selected team: {team_alias} ({team_id})")
-                return team_id
-
-            click.echo(
-                f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-            )
-        except ValueError:
-            click.echo("❌ Invalid input. Please enter a number or 'skip'")
-        except KeyboardInterrupt:
-            click.echo("\n❌ Team selection cancelled.")
-            return None
 
 
 @click.command(name="login")
@@ -553,7 +401,7 @@ def login(ctx: click.Context):
         poll_secret = cli_sso_flow["poll_secret"]
         user_code = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode(
+        sso_url = f"{base_url.rstrip('/')}/ui/login?" + urlencode(
             {"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id}
         )
 

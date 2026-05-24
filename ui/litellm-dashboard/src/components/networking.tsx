@@ -9245,6 +9245,7 @@ export interface LoginRequest {
   username: string;
   password: string;
   useV3?: boolean;
+  cliLoginId?: string;
 }
 
 interface LoginResponse {
@@ -9252,17 +9253,26 @@ interface LoginResponse {
   token?: string;
   code?: string;
   expires_in?: number;
+  cli_login_id?: string;
+  cli_browser_complete_token?: string;
 }
 
-export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {
+export const loginCall = async (
+  username: string,
+  password: string,
+  useV3?: boolean,
+  cliLoginId?: string,
+): Promise<LoginResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const loginPath = useV3 ? "/v3/login" : "/v2/login";
   const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}${loginPath}` : loginPath;
 
-  const body = JSON.stringify({
-    username,
-    password,
-  });
+  const bodyPayload: Record<string, string> = { username, password };
+  if (cliLoginId) {
+    bodyPayload.cli_login_id = cliLoginId;
+  }
+
+  const body = JSON.stringify(bodyPayload);
 
   const response = await fetch(loginUrl, {
     method: "POST",

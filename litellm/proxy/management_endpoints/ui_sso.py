@@ -89,7 +89,6 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
@@ -327,6 +326,82 @@ async def cli_sso_start(request: Request):
         "user_code": user_code,
         "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
     }
+
+
+async def attach_cli_session_after_ui_login(
+    cli_login_id: str,
+    *,
+    user_id: str,
+    user_role: str,
+    user_email: Optional[str],
+) -> str:
+    """
+    Mark a CLI device-login flow ready for verification after /ui/login auth.
+
+    Returns the browser completion token for the verification step.
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    flow = _get_cli_sso_flow_or_raise(login_id=cli_login_id, cache=user_api_key_cache)
+
+    teams: List[str] = []
+    models: List[str] = []
+    team_details: List[Dict[str, Any]] = []
+
+    if prisma_client is not None:
+        try:
+            user_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"CLI login: failed to fetch user row for {user_id}: {e}"
+            )
+            user_row = None
+
+        if user_row is not None:
+            user_teams = getattr(user_row, "teams", None)
+            if isinstance(user_teams, list):
+                teams = [str(t) for t in user_teams]
+            user_models = getattr(user_row, "models", None)
+            if isinstance(user_models, list):
+                models = list(user_models)
+
+        if teams:
+            try:
+                prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
+                    where={"team_id": {"in": teams}}
+                )
+                for team_row in prisma_teams:
+                    team_dict = team_row.model_dump()
+                    team_details.append(
+                        {
+                            "team_id": team_dict.get("team_id"),
+                            "team_alias": team_dict.get("team_alias"),
+                        }
+                    )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"CLI login: error fetching team details: {e}"
+                )
+
+    flow["session_data"] = {
+        "user_id": user_id,
+        "user_role": user_role,
+        "models": models,
+        "user_email": user_email,
+        "teams": teams,
+        "team_details": team_details,
+    }
+    flow["sso_complete"] = True
+    browser_complete_token = secrets.token_urlsafe(32)
+    flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
+    _set_cli_sso_flow(login_id=cli_login_id, cache=user_api_key_cache, flow=flow)
+
+    verbose_proxy_logger.info(
+        f"CLI session attached after UI login for user: {user_id}, teams: {teams}"
+    )
+    return browser_complete_token
 
 
 @router.post(
@@ -570,6 +645,27 @@ def process_sso_jwt_access_token(
     return None
 
 
+def _build_ui_login_redirect_response(
+    request: Request,
+    *,
+    source: Optional[str] = None,
+    key: Optional[str] = None,
+    return_to: Optional[str] = None,
+) -> RedirectResponse:
+    """Send users to the React login page instead of the legacy HTML form."""
+    ui_login_url = get_custom_url(str(request.base_url), route="ui/login")
+    params: Dict[str, str] = {}
+    if source == LITELLM_CLI_SOURCE_IDENTIFIER and key is not None:
+        params["source"] = LITELLM_CLI_SOURCE_IDENTIFIER
+        params["key"] = key
+    if return_to and SSOAuthenticationHandler._validate_return_to(return_to):
+        params["return_to"] = return_to
+    redirect_url = ui_login_url
+    if params:
+        redirect_url = f"{ui_login_url}?{urlencode(params)}"
+    return RedirectResponse(url=redirect_url, status_code=303)
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
     request: Request,
@@ -691,15 +787,13 @@ async def google_login(
                 )
         return sso_redirect
     elif ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
+        return _build_ui_login_redirect_response(
+            request, source=source, key=key, return_to=return_to
+        )
     else:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
+        return _build_ui_login_redirect_response(
+            request, source=source, key=key, return_to=return_to
+        )
 
 
 def generic_response_convertor(
@@ -1821,13 +1915,10 @@ async def cli_poll_key(
     """
     CLI polling endpoint - retrieves session from cache and generates JWT.
 
-    Flow:
-    1. First poll (no team_id): Returns teams list without generating JWT
-    2. Second poll (with team_id): Generates JWT with selected team and deletes session
-
     Args:
         key_id: The CLI login session ID
-        team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
+        team_id: Optional team ID to assign to the JWT. If omitted, the first
+            team on the user's account is used when available.
     """
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1852,31 +1943,6 @@ async def cli_poll_key(
             verbose_proxy_logger.info(
                 f"CLI poll: user={user_id}, team_id={team_id}, user_teams={user_teams}, num_teams={len(user_teams)}"
             )
-
-            # If no team_id provided and user has teams, return teams list for selection
-            # Don't generate JWT yet - let CLI select a team first. For newer
-            # clients we return rich team details (id + alias); older clients
-            # can continue to rely on the simple "teams" list.
-            if team_id is None and len(user_teams) > 1:
-                verbose_proxy_logger.info(
-                    f"Returning teams list for user {user_id} to select from: {user_teams}"
-                )
-                # Best-effort construction of team_details if it wasn't
-                # already cached for some reason.
-                team_details_response: Optional[List[Dict[str, Any]]] = None
-                if isinstance(user_team_details, list) and user_team_details:
-                    team_details_response = user_team_details
-                elif user_teams:
-                    team_details_response = [
-                        {"team_id": t, "team_alias": None} for t in user_teams
-                    ]
-                return {
-                    "status": "ready",
-                    "user_id": user_id,
-                    "teams": user_teams,
-                    "team_details": team_details_response,
-                    "requires_team_selection": True,
-                }
 
             # Validate team_id if provided
             if team_id is not None:
@@ -2942,7 +3008,7 @@ class SSOAuthenticationHandler:
             request_base_url=str(request.base_url), route="ui/"
         )
 
-        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+        if get_secret_bool("EXPERIMENTAL_UI_LOGIN", default_value=True):
             _user_info: Optional[LiteLLM_UserTable] = None
             if (
                 user_defined_values is not None

@@ -2292,14 +2292,13 @@ class TestCLIKeyRegenerationFlow:
             assert result.body is not None
 
     @pytest.mark.asyncio
-    async def test_cli_poll_key_returns_teams_for_selection(self):
-        """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
+    async def test_cli_poll_key_auto_assigns_first_team(self):
+        """Test CLI poll generates JWT immediately using the first team"""
         from litellm.proxy.management_endpoints.ui_sso import (
             _hash_cli_sso_secret,
             cli_poll_key,
         )
 
-        # Test data
         session_key = "cli-session-789123"
         session_data = {
             "user_id": "test-user-456",
@@ -2308,7 +2307,6 @@ class TestCLIKeyRegenerationFlow:
             "models": ["gpt-4"],
         }
 
-        # Mock cache
         mock_cache = MagicMock()
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
@@ -2317,23 +2315,29 @@ class TestCLIKeyRegenerationFlow:
             "session_data": session_data,
         }
 
-        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
-            # Act - First poll without team_id
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
+        ):
             result = await cli_poll_key(
                 key_id=session_key,
                 team_id=None,
                 x_litellm_cli_poll_secret="poll-secret",
             )
 
-            # Assert - should return teams list for selection
             assert result["status"] == "ready"
-            assert result["requires_team_selection"] is True
+            assert result["key"] == mock_jwt_token
             assert result["user_id"] == "test-user-456"
+            assert result["team_id"] == "team-a"
             assert result["teams"] == ["team-a", "team-b", "team-c"]
-            assert "key" not in result  # JWT should not be generated yet
-
-            # Verify session was NOT deleted
-            mock_cache.delete_cache.assert_not_called()
+            assert "requires_team_selection" not in result
+            mock_get_jwt.assert_called_once()
+            mock_cache.delete_cache.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_requires_poll_secret(self):

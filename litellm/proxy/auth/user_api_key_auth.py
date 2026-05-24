@@ -1129,7 +1129,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token = None
 
             ## Check UI Hash Key
-            if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            if valid_token is None and get_secret_bool(
+                "EXPERIMENTAL_UI_LOGIN", default_value=True
+            ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
                     api_key
                 )

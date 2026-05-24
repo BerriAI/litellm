@@ -536,12 +536,10 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     )
     monkeypatch.setenv("UI_USERNAME", "admin")
 
-    response = client_no_auth.get("/sso/key/generate")
+    response = client_no_auth.get("/sso/key/generate", follow_redirects=False)
 
-    assert response.status_code == 200
-    html = response.text
-    assert '<div class="deprecation-banner">' in html
-    assert "Deprecated:" in html
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):

@@ -17,6 +17,12 @@ function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [cliLoginId, setCliLoginId] = useState<string | null>(null);
+  const [cliBrowserCompleteToken, setCliBrowserCompleteToken] = useState<string | null>(null);
+  const [cliVerifyCode, setCliVerifyCode] = useState("");
+  const [cliVerifyError, setCliVerifyError] = useState<string | null>(null);
+  const [cliVerifyComplete, setCliVerifyComplete] = useState(false);
+  const [isCliVerifying, setIsCliVerifying] = useState(false);
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
   const router = useRouter();
@@ -29,6 +35,12 @@ function LoginPageContent() {
     const workerParam = params.get("worker");
     if (workerParam) {
       setSelectedWorkerId(workerParam);
+    }
+    if (params.get("source") === "litellm-cli") {
+      const key = params.get("key");
+      if (key) {
+        setCliLoginId(key);
+      }
     }
   }, []);
 
@@ -75,8 +87,9 @@ function LoginPageContent() {
     }
 
     const rawToken = getCookie("token");
-    if (rawToken && !isJwtExpired(rawToken)) {
+    if (rawToken && !isJwtExpired(rawToken) && !params.get("source")) {
       // User already logged in - redirect to return URL or default
+      // Skip when CLI login flow is active (source=litellm-cli)
       const returnUrl = consumeReturnUrl();
       if (returnUrl) {
         router.replace(returnUrl);
@@ -86,7 +99,7 @@ function LoginPageContent() {
       return;
     }
 
-    if (uiConfig && uiConfig.auto_redirect_to_sso) {
+    if (uiConfig && uiConfig.auto_redirect_to_sso && !params.get("source")) {
       // For SSO, pass the return URL to the SSO endpoint
       const returnUrl = getReturnUrl();
       let ssoUrl = `${getProxyBaseUrl()}/sso/key/generate`;
@@ -100,6 +113,37 @@ function LoginPageContent() {
     setIsLoading(false);
   }, [isConfigLoading, router, uiConfig]);
 
+  const handleCliVerify = async () => {
+    if (!cliLoginId || !cliBrowserCompleteToken) {
+      return;
+    }
+    setIsCliVerifying(true);
+    setCliVerifyError(null);
+    try {
+      const proxyBaseUrl = getProxyBaseUrl();
+      const response = await fetch(
+        `${proxyBaseUrl}/sso/cli/complete/${encodeURIComponent(cliLoginId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            user_code: cliVerifyCode.trim(),
+            browser_complete_token: cliBrowserCompleteToken,
+          }),
+        },
+      );
+      if (!response.ok) {
+        setCliVerifyError("Invalid verification code. Check the code shown in your terminal.");
+        return;
+      }
+      setCliVerifyComplete(true);
+    } catch {
+      setCliVerifyError("Could not verify the code. Please try again.");
+    } finally {
+      setIsCliVerifying(false);
+    }
+  };
+
   const handleSubmit = () => {
     // If a worker is selected, point proxyBaseUrl at it before login
     const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
@@ -108,9 +152,18 @@ function LoginPageContent() {
     }
 
     loginMutation.mutate(
-      { username, password, useV3: !!selectedWorker },
+      { username, password, useV3: !!selectedWorker && !cliLoginId, cliLoginId: cliLoginId ?? undefined },
       {
         onSuccess: (data) => {
+          if (
+            cliLoginId &&
+            data.cli_browser_complete_token &&
+            data.cli_login_id === cliLoginId
+          ) {
+            setCliBrowserCompleteToken(data.cli_browser_complete_token);
+            return;
+          }
+
           // Update the worker context with the selected worker
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
@@ -143,6 +196,75 @@ function LoginPageContent() {
 
   if (isConfigLoading || isLoading) {
     return <LoadingScreen />;
+  }
+
+  if (cliVerifyComplete) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-lg shadow-md">
+          <Space direction="vertical" size="middle" className="w-full">
+            <div className="text-center">
+              <Title level={2}>🚅 LiteLLM</Title>
+            </div>
+            <Alert
+              message="CLI login complete"
+              description="You can close this window and return to your terminal."
+              type="success"
+              showIcon
+            />
+          </Space>
+        </Card>
+      </div>
+    );
+  }
+
+  if (cliBrowserCompleteToken) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-lg shadow-md">
+          <Space direction="vertical" size="middle" className="w-full">
+            <div className="text-center">
+              <Title level={2}>🚅 LiteLLM</Title>
+            </div>
+            <div className="text-center">
+              <Title level={3}>Verify CLI login</Title>
+              <Text type="secondary">
+                Enter the verification code shown in your terminal to finish CLI authentication.
+              </Text>
+            </div>
+            {cliVerifyError && <Alert message={cliVerifyError} type="error" showIcon />}
+            <Form onFinish={handleCliVerify} layout="vertical" requiredMark={false}>
+              <Form.Item
+                label="Verification code"
+                name="cli_verify_code"
+                rules={[{ required: true, message: "Please enter the verification code" }]}
+              >
+                <Input
+                  placeholder="XXXX-XXXX"
+                  value={cliVerifyCode}
+                  onChange={(e) => setCliVerifyCode(e.target.value)}
+                  disabled={isCliVerifying}
+                  size="large"
+                  autoComplete="one-time-code"
+                />
+              </Form.Item>
+              <Form.Item>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  loading={isCliVerifying}
+                  disabled={isCliVerifying}
+                  block
+                  size="large"
+                >
+                  Verify
+                </Button>
+              </Form.Item>
+            </Form>
+          </Space>
+        </Card>
+      </div>
+    );
   }
 
   // Show disabled message if admin UI is disabled
@@ -189,6 +311,15 @@ function LoginPageContent() {
             <Title level={3}>Login</Title>
             <Text type="secondary">Access your LiteLLM Admin UI.</Text>
           </div>
+
+          {cliLoginId && (
+            <Alert
+              message="CLI login"
+              description="Sign in below to link this browser session with the LiteLLM CLI running in your terminal."
+              type="info"
+              showIcon
+            />
+          )}
 
           <Alert
             message="Default Credentials"
@@ -298,8 +429,12 @@ function LoginPageContent() {
                     // SSO on the worker (or this instance if no worker), always
                     // include return_to so the callback redirects back here
                     const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
-                    const returnTo = encodeURIComponent(window.location.origin + "/ui/login");
-                    router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                    const returnTo = encodeURIComponent(window.location.href);
+                    let ssoUrl = `${ssoBase}/sso/key/generate?return_to=${returnTo}`;
+                    if (cliLoginId) {
+                      ssoUrl += `&source=litellm-cli&key=${encodeURIComponent(cliLoginId)}`;
+                    }
+                    router.push(ssoUrl);
                   }}
                   block
                   size="large"

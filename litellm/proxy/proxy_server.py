@@ -12959,6 +12959,9 @@ async def login_v2(request: Request):  # noqa: PLR0915
         body = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
+        cli_login_id = body.get("cli_login_id")
+        if cli_login_id is not None:
+            cli_login_id = str(cli_login_id)
 
         login_result = await authenticate_user(
             username=username,
@@ -12988,11 +12991,29 @@ async def login_v2(request: Request):  # noqa: PLR0915
             litellm_dashboard_ui += "/ui/"
         litellm_dashboard_ui += "?login=success"
 
+        response_content: Dict[str, Any] = {
+            "redirect_url": litellm_dashboard_ui,
+            "token": jwt_token,
+        }
+        if cli_login_id:
+            from litellm.proxy.management_endpoints.ui_sso import (
+                attach_cli_session_after_ui_login,
+            )
+
+            browser_complete_token = await attach_cli_session_after_ui_login(
+                cli_login_id,
+                user_id=login_result.user_id,
+                user_role=login_result.user_role,
+                user_email=login_result.user_email,
+            )
+            response_content["cli_login_id"] = cli_login_id
+            response_content["cli_browser_complete_token"] = browser_complete_token
+
         # Token is included in the response body so the UI can set a JS-accessible
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
         # server-set cookie, which would otherwise cause an infinite login redirect.
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+            content=response_content,
             status_code=status.HTTP_200_OK,
         )
         json_response.set_cookie(key="token", value=jwt_token)

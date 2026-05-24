@@ -321,7 +321,7 @@ class TestLoginCommand:
             # Verify browser was opened with correct URL
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "https://test.example.com/ui/login" in call_args
             assert "cli-test-uuid-123" in call_args
             assert "Verification code: ABCD-EFGH" in result.output
             mock_post.assert_called_once()
@@ -588,39 +588,21 @@ class TestCLIKeyRegenerationFlow:
         """Setup for each test"""
         self.runner = CliRunner()
 
-    def test_login_with_team_selection_flow(self):
-        """Test complete login flow when user has multiple teams - should prompt for selection"""
+    def test_login_with_multiple_teams_completes_without_prompt(self):
+        """Test login completes in one poll when user has multiple teams"""
         mock_context = Mock()
         mock_context.obj = {"base_url": "https://test.example.com"}
 
-        # Mock first response - requires team selection
-        mock_first_response = Mock()
-        mock_first_response.status_code = 200
-        mock_first_response.json.return_value = {
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
             "status": "ready",
-            "requires_team_selection": True,
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-alpha.jwt",
             "user_id": "test-user-456",
-            "teams": ["team-alpha", "team-beta", "team-gamma"],
-            # New richer response with team details including aliases
-            "team_details": [
-                {"team_id": "team-alpha", "team_alias": "Alpha Team"},
-                {"team_id": "team-beta", "team_alias": "Beta Team"},
-                {"team_id": "team-gamma", "team_alias": "Gamma Team"},
-            ],
-        }
-
-        # Mock second response after team selection - JWT with selected team
-        mock_second_response = Mock()
-        mock_second_response.status_code = 200
-        mock_second_response.json.return_value = {
-            "status": "ready",
-            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt",
-            "user_id": "test-user-456",
-            "team_id": "team-beta",
+            "team_id": "team-alpha",
             "teams": ["team-alpha", "team-beta", "team-gamma"],
         }
 
-        # Simulate user selecting team #2 (team-beta)
         with (
             patch("webbrowser.open") as mock_browser,
             patch(
@@ -629,54 +611,26 @@ class TestCLIKeyRegenerationFlow:
                     login_id="cli-session-uuid-456"
                 ),
             ),
-            patch(
-                "requests.get", side_effect=[mock_first_response, mock_second_response]
-            ) as mock_get,
+            patch("requests.get", return_value=mock_response) as mock_get,
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
-            patch(
-                "litellm.proxy.client.cli.interface.show_commands"
-            ) as mock_show_commands,
-            patch("click.prompt", return_value="2"),
-        ):  # User selects index 2
-
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+            patch("click.prompt") as mock_prompt,
+        ):
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
             assert "✅ Login successful!" in result.output
-            assert "team-beta" in result.output
-            # Ensure we surface the human-readable team alias to the user
-            assert "Beta Team" in result.output
-
-            # Verify browser was opened
-            mock_browser.assert_called_once()
-            call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
-
-            # Verify two polling requests were made
-            assert mock_get.call_count == 2
-
-            # First poll should be without team_id
-            first_poll_url = mock_get.call_args_list[0][0][0]
-            assert "cli-session-uuid-456" in first_poll_url
-            assert "team_id=" not in first_poll_url
-            assert mock_get.call_args_list[0].kwargs["headers"] == {
-                "x-litellm-cli-poll-secret": "poll-secret"
-            }
-
-            # Second poll should include team_id=team-beta
-            second_poll_url = mock_get.call_args_list[1][0][0]
-            assert "team_id=team-beta" in second_poll_url
-
-            # Verify JWT was saved
+            mock_prompt.assert_not_called()
+            mock_get.assert_called_once()
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
             assert (
                 saved_data["key"]
-                == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
+                == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-alpha.jwt"
             )
-            assert saved_data["user_id"] == "test-user-456"
-
-            mock_show_commands.assert_called_once()
+            mock_browser.assert_called_once()
+            call_args = mock_browser.call_args[0][0]
+            assert "https://test.example.com/ui/login" in call_args
 
     def test_login_without_teams_flow(self):
         """Test complete login flow when user has no teams - JWT generated without team"""
@@ -715,7 +669,7 @@ class TestCLIKeyRegenerationFlow:
             # Verify browser was opened
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "https://test.example.com/ui/login" in call_args
             assert "source=litellm-cli" in call_args
             assert "key=cli-session-uuid-solo" in call_args
 
