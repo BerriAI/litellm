@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .base import GuardrailConfigModel
 
-
 CISCO_AI_DEFENSE_RULE_NAMES = Literal[
     "Code Detection",
     "Harassment",

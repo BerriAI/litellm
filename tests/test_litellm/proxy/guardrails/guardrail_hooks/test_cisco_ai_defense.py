@@ -48,7 +48,6 @@ from litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
-
 CISCO_BASE = "https://us.api.inspect.aidefense.security.cisco.com"
 CHAT_URL = f"{CISCO_BASE}/api/v1/inspect/chat"
 MCP_URL = f"{CISCO_BASE}/api/v1/inspect/mcp"
