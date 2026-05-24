@@ -17,8 +17,6 @@ import pytest
 import litellm
 from litellm.llms.hosted_vllm.messages.transformation import (
     HostedVLLMAnthropicMessagesConfig,
-)
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     _should_skip_anthropic_translation,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -204,11 +202,13 @@ class TestHandlerRouting:
 
     @pytest.mark.asyncio
     async def test_flag_enabled_uses_passthrough_config(self):
-        """When disable_anthropic_translation=True, the handler must call
-        base_llm_http_handler.anthropic_messages_handler (native path) instead of
+        """When disable_anthropic_translation=True, ProviderConfigManager returns
+        HostedVLLMAnthropicMessagesConfig and the native path is used instead of
         LiteLLMMessagesToCompletionTransformationHandler."""
         from litellm.llms.anthropic.experimental_pass_through.messages import handler as h
+        from litellm.utils import ProviderConfigManager
 
+        passthrough_config = HostedVLLMAnthropicMessagesConfig()
         mock_response = MagicMock()
         mock_response.id = "msg_test"
 
@@ -219,6 +219,7 @@ class TestHandlerRouting:
                 "anthropic_messages_handler",
             ) as mock_translate,
             patch("litellm.get_llm_provider", return_value=("qwen36-27b-fp8", "hosted_vllm", "key", "http://vllm/v1")),
+            patch.object(ProviderConfigManager, "get_provider_anthropic_messages_config", return_value=passthrough_config),
         ):
             h.anthropic_messages_handler(
                 max_tokens=100,
@@ -232,7 +233,6 @@ class TestHandlerRouting:
         mock_native.assert_called_once()
         mock_translate.assert_not_called()
 
-        # Confirm HostedVLLMAnthropicMessagesConfig was passed in
         call_kwargs = mock_native.call_args.kwargs
         assert isinstance(
             call_kwargs.get("anthropic_messages_provider_config"),
@@ -244,6 +244,7 @@ class TestHandlerRouting:
         """When disable_anthropic_translation is absent (default), the handler must
         route to LiteLLMMessagesToCompletionTransformationHandler."""
         from litellm.llms.anthropic.experimental_pass_through.messages import handler as h
+        from litellm.utils import ProviderConfigManager
 
         mock_response = MagicMock()
 
@@ -254,6 +255,7 @@ class TestHandlerRouting:
                 return_value=mock_response,
             ) as mock_translate,
             patch("litellm.get_llm_provider", return_value=("qwen36-27b-fp8", "hosted_vllm", "key", "http://vllm/v1")),
+            patch.object(ProviderConfigManager, "get_provider_anthropic_messages_config", return_value=None),
         ):
             h.anthropic_messages_handler(
                 max_tokens=100,

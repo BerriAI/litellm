@@ -7,6 +7,7 @@ Anthropic→OpenAI chat/completions translation and POSTs the original Anthropic
 directly to `{api_base}/v1/messages`.
 """
 
+import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
@@ -19,6 +20,23 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+
+def _should_skip_anthropic_translation(litellm_params: GenericLiteLLMParams) -> bool:
+    """Return True when Anthropic→OpenAI translation should be bypassed for hosted_vllm.
+
+    Checked in priority order:
+    1. Per-deployment ``disable_anthropic_translation`` in litellm_params
+    2. Global env var ``DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION``
+    """
+    param_flag = litellm_params.get("disable_anthropic_translation")
+    if param_flag is not None:
+        return bool(param_flag)
+    return os.environ.get("DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 class HostedVLLMAnthropicMessagesConfig(BaseAnthropicMessagesConfig):

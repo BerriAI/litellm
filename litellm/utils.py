@@ -8499,7 +8499,19 @@ class ProviderConfigManager:
     def get_provider_anthropic_messages_config(
         model: str,
         provider: LlmProviders,
+        litellm_params: Optional[Any] = None,
     ) -> Optional[BaseAnthropicMessagesConfig]:
+        if provider == litellm.LlmProviders.HOSTED_VLLM:
+            from litellm.llms.hosted_vllm.messages.transformation import (
+                HostedVLLMAnthropicMessagesConfig,
+                _should_skip_anthropic_translation,
+            )
+
+            if litellm_params is not None and _should_skip_anthropic_translation(
+                litellm_params
+            ):
+                return HostedVLLMAnthropicMessagesConfig()
+            return None
         return ProviderConfigManager._get_provider_anthropic_messages_config_cached(
             model=model, provider=provider
         )

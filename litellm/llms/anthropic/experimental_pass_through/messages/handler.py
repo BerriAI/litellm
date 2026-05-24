@@ -7,7 +7,6 @@
 
 import asyncio
 import contextvars
-import os
 from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
@@ -22,7 +21,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.hosted_vllm.messages.transformation import (
-    HostedVLLMAnthropicMessagesConfig,
+    _should_skip_anthropic_translation,  # re-exported for backwards compat
 )
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -52,23 +51,6 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
-
-
-def _should_skip_anthropic_translation(litellm_params: GenericLiteLLMParams) -> bool:
-    """Return True when Anthropic→OpenAI translation should be bypassed for hosted_vllm.
-
-    Checked in priority order:
-    1. Per-deployment ``disable_anthropic_translation`` in litellm_params
-    2. Global env var ``DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION``
-    """
-    param_flag = litellm_params.get("disable_anthropic_translation")
-    if param_flag is not None:
-        return bool(param_flag)
-    return os.environ.get("DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -431,17 +413,14 @@ def anthropic_messages_handler(
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
-    if custom_llm_provider == "hosted_vllm" and _should_skip_anthropic_translation(
-        litellm_params
-    ):
-        anthropic_messages_provider_config = HostedVLLMAnthropicMessagesConfig()
-    elif custom_llm_provider is not None and custom_llm_provider in [
+    if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
     ]:
         anthropic_messages_provider_config = (
             ProviderConfigManager.get_provider_anthropic_messages_config(
                 model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
+                litellm_params=litellm_params,
             )
         )
     if anthropic_messages_provider_config is None:
