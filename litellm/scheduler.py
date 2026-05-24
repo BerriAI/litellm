@@ -10,6 +10,8 @@ from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
 
 
 class SchedulerCacheKeys(enum.Enum):
+    """Cache key constants used by the priority-queue scheduler."""
+
     queue = "scheduler:queue"
     default_in_memory_ttl = (
         DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
@@ -17,12 +19,34 @@ class SchedulerCacheKeys(enum.Enum):
 
 
 class FlowItem(BaseModel):
+    """A single request waiting in the scheduler's priority queue.
+
+    Attributes:
+        priority: Priority value between 0 and 255. Lower values are
+            processed first (standard min-heap semantics).
+        request_id: Unique identifier for the request, used to look it
+            up when polling or removing from the queue.
+        model_name: Name of the model group this request targets. Each
+            model group has its own independent queue.
+    """
+
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str
 
 
 class Scheduler:
+    """Per-model-group priority queue used by the router to gate requests.
+
+    Each model group maintains its own min-heap keyed on ``FlowItem.priority``.
+    Requests at the top of the queue are released when a healthy deployment
+    becomes available; requests further back wait until either a deployment
+    is free or they reach the top of the heap.
+
+    The queue is persisted via a :class:`DualCache` so it can be shared
+    across proxy workers when a Redis cache is provided.
+    """
+
     cache: DualCache
 
     def __init__(
@@ -46,6 +70,13 @@ class Scheduler:
         )  # default to 3ms
 
     async def add_request(self, request: FlowItem):
+        """Enqueue a request into its model group's priority queue.
+
+        The request is inserted into the min-heap using
+        ``(request.priority, request.request_id)`` as the heap key, so
+        lower priority values are released first. Ties on priority are
+        broken by ``request_id`` for deterministic ordering.
+        """
         # We use the priority directly, as lower values indicate higher priority
         # get the queue
         queue = await self.get_queue(model_name=request.model_name)
