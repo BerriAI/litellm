@@ -627,7 +627,6 @@ async def token_endpoint(
 # error response. Declaring ``code``/``state`` as required would cause
 # FastAPI to reject the error response with a 422 before the handler runs,
 # which strands the MCP client waiting on the loopback (see LIT-2750).
-_OAUTH_ERROR_PARAMS = ("error", "error_description", "error_uri")
 
 
 def _render_oauth_error_html(error: str, description: Optional[str]) -> HTMLResponse:
@@ -678,8 +677,10 @@ async def callback(
     """
     # 1. IdP-reported error path (e.g. ``?error=access_denied``).
     if error:
+        # IdP-controlled fields go through repr() so embedded newlines /
+        # control characters can't fake additional log lines.
         verbose_logger.info(
-            "MCP /callback received IdP error: error=%s, error_description=%s",
+            "MCP /callback received IdP error: error=%r, error_description=%r",
             error,
             error_description,
         )
