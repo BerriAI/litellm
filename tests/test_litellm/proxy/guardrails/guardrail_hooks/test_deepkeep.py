@@ -417,6 +417,118 @@ class TestDeepKeepGuardrail:
         assert config_model is not None
         assert config_model.ui_friendly_name() == "DeepKeep AI Firewall"
 
+    def test_build_request_headers_includes_extra_headers(self):
+        """should merge extra_headers into the request headers."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-api-key-123",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            extra_headers={"X-Custom-Header": "custom-value", "X-Tenant": "tenant-1"},
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        headers = guardrail._build_request_headers()
+        assert headers["X-API-Key"] == "test-api-key-123"
+        assert headers["Content-Type"] == "application/json"
+        assert headers["X-Custom-Header"] == "custom-value"
+        assert headers["X-Tenant"] == "tenant-1"
+
+    def test_build_request_headers_no_extra_headers(self):
+        """should not fail and return only base headers when extra_headers is None."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-api-key-123",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        headers = guardrail._build_request_headers()
+        assert set(headers.keys()) == {"Content-Type", "X-API-Key"}
+
+    def test_extract_user_api_key_metadata_token_does_not_overwrite_hash(self):
+        """should not overwrite user_api_key_hash with user_api_key_token when hash is already set."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        request_data = {
+            "metadata": {
+                "user_api_key_hash": "the-real-hash",
+                "user_api_key_token": "the-raw-token",
+            }
+        }
+
+        metadata = guardrail._extract_user_api_key_metadata(request_data)
+        # hash was set explicitly, token alias must NOT overwrite it
+        assert metadata["user_api_key_hash"] == "the-real-hash"
+
+    def test_extract_user_api_key_metadata_token_used_as_hash_fallback(self):
+        """should use user_api_key_token as hash alias only when no explicit hash is present."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        request_data = {
+            "metadata": {
+                "user_api_key_token": "the-raw-token",
+            }
+        }
+
+        metadata = guardrail._extract_user_api_key_metadata(request_data)
+        assert metadata["user_api_key_hash"] == "the-raw-token"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_preserves_tool_calls_and_structured_messages(self):
+        """should include tool_calls and structured_messages in the return value."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        mock_response = Response(
+            status_code=200,
+            json={"action": "NONE", "blocked_reason": None, "texts": None, "images": None},
+            request=Request(
+                "POST",
+                "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api",
+            ),
+        )
+
+        sample_tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather"}}]
+        sample_structured = [{"role": "tool", "content": "sunny"}]
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["what's the weather?"],
+                    "tool_calls": sample_tool_calls,
+                    "structured_messages": sample_structured,
+                },
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        assert result["tool_calls"] == sample_tool_calls
+        assert result["structured_messages"] == sample_structured
+
     @pytest.mark.asyncio
     async def test_firewall_id_in_payload(self):
         """should include firewall_id in additional_provider_specific_params."""

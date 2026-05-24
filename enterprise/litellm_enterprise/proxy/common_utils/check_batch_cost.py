@@ -328,21 +328,32 @@ class CheckBatchCost:
 
                 # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
                 # output/error file IDs to managed base64 IDs before the DB write here.
-                managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
+                managed_files_hook = self.proxy_logging_obj.get_proxy_hook(
+                    "managed_files"
+                )
                 if managed_files_hook is not None:
                     from litellm.proxy._types import UserAPIKeyAuth
+
                     _minimal_auth = UserAPIKeyAuth(
                         user_id=job.created_by or "default-user-id",
                         team_id=getattr(job, "team_id", None),
                     )
                     for _file_attr in ["output_file_id", "error_file_id"]:
                         _raw_file_id = getattr(response, _file_attr, None)
-                        if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
+                        if _raw_file_id and not _is_base64_encoded_unified_file_id(
+                            _raw_file_id
+                        ):
                             try:
-                                _unified_file_id = managed_files_hook.get_unified_output_file_id(
-                                    output_file_id=_raw_file_id,
-                                    model_id=model_id,
-                                    model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                                _unified_file_id = (
+                                    managed_files_hook.get_unified_output_file_id(
+                                        output_file_id=_raw_file_id,
+                                        model_id=model_id,
+                                        model_name=(
+                                            str(model_name)
+                                            if model_name
+                                            else deployment_info.model_name or None
+                                        ),
+                                    )
                                 )
                                 await managed_files_hook.store_unified_file_id(
                                     file_id=_unified_file_id,
