@@ -3696,7 +3696,11 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -3716,8 +3720,19 @@ async def block_team(
         user_api_key_dict=user_api_key_dict,
     )
 
+    # `object_permission` is included so `_refresh_cached_team` doesn't write
+    # a cached team with the relation nulled out — MCP/agent authz paths treat
+    # a missing object_permission as "no team-level restriction".
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": True},  # type: ignore
+        include={"object_permission": True},  # type: ignore
+    )
+
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record
@@ -3748,7 +3763,11 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -3768,8 +3787,19 @@ async def unblock_team(
         user_api_key_dict=user_api_key_dict,
     )
 
+    # `object_permission` is included so `_refresh_cached_team` doesn't write
+    # a cached team with the relation nulled out — MCP/agent authz paths treat
+    # a missing object_permission as "no team-level restriction".
     record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": False},  # type: ignore
+        include={"object_permission": True},  # type: ignore
+    )
+
+    await _refresh_cached_team(
+        team_row=record,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record

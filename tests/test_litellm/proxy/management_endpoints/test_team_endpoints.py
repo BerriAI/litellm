@@ -8243,3 +8243,81 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
             )
     assert str(exc.value.code) == "403"
     assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["block", "unblock"])
+async def test_block_unblock_team_refreshes_cache(route: str):
+    """
+    Regression pin: block_team and unblock_team must call _cache_team_object
+    after the DB write so the in-memory LiteLLM_TeamTableCachedObj stays in
+    sync.
+
+    Without this, auth checks read a stale `blocked` flag — a just-blocked
+    team keeps receiving requests, and a just-unblocked team stays blocked
+    until the cache TTL expires.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import BlockTeamRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        block_team,
+        unblock_team,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    existing_team = MagicMock()
+    existing_team.model_dump.return_value = {
+        "team_id": "team-block-test",
+        "blocked": route == "unblock",
+        "object_permission_id": "op-99",
+        "object_permission": {"object_permission_id": "op-99", "search_tools": []},
+    }
+
+    updated_team = MagicMock()
+    updated_team.team_id = "team-block-test"
+    updated_team.model_dump.return_value = {
+        "team_id": "team-block-test",
+        "blocked": route == "block",
+        "object_permission_id": "op-99",
+        "object_permission": {"object_permission_id": "op-99", "search_tools": []},
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
+        ) as mock_cache_team,
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+        mock_cache_team.return_value = None
+
+        endpoint = block_team if route == "block" else unblock_team
+        await endpoint(
+            data=BlockTeamRequest(team_id="team-block-test"),
+            http_request=mock_request,
+            user_api_key_dict=mock_user,
+        )
+
+        assert mock_cache_team.await_count == 1, (
+            f"{route}_team must call _cache_team_object exactly once after the "
+            f"DB write so the cached blocked flag stays in sync; "
+            f"got await_count={mock_cache_team.await_count}"
+        )
+        call_kwargs = mock_cache_team.await_args.kwargs
+        assert call_kwargs["team_id"] == "team-block-test"
+        cached_obj = call_kwargs["team_table"]
+        assert cached_obj.blocked is (route == "block"), (
+            f"cached team.blocked should be {route == 'block'} after {route}_team"
+        )
