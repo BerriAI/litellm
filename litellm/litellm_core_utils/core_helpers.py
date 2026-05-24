@@ -262,9 +262,7 @@ def process_response_headers(
 
     # Raw httpx.Headers objects come directly from provider HTTP responses and
     # must never be treated as LiteLLM-owned, regardless of caller intent.
-    _preserve = preserve_litellm_internal_headers and isinstance(
-        response_headers, dict
-    )
+    _preserve = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
     openai_headers = {}
     processed_headers = {}
