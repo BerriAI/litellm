@@ -571,8 +571,8 @@ def test_handler_strips_when_no_presanitized_flag():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "sanitize_anthropic_messages_for_upstream",
+        wraps=handler.sanitize_anthropic_messages_for_upstream,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -591,8 +591,8 @@ def test_handler_skips_strip_when_presanitized():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "sanitize_anthropic_messages_for_upstream",
+        wraps=handler.sanitize_anthropic_messages_for_upstream,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -656,8 +656,8 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch.object(
             handler,
-            "strip_empty_text_blocks_from_anthropic_messages",
-            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+            "sanitize_anthropic_messages_for_upstream",
+            wraps=handler.sanitize_anthropic_messages_for_upstream,
         ) as spy,
     ):
         await handler.anthropic_messages(
