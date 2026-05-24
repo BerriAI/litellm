@@ -487,3 +487,66 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+def test_get_key_models_all_proxy_models_preserves_team_specific_entries():
+    """
+    When a key's models list contains both 'all-proxy-models' and team-specific
+    entries, get_key_models must return the union, not just proxy_model_list.
+    Old branch used assignment instead of set.update(),
+    dropping any team-specific models alongside 'all-proxy-models'.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["all-proxy-models", "team-private-claude-sonnet"],
+        api_key="test-key",
+    )
+    proxy_model_list = ["gpt-4o", "gpt-4-turbo"]
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups={},
+    )
+
+    assert (
+        "team-private-claude-sonnet" in result
+    ), "team-specific model was dropped when all-proxy-models sentinel was present"
+    assert "gpt-4o" in result
+    assert "gpt-4-turbo" in result
+    assert len(result) == len(set(result)), "result contains duplicates"
+    assert (
+        "all-proxy-models" not in result
+    ), "all-proxy-models sentinel should not appear as a model name in the result"
+
+
+def test_get_key_models_all_team_models_then_all_proxy_models_chain():
+    """
+    When a key has all-team-models and the team's model list contains
+    all-proxy-models, get_key_models must return the union of proxy models and
+    any team-specific entries, with neither sentinel in the output.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["all-team-models"],
+        team_models=["all-proxy-models", "team-claude-opus"],
+        api_key="test-key",
+    )
+    proxy_model_list = ["gpt-4o", "gpt-4-turbo"]
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups={},
+    )
+
+    assert "team-claude-opus" in result
+    assert "gpt-4o" in result
+    assert "gpt-4-turbo" in result
+    assert "all-proxy-models" not in result
+    assert "all-team-models" not in result
+    assert len(result) == len(set(result)), "result contains duplicates"
