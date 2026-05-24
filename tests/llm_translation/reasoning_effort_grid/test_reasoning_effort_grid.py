@@ -15,7 +15,6 @@ from .grid_spec import (
     all_cells,
 )
 
-
 _PROMPT_MESSAGES: List[Dict[str, str]] = [
     {"role": "user", "content": "Step by step, calculate 47 * 53. Show your work."}
 ]
@@ -164,6 +163,9 @@ async def test_reasoning_effort_grid(
     cell: CellExpectation,
     wire_capture,
 ) -> None:
+    if model.skip_reason:
+        pytest.skip(model.skip_reason)
+
     skip_reason = _required_env_missing(model)
     if skip_reason:
         pytest.skip(skip_reason)
