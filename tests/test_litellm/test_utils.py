@@ -4034,3 +4034,44 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
 
+
+def test_deepseek_v4_models_in_backup_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in litellm/model_prices_and_context_window_backup.json.
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+
+

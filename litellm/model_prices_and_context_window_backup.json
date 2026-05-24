@@ -9911,7 +9911,7 @@
         "supports_tool_choice": false
     },
     "deepseek-v4-flash": {
-        "cache_read_input_token_cost": 1.4e-08,
+        "cache_read_input_token_cost": 2.8e-09,
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
@@ -9927,12 +9927,12 @@
         "supports_tool_choice": true
     },
     "deepseek-v4-pro": {
-        "cache_read_input_token_cost": 1.74e-07,
-        "input_cost_per_token": 1.74e-06,
+        "cache_read_input_token_cost": 3.625e-09,
+        "input_cost_per_token": 4.35e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 3.48e-06,
+        "output_cost_per_token": 8.7e-07,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supports_function_calling": true,
         "supports_native_streaming": true,
@@ -12533,7 +12533,7 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-v4-flash": {
-        "cache_read_input_token_cost": 1.4e-08,
+        "cache_read_input_token_cost": 2.8e-09,
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
@@ -12549,12 +12549,12 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-v4-pro": {
-        "cache_read_input_token_cost": 1.74e-07,
-        "input_cost_per_token": 1.74e-06,
+        "cache_read_input_token_cost": 3.625e-09,
+        "input_cost_per_token": 4.35e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 3.48e-06,
+        "output_cost_per_token": 8.7e-07,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supports_function_calling": true,
         "supports_native_streaming": true,
