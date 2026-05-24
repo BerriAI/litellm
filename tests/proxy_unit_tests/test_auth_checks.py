@@ -1155,6 +1155,120 @@ async def test_can_key_call_model_via_access_group_ids():
         )
 
 
+@pytest.mark.asyncio
+async def test_can_key_call_model_restricts_empty_key_models_to_access_group_ids():
+    """Keys with access_group_ids and no model list are restricted to those groups."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-with-gpt4"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
+            },
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="claude-3",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_restricts_all_team_models_to_access_group_ids():
+    """Keys with all-team-models and access_group_ids are restricted to those groups."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=["all-team-models"],
+        access_group_ids=["ag-with-gpt4"],
+        team_models=["gpt-4", "claude-3"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
+            },
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="claude-3",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_denies_when_access_group_ids_resolve_no_models():
+    """Keys with access_group_ids do not fall back to all models when groups are empty."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["empty-group"],
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("litellm.proxy.auth.auth_checks.verbose_proxy_logger.warning") as warning,
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="gpt-4",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=None,
+            )
+        warning.assert_called_once()
+        assert "resolved to no model permissions" in warning.call_args.args[0]
+
+
 # ---------------------------------------------------------------------------
 # _key_access_group_grants_model (key access group overriding team restriction)
 # ---------------------------------------------------------------------------

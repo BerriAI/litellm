@@ -3054,18 +3054,51 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    key_access_group_ids = valid_token.access_group_ids or []
+    key_models = valid_token.models or []
+    key_defers_to_team_models = (
+        len(key_models) == 0 or SpecialModelNames.all_team_models.value in key_models
+    )
+
+    if key_access_group_ids and key_defers_to_team_models:
+        models_from_groups = await _get_models_from_access_groups(
+            access_group_ids=key_access_group_ids,
+        )
+        if models_from_groups:
+            return _can_object_call_model(
+                model=model,
+                llm_router=llm_router,
+                models=models_from_groups,
+                team_model_aliases=valid_token.team_model_aliases,
+                team_id=valid_token.team_id,
+                object_type="key",
+            )
+        verbose_proxy_logger.warning(
+            "Key has access_group_ids=%s, but those access groups resolved to no model permissions. "
+            "Denying model=%s for key_alias=%s, team_id=%s.",
+            key_access_group_ids,
+            model,
+            valid_token.key_alias,
+            valid_token.team_id,
+        )
+        raise ProxyException(
+            message=f"key not allowed to access model. This key has access_group_ids={key_access_group_ids}, but those groups do not grant any models. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=valid_token.models,
+            models=key_models,
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             object_type="key",
         )
     except ProxyException:
         # Fallback: check key's access_group_ids
-        key_access_group_ids = valid_token.access_group_ids or []
         if key_access_group_ids:
             models_from_groups = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
