@@ -10,6 +10,9 @@ client = OpenAI(
 BEDROCK_BATCH_MODEL = "bedrock/batch-us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
+@pytest.mark.skip(
+    reason="Bedrock batch inference (model-invocation-job) is not authorized on AWS account 941277531214 (requires an AWS support case); re-enable once batch access is granted"
+)
 @pytest.mark.asyncio
 async def test_bedrock_batches_api():
     """
