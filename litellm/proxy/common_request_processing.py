@@ -744,7 +744,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return custom_headers
 
-    async def common_processing_pre_call_logic(
+    async def common_processing_pre_call_logic(  # noqa: PLR0915
         self,
         request: Request,
         general_settings: dict,
