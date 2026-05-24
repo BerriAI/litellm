@@ -167,13 +167,9 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
 
     print(f"team_sl_metadata: {team_sl_metadata}")
     mock_request.url.path = "/chat/completions"
-    # Opt the key into client-supplied tags so request_tags are preserved
-    # and merged with admin-configured key/team tags. Without this flag,
-    # request_tags would be stripped by add_litellm_data_to_request.
     key_metadata = {
         "tags": key_tags,
         "spend_logs_metadata": key_sl_metadata,
-        "allow_client_tags": True,
     }
     team_metadata = {
         "tags": team_tags,
@@ -235,18 +231,10 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
             "langfuse_host": "https://us.cloud.langfuse.com",
             "langfuse_public_key": "pk-lf-9636b7a6-c066",
             "langfuse_secret_key": "sk-lf-7cc8b620",
-        },
-        {
-            "langfuse_host": "os.environ/LANGFUSE_HOST_TEMP",
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY_TEMP",
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
-        },
+        }
     ],
 )
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
-    os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
-    os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
-    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -315,6 +303,41 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
+                    },
+                }
+            ]
+        },
+        team_metadata={},
+    )
+
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+
+    assert callbacks is None
 
 
 @pytest.mark.parametrize(
@@ -393,9 +416,10 @@ def test_dynamic_turn_off_message_logging(callback_vars):
     )
 
     assert callbacks is not None
-    assert (
-        callbacks.callback_vars["turn_off_message_logging"]
-        == callback_vars["turn_off_message_logging"]
+    # AddTeamCallback's validator stringifies callback_var values, so compare
+    # against the str() of the input rather than the input bool directly.
+    assert callbacks.callback_vars["turn_off_message_logging"] == str(
+        callback_vars["turn_off_message_logging"]
     )
 
 
@@ -474,19 +498,28 @@ def test_is_request_body_safe_model_enabled(
     assert expect_error == error_raised
 
 
-@pytest.mark.parametrize(
-    "api_key_value, expect_complete",
-    [
-        ("sk-real-key", True),
-        ("", False),
-        (None, False),
-        ("   ", False),
-    ],
-)
-def test_check_complete_credentials_api_key_values(api_key_value, expect_complete):
+def _assert_check_complete_credentials(api_key_value, expect_complete):
     request_body = {"model": "gpt-3.5-turbo", "api_key": api_key_value}
     result = check_complete_credentials(request_body=request_body)
     assert result == expect_complete
+
+
+def test_check_complete_credentials_with_real_key():
+    _assert_check_complete_credentials(
+        api_key_value="sk-" + "x" * 8, expect_complete=True
+    )
+
+
+def test_check_complete_credentials_with_empty_string():
+    _assert_check_complete_credentials(api_key_value="", expect_complete=False)
+
+
+def test_check_complete_credentials_with_none():
+    _assert_check_complete_credentials(api_key_value=None, expect_complete=False)
+
+
+def test_check_complete_credentials_with_whitespace():
+    _assert_check_complete_credentials(api_key_value="   ", expect_complete=False)
 
 
 def test_reading_openai_org_id_from_headers():
@@ -551,12 +584,21 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         user_api_key_dict=user_api_key_dict,
     )
 
+    # All header values must be str/bytes so httpx won't reject them when the
+    # downstream client builds the request (regression: #27458).
+    for k, v in data.items():
+        assert isinstance(v, (str, bytes)), (
+            f"header {k!r} has non-str value {v!r} ({type(v).__name__}); "
+            "httpx will raise 'Header value must be str or bytes' when the LLM "
+            "request is built."
+        )
+
     expected_data = {
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
-        "x-litellm-user_api_key_spend": 0.0,
-        "x-litellm-user_api_key_auth_metadata": {},
+        "x-litellm-user_api_key_spend": "0.0",
+        "x-litellm-user_api_key_auth_metadata": "{}",
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -686,12 +728,13 @@ async def test_proxy_config_update_from_db():
 
 @pytest.mark.asyncio
 async def test_prepare_key_update_data():
-    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
 
-    existing_key_row = MagicMock()
+    existing_key_row = MagicMock(spec=LiteLLM_VerificationToken)
+    existing_key_row.metadata = {}
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
@@ -863,13 +906,12 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata. Opt into client-supplied tags so the
-    # request_tags are preserved for the merge under test.
+    # Setup key with tags in metadata.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={"tags": key_tags, "allow_client_tags": True},
+        metadata={"tags": key_tags},
     )
 
     # Setup request data with tags
@@ -1262,10 +1304,15 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
         }
     )
 
-    LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="test",
         proxy_config=pc,
     )
+
+    assert callback_metadata is not None
+    assert callback_metadata.callback_vars is not None
+    assert callback_metadata.callback_vars["langfuse_public_key"] == "test_public_key"
+    assert callback_metadata.callback_vars["langfuse_secret"] == "test_secret_key"
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"

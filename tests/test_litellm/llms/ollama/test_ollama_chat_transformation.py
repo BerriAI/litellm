@@ -694,6 +694,71 @@ class TestOllamaReasoningContentStreaming:
         # reasoning_content is not set when there's no thinking in the chunk
         assert getattr(result2.choices[0].delta, "reasoning_content", None) is None
 
+    def test_thinking_and_content_in_same_chunk(self):
+        """
+        Test that a chunk containing both thinking and content preserves both fields.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "Let me reason first.",
+                "content": "Final answer.",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk)
+
+        assert result.choices[0].delta.reasoning_content == "Let me reason first."
+        assert result.choices[0].delta.content == "Final answer."
+
+    def test_streaming_chunks_ignore_inactive_empty_reasoning_fields(self):
+        """
+        Test that Ollama chunks with inactive empty fields stay in the active delta.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "Let me reason first.",
+                "content": "",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk)
+
+        assert result.choices[0].delta.reasoning_content == "Let me reason first."
+        assert result.choices[0].delta.content is None
+        assert iterator.finished_reasoning_content is False
+
+        content_chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "",
+                "content": "Final answer.",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(content_chunk)
+
+        assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+        assert result.choices[0].delta.content == "Final answer."
+        assert iterator.finished_reasoning_content is True
+
     def test_think_tags_in_content(self):
         """
         Test that <think> tags embedded in content are properly parsed.
@@ -746,3 +811,98 @@ class TestOllamaReasoningContentStreaming:
         result = iterator.chunk_parser(done_chunk)
         assert result.choices[0].delta.reasoning_content == "Final thought"
         assert result.choices[0].finish_reason == "stop"
+
+
+class TestOllamaToolCallTransformation:
+    def test_transform_request_preserves_tool_calls(self):
+        """
+        tool_calls on assistant messages must survive transform_request.
+        Previously the translated OllamaToolCall list was built but never
+        copied into the outgoing OllamaChatCompletionMessage, so Ollama
+        received {role: assistant, content: ''} with no tool_calls and
+        the model re-issued the same call on every turn.
+        Regression: https://github.com/BerriAI/litellm/issues/26094
+        """
+        config = OllamaChatConfig()
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What's the weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco, CA"}',
+                            },
+                        }
+                    ],
+                },
+            ],
+        )
+
+        result = config.transform_request(
+            model="gemma4:27b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assistant_msg = result["messages"][1]
+        assert "tool_calls" in assistant_msg, "tool_calls must be forwarded to Ollama"
+        assert len(assistant_msg["tool_calls"]) == 1
+        tc = assistant_msg["tool_calls"][0]
+        assert tc["function"]["name"] == "get_weather"
+        assert tc["function"]["arguments"] == {"location": "San Francisco, CA"}
+
+    def test_transform_request_forwards_tool_call_id(self):
+        """
+        tool_call_id on role:tool messages must be forwarded so Ollama can
+        resolve the tool name from the conversation history.
+        Regression: https://github.com/BerriAI/litellm/issues/26094
+        """
+        config = OllamaChatConfig()
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "What's the weather in SF?"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco, CA"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": "Sunny, 72°F",
+                },
+            ],
+        )
+
+        result = config.transform_request(
+            model="gemma4:27b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        tool_msg = result["messages"][2]
+        assert tool_msg["role"] == "tool"
+        assert tool_msg["content"] == "Sunny, 72°F"
+        assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
+        assert tool_msg["tool_call_id"] == "call_abc123"

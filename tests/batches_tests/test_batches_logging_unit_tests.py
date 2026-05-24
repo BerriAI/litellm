@@ -215,7 +215,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -233,7 +233,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         completion_tokens=50,
         total_tokens=150,
     )
-    expected_models = ["gpt-4o-mini"]
+    expected_models = ["gpt-5-mini"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
@@ -299,7 +299,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -317,7 +317,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
         completion_tokens=100,
         total_tokens=300,
     )
-    explicit_models = ["gpt-4o-mini", "gpt-3.5-turbo"]
+    explicit_models = ["gpt-5-mini", "gpt-5.5"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
@@ -393,7 +393,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -468,7 +468,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -489,7 +489,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
         completion_tokens=75,
         total_tokens=225,
     )
-    expected_models = ["gpt-4o-mini"]
+    expected_models = ["gpt-5-mini"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",

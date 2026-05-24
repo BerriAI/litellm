@@ -96,8 +96,8 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         Returns the model string to use for tests.
 
         Examples:
-        - "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0"
-        - "bedrock/invoke/anthropic.claude-3-7-sonnet-20250219-v1:0"
+        - "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        - "bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0"
         """
         pass
 

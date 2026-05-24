@@ -320,22 +320,24 @@ export default function UISettings() {
             </Space>
           </Space>
 
-          <Space align="start" size="middle">
-            <Switch
-              checked={Boolean(values.enable_projects_ui)}
-              disabled={isUpdating}
-              loading={isUpdating}
-              onChange={handleToggleEnableProjectsUI}
-              aria-label={enableProjectsUIProperty?.description ?? "Enable Projects UI"}
-            />
-            <Space direction="vertical" size={4}>
-              <Typography.Text strong>[BETA] Enable Projects (page will refresh)</Typography.Text>
-              <Typography.Text type="secondary">
-                {enableProjectsUIProperty?.description ??
-                  "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
-              </Typography.Text>
+          {enableProjectsUIProperty && (
+            <Space align="start" size="middle">
+              <Switch
+                checked={Boolean(values.enable_projects_ui)}
+                disabled={isUpdating}
+                loading={isUpdating}
+                onChange={handleToggleEnableProjectsUI}
+                aria-label={enableProjectsUIProperty.description ?? "Enable Projects UI"}
+              />
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>[BETA] Enable Projects (page will refresh)</Typography.Text>
+                <Typography.Text type="secondary">
+                  {enableProjectsUIProperty.description ??
+                    "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."}
+                </Typography.Text>
+              </Space>
             </Space>
-          </Space>
+          )}
 
           <Divider />
 

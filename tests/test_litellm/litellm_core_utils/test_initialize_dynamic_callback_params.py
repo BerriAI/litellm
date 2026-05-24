@@ -64,7 +64,7 @@ def test_env_reference_in_metadata_raises_with_guidance():
     assert "metadata" in message
 
 
-def test_env_reference_in_litellm_params_metadata_raises():
+def test_gcs_bucket_name_in_litellm_params_metadata_is_ignored():
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -73,10 +73,21 @@ def test_env_reference_in_litellm_params_metadata_raises():
         }
     }
 
-    with pytest.raises(ValueError) as exc_info:
-        initialize_standard_callback_dynamic_params(kwargs)
+    params = initialize_standard_callback_dynamic_params(kwargs)
 
-    assert "gcs_bucket_name" in str(exc_info.value)
+    assert params.get("gcs_bucket_name") is None
+
+
+def test_gcs_callback_params_are_not_extracted_from_request_kwargs():
+    kwargs = {
+        "gcs_bucket_name": "server-bucket",
+        "gcs_path_service_account": "/path/to/service-account.json",
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("gcs_bucket_name") is None
+    assert params.get("gcs_path_service_account") is None
 
 
 def test_non_string_values_are_not_flagged():

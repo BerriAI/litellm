@@ -46,6 +46,8 @@ class PassThroughEndpointLogging:
             "search",
             "batchPredictionJobs",
             "predictLongRunning",
+            "embedContent",
+            "batchEmbedContents",
         ]
 
         # Anthropic

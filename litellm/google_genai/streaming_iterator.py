@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -29,12 +29,14 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         litellm_logging_obj: LiteLLMLoggingObj,
         request_body: dict,
         model: str,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
         self.collected_chunks: List[bytes] = []
         self.model = model
+        self._hidden_params: Dict[str, Any] = hidden_params or {}
 
     async def _handle_async_streaming_logging(
         self,
@@ -76,11 +78,13 @@ class GoogleGenAIGenerateContentStreamingIterator(
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: Optional[dict] = None,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
             model=model,
+            hidden_params=hidden_params,
         )
         self.response = response
         self.model = model
@@ -130,11 +134,13 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(
         litellm_metadata: dict,
         custom_llm_provider: str,
         request_body: Optional[dict] = None,
+        hidden_params: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             litellm_logging_obj=logging_obj,
             request_body=request_body or {},
             model=model,
+            hidden_params=hidden_params,
         )
         self.response = response
         self.model = model

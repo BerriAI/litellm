@@ -72,6 +72,9 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -317,6 +320,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "tools",
             "thinking",
             "output_format",
+            "output_config",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -663,7 +667,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -694,6 +698,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "low"
             else:
                 return "minimal"
+        elif thinking_type == "adaptive":
+            # Adaptive thinking: effort is controlled by output_config.effort,
+            # not budget_tokens. Return a default; caller should override with
+            # output_config.effort when available.
+            return "medium"
 
         return None
 
@@ -776,6 +785,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return ChatCompletionToolChoiceObjectParam(
                 type="function", function=tc_function_param
             )
+        elif tool_choice["type"] == "none":
+            return "none"
         else:
             raise ValueError(
                 "Incompatible tool choice param submitted - {}".format(tool_choice)
@@ -1041,6 +1052,12 @@ class LiteLLMAnthropicMessagesAdapter:
         if not reasoning_effort:
             return
 
+        # For adaptive thinking, override with output_config.effort if available
+        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                reasoning_effort = output_config["effort"]
+
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         auto_summary = is_reasoning_auto_summary_enabled()
         if summary:
@@ -1067,10 +1084,23 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """Translate output_format to response_format when applicable."""
-        if "output_format" not in anthropic_message_request:
-            return
-        output_format = anthropic_message_request["output_format"]
+        """Translate Anthropic structured-output config to OpenAI ``response_format``.
+
+        Accepts either the legacy top-level ``output_format`` field OR the
+        newer ``output_config.format`` (sub-key on ``output_config``) so that
+        both shapes flow through to non-Anthropic backends as
+        ``response_format``. Without the ``output_config.format`` branch,
+        callers using the new Anthropic Structured Outputs API would have
+        their schema silently dropped on the adapter path — only the legacy
+        top-level ``output_format`` was being mapped.
+
+        ``output_format`` takes precedence when both are provided.
+        """
+        output_format: Any = anthropic_message_request.get("output_format")
+        if not output_format:
+            output_config = anthropic_message_request.get("output_config")
+            if isinstance(output_config, dict):
+                output_format = output_config.get("format")
         if not output_format:
             return
         response_format = self.translate_anthropic_output_format_to_openai(
@@ -1269,9 +1299,18 @@ class LiteLLMAnthropicMessagesAdapter:
                         else truncated_name
                     )
 
+                    # Strip Gemini thought-signature suffix from id (mirrors streaming
+                    # path below); base64 chars (+ / =) violate Anthropic's
+                    # `^[a-zA-Z0-9_-]+$` tool_use.id pattern when replayed.
+                    raw_id = tool_call.id or ""
+                    base_id = (
+                        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+                        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+                        else raw_id
+                    )
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=tool_call.id,
+                        id=base_id,
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1366,7 +1405,7 @@ class LiteLLMAnthropicMessagesAdapter:
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
-        from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
+        from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
             if (
@@ -1374,12 +1413,25 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
             ):
-                return "tool_use", ToolUseBlock(
-                    type="tool_use",
-                    id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
-                    name=choice.delta.tool_calls[0].function.name or "",
-                    input={},  # type: ignore[typeddict-item]
-                )
+                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
+                tool_name = choice.delta.tool_calls[0].function.name or ""
+                base_id = raw_id
+                thought_sig: Optional[str] = None
+                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
+                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+                    base_id = parts[0]
+                    thought_sig = parts[1] if len(parts) > 1 else None
+                tool_block: Dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": base_id,
+                    "name": tool_name,
+                    "input": {},
+                }
+                if thought_sig:
+                    tool_block["provider_specific_fields"] = {
+                        "signature": thought_sig,
+                    }
+                return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
             elif choice.delta.content is not None and len(choice.delta.content) > 0:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(
@@ -1424,7 +1476,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            if choice.delta.tool_calls is not None:
+            if choice.delta.tool_calls:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
                     if (

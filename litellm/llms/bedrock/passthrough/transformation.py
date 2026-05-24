@@ -10,12 +10,10 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
+    from httpx import URL
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes
-
-
-if TYPE_CHECKING:
-    from httpx import URL
 
 
 class BedrockPassthroughConfig(

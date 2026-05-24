@@ -15,6 +15,40 @@ import yaml
 from fastapi.testclient import TestClient
 
 
+_PROXY_MODULE_GLOBALS_TO_ISOLATE = (
+    "master_key",
+    "prisma_client",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_proxy_module_globals():
+    """
+    Snapshot and restore module-level globals on litellm.proxy.proxy_server
+    that tests sometimes mutate via raw setattr (not monkeypatch).
+
+    Without this, a leaked value — e.g. master_key set by a sibling test —
+    flips the auth short-circuit in user_api_key_auth and causes unrelated
+    tests in the same xdist worker to return 401 instead of 200.
+    """
+    from litellm.proxy import proxy_server
+
+    sentinel = object()
+    snapshot = {
+        name: getattr(proxy_server, name, sentinel)
+        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
+    }
+    try:
+        yield
+    finally:
+        for name, value in snapshot.items():
+            if value is sentinel:
+                if hasattr(proxy_server, name):
+                    delattr(proxy_server, name)
+            else:
+                setattr(proxy_server, name, value)
+
+
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     """
     Build Redis cache configuration from environment variables.

@@ -257,16 +257,16 @@ tests:
           value: 0
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.periodSeconds
-          value: 10
+          value: 15
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
-          value: 1
+          value: 5
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.successThreshold
           value: 1
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.failureThreshold
-          value: 3
+          value: 5
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
           value: /health/readiness
@@ -278,7 +278,7 @@ tests:
           value: 10
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
-          value: 1
+          value: 5
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.successThreshold
           value: 1
@@ -296,7 +296,7 @@ tests:
           value: 10
       - equal:
           path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
-          value: 1
+          value: 5
       - equal:
           path: spec.template.spec.containers[0].startupProbe.successThreshold
           value: 1

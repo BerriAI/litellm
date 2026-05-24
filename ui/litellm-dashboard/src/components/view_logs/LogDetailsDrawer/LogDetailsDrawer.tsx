@@ -26,7 +26,6 @@ export interface LogDetailsDrawerProps {
   logEntry: LogEntry | null;
   sessionId?: string | null;
   accessToken?: string | null;
-  onOpenSettings?: () => void;
   allLogs?: LogEntry[];
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
@@ -109,7 +108,6 @@ export function LogDetailsDrawer({
   logEntry,
   sessionId,
   accessToken,
-  onOpenSettings,
   allLogs = [],
   onSelectLog,
   startTime,
@@ -399,7 +397,6 @@ export function LogDetailsDrawer({
             <div className="flex-1 overflow-y-auto">
               <LogDetailContent
                 logEntry={enrichedLog}
-                onOpenSettings={onOpenSettings}
                 isLoadingDetails={isLoadingDetails}
                 accessToken={accessToken ?? null}
               />

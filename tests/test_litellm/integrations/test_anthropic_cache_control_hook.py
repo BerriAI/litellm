@@ -220,7 +220,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             # Test with multiple messages and negative indices
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "system",
@@ -352,7 +352,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
                 ]
 
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=messages,
                     cache_control_injection_points=[
                         {"location": "message", "index": 10}
@@ -420,7 +420,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
                 ]
 
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=messages,
                     cache_control_injection_points=[
                         {
@@ -486,7 +486,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             # Test with multiple user messages and negative indices
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -586,7 +586,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
             ]
 
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 cache_control_injection_points=[
                     {"location": "message", "index": bad_index}
@@ -651,7 +651,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=message_list,
                 cache_control_injection_points=[{"location": "message", "index": -1}],
                 client=client,
@@ -691,7 +691,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
                 match="bedrock requires at least one non-system message",
             ):
                 await litellm.acompletion(
-                    model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=[],
                     cache_control_injection_points=[
                         {"location": "message", "index": -1}
@@ -742,7 +742,7 @@ async def test_anthropic_cache_control_hook_no_op():
             ]
 
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
                 # No cache_control_injection_points parameter
                 client=client,
@@ -799,7 +799,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -874,7 +874,7 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             response = await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {
                         "role": "user",
@@ -1057,7 +1057,7 @@ async def test_anthropic_cache_control_hook_string_negative_index():
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
             await litellm.acompletion(
-                model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=[
                     {"role": "user", "content": "First message"},
                     {"role": "assistant", "content": "First response"},

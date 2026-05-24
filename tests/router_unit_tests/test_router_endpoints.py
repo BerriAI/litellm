@@ -31,23 +31,23 @@ import asyncio
 def model_list():
     return [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "gpt-4o",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -59,9 +59,9 @@ def model_list():
             },
         },
         {
-            "model_name": "claude-3-5-sonnet-20240620",
+            "model_name": "claude-sonnet-4-5-20250929",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "mock_response": "hi this is macintosh.",
             },
         },
@@ -323,21 +323,21 @@ async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
 
     if sync_mode:
         response = router.text_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
     else:
         ## Test 1: user facing function
         response = await router.atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
 
         ## Test 2: underlying function
         response_2 = await router._atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             mock_response="I'm fine, thank you!",
         )
@@ -359,12 +359,12 @@ async def test_router_with_empty_choices(model_list):
             completion_tokens=10,
             total_tokens=20,
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         object="chat.completion",
         created=1723081200,
     ).model_dump()
     response = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response=mock_response,
     )
@@ -1110,7 +1110,7 @@ def test_initialize_skills_endpoints():
 async def test_init_containers_api_endpoints():
     """
     Test that _init_containers_api_endpoints calls the original function
-    directly without model-based routing.
+    directly when there is no managed container ID (no embedded model_id).
     """
     router = Router(model_list=[])
 
@@ -1127,3 +1127,112 @@ async def test_init_containers_api_endpoints():
         custom_llm_provider="openai", name="Test Container"
     )
     assert result == mock_response
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallbacks():
+    """
+    Managed ``cntr_`` IDs embed ``model_id``; router should decode and use
+    ``_ageneric_api_call_with_fallbacks`` so deployment credentials apply.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-router-model",
+                "litellm_params": {
+                    "model": "azure/gpt-5.5",
+                    "api_key": "fake-key",
+                    "api_base": "https://westus.api.cognitive.microsoft.com",
+                },
+            }
+        ]
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-router-model",
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=AsyncMock(),
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    router._ageneric_api_call_with_fallbacks.assert_called_once()
+    call_kw = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert call_kw["model"] == "azure-router-model"
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps():
+    """
+    Managed ``cntr_`` IDs may be encoded with an empty ``model_id`` (e.g. when a
+    streaming response had no router metadata). The router must still unwrap the
+    managed ID before calling the upstream provider — otherwise the raw
+    ``cntr_...`` token leaks downstream and the provider rejects it.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="openai",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_applies_decoded_provider():
+    """
+    A managed ``cntr_`` ID can encode a non-OpenAI provider (e.g. ``azure``) with
+    an empty ``model_id`` (streaming events without router ``model_info.id``).
+    The router must still apply the decoded provider so the request routes to
+    the correct upstream — not stay on the default ``openai``.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"

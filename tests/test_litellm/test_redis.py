@@ -1,5 +1,4 @@
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,7 +12,18 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
-from litellm._redis_credential_provider import GCPIAMCredentialProvider
+from litellm._redis_credential_provider import (
+    GCPIAMCredentialProvider,
+    _token_cache,
+)
+
+
+@pytest.fixture(autouse=True)
+def clear_gcp_iam_token_cache():
+    """Reset the module-level GCP IAM token cache between tests."""
+    _token_cache.clear()
+    yield
+    _token_cache.clear()
 
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -154,6 +164,13 @@ def test_max_connections_in_cluster_kwargs():
     ), "max_connections should be in available Redis cluster kwargs"
 
 
+def test_socket_timeouts_in_cluster_kwargs():
+    """Test that Redis cluster clients can receive socket timeout configuration"""
+    kwargs = _get_redis_cluster_kwargs()
+    assert "socket_timeout" in kwargs
+    assert "socket_connect_timeout" in kwargs
+
+
 def test_get_redis_async_client_with_connection_pool():
     """Test that connection_pool parameter is properly passed to Redis client"""
     # Create a mock connection pool
@@ -202,7 +219,7 @@ def test_get_redis_async_client_without_connection_pool():
 
 
 def test_gcp_iam_credential_provider_get_credentials():
-    """GCPIAMCredentialProvider.get_credentials() returns a fresh token tuple on every call."""
+    """GCPIAMCredentialProvider.get_credentials() returns a token tuple."""
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
@@ -216,20 +233,76 @@ def test_gcp_iam_credential_provider_get_credentials():
     mock_gen.assert_called_once_with(service_account)
 
 
-def test_gcp_iam_credential_provider_regenerates_token_on_each_call():
-    """Each call to get_credentials() generates a new token (no caching)."""
+def test_gcp_iam_credential_provider_caches_token():
+    """
+    Repeated calls to get_credentials() reuse the cached token and only call
+    _generate_gcp_iam_access_token once, avoiding redundant blocking I/O.
+    """
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
-    tokens = ["tok-1", "tok-2", "tok-3"]
 
     with patch(
         "litellm._redis_credential_provider._generate_gcp_iam_access_token",
-        side_effect=tokens,
+        return_value="tok-cached",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
-        results = [provider.get_credentials() for _ in range(3)]
+        results = [provider.get_credentials() for _ in range(5)]
 
-    assert results == [("tok-1",), ("tok-2",), ("tok-3",)]
-    assert mock_gen.call_count == 3
+    assert all(r == ("tok-cached",) for r in results)
+    # Token must be fetched exactly once regardless of how many connections are established
+    mock_gen.assert_called_once_with(service_account)
+
+
+def test_gcp_iam_credential_provider_refreshes_on_expiry():
+    """
+    get_credentials() fetches a new token after the cached one expires,
+    ensuring connections always authenticate with a valid token.
+    """
+    import time
+
+    import litellm._redis_credential_provider as cred_module
+
+    service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
+
+    with patch(
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        side_effect=["tok-1", "tok-2"],
+    ) as mock_gen:
+        provider = GCPIAMCredentialProvider(service_account)
+
+        # First call — populates cache
+        assert provider.get_credentials() == ("tok-1",)
+
+        # Artificially expire the cached token
+        cred_module._token_cache[service_account] = ("tok-1", time.monotonic() - 1)
+
+        # Second call — cache miss, must refresh
+        assert provider.get_credentials() == ("tok-2",)
+
+    assert mock_gen.call_count == 2
+
+
+def test_gcp_iam_credential_provider_cache_shared_across_instances():
+    """
+    Multiple GCPIAMCredentialProvider instances for the same service account
+    share one cached token so concurrent Redis connections don't each trigger
+    a blocking IAM round-trip.
+    """
+    service_account = (
+        "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
+    )
+
+    with patch(
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        return_value="tok-shared",
+    ) as mock_gen:
+        p1 = GCPIAMCredentialProvider(service_account)
+        p2 = GCPIAMCredentialProvider(service_account)
+
+        assert p1.get_credentials() == ("tok-shared",)
+        assert p2.get_credentials() == ("tok-shared",)
+
+    # Only one network call despite two provider instances
+    mock_gen.assert_called_once()
 
 
 def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
@@ -357,6 +430,120 @@ def test_sync_client_prefers_cluster_over_url_via_env_var(
         "startup_nodes" in call_kwargs
     ), "startup_nodes must be forwarded to init_redis_cluster"
     assert len(call_kwargs["startup_nodes"]) == 1
+
+
+@patch("litellm._redis.redis.Sentinel")
+def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_cls):
+    """Sentinel auth must be passed to the sentinel, not the Redis master client."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert "password" not in sentinel_call_kwargs
+    assert "username" not in sentinel_call_kwargs
+    assert "ssl" not in sentinel_call_kwargs
+    assert "ssl_cert_reqs" not in sentinel_call_kwargs
+    assert "ssl_check_hostname" not in sentinel_call_kwargs
+    assert "ssl_ca_certs" not in sentinel_call_kwargs
+    assert "max_connections" not in sentinel_call_kwargs
+    assert "socket_timeout" not in sentinel_call_kwargs
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+        "socket_timeout": 5,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+
+@patch("litellm._redis.async_redis.Sentinel")
+def test_async_sentinel_uses_sentinel_password_and_master_password(
+    mock_sentinel_cls,
+):
+    """Async sentinel auth must mirror the sync sentinel password routing."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_async_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert "password" not in sentinel_call_kwargs
+    assert "username" not in sentinel_call_kwargs
+    assert "ssl" not in sentinel_call_kwargs
+    assert "ssl_cert_reqs" not in sentinel_call_kwargs
+    assert "ssl_check_hostname" not in sentinel_call_kwargs
+    assert "ssl_ca_certs" not in sentinel_call_kwargs
+    assert "max_connections" not in sentinel_call_kwargs
+    assert "socket_timeout" not in sentinel_call_kwargs
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+        "socket_timeout": 5,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster",
+        password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
+        socket_timeout=5,
+    )
 
 
 @patch("litellm._redis.init_redis_cluster")

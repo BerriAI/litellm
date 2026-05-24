@@ -287,7 +287,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
             content_item = cast(ChatCompletionFileObject, content_item)
-            file_obj = content_item["file"]
+            file_obj = content_item.get("file")
+            if file_obj is None:
+                raise litellm.BadRequestError(
+                    message="Content block has type='file' but is missing the required 'file' field",
+                    model=None,
+                    llm_provider="openai",
+                )
             new_file_obj = ChatCompletionFileObjectFile(
                 **{  # type: ignore
                     k: v

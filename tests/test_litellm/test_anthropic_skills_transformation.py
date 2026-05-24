@@ -70,6 +70,15 @@ class TestAnthropicSkillsConfigURLConstruction:
         )
         assert url == f"{FAKE_API_BASE}/v1/skills/skill_abc123"
 
+    def test_url_with_skill_id_encodes_path_segment(self):
+        url = self.config.get_complete_url(
+            api_base=FAKE_API_BASE,
+            endpoint="skills",
+            skill_id="../../files?x=1#frag",
+        )
+
+        assert url == f"{FAKE_API_BASE}/v1/skills/..%2F..%2Ffiles%3Fx%3D1%23frag"
+
     def test_url_falls_back_to_anthropic_default(self):
         with patch(
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_base",

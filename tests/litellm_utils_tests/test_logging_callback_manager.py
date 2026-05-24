@@ -366,3 +366,40 @@ def test_generic_api_compatible_callbacks_json_unknown_callback():
     # Should return the string unchanged
     assert result == "unknown_callback", "Unknown callback should be returned as-is"
     assert isinstance(result, str), "Unknown callback should remain a string"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_settings_retry_config():
+    """
+    Test that generic_api callback_settings are passed to GenericAPILogger.
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        _generic_api_logger_cache,
+    )
+
+    callback_name = "test_generic_api_retry_config"
+    _generic_api_logger_cache.pop(callback_name, None)
+    litellm.callback_settings[callback_name] = {
+        "callback_type": "generic_api",
+        "endpoint": "https://example.com/api/logs",
+        "headers": {"Content-Type": "application/json"},
+        "max_retries": 2,
+        "retry_delay": 0.5,
+        "timeout": 3,
+    }
+
+    try:
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+            callback_name
+        )
+
+        assert isinstance(result, GenericAPILogger)
+        assert result.endpoint == "https://example.com/api/logs"
+        assert result.headers == {"Content-Type": "application/json"}
+        assert result.max_retries == 2
+        assert result.retry_delay == 0.5
+        assert result.timeout == 3
+    finally:
+        litellm.callback_settings.pop(callback_name, None)
+        _generic_api_logger_cache.pop(callback_name, None)

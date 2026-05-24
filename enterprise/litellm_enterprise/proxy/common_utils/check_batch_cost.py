@@ -300,6 +300,42 @@ class CheckBatchCost:
                     custom_llm_provider=custom_llm_provider,
                 )
 
+                # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
+                # output/error file IDs to managed base64 IDs before the DB write here.
+                managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
+                if managed_files_hook is not None:
+                    from litellm.proxy._types import UserAPIKeyAuth
+                    _minimal_auth = UserAPIKeyAuth(
+                        user_id=job.created_by or "default-user-id",
+                        team_id=getattr(job, "team_id", None),
+                    )
+                    for _file_attr in ["output_file_id", "error_file_id"]:
+                        _raw_file_id = getattr(response, _file_attr, None)
+                        if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
+                            try:
+                                _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                                    output_file_id=_raw_file_id,
+                                    model_id=model_id,
+                                    model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                                )
+                                await managed_files_hook.store_unified_file_id(
+                                    file_id=_unified_file_id,
+                                    file_object=None,
+                                    litellm_parent_otel_span=None,
+                                    model_mappings={model_id: _raw_file_id},
+                                    user_api_key_dict=_minimal_auth,
+                                )
+                                setattr(response, _file_attr, _unified_file_id)
+                                verbose_proxy_logger.info(
+                                    f"CheckBatchCost: converted {_file_attr} "
+                                    f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
+                                )
+                            except Exception as _e:
+                                verbose_proxy_logger.warning(
+                                    f"CheckBatchCost: failed to create managed file ID for "
+                                    f"{_file_attr}={_raw_file_id!r}: {_e}"
+                                )
+
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
                 deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}

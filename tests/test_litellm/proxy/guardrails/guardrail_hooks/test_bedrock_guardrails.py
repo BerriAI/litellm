@@ -1810,14 +1810,19 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ), patch.object(guardrail, "_prepare_request", return_value=MagicMock()), patch.object(
-        guardrail,
-        "add_standard_logging_guardrail_information_to_request_data",
-    ) as mock_log:
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
         mock_post.return_value = mock_bedrock_response
 
         await guardrail.make_bedrock_api_request(
@@ -1826,7 +1831,9 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
             request_data=request_data,
             logging_event_type=GuardrailEventHooks.during_call,
         )
-        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        assert (
+            mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        )
         # Raw Bedrock JSON is forwarded; redaction runs once in
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         assert (
@@ -1844,6 +1851,60 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
             request_data=request_data,
         )
         assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.pre_call
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_filters_dynamic_evaluation_overrides():
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    prepared_request = MagicMock()
+    prepared_request.url = "https://bedrock.test/apply"
+    prepared_request.body = b"{}"
+    prepared_request.headers = {}
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(
+            guardrail, "_prepare_request", return_value=prepared_request
+        ) as mock_prepare_request,
+        patch.object(
+            guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={
+                "content": [{"text": {"text": "benign replacement"}}],
+                "source": "OUTPUT",
+                "outputScope": "FULL",
+            },
+        ),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "actual prompt"}],
+            request_data={"model": "gpt-4o"},
+        )
+
+    prepared_data = mock_prepare_request.call_args.kwargs["data"]
+    assert prepared_data["source"] == "INPUT"
+    assert "actual prompt" in json.dumps(prepared_data["content"])
+    assert "benign replacement" not in json.dumps(prepared_data["content"])
+    assert prepared_data["outputScope"] == "FULL"
 
 
 @pytest.mark.asyncio
@@ -2012,6 +2073,226 @@ def test_get_http_exception_includes_assessments_and_identifier():
     assert exc.detail["assessments"][0]["matches"][0]["match"] == "[REDACTED]"
 
 
+def test_extract_violation_category_names_mixed_policies():
+    """Topic names, content-filter types, PII types, and managed-word types
+    flatten into a single category-name list — using only the operator-
+    defined `name`/`type` labels."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Fiduciary Advice", "action": "BLOCKED"},
+                        {"name": "Tax Advice", "action": "BLOCKED"},
+                    ]
+                },
+                "contentPolicy": {
+                    "filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]
+                },
+                "wordPolicy": {
+                    "managedWordLists": [{"type": "PROFANITY", "action": "BLOCKED"}],
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "EMAIL", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "Fiduciary Advice" in names
+    assert "Tax Advice" in names
+    assert "VIOLENCE" in names
+    assert "PROFANITY" in names
+    assert "EMAIL" in names
+
+
+def test_extract_violation_category_names_does_not_leak_user_input():
+    """SECURITY: customWords.match is the raw user-submitted word that
+    triggered the rule, and an unnamed regex match is the actual sensitive
+    value (e.g. a credit-card number). Neither must appear in
+    violation_categories — otherwise the content the guardrail blocked
+    leaks straight into telemetry backends."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": [
+                        {"match": "secret-codeword-abc-123", "action": "BLOCKED"}
+                    ],
+                },
+                "sensitiveInformationPolicy": {
+                    "regexes": [{"match": "4111-1111-1111-1111", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "secret-codeword-abc-123" not in names
+    assert "4111-1111-1111-1111" not in names
+    assert names == []
+
+
+def test_extract_violation_category_names_named_regex_uses_name():
+    """A regex with a `name` field surfaces that operator-defined label
+    (safe to log), not the matched value."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "regexes": [
+                        {
+                            "name": "credit-card-pattern",
+                            "match": "4111-1111-1111-1111",
+                            "action": "BLOCKED",
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert names == ["credit-card-pattern"]
+
+
+def test_extract_violation_category_names_skips_anonymized():
+    """ANONYMIZED entries are not blocks — they must not contribute to the
+    violation_categories list."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "NAME", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+    }
+    assert g._extract_violation_category_names(response) == []
+
+
+def test_extract_violation_category_names_no_assessments():
+    """Empty / missing assessments → empty list, not an error."""
+    g = _make_guardrail()
+    assert g._extract_violation_category_names({"action": "NONE"}) == []
+    assert g._extract_violation_category_names({"assessments": None}) == []
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_forwards_guardrail_action():
+    """Bedrock's top-level ``action`` string must be propagated through
+    ``tracing_detail`` so downstream loggers (OTEL, ...) can surface the
+    raw provider verdict as a queryable attribute without re-parsing the
+    redacted guardrail_response blob."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [{"name": "Fiduciary Advice", "action": "BLOCKED"}]
+                }
+            }
+        ],
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+        patch.object(
+            guardrail,
+            "_get_http_exception_for_blocked_guardrail",
+            return_value=Exception("blocked"),
+        ),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        with pytest.raises(Exception):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        assert tracing_detail is not None
+        assert tracing_detail["guardrail_action"] == "GUARDRAIL_INTERVENED"
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_omits_guardrail_action_when_missing():
+    """If the Bedrock response omits ``action`` (older / partial payloads),
+    the field must be left off ``tracing_detail`` rather than written as
+    ``None`` — downstream code expects strings or absence, not nulls."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"assessments": []}
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hi"}],
+            request_data={"model": "gpt-4o", "messages": []},
+        )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        # No violation categories and no action ⇒ tracing_detail stays None
+        # (the hook collapses an empty dict before forwarding).
+        if tracing_detail is not None:
+            assert "guardrail_action" not in tracing_detail
+
+
 def test_get_http_exception_no_blocked_assessments_omits_field():
     """L3: when no assessments are blocked, the `assessments` key is omitted entirely."""
     g = _make_guardrail()
@@ -2035,11 +2316,13 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
 
 
 @pytest.mark.asyncio
-async def test_streaming_post_call_parallel_output_passes_request_data_to_make_bedrock():
+async def test_streaming_post_call_only_runs_output_scan():
     """
     async_post_call_streaming_iterator_hook must pass request_data into OUTPUT
     make_bedrock_api_request so spend/standard_logging attaches to the real request
     (Greptile: previously OUTPUT used request_data=None / ephemeral {}).
+
+    post_call only validates the response — no INPUT scan should run here.
     """
     request_data = {
         "model": "gpt-4o-mini",
@@ -2111,8 +2394,7 @@ async def test_streaming_post_call_parallel_output_passes_request_data_to_make_b
     input_calls = [
         c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
     ]
-    assert len(input_calls) == 1
-    assert input_calls[0].kwargs.get("request_data") is request_data
+    assert len(input_calls) == 0
 
 
 @pytest.mark.asyncio
@@ -2164,3 +2446,60 @@ async def test_streaming_post_call_output_only_path_passes_request_data_to_make_
     c = mock_make.call_args
     assert c.kwargs.get("source") == "OUTPUT"
     assert c.kwargs.get("request_data") is request_data
+
+
+# ---------------------------------------------------------------------------
+# Regression: post_call only validates OUTPUT.
+# Input scanning belongs to pre_call / during_call. Running an extra INPUT
+# scan here used to produce a duplicate "post-call" trace entry and made no
+# semantic sense for a "post-call" event.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_only_runs_output_scan():
+    """
+    With only `post_call` configured, async_post_call_success_hook must call
+    make_bedrock_api_request exactly once with source="OUTPUT". An INPUT call
+    here would produce a duplicate post-call log entry.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-post-pii",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+    }
+    response = ModelResponse(
+        choices=[
+            litellm.Choices(
+                message=litellm.Message(role="assistant", content="hello"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        model="gpt-4o-mini",
+    )
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+    sources = [c.kwargs.get("source") for c in mock_make.call_args_list]
+    assert sources == ["OUTPUT"]
+    assert (
+        mock_make.call_args.kwargs.get("logging_event_type")
+        == GuardrailEventHooks.post_call
+    )

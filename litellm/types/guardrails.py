@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
@@ -17,9 +20,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
 )
-from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
-    AktoConfigModel,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
@@ -29,6 +29,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
@@ -37,6 +40,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
     HiddenlayerGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
+    QostodianNexusConfigModel,
 )
 
 """
@@ -85,16 +91,21 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
+    XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
     OVALIX = "ovalix"
+    MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    LLM_AS_A_JUDGE = "llm_as_a_judge"
+    QOSTODIAN_NEXUS = "qostodian_nexus"
+    RUBRIK = "rubrik"
 
 
 class Role(Enum):
@@ -628,6 +639,16 @@ class BaseLitellmParams(
         ),
     )
 
+    skip_tool_message_in_guardrail: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails skip tool-role messages when building "
+            "evaluation inputs (texts and structured_messages). When False, tool "
+            "messages are included even if litellm_settings sets a global skip. When "
+            "None, use the global litellm.skip_tool_message_in_guardrail setting."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,
@@ -761,6 +782,7 @@ class LitellmParams(
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     PromptGuardConfigModel,
+    XecGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
@@ -772,6 +794,7 @@ class LitellmParams(
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
+    QostodianNexusConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -891,6 +914,8 @@ class ApplyGuardrailRequest(BaseModel):
     text: str
     language: Optional[str] = None
     entities: Optional[List[PiiEntityType]] = None
+    input_type: str = "request"
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ApplyGuardrailResponse(BaseModel):
