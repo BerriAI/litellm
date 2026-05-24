@@ -62,6 +62,12 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map skypool provider value to Skypool display name and logo", () => {
+      const result = getProviderLogoAndName("skypool");
+      expect(result.displayName).toBe(Providers.Skypool);
+      expect(result.logo).toBe(providerLogoMap[Providers.Skypool]);
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -136,6 +142,10 @@ describe("provider_info_helpers", () => {
 
     it("should return snowflake placeholder for Snowflake provider", () => {
       expect(getPlaceholder(Providers.Snowflake)).toBe("snowflake/mistral-7b");
+    });
+
+    it("should return skypool placeholder for Skypool provider", () => {
+      expect(getPlaceholder(Providers.Skypool)).toBe("skypool/gemma4:26b");
     });
 
     it("should return voyage placeholder for Voyage provider", () => {

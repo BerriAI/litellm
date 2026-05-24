@@ -87,6 +87,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   Snowflake = "Snowflake",
+  Skypool = "Skypool",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
@@ -195,6 +196,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   Snowflake: "snowflake",
+  Skypool: "skypool",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
@@ -286,6 +288,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.SAP]: `${asset_logos_folder}sap.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
+  [Providers.Skypool]: `${asset_logos_folder}skypool.png`,
   [Providers.TEXT_COMPLETION_CODESTRAL]: `${asset_logos_folder}mistral.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
   [Providers.TOPAZ]: `${asset_logos_folder}topaz.svg`,
@@ -352,6 +355,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "oci/xai.grok-4";
   } else if (selectedProvider == Providers.Snowflake) {
     return "snowflake/mistral-7b";
+  } else if (selectedProvider == Providers.Skypool) {
+    return "skypool/gemma4:26b";
   } else if (selectedProvider == Providers.Voyage) {
     return "voyage/";
   } else if (selectedProvider == Providers.JinaAI) {
