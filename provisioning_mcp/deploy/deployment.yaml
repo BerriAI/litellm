@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-provisioning-mcp
+  namespace: litellm
+  labels:
+    app.kubernetes.io/name: litellm-provisioning-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm-provisioning-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: litellm-provisioning-mcp
+    spec:
+      serviceAccountName: litellm-provisioning-mcp
+      containers:
+        - name: mcp
+          # Replace with your published image (built from provisioning_mcp/Dockerfile).
+          image: ghcr.io/berriai/litellm-provisioning-mcp:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # ---- required OAuth 2.0 resource-server settings (not secret) ----
+            - name: OAUTH_JWKS_URL
+              value: "https://YOUR_IDP/.well-known/jwks.json"
+            - name: OAUTH_ISSUER
+              value: "https://YOUR_IDP/"
+            - name: OAUTH_AUDIENCE
+              value: "litellm-provisioning-mcp"
+            - name: MCP_RESOURCE_SERVER_URL
+              value: "https://mcp.example.com"
+            # ---- optional (defaults shown) ----
+            - name: OAUTH_REQUIRED_SCOPE
+              value: "litellm:provision"
+            - name: LITELLM_NAMESPACE
+              value: "litellm"
+            - name: LITELLM_IMAGE_REGISTRY
+              value: "ghcr.io/berriai"
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-provisioning-mcp
+  namespace: litellm
+  labels:
+    app.kubernetes.io/name: litellm-provisioning-mcp
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: litellm-provisioning-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

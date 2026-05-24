@@ -1,0 +1,54 @@
+# Namespaced RBAC: the provisioning MCP can manage only the `litellm` namespace.
+# No cluster-scoped permissions are granted, so the namespace must already exist
+# (see namespace.yaml) — the server never uses `helm --create-namespace`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: litellm-provisioning-mcp
+  namespace: litellm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: litellm-provisioning-mcp
+  namespace: litellm
+rules:
+  # Core objects created by the chart, the migration job, and the ephemeral
+  # datastores. Secrets cover both the generated master key / DB credentials and
+  # helm's own release-state storage.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - configmaps
+      - secrets
+      - serviceaccounts
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: litellm-provisioning-mcp
+  namespace: litellm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: litellm-provisioning-mcp
+subjects:
+  - kind: ServiceAccount
+    name: litellm-provisioning-mcp
+    namespace: litellm

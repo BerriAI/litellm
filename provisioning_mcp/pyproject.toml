@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "litellm-provisioning-mcp"
+version = "0.1.0"
+description = "MCP server that provisions ephemeral LiteLLM deployments from the helm/litellm chart for end-to-end testing."
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.26.0",
+    "pyjwt[crypto]>=2.8.0",
+    "pyyaml>=6.0",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+litellm-provisioning-mcp = "litellm_provisioning_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/litellm_provisioning_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
