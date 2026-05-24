@@ -42,6 +42,9 @@ async def test_async_create_file():
     )
 
 
+@pytest.mark.skip(
+    reason="Bedrock batch inference (model-invocation-job) is not authorized on AWS account 941277531214 (requires an AWS support case); re-enable once batch access is granted"
+)
 @pytest.mark.asyncio()
 async def test_async_file_and_batch():
     """

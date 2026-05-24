@@ -136,6 +136,9 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         }
 
 
+@pytest.mark.skip(
+    reason="amazon.nova-canvas-v1:0 is legacy-gated and unavailable on AWS account 941277531214"
+)
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
@@ -149,6 +152,9 @@ class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
         }
 
 
+@pytest.mark.skip(
+    reason="amazon.nova-canvas-v1:0 is legacy-gated and unavailable on AWS account 941277531214"
+)
 class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
