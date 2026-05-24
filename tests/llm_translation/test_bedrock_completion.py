@@ -115,7 +115,7 @@ def test_completion_bedrock_guardrails(streaming):
                 ],
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailIdentifier": "4w3d1di3snt5",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -144,7 +144,7 @@ def test_completion_bedrock_guardrails(streaming):
                 stream=True,
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailIdentifier": "4w3d1di3snt5",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
