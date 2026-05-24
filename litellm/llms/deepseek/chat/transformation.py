@@ -10,7 +10,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -50,9 +49,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        is_always_on_reasoner = supports_reasoning(
-            model=model, custom_llm_provider="deepseek"
-        )
+        is_always_on_reasoner = self._is_always_on_reasoner(model=model)
 
         # Handle thinking parameter - accepts {"type": "enabled"} or {"type": "disabled"}.
         # Guard: deepseek-reasoner has always-on thinking and rejects {"type": "disabled"}.
@@ -79,7 +76,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 normalized = "max" if reasoning_effort in ("max", "xhigh") else "high"
                 optional_params["thinking"] = {"type": "enabled"}
                 # Only forward reasoning_effort on V4 opt-in models.
-                # deepseek-reasoner/R1 have supports_reasoning=True but don't accept reasoning_effort field.
+                # deepseek-reasoner/R1 have always-on thinking and don't accept the reasoning_effort field.
                 if not is_always_on_reasoner:
                     optional_params["reasoning_effort"] = normalized
 
@@ -140,6 +137,16 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 result.append(msg)
         return result
 
+    @staticmethod
+    def _is_always_on_reasoner(model: str) -> bool:
+        """
+        Returns True for models with always-on thinking (deepseek-reasoner, R1 variants).
+        These models reject reasoning_effort, thinking: {"type": "disabled"}, and
+        require reasoning_content on every assistant message unconditionally.
+        """
+        m = model.lower()
+        return "reasoner" in m or "-r1" in m or "/r1" in m
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -175,7 +182,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
           - deepseek-reasoner/R1: always-on thinking, no explicit param needed
           - V4 opt-in models: only when user explicitly passed thinking={"type": "enabled"}
         """
-        if supports_reasoning(model=model, custom_llm_provider="deepseek"):
+        if self._is_always_on_reasoner(model=model):
             return True  # deepseek-reasoner always has thinking on
         return (optional_params.get("thinking") or {}).get("type") == "enabled"
 
