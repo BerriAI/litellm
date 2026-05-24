@@ -2036,23 +2036,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
@@ -2124,3 +2120,77 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+class TestUsageChunkEmptyChoices:
+    """The OpenAI streaming spec requires the final usage chunk to have choices: [].
+
+    See: https://platform.openai.com/docs/api-reference/chat/streaming
+    Regression test for https://github.com/BerriAI/litellm/issues/28735
+    """
+
+    def _build_wrapper(self, logging_obj):
+        """Build a CustomStreamWrapper that has already sent the last content chunk."""
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-test",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content="hello", role="assistant"),
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-test",
+                choices=[
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(content=None),
+                    )
+                ],
+            ),
+        ]
+        completion_stream = ModelResponseListIterator(model_responses=chunks)
+        wrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model="gpt-4",
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+        )
+        return wrapper
+
+    def test_sync_usage_chunk_has_empty_choices(self, logging_obj):
+        """Sync __next__: the final usage-only chunk must have choices=[]."""
+        wrapper = self._build_wrapper(logging_obj)
+
+        collected = []
+        for chunk in wrapper:
+            collected.append(chunk)
+
+        # The last chunk should be the usage chunk
+        usage_chunk = collected[-1]
+        assert hasattr(usage_chunk, "usage"), "Final chunk should carry usage"
+        assert usage_chunk.choices == [], (
+            f"Usage chunk must have choices=[] per OpenAI spec, "
+            f"got {usage_chunk.choices!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_usage_chunk_has_empty_choices(self, logging_obj):
+        """Async __anext__: the final usage-only chunk must have choices=[]."""
+        wrapper = self._build_wrapper(logging_obj)
+
+        collected = []
+        async for chunk in wrapper:
+            collected.append(chunk)
+
+        usage_chunk = collected[-1]
+        assert hasattr(usage_chunk, "usage"), "Final chunk should carry usage"
+        assert usage_chunk.choices == [], (
+            f"Usage chunk must have choices=[] per OpenAI spec, "
+            f"got {usage_chunk.choices!r}"
+        )
