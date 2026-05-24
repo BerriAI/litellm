@@ -271,6 +271,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
 
     client.attempt_db_reconnect.assert_awaited_once_with(
         reason="db_health_watchdog_connection_error",
+        force=True,
         timeout_seconds=7.0,
     )
 
@@ -302,8 +303,43 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
 
     client.attempt_db_reconnect.assert_awaited_once_with(
         reason="db_health_watchdog_connection_error",
+        force=True,
         timeout_seconds=9.0,
     )
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_reconnect_bypasses_cooldown(mock_proxy_logging):
+    """Watchdog must bypass the reconnect cooldown -- otherwise busy auth-path
+    failures (which constantly refresh _db_last_reconnect_attempt_ts) would
+    indefinitely block the only reconnect path with enough timeout budget to
+    succeed after a Prisma engine death -- see issue #28322."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(side_effect=Exception("db connection dropped"))
+    client._db_reconnect_cooldown_seconds = 60
+    client._db_last_reconnect_attempt_ts = time.time()
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_watchdog_reconnect_timeout_seconds = 5.0
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+
+    run_cycle = AsyncMock(return_value=None)
+    client._run_reconnect_cycle = run_cycle
+
+    with (
+        patch(
+            "litellm.proxy.utils.asyncio.sleep",
+            AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+        ),
+        patch(
+            "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+            return_value=True,
+        ),
+    ):
+        await client._db_health_watchdog_loop()
+
+    run_cycle.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -364,6 +400,60 @@ async def test_recreate_prisma_client_kills_old_engine_without_disconnect(
     mock_kill.assert_any_call(9999, signal.SIGTERM)
     disconnect_mock.assert_not_awaited()
     fake_new_prisma.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_keeps_old_ref_when_connect_fails(
+    mock_proxy_logging,
+):
+    """If the new Prisma's connect() raises (or is cancelled by asyncio.wait_for
+    on the 2s auth-path budget), the wrapper must NOT install the half-built
+    client. Doing so would leave every subsequent query failing with
+    ClientNotConnectedError until process restart -- the bug from issue #28322.
+    """
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    wrapper = client.db
+    old_prisma = wrapper._original_prisma
+
+    fake_new_prisma = MagicMock()
+    fake_new_prisma.connect = AsyncMock(side_effect=RuntimeError("engine boot failed"))
+
+    with (
+        patch.object(wrapper, "_get_engine_pid", return_value=0),
+        patch("prisma.Prisma", return_value=fake_new_prisma),
+        pytest.raises(RuntimeError, match="engine boot failed"),
+    ):
+        await wrapper.recreate_prisma_client("postgresql://test")
+
+    assert wrapper._original_prisma is old_prisma
+    assert wrapper._original_prisma is not fake_new_prisma
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_swaps_ref_on_successful_connect(
+    mock_proxy_logging,
+):
+    """Happy-path regression: a successful recreate must swap _original_prisma
+    to the newly-connected instance."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    wrapper = client.db
+    old_prisma = wrapper._original_prisma
+
+    fake_new_prisma = MagicMock()
+    fake_new_prisma.connect = AsyncMock(return_value=None)
+
+    with (
+        patch.object(wrapper, "_get_engine_pid", return_value=0),
+        patch("prisma.Prisma", return_value=fake_new_prisma),
+    ):
+        await wrapper.recreate_prisma_client("postgresql://test")
+
+    assert wrapper._original_prisma is fake_new_prisma
+    assert wrapper._original_prisma is not old_prisma
 
 
 # ---------------------------------------------------------------------------

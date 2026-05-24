@@ -4733,8 +4733,15 @@ class PrismaClient:
                 if isinstance(
                     e, asyncio.TimeoutError
                 ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                    # force=True so the watchdog can always run. Busy auth-path
+                    # reconnect attempts continuously refresh
+                    # _db_last_reconnect_attempt_ts; without this, the cooldown
+                    # gate would permanently block the one recovery path with a
+                    # long-enough timeout budget to heal a dead engine -- see
+                    # issue #28322.
                     await self.attempt_db_reconnect(
                         reason="db_health_watchdog_connection_error",
+                        force=True,
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
