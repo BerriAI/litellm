@@ -70,7 +70,7 @@ async def test_async_file_and_batch():
         # bedrock specific params
         #########################################################
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
+        aws_batch_role_arn="arn:aws:iam::941277531214:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
 

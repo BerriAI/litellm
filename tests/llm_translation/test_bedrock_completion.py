@@ -737,7 +737,7 @@ def test_bedrock_ptu():
         from openai.types.chat import ChatCompletion
 
         model_id = (
-            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+            "arn:aws:bedrock:us-west-2:941277531214:provisioned-model/8fxff74qyhs3"
         )
         try:
             response = litellm.completion(
@@ -752,7 +752,7 @@ def test_bedrock_ptu():
         assert "url" in mock_client_post.call_args.kwargs
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A941277531214%3Aprovisioned-model%2F8fxff74qyhs3/converse"
         )
         mock_client_post.assert_called_once()
 

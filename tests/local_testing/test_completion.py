@@ -2699,7 +2699,7 @@ def test_bedrock_deepseek_custom_prompt_dict():
 
 def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
     model = (
-        "deepseek_r1/arn:aws:bedrock:us-west-2:888602223428:imported-model/bnnr6463ejgf"
+        "deepseek_r1/arn:aws:bedrock:us-west-2:941277531214:imported-model/bnnr6463ejgf"
     )
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from unittest.mock import Mock
