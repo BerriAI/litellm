@@ -418,12 +418,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     # Response translation: Responses API -> Anthropic                    #
     # ------------------------------------------------------------------ #
 
-    def translate_response(
+    def _translate_output_item(
         self,
-        response: ResponsesAPIResponse,
-    ) -> AnthropicMessagesResponse:
-        """
-        Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
+        item: Any,
+        content: List[Dict[str, Any]],
+        web_tool_uses: List[Dict[str, Any]],
+    ) -> Optional[AnthropicFinishReason]:
+        """Translate a single output item, appending blocks to *content*.
+
+        Returns a stop_reason override if the item implies one, else None.
         """
         from openai.types.responses import (
             ResponseFunctionToolCall,
@@ -432,6 +435,122 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
+        if isinstance(item, ResponseReasoningItem):
+            for summary in item.summary:
+                text = getattr(summary, "text", "")
+                if text:
+                    content.append(
+                        AnthropicResponseContentBlockThinking(
+                            type="thinking",
+                            thinking=text,
+                            signature=None,
+                        ).model_dump()
+                    )
+
+        elif isinstance(item, ResponseFunctionWebSearch):
+            block, input_dict = build_web_tool_use(item)
+            web_tool_uses.append(block)
+            content.append({**block, "input": input_dict})
+
+        elif isinstance(item, ResponseOutputMessage) and web_tool_uses:
+            for part in item.content:
+                if getattr(part, "type", None) == "output_text":
+                    blocks, citations = build_web_search_results_from_annotations(
+                        web_tool_uses, getattr(part, "annotations", []) or []
+                    )
+                    content.extend(blocks)
+                    content.extend(
+                        build_text_blocks_with_citations(
+                            getattr(part, "text", ""), citations
+                        )
+                    )
+                    break
+
+        elif isinstance(item, ResponseOutputMessage):
+            for part in item.content:
+                if getattr(part, "type", None) == "output_text":
+                    content.append(
+                        AnthropicResponseContentBlockText(
+                            type="text", text=getattr(part, "text", "")
+                        ).model_dump()
+                    )
+
+        elif isinstance(item, ResponseFunctionToolCall):
+            try:
+                input_data = json.loads(item.arguments) if item.arguments else {}
+            except (json.JSONDecodeError, TypeError):
+                input_data = {}
+            content.append(
+                AnthropicResponseContentBlockToolUse(
+                    type="tool_use",
+                    id=item.call_id or item.id or "",
+                    name=item.name,
+                    input=input_data,
+                ).model_dump()
+            )
+            return "tool_use"
+
+        elif isinstance(item, dict):
+            return self._translate_dict_output_item(item, content, web_tool_uses)
+
+        return None
+
+    def _translate_dict_output_item(
+        self,
+        item: Dict[str, Any],
+        content: List[Dict[str, Any]],
+        web_tool_uses: List[Dict[str, Any]],
+    ) -> Optional[AnthropicFinishReason]:
+        """Handle dict-typed output items (untyped SDK responses)."""
+        item_type = item.get("type")
+        if item_type == "web_search_call":
+            block, input_dict = build_web_tool_use(item)
+            web_tool_uses.append(block)
+            content.append({**block, "input": input_dict})
+        elif item_type == "message" and web_tool_uses:
+            for part in item.get("content", []):
+                if isinstance(part, dict) and part.get("type") == "output_text":
+                    blocks, citations = build_web_search_results_from_annotations(
+                        web_tool_uses, part.get("annotations") or []
+                    )
+                    content.extend(blocks)
+                    content.extend(
+                        build_text_blocks_with_citations(
+                            part.get("text", ""), citations
+                        )
+                    )
+                    break
+        elif item_type == "message":
+            for part in item.get("content", []):
+                if isinstance(part, dict) and part.get("type") == "output_text":
+                    content.append(
+                        AnthropicResponseContentBlockText(
+                            type="text", text=part.get("text", "")
+                        ).model_dump()
+                    )
+        elif item_type == "function_call":
+            try:
+                input_data = json.loads(item.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                input_data = {}
+            content.append(
+                AnthropicResponseContentBlockToolUse(
+                    type="tool_use",
+                    id=item.get("call_id") or item.get("id", ""),
+                    name=item.get("name", ""),
+                    input=input_data,
+                ).model_dump()
+            )
+            return "tool_use"
+        return None
+
+    def translate_response(
+        self,
+        response: ResponsesAPIResponse,
+    ) -> AnthropicMessagesResponse:
+        """
+        Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
+        """
         from litellm.types.llms.openai import ResponseAPIUsage
 
         content: List[Dict[str, Any]] = []
@@ -439,104 +558,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         web_tool_uses: List[Dict[str, Any]] = []
 
         for item in response.output:
-            if isinstance(item, ResponseReasoningItem):
-                for summary in item.summary:
-                    text = getattr(summary, "text", "")
-                    if text:
-                        content.append(
-                            AnthropicResponseContentBlockThinking(
-                                type="thinking",
-                                thinking=text,
-                                signature=None,
-                            ).model_dump()
-                        )
-
-            elif isinstance(item, ResponseFunctionWebSearch):
-                block, input_dict = build_web_tool_use(item)
-                web_tool_uses.append(block)
-                content.append({**block, "input": input_dict})
-
-            elif isinstance(item, ResponseOutputMessage) and web_tool_uses:
-                for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
-                        blocks, citations = build_web_search_results_from_annotations(
-                            web_tool_uses, getattr(part, "annotations", []) or []
-                        )
-                        content.extend(blocks)
-                        content.extend(
-                            build_text_blocks_with_citations(
-                                getattr(part, "text", ""), citations
-                            )
-                        )
-                        break
-
-            elif isinstance(item, ResponseOutputMessage):
-                for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
-                        content.append(
-                            AnthropicResponseContentBlockText(
-                                type="text", text=getattr(part, "text", "")
-                            ).model_dump()
-                        )
-
-            elif isinstance(item, ResponseFunctionToolCall):
-                try:
-                    input_data = json.loads(item.arguments) if item.arguments else {}
-                except (json.JSONDecodeError, TypeError):
-                    input_data = {}
-                content.append(
-                    AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=item.call_id or item.id or "",
-                        name=item.name,
-                        input=input_data,
-                    ).model_dump()
-                )
-                stop_reason = "tool_use"
-
-            elif isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type == "web_search_call":
-                    block, input_dict = build_web_tool_use(item)
-                    web_tool_uses.append(block)
-                    content.append({**block, "input": input_dict})
-                elif item_type == "message" and web_tool_uses:
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            blocks, citations = (
-                                build_web_search_results_from_annotations(
-                                    web_tool_uses, part.get("annotations") or []
-                                )
-                            )
-                            content.extend(blocks)
-                            content.extend(
-                                build_text_blocks_with_citations(
-                                    part.get("text", ""), citations
-                                )
-                            )
-                            break
-                elif item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(
-                                    type="text", text=part.get("text", "")
-                                ).model_dump()
-                            )
-                elif item_type == "function_call":
-                    try:
-                        input_data = json.loads(item.get("arguments", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        input_data = {}
-                    content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=item.get("call_id") or item.get("id", ""),
-                            name=item.get("name", ""),
-                            input=input_data,
-                        ).model_dump()
-                    )
-                    stop_reason = "tool_use"
+            override = self._translate_output_item(item, content, web_tool_uses)
+            if override is not None:
+                stop_reason = override
 
         # status -> stop_reason override
         if response.status == "incomplete":
