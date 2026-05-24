@@ -1736,9 +1736,6 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        # Extract alias fields for resolution (if configured)
-        org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
-
         # Get other objects
         (
             user_object,
@@ -1758,16 +1755,17 @@ class JWTAuthManager:
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             route=route,
-            org_alias=org_alias,
+            org_alias=jwt_handler.get_org_alias(
+                token=jwt_valid_token, default_value=None
+            ),
         )
 
         # Reconcile to canonical UserTable.user_id if get_objects resolved via sso_user_id/email fuzzy match.
-        if (
-            user_object is not None
-            and user_object.user_id
-            and user_id != user_object.user_id
-        ):
-            user_id = user_object.user_id
+        user_id = (
+            user_object.user_id
+            if (user_object and user_object.user_id and user_id != user_object.user_id)
+            else user_id
+        )
 
         # Derive org_id from org_object if resolved by alias
         resolved_org_id = org_object.organization_id if org_object else org_id
