@@ -4,6 +4,15 @@ from typing import Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 
+# Prefix used to identify AES-256-GCM encrypted values (FIPS-compliant).
+# Values without this prefix are treated as legacy nacl-encrypted.
+_AES_GCM_PREFIX = "aes256gcm:"
+
+
+def _is_fips_mode() -> bool:
+    """Return True when LITELLM_FIPS_MODE is set to a truthy value."""
+    return os.getenv("LITELLM_FIPS_MODE", "").lower() in ("true", "1", "yes")
+
 
 def _get_salt_key():
     from litellm.proxy.proxy_server import master_key
@@ -16,11 +25,50 @@ def _get_salt_key():
     return salt_key
 
 
+def _encrypt_aes_gcm(value: str, signing_key: str) -> bytes:
+    """Encrypt *value* with AES-256-GCM using a SHA-256 derived key.
+
+    Returns: nonce (12 B) + ciphertext + auth-tag (16 B).
+    Uses the ``cryptography`` library which delegates to OpenSSL and is
+    FIPS-compliant when the underlying OpenSSL build is FIPS-enabled.
+    """
+    import hashlib
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = hashlib.sha256(signing_key.encode()).digest()
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, value.encode("utf-8"), None)
+    return nonce + ciphertext
+
+
+def _decrypt_aes_gcm(data: bytes, signing_key: str) -> str:
+    """Decrypt AES-256-GCM ciphertext produced by :func:`_encrypt_aes_gcm`."""
+    import hashlib
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if len(data) < 12:
+        raise ValueError("AES-GCM ciphertext too short")
+
+    key = hashlib.sha256(signing_key.encode()).digest()
+    nonce, ciphertext = data[:12], data[12:]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
+
+
 def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
     signing_key = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
+            if _is_fips_mode():
+                encrypted_bytes = _encrypt_aes_gcm(value, signing_key)  # type: ignore
+                return _AES_GCM_PREFIX + base64.urlsafe_b64encode(
+                    encrypted_bytes
+                ).decode("utf-8")
+
             encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
             encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
@@ -46,6 +94,13 @@ def decrypt_value_helper(
 
     try:
         if isinstance(value, str):
+            if value.startswith(_AES_GCM_PREFIX):
+                # AES-256-GCM encrypted value (FIPS-compliant path)
+                b64_part = value[len(_AES_GCM_PREFIX) :]
+                encrypted_bytes = base64.urlsafe_b64decode(b64_part)
+                return _decrypt_aes_gcm(encrypted_bytes, signing_key)  # type: ignore
+
+            # Legacy nacl-encrypted value
             # Try URL-safe base64 decoding first (new format)
             # Fall back to standard base64 decoding for backwards compatibility (old format)
             try:

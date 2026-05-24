@@ -39,9 +39,19 @@ from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
-    """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
-        return
+    """Rehash legacy password (SHA256 or scrypt) to the current algorithm on successful login.
+
+    In FIPS mode the current algorithm is PBKDF2-HMAC-SHA256; otherwise scrypt.
+    """
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import _is_fips_mode
+
+    if _is_fips_mode():
+        if stored.startswith("pbkdf2:"):
+            return
+    else:
+        if stored.startswith("scrypt:"):
+            return
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is not None:

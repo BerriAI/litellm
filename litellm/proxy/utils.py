@@ -5075,21 +5075,54 @@ def hash_token(token: str):
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
+    """Hash a password.
+
+    Uses PBKDF2-HMAC-SHA256 when ``LITELLM_FIPS_MODE`` is enabled (FIPS 140-2/3
+    compliant via Python's ``hashlib`` which delegates to OpenSSL).  Falls back
+    to scrypt in non-FIPS environments for stronger brute-force resistance.
+
+    Format:
+      * FIPS mode  → ``pbkdf2:<base64(salt + dk)>``  (16-byte salt, 32-byte dk,
+        600 000 iterations of HMAC-SHA256)
+      * Default    → ``scrypt:<base64(salt + dk)>``  (16-byte salt, 32-byte dk,
+        n=16384, r=8, p=1)
+    """
     import base64
     import hashlib
     import os
 
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import _is_fips_mode
+
     salt = os.urandom(16)
+    if _is_fips_mode():
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000, dklen=32)
+        return "pbkdf2:" + base64.b64encode(salt + dk).decode()
+
     dk = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
     return "scrypt:" + base64.b64encode(salt + dk).decode()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    """Verify a password against a stored hash.
+
+    Supports pbkdf2 (FIPS-compliant), scrypt, and SHA256 (legacy) formats.
+    On successful verification via SHA256 or scrypt while FIPS mode is active
+    the caller should re-hash with :func:`hash_password` on next login.
+    """
     import base64
     import hashlib
     import secrets
+
+    if stored.startswith("pbkdf2:"):
+        try:
+            raw = base64.b64decode(stored[7:])
+            salt, dk = raw[:16], raw[16:]
+            dk2 = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt, 600_000, dklen=32
+            )
+            return secrets.compare_digest(dk, dk2)
+        except Exception:
+            return False
 
     if stored.startswith("scrypt:"):
         try:
@@ -5101,6 +5134,7 @@ def verify_password(password: str, stored: str) -> bool:
             return secrets.compare_digest(dk, dk2)
         except Exception:
             return False
+
     # SHA256 fallback (not vulnerable to pass-the-hash: checks sha256(input) == stored)
     if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
         return secrets.compare_digest(
@@ -5111,8 +5145,8 @@ def verify_password(password: str, stored: str) -> bool:
 
 async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     """
-    Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
-    are left alone (they migrate on next login via the SHA256 fallback).
+    Migrate plaintext passwords in the DB to scrypt (or pbkdf2 in FIPS mode).
+    SHA256 passwords are left alone (they migrate on next login).
     Skips quickly if no plaintext passwords exist.
     """
     all_with_pw = await prisma_client.db.litellm_usertable.find_many(
@@ -5127,6 +5161,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
         for u in all_with_pw
         if u.password
         and not u.password.startswith("scrypt:")
+        and not u.password.startswith("pbkdf2:")
         and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
