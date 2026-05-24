@@ -209,6 +209,19 @@ export interface MCPServer {
   args?: string[] | null;
   env?: Record<string, string> | null;
 
+  /**
+   * Per-server env-var definitions used to interpolate `${VAR_NAME}` in
+   * static_headers / auth values. The list endpoint returns the full
+   * payload (admin-readable). Only the per-user names are needed on the
+   * card to detect "this server requires per-user setup"; values for
+   * `instance` scope are not consumed by the UI.
+   */
+  env_vars?: Array<{
+    name: string;
+    scope: "instance" | "per_user";
+    value?: string | null;
+  }> | null;
+
   /** BYOK (Bring Your Own Key) fields */
   is_byok?: boolean | null;
   byok_description?: string[] | null;

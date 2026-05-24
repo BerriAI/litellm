@@ -305,11 +305,10 @@ export const mcpServerColumns = (
     id: "mock_user_fields",
     header: "My Credentials",
     cell: ({ row }) => {
-      const alias = row.original.alias || row.original.server_name || "";
+      const envVars = (row.original as any).env_vars;
       return (
         <UserFieldsStatusCell
-          serverAlias={alias}
-          userId={userIdForMockFields || ""}
+          envVars={envVars}
           onOpenFill={() => onOpenFillFields?.(row.original)}
           onOpenDemo={() => onOpenMockDemo?.(row.original)}
         />

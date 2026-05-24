@@ -1,62 +1,87 @@
-// PROTOTYPE: modal where an end-user fills in their per-user fields for an
-// MCP server (mock — values stored in localStorage keyed by user + server alias).
+// Per-user env-vars fill modal — DB-backed (no longer a mock).
+// Loads the per-user `MCPEnvVarDefinitionPublic` list + current values from
+// `GET /v1/mcp/server/{server_id}/my-env-vars` and saves via POST. Lives in
+// `mock/` for historical reasons; safe to relocate once we kill that folder.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Modal, Input, Form, Typography, Tag, Alert } from "antd";
+import { Modal, Input, Form, Typography, Tag, Alert, Spin } from "antd";
 import { Button } from "@tremor/react";
 import {
-  EnvVarDefinition,
-  getEnvVarDefinitions,
-  getPerUserValues,
-  setPerUserValues,
-  notifyEnvVarsChanged,
-} from "./mockMcpEnvVars";
+  MCPEnvVarDefinitionPublic,
+  MCPUserEnvVarsStatus,
+  getMyMcpEnvVars,
+  storeMyMcpEnvVars,
+} from "../../networking";
 
 const { Text, Title } = Typography;
 
 interface FillUserFieldsModalProps {
   open: boolean;
+  serverId: string;
   serverAlias: string;
   serverName?: string | null;
-  userId: string;
+  accessToken: string;
   onClose: () => void;
-  onSaved?: () => void;
+  onSaved?: (status: MCPUserEnvVarsStatus) => void;
 }
 
 const FillUserFieldsModal: React.FC<FillUserFieldsModalProps> = ({
   open,
+  serverId,
   serverAlias,
   serverName,
-  userId,
+  accessToken,
   onClose,
   onSaved,
 }) => {
-  const [defs, setDefs] = useState<EnvVarDefinition[]>([]);
+  const [defs, setDefs] = useState<MCPEnvVarDefinitionPublic[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !serverAlias) return;
-    const loadedDefs = getEnvVarDefinitions(serverAlias);
-    setDefs(loadedDefs);
-    setValues(getPerUserValues(serverAlias, userId));
-  }, [open, serverAlias, userId]);
+    if (!open || !serverId || !accessToken) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setSaveError(null);
+    getMyMcpEnvVars(accessToken, serverId)
+      .then((status) => {
+        if (cancelled) return;
+        setDefs(status.definitions);
+        setValues(status.values || {});
+      })
+      .catch((e: Error) => {
+        if (cancelled) return;
+        setLoadError(e.message || "Failed to load credentials");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, serverId, accessToken]);
 
   const perUserDefs = useMemo(
     () => defs.filter((d) => d.scope === "per_user"),
     [defs],
   );
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSaving(true);
-    // Simulate brief latency so the demo feels real.
-    setTimeout(() => {
-      setPerUserValues(serverAlias, userId, values);
-      notifyEnvVarsChanged();
-      setSaving(false);
-      onSaved?.();
+    setSaveError(null);
+    try {
+      const status = await storeMyMcpEnvVars(accessToken, serverId, values);
+      onSaved?.(status);
       onClose();
-    }, 250);
+    } catch (e: any) {
+      setSaveError(e?.message || "Failed to save credentials");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -70,7 +95,7 @@ const FillUserFieldsModal: React.FC<FillUserFieldsModalProps> = ({
             <Title level={5} style={{ margin: 0 }}>
               Set your credentials
             </Title>
-            <Tag color="purple">Prototype</Tag>
+            <Tag color="blue">Per-user</Tag>
           </div>
           <Text type="secondary" className="text-xs">
             {serverName || serverAlias}
@@ -80,7 +105,13 @@ const FillUserFieldsModal: React.FC<FillUserFieldsModalProps> = ({
       width={520}
     >
       <div className="space-y-4 mt-2">
-        {perUserDefs.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Spin />
+          </div>
+        ) : loadError ? (
+          <Alert type="error" showIcon message={loadError} />
+        ) : perUserDefs.length === 0 ? (
           <Alert
             type="info"
             showIcon
@@ -117,6 +148,9 @@ const FillUserFieldsModal: React.FC<FillUserFieldsModalProps> = ({
                 </Form.Item>
               ))}
             </Form>
+            {saveError && (
+              <Alert type="error" showIcon message={saveError} />
+            )}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
               <Button variant="secondary" onClick={onClose}>
                 Cancel

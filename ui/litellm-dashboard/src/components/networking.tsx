@@ -10013,6 +10013,83 @@ export const listMCPUserCredentials = async (
   return response.json();
 };
 
+// ── MCP per-user env-vars helpers ────────────────────────────────────────────
+
+export interface MCPEnvVarDefinitionPublic {
+  name: string;
+  scope: "instance" | "per_user";
+}
+
+export interface MCPUserEnvVarsStatus {
+  server_id: string;
+  server_alias?: string | null;
+  definitions: MCPEnvVarDefinitionPublic[];
+  values: Record<string, string>;
+  missing: string[];
+}
+
+const _extractEnvVarsError = async (
+  response: Response,
+  fallback: string,
+): Promise<string> => {
+  const err = await response.json().catch(() => ({}));
+  const errObj = err as { detail?: unknown };
+  const detail = errObj?.detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d: unknown) =>
+        d && typeof d === "object"
+          ? (d as Record<string, unknown>).msg ?? JSON.stringify(d)
+          : String(d),
+      )
+      .join("; ");
+  }
+  if (typeof detail === "string") return detail;
+  if (detail && typeof (detail as Record<string, unknown>).error === "string") {
+    return (detail as Record<string, unknown>).error as string;
+  }
+  return fallback;
+};
+
+export const getMyMcpEnvVars = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPUserEnvVarsStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${encodeURIComponent(serverId)}/my-env-vars`
+    : `/v1/mcp/server/${encodeURIComponent(serverId)}/my-env-vars`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(await _extractEnvVarsError(response, "Failed to load env vars"));
+  }
+  return response.json();
+};
+
+export const storeMyMcpEnvVars = async (
+  accessToken: string,
+  serverId: string,
+  values: Record<string, string>,
+): Promise<MCPUserEnvVarsStatus> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/mcp/server/${encodeURIComponent(serverId)}/my-env-vars`
+    : `/v1/mcp/server/${encodeURIComponent(serverId)}/my-env-vars`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ values }),
+  });
+  if (!response.ok) {
+    throw new Error(await _extractEnvVarsError(response, "Failed to save env vars"));
+  }
+  return response.json();
+};
+
 // ============================================================
 // Memory management (/v1/memory)
 // ============================================================

@@ -42,6 +42,10 @@ class MCPServer(BaseModel):
     static_headers: Optional[Dict[str, str]] = (
         None  # static headers to forward to the MCP server
     )
+    # Per-server variable definitions: list of {name, scope, value}.
+    # `${NAME}` placeholders in static_headers / authentication_token get
+    # substituted at request time via env_vars.resolve_values().
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None

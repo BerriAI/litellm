@@ -118,6 +118,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [mockDemoServer, setMockDemoServer] = useState<MCPServer | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
+  // Bumped after the per-user fill modal saves so each MCPServerCard
+  // re-fetches its missing-fields status. Demo wiring — a real impl
+  // would use a single bulk endpoint with React Query invalidation.
+  const [envVarsRefreshKey, setEnvVarsRefreshKey] = useState(0);
   const isInternalUser = userRole === "Internal User";
 
   // PROTOTYPE: deep-link via ?fill_fields=<alias> (used by the mock Claude
@@ -552,6 +556,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           key={server.server_id}
                           server={server}
                           userID={userID || ""}
+                          accessToken={accessToken}
+                          envVarsRefreshKey={envVarsRefreshKey}
                           isLoadingHealth={isLoadingHealth}
                           isRechecking={recheckingServerIds?.has(server.server_id)}
                           onClick={() => {
@@ -613,16 +619,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         />
       )}
 
-      {/* PROTOTYPE: per-user env-var fill modal */}
-      {fillFieldsServer && (
+      {/* Per-user env-var fill modal — DB-backed via /v1/mcp/server/{id}/my-env-vars */}
+      {fillFieldsServer && accessToken && (
         <FillUserFieldsModal
           open={!!fillFieldsServer}
+          serverId={fillFieldsServer.server_id}
           serverAlias={
             fillFieldsServer.alias || fillFieldsServer.server_name || ""
           }
           serverName={fillFieldsServer.server_name}
-          userId={userID || ""}
+          accessToken={accessToken}
           onClose={() => setFillFieldsServer(null)}
+          onSaved={() => {
+            // Refresh table so the per-user count / row data stays current,
+            // and bump the env-vars refresh key so each card re-fetches its
+            // missing-fields status (the red border + Set button driver).
+            refetch();
+            setEnvVarsRefreshKey((k) => k + 1);
+          }}
         />
       )}
 

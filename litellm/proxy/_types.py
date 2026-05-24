@@ -1267,6 +1267,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[Dict[str, Any]]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1351,6 +1352,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[Dict[str, Any]]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1417,6 +1419,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
@@ -1492,6 +1495,43 @@ class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     credential_type: str  # "oauth2" or "byok"
     has_credential: bool
     expires_at: Optional[str] = None  # ISO-8601; None means non-expiring
+
+
+class MCPEnvVarDefinitionPublic(LiteLLMPydanticObjectBase):
+    """Public-safe view of an env-var definition (no instance values).
+
+    Returned to the calling user so the fill-in form knows which inputs to
+    render. Instance values are intentionally excluded — they may contain
+    secrets (e.g. a shared upstream token) that only the admin needs.
+    """
+
+    name: str
+    scope: Literal["instance", "per_user"]
+
+
+class MCPUserEnvVarsStatus(LiteLLMPydanticObjectBase):
+    """Response for `GET /server/{server_id}/my-env-vars`.
+
+    The UI uses this to render both the fill modal AND the "N missing"
+    status pill without a second request.
+    """
+
+    server_id: str
+    server_alias: Optional[str] = None
+    definitions: List[MCPEnvVarDefinitionPublic] = Field(default_factory=list)
+    values: Dict[str, str] = Field(default_factory=dict)  # per-user values, plaintext
+    missing: List[str] = Field(default_factory=list)  # per-user names with no value
+
+
+class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
+    """Body for `POST /server/{server_id}/my-env-vars`.
+
+    Full replace of the caller's vars for this server — the UI sends every
+    field every time it saves, matching the existing FillUserFieldsModal
+    behavior.
+    """
+
+    values: Dict[str, str] = Field(default_factory=dict)
     connected_at: Optional[str] = None  # ISO-8601
 
 

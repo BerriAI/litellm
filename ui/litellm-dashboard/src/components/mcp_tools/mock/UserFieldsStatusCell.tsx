@@ -1,44 +1,41 @@
-// PROTOTYPE: cell rendered in the MCP servers table. Shows a red "N user
-// fields missing" pill plus quick-action buttons when the current user hasn't
-// filled in their per-user fields, otherwise shows a green "Ready" pill.
+// Cell rendered in the MCP servers table. Counts per-user env-var
+// definitions on the server row itself (no HTTP per row) and renders quick
+// actions to (a) open the fill modal and (b) open the simulated terminal
+// preview.
+//
+// Whether the caller has *missing* fields requires a per-user lookup, which
+// we defer to the FillUserFieldsModal on open. The cell only knows "this
+// server has N per-user fields" — the actual missing/ready state surfaces
+// in-modal and in the real terminal error.
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Tooltip } from "antd";
 import {
-  ExclamationCircleFilled,
-  CheckCircleFilled,
+  ExclamationCircleOutlined,
   PlayCircleOutlined,
 } from "@ant-design/icons";
-import {
-  getEnvVarDefinitions,
-  getMissingUserFields,
-  subscribeEnvVarsChanged,
-} from "./mockMcpEnvVars";
+
+type EnvVarDef = { name: string; scope: "instance" | "per_user"; value?: string };
 
 interface UserFieldsStatusCellProps {
-  serverAlias: string;
-  userId: string;
+  envVars: EnvVarDef[] | undefined | null;
   onOpenFill: () => void;
   onOpenDemo: () => void;
 }
 
 const UserFieldsStatusCell: React.FC<UserFieldsStatusCellProps> = ({
-  serverAlias,
-  userId,
+  envVars,
   onOpenFill,
   onOpenDemo,
 }) => {
-  const [tick, setTick] = useState(0);
-  useEffect(() => subscribeEnvVarsChanged(() => setTick((t) => t + 1)), []);
+  const perUserDefs = Array.isArray(envVars)
+    ? envVars.filter((d) => d && d.scope === "per_user" && d.name)
+    : [];
 
-  const defs = serverAlias ? getEnvVarDefinitions(serverAlias) : [];
-  const perUserCount = defs.filter((d) => d.scope === "per_user").length;
-  const missing = serverAlias ? getMissingUserFields(serverAlias, userId) : [];
-
-  // Server has no per-user fields at all → no badge to show.
-  if (perUserCount === 0) {
+  if (perUserDefs.length === 0) {
     return (
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onOpenDemo();
@@ -51,70 +48,42 @@ const UserFieldsStatusCell: React.FC<UserFieldsStatusCellProps> = ({
     );
   }
 
-  if (missing.length > 0) {
-    return (
-      <div
-        className="inline-flex items-center gap-2 px-2 py-1 rounded-md border-2 border-red-300 bg-red-50"
-        // PROTOTYPE: cell-level highlight stands in for full-row highlight
-        // since DataTable doesn't expose a row-class hook today.
-      >
-        <Tooltip
-          title={
-            <div>
-              <div className="font-semibold mb-1">Missing user fields:</div>
-              <ul className="ml-3">
-                {missing.map((m) => (
-                  <li key={m}>• {m}</li>
-                ))}
-              </ul>
-            </div>
-          }
-        >
-          <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-700">
-            <ExclamationCircleFilled />
-            {missing.length} user field{missing.length === 1 ? "" : "s"} missing
-          </span>
-        </Tooltip>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenFill();
-          }}
-          className="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-0.5 rounded font-medium transition-colors"
-        >
-          Set
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenDemo();
-          }}
-          className="text-xs text-gray-600 hover:text-blue-600 transition-colors"
-          title="Simulate using this MCP server in Claude Code"
-        >
-          <PlayCircleOutlined />
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="inline-flex items-center gap-2">
-      <Tooltip title="All per-user fields are set for your account.">
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">
-          <CheckCircleFilled /> Ready
+    <div className="inline-flex items-center gap-2 px-2 py-1 rounded-md border border-blue-200 bg-blue-50">
+      <Tooltip
+        title={
+          <div>
+            <div className="font-semibold mb-1">Per-user fields:</div>
+            <ul className="ml-3">
+              {perUserDefs.map((d) => (
+                <li key={d.name}>• {d.name}</li>
+              ))}
+            </ul>
+            <div className="mt-2 text-xs">
+              Click <b>Set</b> to enter your values, or <b>▶</b> to preview the
+              terminal error.
+            </div>
+          </div>
+        }
+      >
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700">
+          <ExclamationCircleOutlined />
+          {perUserDefs.length} per-user field
+          {perUserDefs.length === 1 ? "" : "s"}
         </span>
       </Tooltip>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onOpenFill();
         }}
-        className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
+        className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded font-medium transition-colors"
       >
-        Update
+        Set
       </button>
       <button
+        type="button"
         onClick={(e) => {
           e.stopPropagation();
           onOpenDemo();

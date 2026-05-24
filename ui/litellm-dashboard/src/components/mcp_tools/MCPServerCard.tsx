@@ -10,17 +10,18 @@ import {
 } from "@ant-design/icons";
 import type { MCPServer } from "./types";
 import { getMaskedAndFullUrl } from "./utils";
-import {
-  getEnvVarDefinitions,
-  getMissingUserFields,
-  subscribeEnvVarsChanged,
-} from "./mock/mockMcpEnvVars";
+import { getMyMcpEnvVars } from "../networking";
 
 const { Text } = Typography;
 
 interface MCPServerCardProps {
   server: MCPServer;
   userID: string;
+  accessToken?: string | null;
+  // Bumped by the parent after the fill-fields modal saves so the card
+  // re-fetches the user's missing-vars status. Throwaway demo wiring —
+  // a real impl would do a single bulk endpoint at the page level.
+  envVarsRefreshKey?: number;
   isLoadingHealth?: boolean;
   isRechecking?: boolean;
   onClick: () => void;
@@ -42,6 +43,8 @@ const stop = (e: MouseEvent | KeyboardEvent) => e.stopPropagation();
 const MCPServerCard: FC<MCPServerCardProps> = ({
   server,
   userID,
+  accessToken,
+  envVarsRefreshKey,
   isLoadingHealth,
   isRechecking,
   onClick,
@@ -50,14 +53,6 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onOpenFillFields,
   onDelete,
 }) => {
-  // Re-render whenever the mock env var store changes, so the missing-fields
-  // badge updates as soon as the user fills in values in the modal.
-  const [, setEnvTick] = useState(0);
-  useEffect(
-    () => subscribeEnvVarsChanged(() => setEnvTick((t) => t + 1)),
-    [],
-  );
-
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
@@ -80,9 +75,49 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     (g): g is string => typeof g === "string",
   );
 
-  const envDefs = alias ? getEnvVarDefinitions(alias) : [];
-  const perUserCount = envDefs.filter((d) => d.scope === "per_user").length;
-  const missingUserFields = alias ? getMissingUserFields(alias, userID) : [];
+  // `env_vars` comes straight from the list endpoint (no extra HTTP). The
+  // missing-for-this-user check requires a per-server fetch, which is N+1
+  // for the demo but cheap enough on a list of <50 servers.
+  const perUserDefNames = (server.env_vars ?? [])
+    .filter((d) => d && d.scope === "per_user" && d.name)
+    .map((d) => d.name);
+  const perUserCount = perUserDefNames.length;
+  // Stable string key so the effect doesn't refire on every render just
+  // because `.map().filter()` returns a fresh array reference.
+  const perUserDefNamesKey = perUserDefNames.join(",");
+  const [missingUserFields, setMissingUserFields] = useState<string[]>([]);
+  useEffect(() => {
+    // Force the linter to see envVarsRefreshKey as "used"; the parent
+    // bumps it after the fill modal saves to drive a refetch.
+    void envVarsRefreshKey;
+    if (perUserCount === 0 || !accessToken || !userID) {
+      setMissingUserFields([]);
+      return;
+    }
+    let cancelled = false;
+    getMyMcpEnvVars(accessToken, server.server_id)
+      .then((status) => {
+        if (cancelled) return;
+        setMissingUserFields(status.missing ?? []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Fall back to "all per-user fields missing" so the red state still
+        // surfaces even if the per-row fetch fails (better to over-warn than
+        // silently swallow it for the demo).
+        setMissingUserFields(perUserDefNamesKey ? perUserDefNamesKey.split(",") : []);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accessToken,
+    userID,
+    server.server_id,
+    perUserCount,
+    perUserDefNamesKey,
+    envVarsRefreshKey,
+  ]);
   const needsAttention = perUserCount > 0 && missingUserFields.length > 0;
 
   const cardClass = needsAttention

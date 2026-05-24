@@ -26,6 +26,7 @@ from mcp.types import (
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    TextContent,
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
@@ -60,6 +61,15 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     split_server_prefix_from_name,
     validate_mcp_server_name,
+)
+from litellm.proxy._experimental.mcp_server.env_vars import (
+    MissingEnvVarsError,
+    collect_placeholders,
+    get_user_env_vars,
+    interpolate_headers,
+    missing_required,
+    parse_env_var_definitions,
+    resolve_values,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -668,6 +678,16 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        env_vars_raw = getattr(mcp_server, "env_vars", None)
+        env_vars_list: Optional[List[Dict[str, Any]]] = None
+        if env_vars_raw is not None:
+            if isinstance(env_vars_raw, str):
+                try:
+                    env_vars_list = json.loads(env_vars_raw)
+                except (ValueError, TypeError):
+                    env_vars_list = None
+            elif isinstance(env_vars_raw, list):
+                env_vars_list = env_vars_raw
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )
@@ -767,6 +787,7 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
@@ -2662,6 +2683,71 @@ class MCPServerManager:
             )
         )
 
+    async def _resolve_env_vars_for_server(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Substitute `${VAR}` placeholders in this server's static_headers
+        using instance defaults + per-user values.
+
+        Returns the interpolated `static_headers` dict (or None / the original
+        when the server has no placeholders to resolve).
+
+        Note: only `static_headers` are interpolated today. Extending this to
+        `authentication_token` requires plumbing a resolved value through
+        `_create_mcp_client`; left as a follow-up since the demo uses
+        `Authorization: Bearer ${TOKEN}` inside `static_headers`.
+
+        Raises:
+            MissingEnvVarsError: when a referenced per-user var has no stored
+                value for the caller. The MCP tool handler converts this to a
+                `CallToolResult(isError=True)` containing the dashboard
+                deep-link error message.
+        """
+        defs = parse_env_var_definitions(getattr(mcp_server, "env_vars", None))
+        scannable: List[Optional[str]] = []
+        if mcp_server.static_headers:
+            scannable.extend(mcp_server.static_headers.values())
+
+        referenced = collect_placeholders(scannable)
+        if not referenced:
+            return mcp_server.static_headers
+
+        user_id = user_api_key_auth.user_id if user_api_key_auth is not None else None
+        per_user_values: Dict[str, str] = {}
+        if user_id and defs:
+            # Only hit the DB if (a) we know who is calling and (b) the
+            # server actually has var definitions.
+            from litellm.proxy.proxy_server import prisma_client as _global_prisma
+
+            if _global_prisma is not None:
+                try:
+                    per_user_values = await get_user_env_vars(
+                        _global_prisma, user_id, mcp_server.server_id
+                    )
+                except Exception as e:  # noqa: BLE001
+                    verbose_logger.warning(
+                        "MCP env-vars: failed to load per-user vars for "
+                        "user=%s server=%s: %s",
+                        user_id,
+                        mcp_server.server_id,
+                        e,
+                    )
+
+        missing = missing_required(defs, per_user_values, referenced=referenced)
+        if missing:
+            raise MissingEnvVarsError(
+                server_alias=(
+                    mcp_server.alias or mcp_server.server_name or mcp_server.name
+                ),
+                server_name=mcp_server.server_name or mcp_server.name,
+                missing=missing,
+            )
+
+        resolved = resolve_values(defs, per_user_values, referenced=referenced)
+        return interpolate_headers(mcp_server.static_headers, resolved)
+
     async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
         mcp_server: MCPServer,
@@ -2675,6 +2761,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2701,6 +2788,26 @@ class MCPServerManager:
             GuardrailRaisedException: If guardrails block the call
             HTTPException: If an HTTP error occurs
         """
+        # Resolve `${VAR}` placeholders in static_headers before any merge
+        # work. If the caller is missing required per-user vars, surface a
+        # dashboard deep-link as an MCP tool error so Claude Code (or any
+        # client) prints it back to the user.
+        try:
+            resolved_static_headers = await self._resolve_env_vars_for_server(
+                mcp_server, user_api_key_auth
+            )
+        except MissingEnvVarsError as e:
+            verbose_logger.info(
+                "MCP env-vars missing for server=%s user=%s: %s",
+                mcp_server.server_name or mcp_server.name,
+                user_api_key_auth.user_id if user_api_key_auth else None,
+                e.missing,
+            )
+            return CallToolResult(
+                isError=True,
+                content=[TextContent(type="text", text=e.to_user_message())],
+            )
+
         # Get server-specific auth header if available (case-insensitive)
         # FIX: Added case-insensitive matching to handle auth header keys that may not match
         # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
@@ -2754,10 +2861,10 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -3039,6 +3146,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
@@ -3649,6 +3757,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=server.env_vars,
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed
             health_check_error=None,

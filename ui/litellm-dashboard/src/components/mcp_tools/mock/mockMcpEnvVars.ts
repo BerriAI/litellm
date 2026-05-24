@@ -2,7 +2,7 @@
 // All state lives in localStorage; no backend wiring. Throwaway code — once
 // the customer agrees on the flow, this gets rebuilt against the real DB.
 
-export type EnvVarScope = "global" | "per_user";
+export type EnvVarScope = "instance" | "per_user";
 
 export interface EnvVarDefinition {
   name: string;
@@ -20,7 +20,14 @@ export function getEnvVarDefinitions(serverAlias: string): EnvVarDefinition[] {
     const raw = window.localStorage.getItem(defsKey(serverAlias));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Migrate legacy "global" scope to "instance" so the dropdown stays in sync
+    // with renamed labels without forcing a re-save.
+    return parsed.map((d: EnvVarDefinition) =>
+      d && (d.scope as unknown) === "global"
+        ? { ...d, scope: "instance" as const }
+        : d,
+    );
   } catch {
     return [];
   }

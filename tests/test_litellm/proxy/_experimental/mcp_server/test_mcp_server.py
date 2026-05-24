@@ -2430,6 +2430,40 @@ class TestMCPServerManagerReload:
         ]
         assert "Skipping MCP server bad-openapi-server" in caplog.text
 
+    def test_build_mcp_server_table_preserves_env_vars(self):
+        """Registry → API list rows must expose env_vars so the edit form can
+        repopulate the Variables section. Regression test: previously the
+        ``_build_mcp_server_table`` projection dropped this field, so opening
+        an existing server in the dashboard showed an empty list even when
+        the DB row had env-var definitions.
+        """
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        env_vars = [
+            {"name": "DB_HOST", "scope": "instance", "value": "db.corp"},
+            {"name": "CORP_TOKEN", "scope": "per_user", "value": None},
+        ]
+        server = MCPServer(
+            server_id="server-with-vars",
+            name="server",
+            transport=MCPTransport.http,
+            env_vars=env_vars,
+        )
+
+        table = manager._build_mcp_server_table(server)
+        assert table.env_vars == env_vars
+
+        empty = manager._build_mcp_server_table(
+            server.model_copy(update={"env_vars": None})
+        )
+        assert empty.env_vars is None
+
 
 @pytest.mark.asyncio
 async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():

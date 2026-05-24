@@ -134,11 +134,18 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
+    from litellm.proxy._experimental.mcp_server.env_vars import (
+        get_user_env_vars,
+        missing_required,
+        parse_env_var_definitions,
+        store_user_env_vars,
+    )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
+        MCPEnvVarDefinitionPublic,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -146,6 +153,8 @@ if MCP_AVAILABLE:
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
+        MCPUserEnvVarsRequest,
+        MCPUserEnvVarsStatus,
         NewMCPServerRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
@@ -2053,6 +2062,123 @@ if MCP_AVAILABLE:
             expires_at=expires_at,
             is_expired=is_expired,
             connected_at=cred.get("connected_at"),
+        )
+
+    # ── Per-user env-vars endpoints ──────────────────────────────────────────
+    # Variables are admin-defined on the MCP server (per_user vs instance scope).
+    # Per-user values land here so the proxy can interpolate `${VAR}` placeholders
+    # in static_headers at request time. Missing values surface as an MCP tool
+    # error with a deep link back to the dashboard's fill modal.
+
+    @router.get(
+        "/server/{server_id}/my-env-vars",
+        description="Return the calling user's env-var values + per-user definitions for this MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def get_my_mcp_env_vars(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Used by the fill modal (`FillUserFieldsModal`) to render the form
+        with current values pre-filled, and by the status pill
+        (`UserFieldsStatusCell`) to render the "N missing" badge.
+
+        Returns only `per_user` definitions — `instance` values may be
+        secrets the admin doesn't want exposed to the end user.
+        """
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        mcp_server = await get_mcp_server(prisma_client, server_id)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        defs = parse_env_var_definitions(getattr(mcp_server, "env_vars", None))
+        per_user_defs = [d for d in defs if d.scope == "per_user"]
+        values = await get_user_env_vars(prisma_client, user_id, server_id)
+        # Trim to declared per_user names so stale entries (after a rename or
+        # scope flip) don't leak back to the form.
+        declared_names = {d.name for d in per_user_defs}
+        trimmed_values = {k: v for k, v in values.items() if k in declared_names}
+        missing = missing_required(
+            defs, trimmed_values, referenced=[d.name for d in per_user_defs]
+        )
+        return MCPUserEnvVarsStatus(
+            server_id=server_id,
+            server_alias=getattr(mcp_server, "alias", None),
+            definitions=[
+                MCPEnvVarDefinitionPublic(name=d.name, scope=d.scope)
+                for d in per_user_defs
+            ],
+            values=trimmed_values,
+            missing=missing,
+        )
+
+    @router.post(
+        "/server/{server_id}/my-env-vars",
+        description="Store / replace the calling user's env-var values for this MCP server",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def store_my_mcp_env_vars(
+        server_id: str,
+        payload: MCPUserEnvVarsRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Full-replace upsert of the caller's values for this server.
+
+        Silently drops any names not declared as `per_user` on the server —
+        the form should never have rendered an input for them, but we don't
+        want a stale UI payload to pollute the stored map either.
+        """
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        mcp_server = await get_mcp_server(prisma_client, server_id)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP Server {server_id} not found"},
+            )
+        defs = parse_env_var_definitions(getattr(mcp_server, "env_vars", None))
+        per_user_names = {d.name for d in defs if d.scope == "per_user"}
+        # Keep only declared per-user names; trim blanks (treat as "not set").
+        clean_values = {
+            k: v
+            for k, v in payload.values.items()
+            if k in per_user_names and isinstance(v, str) and v.strip() != ""
+        }
+        await store_user_env_vars(prisma_client, user_id, server_id, clean_values)
+        per_user_defs = [d for d in defs if d.scope == "per_user"]
+        missing = missing_required(
+            defs, clean_values, referenced=[d.name for d in per_user_defs]
+        )
+        return MCPUserEnvVarsStatus(
+            server_id=server_id,
+            server_alias=getattr(mcp_server, "alias", None),
+            definitions=[
+                MCPEnvVarDefinitionPublic(name=d.name, scope=d.scope)
+                for d in per_user_defs
+            ],
+            values=clean_values,
+            missing=missing,
         )
 
     @router.get(

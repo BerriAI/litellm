@@ -20,14 +20,14 @@ const EnvVarsSection: React.FC = () => {
           Prototype
         </Tag>
         <Text strong className="text-sm">
-          Environment Variables
+          Variables
         </Text>
         <Tooltip
           title={
             <>
-              Define variables you can interpolate in Static Headers using{" "}
-              <code>{"${VAR_NAME}"}</code>. <br />
-              <b>Global</b>: admin-defined value used for every user.
+              Define variables you can interpolate in Static Headers or
+              Authentication using <code>{"${VAR_NAME}"}</code>. <br />
+              <b>Instance</b>: admin-defined value used for every user.
               <br />
               <b>Per-user</b>: each user supplies their own value (e.g. personal
               credentials).
@@ -38,8 +38,8 @@ const EnvVarsSection: React.FC = () => {
         </Tooltip>
       </div>
       <Text className="text-xs text-gray-600 block mb-3">
-        Reference these in Static Headers as <code>{"${VAR_NAME}"}</code>. For
-        example:{" "}
+        Reference these in Static Headers or Authentication as{" "}
+        <code>{"${VAR_NAME}"}</code>. For example:{" "}
         <code className="bg-white px-1 rounded border border-gray-200">
           {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
         </code>
@@ -89,12 +89,12 @@ const EnvVarsSection: React.FC = () => {
                   {...restField}
                   name={[name, "scope"]}
                   className="mb-0"
-                  initialValue="global"
+                  initialValue="instance"
                   style={{ width: 160 }}
                 >
                   <Select
                     options={[
-                      { value: "global", label: "Global" },
+                      { value: "instance", label: "Instance" },
                       { value: "per_user", label: "Per-user" },
                     ]}
                   />
@@ -112,11 +112,11 @@ const EnvVarsSection: React.FC = () => {
             ))}
             <Button
               type="dashed"
-              onClick={() => add({ scope: "global" })}
+              onClick={() => add({ scope: "instance" })}
               icon={<PlusOutlined />}
               block
             >
-              Add Environment Variable
+              Add Variable
             </Button>
           </div>
         )}

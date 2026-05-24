@@ -61,6 +61,10 @@ def _prepare_mcp_server_data(
     if data.static_headers is not None:
         data_dict["static_headers"] = safe_dumps(data.static_headers)
 
+    # Handle env_vars serialization — list[{name, scope, value}], stored as JSON
+    if getattr(data, "env_vars", None) is not None:
+        data_dict["env_vars"] = safe_dumps(data.env_vars)
+
     # Handle mcp_info serialization
     if data.mcp_info is not None:
         data_dict["mcp_info"] = safe_dumps(data.mcp_info)

@@ -13,11 +13,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./mock/EnvVarsSection";
-import {
-  setEnvVarDefinitions,
-  notifyEnvVarsChanged,
-  EnvVarDefinition,
-} from "./mock/mockMcpEnvVars";
+import { EnvVarDefinition } from "./mock/mockMcpEnvVars";
 import { isAdminRole } from "@/utils/roles";
 import {
   validateMCPServerUrl,
@@ -306,25 +302,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         ...restValues
       } = values;
 
-      // PROTOTYPE: persist the env-var definitions to localStorage keyed by
-      // the server alias. Replaced once the backend stores these properly.
       const cleanedEnvVars: EnvVarDefinition[] = Array.isArray(mockEnvVarsRaw)
         ? mockEnvVarsRaw
             .filter((row: any) => row && row.name && String(row.name).trim() !== "")
             .map((row: any) => ({
               name: String(row.name).trim(),
               value: row.scope === "per_user" ? "" : (row.value ?? ""),
-              scope: row.scope === "per_user" ? "per_user" : "global",
+              scope: row.scope === "per_user" ? "per_user" : "instance",
             }))
         : [];
-      const aliasForEnvVars =
-        (restValues.alias && String(restValues.alias).trim()) ||
-        (restValues.server_name && String(restValues.server_name).trim()) ||
-        "";
-      if (aliasForEnvVars && cleanedEnvVars.length > 0) {
-        setEnvVarDefinitions(aliasForEnvVars, cleanedEnvVars);
-        notifyEnvVarsChanged();
-      }
 
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
@@ -428,6 +414,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         static_headers: staticHeaders,
+        env_vars: cleanedEnvVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
@@ -1037,7 +1024,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <StdioConfiguration isVisible={transportType === "stdio"} />
           </div>
 
-          {/* PROTOTYPE: Environment variables (global vs per-user) */}
+          {/* PROTOTYPE: Variables (instance vs per-user) */}
           <div className="mt-8">
             <EnvVarsSection />
           </div>
