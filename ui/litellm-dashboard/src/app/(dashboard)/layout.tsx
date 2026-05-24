@@ -30,9 +30,7 @@ function withBase(path: string): string {
  *
  * Key = legacy page id used in leftnav, Value = route segment under (dashboard)/
  */
-const MIGRATED_PAGES: Record<string, string> = {
-  "api-reference": "api-reference",
-};
+const MIGRATED_PAGES: Record<string, string> = {};
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
