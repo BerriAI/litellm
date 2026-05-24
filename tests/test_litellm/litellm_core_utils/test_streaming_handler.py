@@ -2173,7 +2173,9 @@ class TestUsageChunkEmptyChoices:
 
         # The last chunk should be the usage chunk
         usage_chunk = collected[-1]
-        assert hasattr(usage_chunk, "usage"), "Final chunk should carry usage"
+        assert (
+            getattr(usage_chunk, "usage", None) is not None
+        ), "Final chunk should carry non-None usage"
         assert usage_chunk.choices == [], (
             f"Usage chunk must have choices=[] per OpenAI spec, "
             f"got {usage_chunk.choices!r}"
@@ -2189,7 +2191,9 @@ class TestUsageChunkEmptyChoices:
             collected.append(chunk)
 
         usage_chunk = collected[-1]
-        assert hasattr(usage_chunk, "usage"), "Final chunk should carry usage"
+        assert (
+            getattr(usage_chunk, "usage", None) is not None
+        ), "Final chunk should carry non-None usage"
         assert usage_chunk.choices == [], (
             f"Usage chunk must have choices=[] per OpenAI spec, "
             f"got {usage_chunk.choices!r}"
