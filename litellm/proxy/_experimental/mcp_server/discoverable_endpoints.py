@@ -627,7 +627,6 @@ async def token_endpoint(
 # error response. Declaring ``code``/``state`` as required would cause
 # FastAPI to reject the error response with a 422 before the handler runs,
 # which strands the MCP client waiting on the loopback (see LIT-2750).
-_OAUTH_ERROR_PARAMS = ("error", "error_description", "error_uri")
 
 
 def _render_oauth_error_html(error: str, description: Optional[str]) -> HTMLResponse:
