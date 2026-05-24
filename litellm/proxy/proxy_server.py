@@ -469,7 +469,6 @@ from litellm.proxy.utils import (
     invalidate_config_param,
     litellm_config_cache,
     migrate_passwords_to_pbkdf2_async,
-    migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
     update_spend,
