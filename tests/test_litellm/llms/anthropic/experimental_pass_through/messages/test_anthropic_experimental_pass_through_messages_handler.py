@@ -64,6 +64,51 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
+    """Regression test for #22930.  The unified /v1/messages path must
+    strip empty text blocks before forwarding, otherwise Anthropic
+    returns 400 "text content blocks must be non-empty"."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "tool_use", "id": "t", "name": "B", "input": {}},
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+    assert len(msgs[0]["content"]) == 2  # caller untouched
+
+
+async def _async_return(value):
+    return value
+
+
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
     """
     Test that litellm.completion is called when a custom LLM provider is given

@@ -2633,6 +2633,67 @@ class TestMCPServerTimestamps:
         assert rebuilt_table.updated_at == updated
 
 
+class TestInternalDelegatePkceWarningLog:
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-1",
+            server_name="warn_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" in combined
+        assert "delegate_auth_to_upstream=true" in combined
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_no_internal_delegate_log_when_public(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-2",
+            server_name="warn_server_pub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=True,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
+
+    def test_warn_skipped_for_client_credentials(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_internal_delegate_pkce_if_applicable,
+        )
+
+        server = MCPServer(
+            server_id="m2m-1",
+            name="x",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        _warn_internal_delegate_pkce_if_applicable(server, source="test")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
+
+
 class TestHasClientCredentialsOAuth2Flow:
     """
     Regression tests for the M2M auto-detection bug.

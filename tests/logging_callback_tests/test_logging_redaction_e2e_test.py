@@ -39,7 +39,7 @@ async def test_global_redaction_on():
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hello",
     )
@@ -69,7 +69,7 @@ async def test_global_redaction_ignores_dynamic_param(turn_off_message_logging):
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
@@ -101,7 +101,7 @@ async def test_global_redaction_off_ignores_dynamic_param(turn_off_message_loggi
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         turn_off_message_logging=turn_off_message_logging,
         mock_response="hello",
@@ -129,7 +129,7 @@ async def test_redaction_responses_api():
     litellm.callbacks = [test_custom_logger]
 
     response = await litellm.aresponses(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         input="hi",
         mock_response="This is a test response",
     )
@@ -198,7 +198,7 @@ async def test_redaction_responses_api_stream():
         new=mock_post,
     ):
         response = await litellm.aresponses(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             input="hi",
             stream=True,
         )
@@ -411,7 +411,7 @@ async def test_redaction_with_streaming_response():
     # This simulates the scenario where a streaming response returns a coroutine
     # that would normally cause the pickle error
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         mock_response="hello",
@@ -450,7 +450,7 @@ async def test_disable_redaction_header_responses_api():
 
     # Pass the header via litellm_metadata (as the proxy does for Responses API)
     response = await litellm.aresponses(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         input="hi",
         mock_response="This is a test response",
         litellm_metadata={"headers": {"litellm-disable-message-redaction": "true"}},
@@ -487,7 +487,7 @@ async def test_redaction_with_metadata_completion_api():
     # to determine which field to check. No headers means redaction should happen
     # based on the global setting (litellm.turn_off_message_logging = True)
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hello",
         metadata={},

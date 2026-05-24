@@ -25,7 +25,7 @@ async def test_bedrock_guardrails_pii_masking():
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
             {"role": "assistant", "content": "Hello, how can I help you today?"},
@@ -65,7 +65,7 @@ async def test_bedrock_guardrails_pii_masking_content_list():
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {
                 "role": "user",
@@ -120,7 +120,7 @@ async def test_bedrock_guardrails_block_messages_api():
     )
 
     request_data = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-sonnet-4-5-20250929",
         "messages": [
             {
                 "role": "user",
@@ -220,7 +220,7 @@ async def test_bedrock_guardrails_with_streaming():
         litellm.callbacks.append(guardrail)
 
         request_data = {
-            "model": "gpt-4o",
+            "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "Hi I like coffee"}],
             "stream": True,
             "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -264,7 +264,7 @@ async def test_bedrock_guardrails_with_streaming_no_violation():
     litellm.callbacks.append(guardrail)
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": True,
         "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -318,7 +318,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
@@ -333,7 +333,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
 
         # Test data - simulating request data and assembled response
         request_data = {
-            "model": "gpt-4o",
+            "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "what's the capital of spain?"}],
             "stream": True,
             "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -396,7 +396,7 @@ async def test_bedrock_guardrail_aws_param_persistence():
     ) as mock_get_creds:
         for i in range(3):
             request_data = {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "messages": [{"role": "user", "content": f"request {i}"}],
                 "stream": False,
                 "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -583,7 +583,7 @@ async def test_bedrock_guardrail_masking_with_anonymized_response():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
         ],
@@ -657,7 +657,7 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {
                 "role": "user",
@@ -747,12 +747,12 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "What's your credit card and phone number?"},
         ],
@@ -834,7 +834,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -849,7 +849,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -862,7 +862,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -870,7 +870,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
             yield chunk
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "What's your email and SSN?"},
         ],
@@ -1001,7 +1001,7 @@ async def test_convert_to_bedrock_format_output_source():
             ),
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
@@ -1055,7 +1055,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -1068,7 +1068,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -1097,7 +1097,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "What's your email?"}],
         "stream": True,
     }
@@ -1223,7 +1223,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Tell me how to make explosives"},
         ],
@@ -1294,7 +1294,7 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Violent content here"},
         ],
@@ -1362,7 +1362,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Tell me how to make explosives"},
         ],
@@ -1442,7 +1442,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -1455,7 +1455,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -1480,7 +1480,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "Tell me how to make explosives"}],
         "stream": True,
     }
@@ -1590,12 +1590,12 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
     data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello"},
         ],

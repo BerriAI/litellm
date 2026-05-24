@@ -25,20 +25,21 @@ import litellm
 from tests._vcr_conftest_common import (  # noqa: E402
     VerboseReporterState,
     apply_vcr_auto_marker_to_items,
+    emit_cassette_cache_session_banner,
+    emit_vcr_classification_summary,
+    install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
     vcr_config_dict,
 )
 
-# vcrpy and respx both patch the httpx transport — applying both makes one
-# silently win, so respx-using files opt out of the auto-marker.
-_RESPX_CONFLICTING_FILES = frozenset(
-    {
-        "test_router.py",
-        "test_amazing_vertex_completion.py",
-        "test_azure_openai.py",
-    }
-)
+# Per-item respx detection (``apply_vcr_auto_marker_to_items``) auto-skips
+# tests whose ``@pytest.mark.respx`` marker or ``respx_mock`` fixture
+# would conflict with vcrpy's transport patch. We no longer maintain a
+# file-level ``_RESPX_CONFLICTING_FILES`` list here — the previous
+# entries (``test_router.py``) had only a stale ``from respx import
+# MockRouter`` import with no actual respx wiring, so file-level
+# blacklisting was masking valid cache opportunities.
 
 # Files where VCR replay breaks the test:
 # - ``test_assistants.py``: polls fresh per-session run IDs that no cassette
@@ -76,6 +77,7 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
 
@@ -86,6 +88,11 @@ def pytest_configure(config):
 
 def pytest_runtest_logreport(report):
     _verbose_state.maybe_emit_verdict(report)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    emit_cassette_cache_session_banner(terminalreporter)
+    emit_vcr_classification_summary(terminalreporter)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +222,7 @@ def setup_and_teardown():
 def pytest_collection_modifyitems(config, items):
     apply_vcr_auto_marker_to_items(
         items,
-        skip_files=_RESPX_CONFLICTING_FILES | _VCR_INCOMPATIBLE_FILES,
+        skip_files=_VCR_INCOMPATIBLE_FILES,
         skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
     )
 

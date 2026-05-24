@@ -1651,6 +1651,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
+    # Carry the proxy-receive instant via metadata (like `endpoint`) so the
+    # OTel layer can compute pre-request latency, including on the failure
+    # path after the logging object is popped.
+    data[_metadata_variable_name]["litellm_received_at"] = getattr(
+        request.state, "litellm_received_at", None
+    )
 
     # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM

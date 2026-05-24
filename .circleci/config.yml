@@ -228,7 +228,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm \
+                --cov=./litellm \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -293,7 +293,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm \
+                --cov=./litellm \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -409,14 +409,25 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -v -x \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
           no_output_timeout: 15m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml auth_ui_unit_tests_coverage.xml
+            mv .coverage auth_ui_unit_tests_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - auth_ui_unit_tests_coverage.xml
+            - auth_ui_unit_tests_coverage
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
@@ -493,13 +504,24 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -v -x \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
           no_output_timeout: 15m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml router_unit_tests_coverage.xml
+            mv .coverage router_unit_tests_coverage
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - router_unit_tests_coverage.xml
+            - router_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
       - *python312_image
@@ -603,7 +625,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
                 -n 4 \
@@ -646,7 +668,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -688,7 +710,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2 \
@@ -732,7 +754,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 --retries 3 --retry-delay 5"
@@ -814,7 +836,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -856,7 +878,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -930,7 +952,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
@@ -972,7 +994,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 2"
@@ -1015,7 +1037,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -n 4"
@@ -1090,7 +1112,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 -n 4 \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1133,7 +1155,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
@@ -1184,7 +1206,7 @@ jobs:
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv -x -s \
-                --cov=litellm --cov-report=xml \
+                --cov=./litellm --cov-report=xml \
                 --junitxml=test-results/junit.xml \
                 --durations=5 -n 2 \
                 --reruns 2 --reruns-delay 1"
@@ -2280,10 +2302,11 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
+          flags: circleci
 
   ui_build:
     docker:
@@ -2669,6 +2692,8 @@ workflows:
             - local_testing_part1
             - local_testing_part2
             - litellm_assistants_api_testing
+            - litellm_router_unit_testing
+            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
