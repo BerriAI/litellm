@@ -55,7 +55,7 @@ guardrails:
     litellm_params:
       guardrail: bedrock  # supported values: "bedrock", "lakera"
       mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
+      guardrailIdentifier: 4w3d1di3snt5
       guardrailVersion: "DRAFT"
   - guardrail_name: "custom-pre-guard"
     litellm_params:
