@@ -627,7 +627,11 @@ class RouteChecks:
         Returns:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
-        if "thread" in request.url.path or "assistant" in request.url.path:
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from .auth_utils import get_request_route  # noqa: PLC0415
+
+        route = get_request_route(request)
+        if "thread" in route or "assistant" in route:
             return True
         return False
 
