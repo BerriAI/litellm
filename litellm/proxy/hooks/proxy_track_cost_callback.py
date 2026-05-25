@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -72,6 +73,15 @@ class _ProxyDBLogger(CustomLogger):
         elif request_route is not None and not (
             RouteChecks.is_llm_api_route(route=request_route)
             or RouteChecks.is_info_route(route=request_route)
+        ):
+            return
+
+        # Skip DB writes for proxy-internal health-check failures (LIT-2457).
+        if _is_litellm_internal_health_check_call(
+            user_api_key=user_api_key_dict.api_key,
+            user_id=user_api_key_dict.user_id,
+            team_id=user_api_key_dict.team_id,
+            end_user_id=user_api_key_dict.end_user_id,
         ):
             return
 
@@ -409,6 +419,30 @@ class _ProxyDBLogger(CustomLogger):
         return
 
 
+def _is_litellm_internal_health_check_call(
+    user_api_key: Optional[str],
+    user_id: Optional[str],
+    team_id: Optional[str],
+    end_user_id: Optional[str],
+) -> bool:
+    """
+    Return True when any spend-attribution identifier matches the sentinel
+    used by the proxy's background/manual health check service account
+    (see ``HealthCheckHelpers._update_model_params_with_health_check_tracking_information``
+    and ``UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth``).
+
+    Health-check requests should not produce SpendLogs rows or move budget
+    counters — they are synthetic calls issued by the proxy itself.
+    """
+    sentinel = LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    return (
+        user_api_key == sentinel
+        or user_id == sentinel
+        or team_id == sentinel
+        or end_user_id == sentinel
+    )
+
+
 def _should_track_cost_callback(
     user_api_key: Optional[str],
     user_id: Optional[str],
@@ -421,6 +455,15 @@ def _should_track_cost_callback(
 
     # don't run track cost callback if user opted into disabling spend
     if ProxyUpdateSpend.disable_spend_updates() is True:
+        return False
+
+    # don't run track cost callback for proxy-internal health checks (LIT-2457)
+    if _is_litellm_internal_health_check_call(
+        user_api_key=user_api_key,
+        user_id=user_id,
+        team_id=team_id,
+        end_user_id=end_user_id,
+    ):
         return False
 
     if (
