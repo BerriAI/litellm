@@ -936,16 +936,9 @@ class AmazonConverseConfig(BaseConfig):
                     model=model, reasoning_effort=value, optional_params=optional_params
                 )
             if param == "context_management" and isinstance(value, (dict, list)):
-                # Forward context_management; later filter keeps compact_20260112 only.
-                optional_params["context_management"] = (
-                    AnthropicConfig.map_openai_context_management_to_anthropic(
-                        cast(Union[dict, list], value)
-                    )
-                )
+                self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
-                if value is not None and isinstance(value, dict):
-                    self._validate_request_metadata(value)  # type: ignore
-                    optional_params["requestMetadata"] = value
+                self._map_request_metadata_param(value, optional_params)
             if param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
 
@@ -977,6 +970,20 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 
         return optional_params
+
+    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+        if value is not None and isinstance(value, dict):
+            self._validate_request_metadata(value)  # type: ignore
+            optional_params["requestMetadata"] = value
+
+    def _map_context_management_param(
+        self, value: Union[dict, list], optional_params: dict
+    ) -> None:
+        optional_params["context_management"] = (
+            AnthropicConfig.map_openai_context_management_to_anthropic(
+                cast(Union[dict, list], value)
+            )
+        )
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
