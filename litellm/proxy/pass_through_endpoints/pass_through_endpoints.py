@@ -1307,11 +1307,14 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
             )
 
-            path = request.url.path
+            path = get_request_route(request)
 
             # Parse request data based on content type
             (
