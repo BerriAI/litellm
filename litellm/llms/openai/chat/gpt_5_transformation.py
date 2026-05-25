@@ -106,7 +106,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
         model_name = model.split("/")[-1]
         if not model_name.startswith("gpt-5."):
-            return False
+            idx = model_name.find("gpt-5.")
+            if idx < 0:
+                return False
+            model_name = model_name[idx:]
         try:
             version_str = model_name.replace("gpt-5.", "").split("-")[0]
             major = version_str.split(".")[0]

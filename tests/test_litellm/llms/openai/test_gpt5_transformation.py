@@ -928,7 +928,30 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
-# GPT-5-Search specific tests
+def test_gpt5_4_plus_model_with_custom_prefix(gpt5_config: OpenAIGPT5Config):
+    """is_model_gpt_5_4_plus_model should handle custom deployment name prefixes."""
+    
+    # Standard names
+    assert gpt5_config.is_model_gpt_5_4_plus_model("gpt-5.4")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("gpt-5.5")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("gpt-5.5-pro")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("azure/gpt-5.4")
+
+    # Custom deployment prefixes
+    assert gpt5_config.is_model_gpt_5_4_plus_model("azure/something-something-gpt-5.5")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.4")
+    assert gpt5_config.is_model_gpt_5_4_plus_model("azure/my-deploy-gpt-5.5")
+
+    # Versions below 5.4
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.2")
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("my-prefix-gpt-5.1")
+
+    # Non-gpt-5 models
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("gpt-4o")
+    assert not gpt5_config.is_model_gpt_5_4_plus_model("my-custom-model")
+
+
+
 def test_gpt5_search_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that GPT-5 search models are correctly detected."""
     assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-api")
