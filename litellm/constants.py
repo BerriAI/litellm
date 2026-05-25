@@ -1443,6 +1443,12 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+# Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
+# "employment_type->acme_employment_type,org_info.department->department"
+CLI_SSO_CLAIM_MAP = (
+    os.getenv("CLI_SSO_CLAIM_MAP") or os.getenv("LITELLM_CLI_SSO_CLAIM_MAP") or ""
+)
+CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
