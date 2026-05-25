@@ -3,6 +3,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.config_export_types import (
     SAFE_GENERAL_SETTINGS_KEYS,
     _KEYS_UPDATE_STRIP,
@@ -10,6 +11,31 @@ from litellm.proxy.management_endpoints.config_export_types import (
     ImportSectionResult,
     _deep_merge,
 )
+
+
+def _encrypt_dict_field(record: Dict[str, Any], field: str) -> Dict[str, Any]:
+    """Encrypt all values in a dict-typed field before a DB write.
+
+    Matches the encryption applied by /model/new, /credentials, and MCP paths.
+    Returns the record unchanged if the field is absent, None, or not a dict.
+    """
+    value = record.get(field)
+    if not isinstance(value, dict) or not value:
+        return record
+    return {**record, field: {k: encrypt_value_helper(v) for k, v in value.items()}}
+
+
+def _encrypt_litellm_params_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _encrypt_dict_field(record, "litellm_params")
+
+
+def _encrypt_credential_values(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _encrypt_dict_field(record, "credential_values")
+
+
+def _encrypt_mcp_credentials(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _encrypt_dict_field(record, "credentials")
+
 
 _ROUTING_SECTIONS = frozenset(
     {"models", "agents", "guardrails", "mcp_servers", "general_settings"}

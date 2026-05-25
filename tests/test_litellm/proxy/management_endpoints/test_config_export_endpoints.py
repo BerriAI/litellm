@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.config_export_types import (
     _validate_envelope,
 )
 from litellm.proxy.management_endpoints.config_import_helpers import (
+    _encrypt_dict_field,
     _import_section,
     _upsert,
 )
@@ -406,6 +407,13 @@ async def test_import_does_not_write_redacted_placeholders_to_db(monkeypatch):
         AsyncMock(return_value={}),
     )
 
+    # Bypass real encryption (requires a master key) — this test checks stripping
+    # of redacted sentinels, not encryption correctness.
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.config_import_helpers.encrypt_value_helper",
+        lambda v: v,
+    )
+
     envelope = LiteLLMExportEnvelope(
         exported_at="2024-01-01T00:00:00Z",
         source_instance="http://dev",
@@ -478,6 +486,27 @@ def test_resolve_sections_rejects_unknown_section():
     with pytest.raises(HTTPException) as exc:
         _resolve_sections("not_a_real_section")
     assert exc.value.status_code == 400
+
+
+def test_encrypt_dict_field(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.config_import_helpers.encrypt_value_helper",
+        lambda v: f"enc:{v}",
+    )
+    # encrypts values in the named field
+    rec = {"credential_name": "c1", "credential_values": {"api_key": "sk-secret", "region": "us-east-1"}}
+    result = _encrypt_dict_field(rec, "credential_values")
+    assert result["credential_values"] == {"api_key": "enc:sk-secret", "region": "enc:us-east-1"}
+    assert result["credential_name"] == "c1"  # other fields untouched
+
+    # returns record unchanged when field is absent
+    assert _encrypt_dict_field({"x": 1}, "credential_values") == {"x": 1}
+
+    # returns record unchanged when field is not a dict
+    assert _encrypt_dict_field({"credential_values": None}, "credential_values") == {"credential_values": None}
+
+    # returns record unchanged when dict is empty
+    assert _encrypt_dict_field({"credential_values": {}}, "credential_values") == {"credential_values": {}}
 
 
 def test_validate_envelope_rejects_duplicate_ids():

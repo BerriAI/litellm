@@ -30,6 +30,9 @@ from litellm.proxy.management_endpoints.config_export_types import (
     _validate_envelope,
 )
 from litellm.proxy.management_endpoints.config_import_helpers import (
+    _encrypt_credential_values,
+    _encrypt_litellm_params_record,
+    _encrypt_mcp_credentials,
     _import_general_settings,
     _import_keys_section,
     _import_section,
@@ -67,7 +70,9 @@ async def _import_standard_section(
     records = getattr(data, section_name, None)
     if records is None:
         return
-    records = [_clean_litellm_params_record(r) for r in records]
+    records = [
+        _encrypt_litellm_params_record(_clean_litellm_params_record(r)) for r in records
+    ]
     result.sections_attempted.append(section_name)
     table = getattr(prisma_client.db, table_name)
     em = await _load_existing(
@@ -126,7 +131,7 @@ async def _import_all_sections(
                     "credential_values is redacted. Bind secrets manually."
                 )
             else:
-                importable_creds.append(rec)
+                importable_creds.append(_encrypt_credential_values(rec))
         em = await _load_existing(
             prisma_client.db.litellm_credentialstable,
             "credential_name",
@@ -169,9 +174,10 @@ async def _import_all_sections(
                 result.mcp_servers.warnings.append(
                     f"MCP server '{rec.get('server_name')}' — '{f}' is redacted; bind manually."
                 )
-            cleaned_servers.append(
+            cleaned = (
                 {k: v for k, v in rec.items() if k not in to_strip} if to_strip else rec
             )
+            cleaned_servers.append(_encrypt_mcp_credentials(cleaned))
         em = await _load_existing(
             prisma_client.db.litellm_mcpservertable,
             "server_id",
@@ -430,11 +436,6 @@ async def export_config(
         return Response(content=content, media_type="application/yaml")
     content = json.dumps(envelope, indent=2, default=str)
     return Response(content=content, media_type="application/json")
-
-
-# ---------------------------------------------------------------------------
-# POST /config/import
-# ---------------------------------------------------------------------------
 
 
 @router.post(
