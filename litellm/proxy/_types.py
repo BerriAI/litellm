@@ -453,24 +453,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/mcp/server/{path:path}",
     ]
 
-    # Read-only MCP server discovery endpoints. Included in `llm_api_routes`
-    # below so that virtual keys configured with allowed_routes=["llm_api_routes"]
-    # can list/inspect the MCP servers they have access to (for example, an LLM
-    # gateway frontend that needs to render the available MCP servers for a
-    # user). The GET handlers in `mcp_management_endpoints.py` already strip
-    # credential-bearing fields via `_sanitize_mcp_server_list_for_virtual_key`
-    # when the caller is a restricted virtual key. Write methods (POST/PUT/
-    # DELETE) on these paths remain gated by handler-level admin role checks.
-    #
-    # NOTE: Intentionally kept OUT of `mcp_inference_routes` so that
-    # `is_llm_api_route()` continues to return False for these paths — this
-    # preserves the existing contract that DISABLE_LLM_API_ENDPOINTS must not
-    # block the Admin UI's MCP server listing.
-    mcp_discovery_routes = [
-        "/v1/mcp/server",
-        "/v1/mcp/server/{server_id}",
-    ]
-
     # Backwards-compat union — virtual keys may be configured with
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
@@ -517,7 +499,6 @@ class LiteLLMRoutes(enum.Enum):
         + passthrough_routes_wildcard
         + apply_guardrail_routes
         + mcp_inference_routes
-        + mcp_discovery_routes
         + litellm_native_routes
         + agent_routes
     )

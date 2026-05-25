@@ -264,16 +264,22 @@ def test_mcp_management_routes_classified_as_management_not_llm_api(route):
     """MCP server CRUD must be management routes, not llm_api routes, so
     DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI.
 
-    Note: `/v1/mcp/server` and `/v1/mcp/server/{server_id}` are *also* exposed
-    via `LiteLLMRoutes.llm_api_routes` (see `mcp_discovery_routes`) so that
-    virtual keys with allowed_routes=["llm_api_routes"] can list/inspect MCP
-    servers (sanitized response). That exposure is intentionally NOT added to
-    `mcp_inference_routes`, so `is_llm_api_route()` continues to return False
-    and `DISABLE_LLM_API_ENDPOINTS` does not block these paths.
+    Note: virtual keys with allowed_routes=["llm_api_routes"] can still call
+    *GET* `/v1/mcp/server` and *GET* `/v1/mcp/server/{server_id}` — that
+    carve-out is enforced method-aware inside
+    `is_virtual_key_allowed_to_call_route`, not by adding the paths to
+    `llm_api_routes`. So `is_llm_api_route()` still returns False here and
+    `DISABLE_LLM_API_ENDPOINTS` still does not block these paths.
     """
 
     assert RouteChecks.is_llm_api_route(route=route) is False
     assert RouteChecks.is_management_route(route=route) is True
+
+
+def _mock_request(method: str) -> Request:
+    request = MagicMock(spec=Request)
+    request.method = method
+    return request
 
 
 @pytest.mark.parametrize(
@@ -283,15 +289,16 @@ def test_mcp_management_routes_classified_as_management_not_llm_api(route):
         "/v1/mcp/server/abc-123",
     ],
 )
-def test_virtual_key_llm_api_routes_allows_mcp_server_discovery(route):
+def test_virtual_key_llm_api_routes_allows_get_mcp_server_discovery(route):
     """
     Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
     be able to list/inspect MCP servers via GET /v1/mcp/server[/{server_id}].
 
     The handlers strip credential-bearing fields via
     `_sanitize_mcp_server_list_for_virtual_key` when the caller is a
-    restricted virtual key, so this is safe to expose. Write methods on the
-    same paths remain gated by handler-level admin role checks.
+    restricted virtual key, so GET is safe to expose. The carve-out is
+    method-aware (see below) — non-GET requests to the same paths are
+    rejected at this layer, so admin-only writes remain gated.
     """
 
     valid_token = UserAPIKeyAuth(
@@ -302,6 +309,7 @@ def test_virtual_key_llm_api_routes_allows_mcp_server_discovery(route):
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
         route=route,
         valid_token=valid_token,
+        request=_mock_request("GET"),
     )
 
     assert result is True
@@ -310,25 +318,16 @@ def test_virtual_key_llm_api_routes_allows_mcp_server_discovery(route):
 @pytest.mark.parametrize(
     "route",
     [
-        # Multi-segment admin-only sub-paths must NOT be reachable via
-        # llm_api_routes. (Single-segment paths like /v1/mcp/server/health
-        # and /v1/mcp/server/submissions DO match the {server_id} placeholder
-        # at the route-check layer; those endpoints enforce admin role inside
-        # the handler itself.)
-        "/v1/mcp/server/abc-123/approve",
-        "/v1/mcp/server/abc-123/reject",
-        "/v1/mcp/server/oauth/session",
-        "/v1/mcp/server/abc-123/user-credential",
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
     ],
 )
-def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
-    route,
-):
-    """Multi-segment admin-only MCP sub-paths are not reachable via llm_api_routes.
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, method):
+    """Method-aware: the MCP server discovery carve-out is GET-only.
 
-    The discovery list only includes `/v1/mcp/server` and
-    `/v1/mcp/server/{server_id}` (single segment after `/server/`), so any
-    path with additional segments is rejected at the route-check layer.
+    POST/PUT/PATCH/DELETE on `/v1/mcp/server[/{server_id}]` are admin-only
+    management writes and must not be reachable via llm_api_routes.
     """
 
     valid_token = UserAPIKeyAuth(
@@ -340,6 +339,43 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
         RouteChecks.is_virtual_key_allowed_to_call_route(
             route=route,
             valid_token=valid_token,
+            request=_mock_request(method),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Multi-segment admin-only sub-paths must NOT be reachable via
+        # llm_api_routes, even on GET.
+        "/v1/mcp/server/abc-123/approve",
+        "/v1/mcp/server/abc-123/reject",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/abc-123/user-credential",
+    ],
+)
+def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
+    route,
+):
+    """Multi-segment admin-only MCP sub-paths are not reachable via llm_api_routes.
+
+    The discovery carve-out only matches `/v1/mcp/server` and
+    `/v1/mcp/server/{server_id}` (single segment after `/server/`), so any
+    path with additional segments is rejected even when the request is GET.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request("GET"),
         )
 
     assert exc_info.value.status_code == 403
