@@ -82,11 +82,12 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     # Validate that the expected number of attributes were set.
-    # NOTE: OPENINFERENCE_SPAN_KIND is now written twice (defensive early
-    # write + the original late write) so a partial failure can't blank
-    # the kind. Both writes carry the same value (TOOL when tools are
-    # provided), so the final span attributes are unchanged.
-    assert span.set_attribute.call_count == 27
+    # OPENINFERENCE_SPAN_KIND is written exactly once (defensively, before
+    # the main attribute pipeline) so a partial failure cannot blank it.
+    # Per the OpenInference spec, a chat completion that passes `tools=[...]`
+    # is still an LLM span — not TOOL (TOOL is reserved for actual tool
+    # execution by application code).
+    assert span.set_attribute.call_count == 26
 
     # Metadata attached to the span
     span.set_attribute.assert_any_call(SpanAttributes.METADATA, json.dumps({"key_1": "value_1", "key_2": None}))
@@ -108,8 +109,13 @@ def test_arize_set_attributes():
     # Response metadata
     span.set_attribute.assert_any_call("llm.response.id", "chatcmpl-ID")
     span.set_attribute.assert_any_call("llm.response.model", "gpt-4o")
-    # Span kind is set to TOOL when tools are present
-    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "TOOL")
+    # Span kind stays LLM even when tools are passed (OpenInference spec).
+    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "LLM")
+    # And TOOL must never be written for an LLM chat completion call.
+    span_kind_writes = [
+        c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
+    ]
+    assert "TOOL" not in span_kind_writes
 
     # Request message content and metadata
     span.set_attribute.assert_any_call(SpanAttributes.INPUT_VALUE, "Basic Request Content")
@@ -499,9 +505,66 @@ def test_passthrough_call_type_resolves_to_llm_span_kind():
 
     assert _infer_open_inference_span_kind("allm_passthrough_route") == OpenInferenceSpanKindValues.LLM.value
     assert _infer_open_inference_span_kind("llm_passthrough_route") == OpenInferenceSpanKindValues.LLM.value
-    # Existing behavior unchanged
-    assert _infer_open_inference_span_kind("completion") == OpenInferenceSpanKindValues.LLM.value
-    assert _infer_open_inference_span_kind("call_mcp_tool") == OpenInferenceSpanKindValues.TOOL.value
+
+
+def test_arize_chat_completion_with_tools_stays_llm_span_kind():
+    """Regression guard against the old `TOOL` override: a chat completion
+    that passes `tools=[...]` AND returns `tool_calls` must remain LLM."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "weather?"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+        },
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        usage={"total_tokens": 10, "completion_tokens": 4, "prompt_tokens": 6},
+        choices=[
+            Choices(
+                message={
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_x",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                }
+            )
+        ],
+        model="gpt-4o",
+        id="r-toolkind",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+    span_kind_writes = [
+        c.args[1] for c in span.set_attribute.call_args_list if c.args[0] == SpanAttributes.OPENINFERENCE_SPAN_KIND
+    ]
+    assert span_kind_writes, "span.kind must be written"
+    assert all(v == "LLM" for v in span_kind_writes)
+    assert "TOOL" not in span_kind_writes
 
 
 def test_arize_emits_assistant_tool_calls_on_output_message():
@@ -551,6 +614,103 @@ def test_arize_emits_assistant_tool_calls_on_output_message():
     assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_ID}"] == "call_abc"
     assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}"] == "get_weather"
     assert attrs[f"{base}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}"] == '{"location": "SF"}'
+
+
+def test_arize_output_value_falls_back_to_tool_calls_summary():
+    """When the assistant returns no text content but did request tool
+    calls, OUTPUT_VALUE should contain a JSON summary so Arize's Output
+    pane shows something."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "weather?"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        usage={"total_tokens": 10, "completion_tokens": 4, "prompt_tokens": 6},
+        choices=[
+            Choices(
+                message={
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "SF"}',
+                            },
+                        }
+                    ],
+                }
+            )
+        ],
+        model="gpt-4o",
+        id="r-tc-out",
+    )
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+    attrs = _collect_calls(span)
+
+    # OUTPUT_VALUE should contain the tool_call name + arguments JSON
+    out = attrs[SpanAttributes.OUTPUT_VALUE]
+    assert "tool_calls" in out
+    assert "get_weather" in out
+    assert "SF" in out
+
+
+def test_arize_output_value_unchanged_when_content_present():
+    """Regression guard: when content is non-empty, OUTPUT_VALUE must be
+    exactly that content (no summary written)."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Choices, ModelResponse
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj = ModelResponse(
+        usage={"total_tokens": 4, "completion_tokens": 2, "prompt_tokens": 2},
+        choices=[
+            Choices(
+                message={
+                    "role": "assistant",
+                    "content": "hello world",
+                    "tool_calls": [
+                        {
+                            "id": "call_x",
+                            "type": "function",
+                            "function": {"name": "n", "arguments": "{}"},
+                        }
+                    ],
+                }
+            )
+        ],
+        model="gpt-4o",
+        id="r-content",
+    )
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+    attrs = _collect_calls(span)
+    assert attrs[SpanAttributes.OUTPUT_VALUE] == "hello world"
 
 
 def test_arize_emits_tool_call_id_and_name_on_input_tool_message():

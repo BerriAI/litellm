@@ -75,11 +75,6 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
             span: The OpenTelemetry span to set attributes on
             response_obj: The response object containing choices with messages
         """
-        from litellm.integrations._types.open_inference import (
-            MessageAttributes,
-            SpanAttributes,
-        )
-
         for idx, choice in enumerate(response_obj.get("choices", [])):
             response_message = choice.get("message", {})
             safe_set_attribute(
@@ -119,11 +114,19 @@ def _set_response_attributes(span: "Span", response_obj):
 def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
     for idx, choice in enumerate(response_obj.get("choices", [])):
         response_message = choice.get("message", {})
-        safe_set_attribute(
-            span,
-            span_attrs.OUTPUT_VALUE,
-            response_message.get("content", ""),
-        )
+        content = response_message.get("content", "")
+
+        # When the assistant has no text content but did request tool calls,
+        # serialize them into OUTPUT_VALUE so Arize's "Output" pane shows
+        # something useful instead of blank. When `content` is truthy we
+        # leave the existing behavior untouched.
+        output_value = content
+        if not output_value:
+            tool_calls = _get_tool_calls(response_message)
+            if tool_calls:
+                output_value = _summarize_tool_calls_for_output(tool_calls)
+
+        safe_set_attribute(span, span_attrs.OUTPUT_VALUE, output_value)
         prefix = f"{span_attrs.LLM_OUTPUT_MESSAGES}.{idx}"
         safe_set_attribute(
             span,
@@ -133,7 +136,7 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
         safe_set_attribute(
             span,
             f"{prefix}.{msg_attrs.MESSAGE_CONTENT}",
-            response_message.get("content", ""),
+            content,
         )
 
         # Additive: emit assistant tool_calls so tool-using turns render in
@@ -438,10 +441,10 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     # models) are returned unchanged, preserving the existing test behavior.
     response_obj_for_attrs = _coerce_response_obj_for_attrs(response_obj)
 
-    # Set span.kind ASAP. If any downstream step throws, the span still has
-    # a kind so Arize can render it as an LLM call instead of UNKNOWN.
-    # The original late-set call below remains intact (so the TOOL upgrade
-    # path still wins when tools are present).
+    # Set span.kind defensively before anything else. If a downstream step
+    # throws, the span still has a kind so Arize can render it correctly
+    # (an LLM call instead of UNKNOWN). This is the single source of truth
+    # for span.kind — no late re-write happens below.
     _safe_emit("early span kind", _set_early_span_kind, span, kwargs)
 
     try:
@@ -468,12 +471,12 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
             span_attrs=SpanAttributes,
         )
 
-        span_kind = _infer_open_inference_span_kind(call_type=call_type)
+        # span.kind was already set above by `_set_early_span_kind`. We do
+        # NOT re-write it here based on tool presence: a chat completion
+        # that passes `tools=[...]` (or returns `tool_calls`) is still an
+        # LLM call per the OpenInference spec — TOOL is reserved for actual
+        # tool execution spans, not LLM calls that request tools.
         _set_tool_attributes(span, optional_tools, metadata_tools)
-        if (optional_tools or metadata_tools) and span_kind != OpenInferenceSpanKindValues.TOOL.value:
-            span_kind = OpenInferenceSpanKindValues.TOOL.value
-
-        safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)
 
         model_params = standard_logging_payload.get("model_parameters") if standard_logging_payload else None
@@ -671,50 +674,89 @@ def _to_plain_dict(value):
     return value
 
 
-def _emit_message_tool_calls(span: "Span", prefix: str, message) -> None:
-    """Emit `MESSAGE_TOOL_CALLS.*` for an assistant message that requested
-    tool calls. Pure addition: only writes when `tool_calls` is non-empty.
+def _get_tool_calls(message) -> Optional[list]:
+    """Pull a non-empty ``tool_calls`` list from a dict or Pydantic message.
 
-    Accepts dicts or Pydantic message objects (e.g. ``litellm.Message``); the
-    same applies to each tool_call entry.
+    Returns ``None`` when the field is missing, empty, or not a list.
     """
-    # Pull tool_calls from either dict or Pydantic message.
     if isinstance(message, dict):
         tool_calls = message.get("tool_calls")
     else:
         tool_calls = getattr(message, "tool_calls", None)
-    if not tool_calls or not isinstance(tool_calls, list):
+    if isinstance(tool_calls, list) and tool_calls:
+        return tool_calls
+    return None
+
+
+def _normalize_tool_call(raw_tc) -> Optional[Dict[str, Any]]:
+    """Normalize a single tool_call (dict or Pydantic) into a stable shape:
+
+        {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}
+
+    Arguments are coerced to a JSON string per OpenInference convention.
+    Returns ``None`` when ``raw_tc`` cannot be coerced to a dict.
+    """
+    tc = _to_plain_dict(raw_tc)
+    if not isinstance(tc, dict):
+        return None
+    function = _to_plain_dict(tc.get("function"))
+    name = function.get("name") if isinstance(function, dict) else None
+    args = function.get("arguments") if isinstance(function, dict) else None
+    if args is not None and not isinstance(args, str):
+        try:
+            args = json.dumps(args)
+        except Exception:
+            args = str(args)
+    return {
+        "id": tc.get("id"),
+        "type": tc.get("type", "function"),
+        "function": {"name": name, "arguments": args},
+    }
+
+
+def _summarize_tool_calls_for_output(tool_calls) -> str:
+    """Render a tool_calls list as a compact JSON string for OUTPUT_VALUE.
+
+    Best-effort: returns ``str(tool_calls)`` if anything unexpected happens
+    so OUTPUT_VALUE is never blanked on a malformed payload.
+    """
+    try:
+        normalized = [n for n in (_normalize_tool_call(tc) for tc in tool_calls) if n]
+        return json.dumps({"tool_calls": normalized})
+    except Exception:
+        return str(tool_calls)
+
+
+def _emit_message_tool_calls(span: "Span", prefix: str, message) -> None:
+    """Emit ``MESSAGE_TOOL_CALLS.*`` for an assistant message that requested
+    tool calls. Pure addition: only writes when ``tool_calls`` is non-empty.
+
+    Accepts dicts or Pydantic message objects (e.g. ``litellm.Message``); the
+    same applies to each tool_call entry.
+    """
+    tool_calls = _get_tool_calls(message)
+    if not tool_calls:
         return
     for tc_idx, raw_tc in enumerate(tool_calls):
-        tc = _to_plain_dict(raw_tc)
-        if not isinstance(tc, dict):
+        tc = _normalize_tool_call(raw_tc)
+        if tc is None:
             continue
         tc_prefix = f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tc_idx}"
-        tc_id = tc.get("id")
-        if tc_id:
-            safe_set_attribute(span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tc_id)
-        function = _to_plain_dict(tc.get("function"))
-        if isinstance(function, dict):
-            name = function.get("name")
-            if name:
-                safe_set_attribute(
-                    span,
-                    f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
-                    name,
-                )
-            args = function.get("arguments")
-            if args is not None:
-                # OpenInference expects a JSON string for arguments.
-                if not isinstance(args, str):
-                    try:
-                        args = json.dumps(args)
-                    except Exception:
-                        args = str(args)
-                safe_set_attribute(
-                    span,
-                    f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
-                    args,
-                )
+        if tc["id"]:
+            safe_set_attribute(span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tc["id"])
+        fn = tc["function"]
+        if fn["name"]:
+            safe_set_attribute(
+                span,
+                f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
+                fn["name"],
+            )
+        if fn["arguments"] is not None:
+            safe_set_attribute(
+                span,
+                f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}",
+                fn["arguments"],
+            )
 
 
 def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None:
