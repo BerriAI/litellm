@@ -87,3 +87,46 @@ def test_usgov_carries_20_percent_premium_over_global(model_data):
         assert (
             abs(ratio - 1.2) < 1e-9
         ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
+
+
+# The us-gov.anthropic.* cross-region inference profile is the only us-gov
+# entry that carries the 1M-context `_above_200k_tokens` pricing tier — the
+# bedrock/us-gov-{east,west}-1/ entries are capped at 200k tokens.
+USGOV_CROSS_REGION_KEY = "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+EXPECTED_USGOV_ABOVE_200K = {
+    "input_cost_per_token_above_200k_tokens": 7.2e-06,
+    "output_cost_per_token_above_200k_tokens": 2.7e-05,
+    "cache_creation_input_token_cost_above_200k_tokens": 9.0e-06,
+    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
+    "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
+}
+
+
+@pytest.mark.parametrize("field,expected", EXPECTED_USGOV_ABOVE_200K.items())
+def test_usgov_cross_region_above_200k_carries_gov_premium(model_data, field, expected):
+    """The `_above_200k_tokens` tier on the us-gov cross-region inference
+    profile must also carry the +20% GovCloud uplift. The original PR
+    corrected the base rates but left the 200k-tier fields at the +10%
+    commercial-US rates, undercharging long-context requests.
+    """
+    info = model_data[USGOV_CROSS_REGION_KEY]
+    assert field in info, f"{USGOV_CROSS_REGION_KEY}: missing field {field}"
+    assert (
+        info[field] == expected
+    ), f"{USGOV_CROSS_REGION_KEY}: {field} should be {expected} (got {info[field]})"
+
+
+def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
+    """Cross-check via the property-based invariant: every `_above_200k_tokens`
+    field on the us-gov cross-region profile must equal 1.2x the global
+    anthropic.* rate, the same GovCloud uplift the base tier carries.
+    """
+    global_key = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    global_info = model_data[global_key]
+    usgov_info = model_data[USGOV_CROSS_REGION_KEY]
+    for field in EXPECTED_USGOV_ABOVE_200K:
+        ratio = usgov_info[field] / global_info[field]
+        assert (
+            abs(ratio - 1.2) < 1e-9
+        ), f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
