@@ -116,10 +116,8 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
         response_message = choice.get("message", {})
         content = response_message.get("content", "")
 
-        # When the assistant has no text content but did request tool calls,
-        # serialize them into OUTPUT_VALUE so Arize's "Output" pane shows
-        # something useful instead of blank. When `content` is truthy we
-        # leave the existing behavior untouched.
+        # Tool-only assistant responses have empty content; serialize the
+        # tool_calls into OUTPUT_VALUE so Arize's "Output" pane isn't blank.
         output_value = content
         if not output_value:
             tool_calls = _get_tool_calls(response_message)
@@ -675,17 +673,12 @@ def _to_plain_dict(value):
 
 
 def _get_tool_calls(message) -> Optional[list]:
-    """Pull a non-empty ``tool_calls`` list from a dict or Pydantic message.
+    """Return ``message.tool_calls`` only when it's a non-empty list.
 
-    Returns ``None`` when the field is missing, empty, or not a list.
+    Works for dicts and Pydantic message objects via ``_safe_get``.
     """
-    if isinstance(message, dict):
-        tool_calls = message.get("tool_calls")
-    else:
-        tool_calls = getattr(message, "tool_calls", None)
-    if isinstance(tool_calls, list) and tool_calls:
-        return tool_calls
-    return None
+    tool_calls = _safe_get(message, "tool_calls")
+    return tool_calls if isinstance(tool_calls, list) and tool_calls else None
 
 
 def _normalize_tool_call(raw_tc) -> Optional[Dict[str, Any]]:
