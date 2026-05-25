@@ -14,7 +14,7 @@ import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
@@ -145,6 +145,10 @@ export function LogDetailsDrawer({
       };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
+    // Keep the previous page's data visible while fetching the next page so the
+    // drawer doesn't unmount (which would otherwise trigger a close→reopen
+    // animation on the first paginate click while the fetch is in flight).
+    placeholderData: keepPreviousData,
   });
 
   const sessionLogs = sessionQueryResult?.logs ?? [];
