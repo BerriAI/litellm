@@ -182,12 +182,16 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        # Pass the resolved provider through to `responses()` so it doesn't
-        # re-run `get_llm_provider()` on the model string and strip a
-        # second provider prefix (see GitHub issue #28505).
+        # Pin the resolved provider so `responses()` doesn't re-run
+        # `get_llm_provider()` on the model string and strip a second
+        # provider prefix (see GitHub issue #28505).  request_data already
+        # carries `custom_llm_provider` via the spread of
+        # `sanitized_litellm_params`; overwriting it on the dict (rather
+        # than adding an explicit kwarg) avoids the duplicate-keyword
+        # TypeError that would otherwise fire on the real bridge path.
+        request_data["custom_llm_provider"] = custom_llm_provider
         result = responses(
             **request_data,
-            custom_llm_provider=custom_llm_provider,
         )
 
         from litellm.types.utils import ModelResponse
@@ -272,13 +276,16 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        # Pass the resolved provider through to `aresponses()` so it doesn't
-        # re-run `get_llm_provider()` on the model string and strip a
-        # second provider prefix (see GitHub issue #28505).
+        # Pin the resolved provider so `aresponses()` doesn't re-run
+        # `get_llm_provider()` on the model string and strip a second
+        # provider prefix (see GitHub issue #28505).  Set on request_data
+        # rather than passed as a separate kwarg to avoid the duplicate-
+        # keyword TypeError when `sanitized_litellm_params` already
+        # carries `custom_llm_provider`.
+        request_data["custom_llm_provider"] = custom_llm_provider
         result = await aresponses(
             **request_data,
             aresponses=True,
-            custom_llm_provider=custom_llm_provider,
         )
 
         from litellm.types.utils import ModelResponse

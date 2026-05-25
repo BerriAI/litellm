@@ -44,6 +44,11 @@ def test_sync_completion_forwards_custom_llm_provider():
     handler.transformation_handler.transform_request.return_value = {
         "model": "openai/openai/openai/gpt-5.5",
         "input": [],
+        # `_build_sanitized_litellm_params` spreads `custom_llm_provider` from
+        # `litellm_params` into request_data on the real bridge path.  Seed
+        # it here so the test exercises the overwrite (not an explicit kwarg
+        # that would TypeError against an already-present key).
+        "custom_llm_provider": "should-be-overwritten",
     }
     handler.transformation_handler.transform_response.return_value = (
         _validated_kwargs()["model_response"]
@@ -81,6 +86,11 @@ async def test_async_completion_forwards_custom_llm_provider():
     handler.transformation_handler.transform_request.return_value = {
         "model": "openai/openai/openai/gpt-5.5",
         "input": [],
+        # `_build_sanitized_litellm_params` spreads `custom_llm_provider` from
+        # `litellm_params` into request_data on the real bridge path.  Seed
+        # it here so the test exercises the overwrite (not an explicit kwarg
+        # that would TypeError against an already-present key).
+        "custom_llm_provider": "should-be-overwritten",
     }
 
     async def _fake_aresponses(**kwargs):
