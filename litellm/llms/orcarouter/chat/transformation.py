@@ -197,9 +197,18 @@ class OrcaRouterConfig(OpenAIGPTConfig):
             if existing_thinking is not None:
                 params["thinking"] = existing_thinking
             elif effort is not None:
-                budget = _REASONING_EFFORT_TO_BUDGET.get(
-                    effort, _REASONING_EFFORT_TO_BUDGET["medium"]
-                )
+                budget = _REASONING_EFFORT_TO_BUDGET.get(effort)
+                if budget is None:
+                    litellm.verbose_logger.warning(
+                        "OrcaRouter: unknown reasoning_effort %r for %s; "
+                        "falling back to 'medium' budget (%d tokens). "
+                        "Valid values: %s",
+                        effort,
+                        model,
+                        _REASONING_EFFORT_TO_BUDGET["medium"],
+                        sorted(_REASONING_EFFORT_TO_BUDGET),
+                    )
+                    budget = _REASONING_EFFORT_TO_BUDGET["medium"]
                 params["thinking"] = {"type": "enabled", "budget_tokens": budget}
             return
 
@@ -353,11 +362,18 @@ class OrcaRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             new_choices: List[Any] = []
             for choice in chunk["choices"]:
                 original_delta = choice["delta"]
-                new_delta: Any = {
-                    **original_delta,
-                    "reasoning_content": original_delta.get("reasoning"),
-                }
-                new_choice: Any = {**choice, "delta": new_delta}
+                reasoning = original_delta.get("reasoning")
+                if reasoning is not None:
+                    new_delta: Any = {
+                        **original_delta,
+                        "reasoning_content": reasoning,
+                    }
+                    new_choice: Any = {**choice, "delta": new_delta}
+                else:
+                    # Don't synthesize a `reasoning_content: None` field for
+                    # non-reasoning chunks; callers that key on field presence
+                    # would mis-classify them as reasoning-bearing.
+                    new_choice = choice
                 new_choices.append(new_choice)
             return ModelResponseStream(
                 id=chunk["id"],
