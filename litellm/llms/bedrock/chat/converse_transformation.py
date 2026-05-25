@@ -1460,6 +1460,7 @@ class AmazonConverseConfig(BaseConfig):
         """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
         cm = additional_request_params.get("context_management")
         if not isinstance(cm, dict):
+            additional_request_params.pop("context_management", None)
             return
         edits = cm.get("edits")
         if not isinstance(edits, list):
