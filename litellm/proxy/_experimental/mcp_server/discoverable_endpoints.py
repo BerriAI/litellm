@@ -639,9 +639,7 @@ def _render_oauth_error_html(error: str, description: Optional[str]) -> HTMLResp
     """
     safe_error = _html.escape(error or "unknown_error")
     safe_description = _html.escape(description) if description else ""
-    description_html = (
-        f"<p>{safe_description}</p>" if safe_description else ""
-    )
+    description_html = f"<p>{safe_description}</p>" if safe_description else ""
     body = (
         "<html><body>"
         "<h2>Authentication failed</h2>"
@@ -686,9 +684,7 @@ async def callback(
             try:
                 state_data = decode_state_hash(state)
                 original_state = state_data.get("original_state")
-                redirect_uri = _get_validated_client_redirect_uri(
-                    request, state_data
-                )
+                redirect_uri = _get_validated_client_redirect_uri(request, state_data)
             except HTTPException:
                 # Untrusted/invalid client redirect_uri — surface inline rather
                 # than blindly forwarding the error to an attacker-controlled URL.
