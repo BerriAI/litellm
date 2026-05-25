@@ -993,7 +993,11 @@ def review_gate(
     login = (item.get("user") or {}).get("login") or ""
     association = item.get("author_association") or ""
     state = item.get("state") or ""
-    labels_now = {(lbl.get("name") or "") for lbl in (item.get("labels") or [])}
+    # GitHub label names are case-insensitive; compare lowercased so a repo
+    # that already has e.g. "Ready for Review" is recognized as the same
+    # label as our READY_FOR_REVIEW_LABEL constant ("ready for review").
+    labels_now = {(lbl.get("name") or "").lower() for lbl in (item.get("labels") or [])}
+    label_key = label.lower()
     created_raw = item.get("created_at") or ""
 
     base_result = {
@@ -1003,7 +1007,7 @@ def review_gate(
         "author": login,
         "author_association": association,
         "state": state,
-        "labeled": label in labels_now,
+        "labeled": label_key in labels_now,
         "review_gate": True,
     }
 
@@ -1059,7 +1063,7 @@ def review_gate(
         reference = now or dt.datetime.now(dt.timezone.utc)
         age_days = (reference - parse_iso8601(created_raw)).days
 
-    label_present = label in labels_now
+    label_present = label_key in labels_now
     explanation = verdict.get("explanation") or ""
     base_result = {
         **base_result,
@@ -1093,6 +1097,15 @@ def review_gate(
         remove_label(repo, number, label)
         post_comment(repo, number, comment)
         return {**base_result, "action": "label-removed-regressed", "comment": comment}
+
+    # Not passing and not tagged. If the PR was previously tagged and then
+    # regressed (we removed the label and posted REGRESSED_MARKER), honor the
+    # "PR stays open — fix it and the tag comes back" promise from
+    # `format_regression_comment` and skip the close path. Without this guard,
+    # any PR older than `grace_days` would be closed on the next evaluation,
+    # giving the contributor no realistic window to address the regression.
+    if _has_marker(comments, REGRESSED_MARKER):
+        return {**base_result, "action": "regressed-already-notified"}
 
     # Not passing and not tagged: close if past the grace window, else notify once.
     if age_days is not None and age_days >= grace_days:
