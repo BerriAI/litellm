@@ -550,6 +550,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -1209,12 +1210,66 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     headers = exc.headers
     error_dict = exc.to_dict()
+    status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+    _close_dangling_otel_server_span(request, status_code)
     return JSONResponse(
-        status_code=(
-            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-        ),
+        status_code=status_code,
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+def _close_dangling_otel_server_span(request: Request, status_code: int) -> None:
+    parent_otel_span = getattr(request.state, "parent_otel_span", None)
+    if parent_otel_span is None:
+        return
+    if open_telemetry_logger is None:
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+
+        open_telemetry_logger.set_response_status_code_attribute(
+            parent_otel_span, status_code
+        )
+        parent_otel_span.set_status(
+            Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
+        )
+        parent_otel_span.end()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Error closing dangling OTEL SERVER span: %s", str(e)
+        )
+    finally:
+        request.state.parent_otel_span = None
+
+
+@app.exception_handler(RequestValidationError)
+async def otel_request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
+    _close_dangling_otel_server_span(request, 422)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
+@app.exception_handler(Exception)
+async def otel_unhandled_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
+        raise exc
+    verbose_proxy_logger.exception(
+        "Unhandled exception in request: %s", type(exc).__name__
+    )
+    _close_dangling_otel_server_span(request, 500)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "message": "Internal server error",
+                "type": "internal_server_error",
+            }
+        },
     )
 
 
@@ -2710,11 +2765,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -4328,6 +4381,19 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            ### INTERACTIONS API SCHEMA ###
+            _use_legacy_interactions_schema = general_settings.get(
+                "use_legacy_interactions_schema"
+            )
+            if _use_legacy_interactions_schema is not None:
+                if isinstance(_use_legacy_interactions_schema, str):
+                    litellm.use_legacy_interactions_schema = (
+                        _use_legacy_interactions_schema.lower() == "true"
+                    )
+                else:
+                    litellm.use_legacy_interactions_schema = bool(
+                        _use_legacy_interactions_schema
+                    )
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get(
                 "enable_health_check_routing", False
@@ -4727,6 +4793,7 @@ class ProxyConfig:
         if _id is not None:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
+            model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
         if premium_user is True:
             # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
@@ -6916,6 +6983,15 @@ async def async_data_generator(  # noqa: PLR0915
 
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
+            elif isinstance(chunk, bytes):
+                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
+                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
+                # Decode to str so the f-string below does not emit a Python b'...' literal,
+                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
+                chunk = chunk.decode("utf-8", errors="replace")
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                    continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -8089,6 +8165,11 @@ async def model_list(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Compute once — used in both branches below to hide paused models from the listing.
+    blocked_names = (
+        llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -8120,6 +8201,10 @@ async def model_list(
             include_model_access_groups=include_model_access_groups or False,
             only_model_access_groups=only_model_access_groups or False,
         )
+
+        # Hide paused models from the public listing (admins manage them via /model/info)
+        if blocked_names:
+            all_models = [m for m in all_models if m not in blocked_names]
 
         # Build response data with all proxy models
         model_data = []
@@ -8153,6 +8238,10 @@ async def model_list(
         return_wildcard_routes=return_wildcard_routes or False,
         user_api_key_cache=user_api_key_cache,
     )
+
+    # Hide paused models from the public listing (admins manage them via /model/info)
+    if blocked_names:
+        all_models = [m for m in all_models if m not in blocked_names]
 
     # Build response data
     model_data = []

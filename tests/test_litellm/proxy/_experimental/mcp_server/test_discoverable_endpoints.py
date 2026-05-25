@@ -1345,7 +1345,13 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
                 "https://litellm.example.com/ui/mcp/oauth/callback",
             )
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "invalid_request"
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "invalid_request"
+        assert "error_description" in detail
+        assert "redirect_uri origin" in detail["error_description"]
+        assert "proxy origin" in detail["error_description"]
+        assert "hint" in detail
 
     matching = [r for r in caplog.records if "rejecting redirect_uri" in r.getMessage()]
     assert len(matching) == 1, (
