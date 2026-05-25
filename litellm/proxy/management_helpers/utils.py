@@ -502,8 +502,6 @@ def management_endpoint_wrapper(func):
             result = await func(*args, **kwargs)
             end_time = datetime.now()
             try:
-                if kwargs is None:
-                    kwargs = {}
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
@@ -538,8 +536,6 @@ def management_endpoint_wrapper(func):
         except Exception as e:
             end_time = datetime.now()
 
-            if kwargs is None:
-                kwargs = {}
             user_api_key_dict: UserAPIKeyAuth = (
                 kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             )
