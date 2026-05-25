@@ -2775,3 +2775,121 @@ async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
     assert (
         "model_per_project" not in descriptor_keys
     ), f"model_per_project should not be added for unrelated model, got: {descriptor_keys}"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_does_not_leak_internal_stash_to_request_body():
+    """Regression for #27001: stash keys must stay in metadata, never on
+    the top level of ``data`` (which gets forwarded as the provider body)."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _LITELLM_STASH_KEYS,
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    _api_key = hash_token("sk-leak-regression")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        tpm_limit=1000,
+        rpm_limit=5,
+    )
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        return {"overall_code": "OK", "statuses": []}
+
+    async def mock_reserve_tpm_tokens(descriptors, estimated_tokens, **kwargs):
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "current_limit": 1000,
+                    "limit_remaining": 1000 - estimated_tokens,
+                    "descriptor_key": d["key"],
+                    "descriptor_value": d["value"],
+                    "rate_limit_type": "tokens",
+                }
+                for d in descriptors
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+    parallel_request_handler.reserve_tpm_tokens = mock_reserve_tpm_tokens
+
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    leaked = [k for k in _LITELLM_STASH_KEYS if k in data]
+    assert not leaked, f"stash keys leaked to top level: {leaked}"
+
+    metadata = data.get("metadata") or {}
+    assert metadata.get(TPM_RESERVED_TOKENS_KEY)
+    assert isinstance(metadata.get(RATE_LIMIT_DESCRIPTORS_KEY), list)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_caller_supplied_stash_values():
+    """Caller cannot pre-populate stash keys in body metadata to drive a
+    later TPM refund against an arbitrary scope."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _LITELLM_STASH_KEYS,
+        RATE_LIMIT_DESCRIPTORS_KEY,
+        TPM_RESERVED_TOKENS_KEY,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-no-limits"))
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+
+    victim_descriptors = [
+        {
+            "key": "api_key",
+            "value": "victim-key-hash",
+            "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
+        }
+    ]
+    data: Dict[str, Any] = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        TPM_RESERVED_TOKENS_KEY: 9999,
+        RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        "metadata": {
+            TPM_RESERVED_TOKENS_KEY: 9999,
+            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        },
+        "litellm_metadata": {
+            TPM_RESERVED_TOKENS_KEY: 9999,
+            RATE_LIMIT_DESCRIPTORS_KEY: victim_descriptors,
+        },
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    for channel in (
+        data,
+        data.get("metadata") or {},
+        data.get("litellm_metadata") or {},
+    ):
+        leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
+        assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"

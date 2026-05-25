@@ -7,7 +7,7 @@ import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { modelDeleteCall } from "@/components/networking";
+import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { useQueryClient } from "@tanstack/react-query";
@@ -217,6 +217,25 @@ const AllModelsTab = ({
     } finally {
       setDeleteLoading(false);
       setDeleteModalModelId(null);
+    }
+  };
+
+  const [pausingModelId, setPausingModelId] = useState<string | null>(null);
+
+  const handleTogglePause = async (modelId: string, blocked: boolean) => {
+    if (!accessToken) return;
+    try {
+      setPausingModelId(modelId);
+      await modelPatchUpdateCall(accessToken, { blocked }, modelId);
+      NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+      // invalidateQueries already schedules a refetch for active observers
+      // on this key — no need to also call refetchModels() (would double-fetch).
+      queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    } catch (error) {
+      console.error("Error toggling model pause state:", error);
+      NotificationsManager.fromBackend(error);
+    } finally {
+      setPausingModelId(null);
     }
   };
 
@@ -536,6 +555,8 @@ const AllModelsTab = ({
                 expandedRows,
                 setExpandedRows,
                 setDeleteModalModelId,
+                handleTogglePause,
+                pausingModelId,
               )}
               data={filteredData}
               isLoading={isLoadingModelsInfo}

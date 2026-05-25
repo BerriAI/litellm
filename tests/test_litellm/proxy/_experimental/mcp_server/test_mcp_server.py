@@ -774,6 +774,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         if server.name == "working_server":
             # Working server returns tools
@@ -879,6 +880,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
@@ -1228,6 +1230,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
+        subject_token=None,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -1236,6 +1239,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
                 "mcp_auth_header": mcp_auth_header,
                 "extra_headers": extra_headers,
                 "stdio_env": stdio_env,
+                "subject_token": subject_token,
             }
         )
         # Return a mock client that doesn't actually connect
@@ -1337,6 +1341,7 @@ async def test_list_tools_single_server_unprefixed_names():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
@@ -1418,6 +1423,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         # When multiple servers, add_prefix should be True -> prefixed names
@@ -1684,6 +1690,7 @@ async def test_list_tools_filters_by_key_team_permissions():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools, but only 2 should be allowed
         tool1 = MagicMock()
@@ -1793,6 +1800,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools
         tool1 = MagicMock()
@@ -1888,6 +1896,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 3 tools
         tool1 = MagicMock()
@@ -1986,6 +1995,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return tools WITH prefix (as they come from MCP server)
         tool1 = MagicMock()
@@ -3026,6 +3036,206 @@ class TestMergeGatewayInitializeInstructions:
             )
 
 
+class TestEnsureUpstreamInitializeInstructionsCached:
+    @pytest.mark.asyncio
+    async def test_skips_when_yaml_instructions_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="yaml-only", instructions="from yaml"
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_already_cached(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cached-only", instructions=None)
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "cached-only"
+        ] = "warm"
+        try:
+            with patch.object(
+                global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+            ) as mock_create:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+            mock_create.assert_not_awaited()
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "cached-only", None
+            )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_spec_path_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="openapi-spec", spec_path="/openapi.json", url=None
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runs_upstream_session_and_caches(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cold-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = "  upstream says hi  "
+
+        with patch.object(
+            global_mcp_server_manager,
+            "_create_mcp_client",
+            AsyncMock(return_value=fake_client),
+        ):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert (
+                    global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+                        "cold-server"
+                    ]
+                    == "upstream says hi"
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                    "cold-server", None
+                )
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "cold-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_empty_upstream_response(self):
+        """Upstream returns no instructions → next call within cooldown must not reconnect."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="empty-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = None  # upstream sent nothing
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect to upstream"
+                )
+                assert (
+                    "empty-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "empty-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "empty-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_upstream_failure(self):
+        """run_with_session raises → cooldown applies, no immediate retry."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="boom-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
+        fake_client._last_initialize_instructions = None
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect after failure"
+                )
+                assert (
+                    "boom-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "boom-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "boom-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_reload_resets_probe_cooldown(self):
+        """load_servers_from_config clears the negative-cache map so reloads re-probe."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_probed_at[
+            "reload-target"
+        ] = 1.0
+        try:
+            await global_mcp_server_manager.load_servers_from_config({})
+            assert (
+                "reload-target"
+                not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+            )
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                "reload-target", None
+            )
+
+
 class TestGatewayCreateInitializationOptions:
     """Tests for the patched server.create_initialization_options via ContextVar."""
 
@@ -3254,3 +3464,137 @@ async def test_call_tool_empty_extra_headers_returns_none():
     ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
         captured_extra_headers
     )
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight upstream auth check tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_returns_upstream_status():
+    """_probe_upstream_auth forwards the status code from the upstream server."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+    mock_client.post.assert_awaited_once()
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer some-token"
+    assert kwargs["json"]["method"] == "initialize"
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_surfaces_httpx_status_error():
+    """Probe extracts status + WWW-Authenticate from httpx.HTTPStatusError.
+
+    AsyncHTTPHandler.post() calls raise_for_status() internally, so when the
+    upstream returns 401/403 the call raises httpx.HTTPStatusError rather than
+    returning the response. The probe must catch that specifically (before the
+    fail-open `except Exception`) so the auth check is not silently defeated.
+    """
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+    request = httpx.Request("POST", "http://upstream/mcp")
+    error = httpx.HTTPStatusError(
+        message="401 Unauthorized", request=request, response=mock_response
+    )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=error)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_fails_open_on_network_error():
+    """_probe_upstream_auth returns (200, None) when the network call fails."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 200
+    assert www_auth is None
+
+
+def test_get_forwarded_auth_from_scope_extracts_header():
+    """Returns Authorization value when x-litellm-api-key is also present."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+            (b"authorization", b"Bearer my-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) == "Bearer my-token"
+
+
+def test_get_forwarded_auth_from_scope_returns_none_when_missing():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    assert _get_forwarded_auth_from_scope({"headers": []}) is None
+
+
+def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
+    """Skip when ``x-litellm-api-key`` is absent.
+
+    Without ``x-litellm-api-key``, the ``Authorization`` header may itself be
+    the LiteLLM proxy API key (backward-compat). Forwarding it upstream would
+    leak the proxy key, so the helper must return None and the probe must
+    not fire.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer ambiguous-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) is None

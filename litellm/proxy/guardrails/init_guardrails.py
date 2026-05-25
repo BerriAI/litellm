@@ -30,6 +30,7 @@ def init_guardrails_v2(
             guardrail=cast(Guardrail, guardrail),
             config_file_path=config_file_path,
             llm_router=llm_router,
+            source="config",
         )
         if initialized_guardrail:
             guardrail_list.append(initialized_guardrail)

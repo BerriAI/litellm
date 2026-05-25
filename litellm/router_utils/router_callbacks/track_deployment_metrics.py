@@ -1,5 +1,5 @@
 """
-Helper functions to get/set num success and num failures per deployment 
+Helper functions to get/set num success and num failures per deployment
 
 
 set_deployment_failures_for_current_minute

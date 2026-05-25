@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -9,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
+from fastapi import status
 
 import litellm
 import litellm.proxy.proxy_server
@@ -29,8 +31,10 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
-    _route_requires_auth_despite_public,
+    _matches_routing_override,
     _reserve_budget_after_common_checks,
+    _route_requires_auth_despite_public,
+    _routing_selector_matches_claim,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
     get_api_key,
@@ -176,6 +180,26 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
             parent_otel_span=None,
         )
         mock_can_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_custom_auth_expired_key_returns_unauthorized():
+    expired_token = UserAPIKeyAuth(
+        token="test_token",
+        expires=datetime.now() - timedelta(minutes=1),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_post_custom_auth_checks(
+            valid_token=expired_token,
+            request=MagicMock(),
+            request_data={},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.expired_key
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.asyncio
@@ -572,6 +596,151 @@ def _assert_get_api_key_with_custom_litellm_key_header(
     ) == (api_key, passed_in_key)
 
 
+@pytest.mark.parametrize(
+    "selector_value, claim_value, expected, split_space_delimited",
+    [
+        (None, "any-value", True, False),
+        ("issuer.example.com", "issuer.example.com", True, False),
+        ("issuer.example.com", "other-issuer.example.com", False, False),
+        # iss (and other non-scope claims) must not match via space-split injection
+        (
+            "trusted.example.com",
+            "trusted.example.com attacker.example.com",
+            False,
+            False,
+        ),
+        # Wildcard iss must not match space-containing claim strings (fnmatch * spans spaces)
+        (
+            "trusted.*",
+            "trusted.example.com attacker.example.com",
+            False,
+            False,
+        ),
+        ("trusted.*", "trusted.example.com", True, False),
+        (
+            ["issuer-a.example.com", "issuer-b.example.com"],
+            "issuer-b.example.com",
+            True,
+            False,
+        ),
+        ("*MID_LITELLM", "STREAM_MID_LITELLM", True, False),
+        ("*MID_LITELLM", "REDIS_LITELLM", False, False),
+        ("machine-??", "machine-01", True, False),
+        ("machine-??", "machine-001", False, False),
+        # Wildcard matching is case-sensitive (fnmatch.fnmatchcase)
+        ("*litellm", "BATCH_LITELLM", False, False),
+        ("*LITELLM", "BATCH_LITELLM", True, False),
+        ("App:LiteLLM", "App:LiteLLM openid", True, True),
+        ("App:*", "App:LiteLLM openid", True, True),
+        (["openid", "App:LiteLLM"], "openid profile", True, True),
+        (["service-*", "batch-*"], "batch-123", True, False),
+        (["service-*", "batch-*"], "other-123", False, False),
+        ("App:LiteLLM", ["openid", "App:LiteLLM"], True, False),
+        ("App:LiteLLM", None, False, False),
+    ],
+)
+def test_routing_selector_matches_claim_parametrized(
+    selector_value, claim_value, expected, split_space_delimited
+):
+    assert (
+        _routing_selector_matches_claim(
+            selector_value=selector_value,
+            claim_value=claim_value,
+            split_space_delimited=split_space_delimited,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "override, token_claims, expected",
+    [
+        # Only iss selector is required and should match.
+        (
+            JWTRoutingOverride(iss="oauth-issuer.example.com", path="oauth2"),
+            {"iss": "oauth-issuer.example.com"},
+            True,
+        ),
+        # Scope selector narrows the match.
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                scope="App:LiteLLM",
+                path="oauth2",
+            ),
+            {"iss": "oauth-issuer.example.com", "scope": "App:LiteLLM openid"},
+            True,
+        ),
+        # client_id wildcard selector narrows the match.
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                client_id="*MID_LITELLM",
+                path="oauth2",
+            ),
+            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_MID_LITELLM"},
+            True,
+        ),
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                client_id="*MID_LITELLM",
+                path="oauth2",
+            ),
+            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_PORTAL"},
+            False,
+        ),
+        # aud selector still works with list claims.
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                aud=["api://litellm", "api://fallback"],
+                path="oauth2",
+            ),
+            {
+                "iss": "oauth-issuer.example.com",
+                "aud": ["api://other", "api://litellm"],
+            },
+            True,
+        ),
+        # All provided selectors are AND-ed.
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                scope="App:LiteLLM",
+                client_id="*MID_LITELLM",
+                path="oauth2",
+            ),
+            {
+                "iss": "oauth-issuer.example.com",
+                "scope": "App:LiteLLM openid",
+                "client_id": "BATCH_MID_LITELLM",
+            },
+            True,
+        ),
+        (
+            JWTRoutingOverride(
+                iss="oauth-issuer.example.com",
+                scope="App:LiteLLM",
+                client_id="*MID_LITELLM",
+                path="oauth2",
+            ),
+            {
+                "iss": "oauth-issuer.example.com",
+                "scope": "App:Other openid",
+                "client_id": "BATCH_MID_LITELLM",
+            },
+            False,
+        ),
+    ],
+)
+def test_matches_routing_override_parametrized(override, token_claims, expected):
+    assert (
+        _matches_routing_override(token_claims=token_claims, override=override)
+        is expected
+    )
+
+
 def test_get_api_key_with_custom_litellm_key_header_bearer_prefix():
     token = "sk-" + "1" * 8
     header = f"Bearer {token}"
@@ -934,6 +1103,7 @@ async def test_proxy_admin_expired_key_from_cache():
             assert (
                 exc_info.value.type == ProxyErrorTypes.expired_key
             ), f"Expected expired_key error type, got {exc_info.value.type}"
+            assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
             assert "Expired Key" in str(
                 exc_info.value.message
             ), f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
@@ -1577,6 +1747,206 @@ class TestJWTOAuth2Coexistence:
             mock_oauth2.assert_called_once_with(token=jwt_token)
             mock_jwt_auth.assert_not_called()
             assert result.user_id == "machine-client-aud-list"
+
+    @pytest.mark.asyncio
+    async def test_routing_override_matches_scope_claim(self):
+        """
+        Match routing override when scope selector is configured and scope claim matches.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJvYXV0aC1pc3N1ZXIuZXhhbXBsZS5jb20iLCJzY29wZSI6IkFwcDpMaXRlTExNIiwiY2xpZW50X2lkIjoiTUFDSElORV9NSURfTElURUxMTSJ9."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=jwt_token,
+            user_id="machine-client-scope-match",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=mock_oauth2_response,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+            ) as mock_jwt_auth,
+        ):
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="oauth-issuer.example.com",
+                            scope="App:LiteLLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=jwt_token)
+            mock_jwt_auth.assert_not_called()
+            assert result.user_id == "machine-client-scope-match"
+
+    @pytest.mark.asyncio
+    async def test_routing_override_scope_mismatch_falls_back_to_jwt(self):
+        """
+        If scope selector does not match, continue default JWT flow.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJvYXV0aC1pc3N1ZXIuZXhhbXBsZS5jb20iLCJzY29wZSI6IkFwcDpPdGhlciIsImNsaWVudF9pZCI6IlBPUlRBTF9NSURfTElURUxMTSJ9."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_jwt_result = {
+            "is_proxy_admin": True,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": "jwt-team",
+            "user_id": "jwt-user-scope-mismatch",
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ) as mock_jwt_auth,
+        ):
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="oauth-issuer.example.com",
+                            scope="App:LiteLLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_not_called()
+            mock_jwt_auth.assert_called_once()
+            assert result.user_id == "jwt-user-scope-mismatch"
+
+    @pytest.mark.asyncio
+    async def test_routing_override_matches_scope_and_client_wildcard_when_scope_claim_is_space_delimited(
+        self,
+    ):
+        """
+        Integration check: combined scope + wildcard selectors match on OAuth2 path
+        when scope claim is a space-delimited string.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJvYXV0aC1pc3N1ZXIuZXhhbXBsZS5jb20iLCJzY29wZSI6IkFwcDpMaXRlTExNIG9wZW5pZCIsImNsaWVudF9pZCI6IkJBVENIX01JRF9MSVRFTExNIn0."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=jwt_token,
+            user_id="machine-client-space-delimited-scope-match",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=mock_oauth2_response,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+            ) as mock_jwt_auth,
+        ):
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="oauth-issuer.example.com",
+                            scope="App:LiteLLM",
+                            client_id="*MID_LITELLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=jwt_token)
+            mock_jwt_auth.assert_not_called()
+            assert result.user_id == "machine-client-space-delimited-scope-match"
 
     @pytest.mark.asyncio
     async def test_routing_override_routes_jwt_to_oauth2_when_oauth2_globally_disabled(
@@ -2964,4 +3334,126 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
         assert result.api_key != hash_token(master_key)
     finally:
         for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
+    """Defense-in-depth: ``_user_api_key_auth_builder`` has multiple
+    early-return paths (master_key=None, /user/auth route, JWT
+    short-circuits) that bypass the end-user resolution block. The wrapper
+    must still attribute spend logs to the request-supplied end-user when
+    none of those paths set it.
+
+    Krrish flagged the removal of this fallback as a regression risk; this
+    test pins the behaviour so future refactors don't silently drop it.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    # builder did NOT set end_user_id (e.g. master_key=None early return)
+    assert builder_token.end_user_id is None
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps(
+        {"model": "gpt-4o", "user": "alice@example.com"}
+    ).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        # Stub the builder so the test doesn't have to traverse the full
+        # auth state machine; we only care about the wrapper's safety net.
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            result = await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+        # Validation flag is False by default → pass-through, raw value lands
+        # on the auth obj instead of being silently dropped.
+        assert result.end_user_id == "alice@example.com"
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder():
+    """When the builder already resolved the end-user id (the primary
+    path), the wrapper-level safety net must not run a second resolution
+    pass — that would re-extract from the request body and could
+    overwrite a value the builder explicitly chose to set."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(
+        api_key="sk-test", user_id="u1", end_user_id="builder-resolved-id"
+    )
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps(
+        {"model": "gpt-4o", "user": "different-id-from-body"}
+    ).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+        ):
+            result = await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+        assert result.end_user_id == "builder-resolved-id"
+        mock_resolve.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

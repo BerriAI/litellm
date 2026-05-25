@@ -19,6 +19,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
+    get_request_route_template,
     is_request_body_safe,
 )
 
@@ -594,6 +595,315 @@ def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
         )
 
     assert result == "user-legacy"
+
+
+class TestCoerceUserIdToStr:
+    """Unit tests for the _coerce_user_id_to_str helper."""
+
+    def test_plain_string_is_returned_verbatim(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str("alice@example.com") == "alice@example.com"
+
+    def test_string_is_stripped(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str("  bob  ") == "bob"
+
+    def test_codex_opaque_identifier_is_preserved(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        codex_id = (
+            "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
+            "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
+        )
+        assert _coerce_user_id_to_str(codex_id) == codex_id
+
+    def test_none_returns_none(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str(None) is None
+
+    def test_empty_string_returns_none(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str("") is None
+        assert _coerce_user_id_to_str("   ") is None
+
+    def test_dict_returns_none(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        payload = {
+            "device_id": "abc",
+            "account_uuid": "",
+            "session_id": "c284b8cb",
+        }
+        assert _coerce_user_id_to_str(payload) is None
+
+    def test_list_returns_none(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str(["a", "b"]) is None
+
+    def test_json_encoded_dict_string_passes_through_by_default(self):
+        """JSON-encoded dict strings are preserved unless opt-in flag is on.
+
+        This preserves backwards compatibility: existing deployments that
+        intentionally pass JSON-encoded user identifiers keep working.
+        """
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        blob = (
+            '{"device_id":"d5abe9199ee7759a0558974e9371e78c7b38d7621aae26d6609c1de61af6afb0",'
+            '"account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+        )
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            assert _coerce_user_id_to_str(blob) == blob
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_json_encoded_dict_string_returns_none_when_validation_enabled(self):
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        # Same broken shape we saw in spend logs, but pre-stringified to JSON.
+        blob = (
+            '{"device_id":"d5abe9199ee7759a0558974e9371e78c7b38d7621aae26d6609c1de61af6afb0",'
+            '"account_uuid":"","session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+        )
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            assert _coerce_user_id_to_str(blob) is None
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_json_encoded_list_string_passes_through_by_default(self):
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            assert _coerce_user_id_to_str('["a","b"]') == '["a","b"]'
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_json_encoded_list_string_returns_none_when_validation_enabled(self):
+        import litellm
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            assert _coerce_user_id_to_str('["a","b"]') is None
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+    def test_int_returns_str(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str(12345) == "12345"
+
+    def test_bool_returns_none(self):
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        # bool is an int subclass — reject explicitly, never produce "True"/"False".
+        assert _coerce_user_id_to_str(True) is None
+        assert _coerce_user_id_to_str(False) is None
+
+    def test_brace_string_that_isnt_json_is_kept(self):
+        """A string starting with `{` but failing to parse stays as-is."""
+        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+
+        assert _coerce_user_id_to_str("{not json") == "{not json"
+
+
+class TestGetEndUserIdDropsMalformedBodyValues:
+    """Tests that get_end_user_id_from_request_body drops dict-shaped values
+    rather than stringifying them into spend logs."""
+
+    def test_dict_user_falls_through_to_litellm_metadata(self):
+        request_body = {
+            "user": {
+                "device_id": "abc",
+                "session_id": "c284b8cb",
+            },
+            "litellm_metadata": {"user": "alice@example.com"},
+        }
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == "alice@example.com"
+
+    def test_dict_user_with_no_other_sources_returns_none(self):
+        request_body = {
+            "user": {"device_id": "abc", "session_id": "xyz"},
+        }
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result is None
+
+    def test_json_encoded_user_string_passes_through_by_default(self):
+        """JSON-encoded user strings pass through unless validation is opted in.
+
+        Gating behind ``litellm.validate_end_user_id_in_db`` keeps existing
+        deployments that send JSON-encoded identifiers working until they
+        explicitly opt into the stricter extraction.
+        """
+        import litellm
+
+        blob = (
+            '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
+            '"session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+        )
+        request_body = {"user": blob}
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = False
+        try:
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                result = get_end_user_id_from_request_body(
+                    request_body=request_body, request_headers={}
+                )
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+        assert result == blob
+
+    def test_json_encoded_user_string_returns_none_when_validation_enabled(self):
+        import litellm
+
+        request_body = {
+            "user": (
+                '{"device_id":"d5abe9199ee7759a","account_uuid":"",'
+                '"session_id":"c284b8cb-a050-4278-8599-cc4e016a10ab"}'
+            ),
+        }
+
+        original = litellm.validate_end_user_id_in_db
+        litellm.validate_end_user_id_in_db = True
+        try:
+            with patch("litellm.proxy.proxy_server.general_settings", {}):
+                result = get_end_user_id_from_request_body(
+                    request_body=request_body, request_headers={}
+                )
+        finally:
+            litellm.validate_end_user_id_in_db = original
+
+        assert result is None
+
+    def test_plain_string_user_is_preserved(self):
+        request_body = {"user": "alice@example.com"}
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == "alice@example.com"
+
+    def test_codex_opaque_user_is_preserved(self):
+        codex_id = (
+            "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
+            "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
+        )
+        request_body = {"user": codex_id}
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == codex_id
+
+    def test_int_user_is_coerced_to_string(self):
+        request_body = {"user": 12345}
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == "12345"
+
+    def test_list_user_falls_through(self):
+        request_body = {
+            "user": ["a", "b"],
+            "safety_identifier": "alice@example.com",
+        }
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == "alice@example.com"
+
+    def test_dict_safety_identifier_returns_none(self):
+        request_body = {
+            "safety_identifier": {"device_id": "abc"},
+        }
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result is None
+
+    def test_dict_metadata_user_id_returns_none(self):
+        request_body = {
+            "metadata": {"user_id": {"device_id": "abc"}},
+        }
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result is None
+
+    def test_whitespace_user_falls_through(self):
+        request_body = {"user": "   ", "safety_identifier": "alice@example.com"}
+
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers={}
+            )
+
+        assert result == "alice@example.com"
+
+    def test_dict_user_header_falls_through_to_body(self):
+        """A dict-shaped value in a configured user-id header is dropped, not stringified."""
+        general_settings = {"user_header_name": "x-custom-user-id"}
+        # A header value will normally be a str, but be defensive: the coercion
+        # must drop anything that isn't a usable identifier.
+        headers = {"x-custom-user-id": {"device_id": "abc"}}
+        request_body = {"user": "alice@example.com"}
+
+        with (
+            patch(
+                "litellm.proxy.auth.auth_utils._get_customer_id_from_standard_headers",
+                return_value=None,
+            ),
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        ):
+            result = get_end_user_id_from_request_body(
+                request_body=request_body, request_headers=headers
+            )
+
+        assert result == "alice@example.com"
 
 
 def _make_deployment_dict(
@@ -1514,3 +1824,103 @@ def test_observability_ban_covers_canonical_supported_callback_params():
             f"{param} is in _request_blocked_callback_params but is not banned "
             "at the proxy request-body boundary."
         )
+
+
+# ── pricing injection (global model cost registry poisoning) ──────────────────
+
+
+class TestPricingInjectionBlocked:
+    """Authenticated clients must not be able to mutate the global
+    litellm.model_cost registry by supplying pricing fields in the request
+    body.  Any CustomPricingLiteLLMParams field (input_cost_per_token etc.)
+    passed to completion() is forwarded to register_model(), which overwrites
+    the shared global dict for ALL users on the instance.
+
+    Fix: all CustomPricingLiteLLMParams fields are in _BANNED_REQUEST_BODY_PARAMS,
+    so is_request_body_safe() rejects them before they reach completion().
+    """
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("input_cost_per_token", -0.01),
+            ("output_cost_per_token", 0.0),
+            ("input_cost_per_second", 999.0),
+            ("output_cost_per_second", -1.0),
+            ("cache_read_input_token_cost", 0.0),
+            ("cache_creation_input_token_cost", -0.05),
+        ],
+    )
+    def test_pricing_field_rejected_by_default(self, field, value):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: value},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert field in str(exc.value)
+
+    def test_all_custom_pricing_fields_are_banned(self):
+        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
+        from litellm.types.utils import CustomPricingLiteLLMParams
+
+        banned = set(_BANNED_REQUEST_BODY_PARAMS)
+        for field in CustomPricingLiteLLMParams.model_fields:
+            assert field in banned, (
+                f"CustomPricingLiteLLMParams.{field} is not in "
+                "_BANNED_REQUEST_BODY_PARAMS — clients can poison the global "
+                "model cost registry by supplying it in the request body."
+            )
+
+    def test_pricing_field_allowed_with_admin_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "input_cost_per_token": 0.00001},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestGetRequestRouteTemplate:
+    """get_request_route_template returns the low-cardinality FastAPI route
+    template (e.g. /v1/threads/{thread_id}/runs) for http.route, distinct
+    from the literal url.path. None when unavailable."""
+
+    def _request(self, scope):
+        req = MagicMock()
+        req.scope = scope
+        return req
+
+    def test_returns_route_template(self):
+        route = MagicMock()
+        route.path = "/v1/threads/{thread_id}/runs"
+        req = self._request({"route": route, "path": "/v1/threads/abc123/runs"})
+        # template, not the literal path — two thread IDs share this value
+        assert get_request_route_template(req) == "/v1/threads/{thread_id}/runs"
+
+    def test_scope_not_dict_returns_none(self):
+        assert get_request_route_template(self._request("not-a-dict")) is None
+
+    def test_no_route_in_scope_returns_none(self):
+        assert get_request_route_template(self._request({"path": "/x"})) is None
+
+    def test_route_without_str_path_returns_none(self):
+        route = MagicMock()
+        route.path = 12345  # not a str
+        assert get_request_route_template(self._request({"route": route})) is None
+
+    def test_route_with_empty_path_returns_none(self):
+        route = MagicMock()
+        route.path = ""
+        assert get_request_route_template(self._request({"route": route})) is None
+
+    def test_exception_returns_none(self):
+        req = MagicMock()
+        type(req).scope = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        assert get_request_route_template(req) is None

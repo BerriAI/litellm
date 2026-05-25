@@ -45,6 +45,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponseStream
+from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -408,6 +409,47 @@ class AmazonAnthropicClaudeMessagesConfig(
             if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    @staticmethod
+    def _filter_context_management_for_bedrock_invoke(
+        anthropic_messages_request: Dict,
+        beta_set: set,
+    ) -> None:
+        """
+        Bedrock InvokeModel accepts ``context_management`` only when it carries
+        ``compact_20260112`` edits paired with the ``compact-2026-01-12``
+        anthropic-beta header. Other edit types (notably ``clear_thinking_20251015``,
+        which Claude Code sends on every request) are LiteLLM-internal and would
+        cause Bedrock to 400 with ``"context_management: Extra inputs are not
+        permitted"``.
+
+        Filter the edits list to the supported subset, add the beta header when
+        compact edits remain, and drop ``context_management`` entirely when no
+        supported edits are left so the safety-net allowlist can pass it through.
+
+        Ref: https://github.com/BerriAI/litellm/issues/27532
+        """
+        cm = anthropic_messages_request.get("context_management")
+        if not isinstance(cm, dict):
+            return
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            anthropic_messages_request.pop("context_management", None)
+            return
+
+        compact_edits = [
+            e
+            for e in edits
+            if isinstance(e, dict) and e.get("type") == "compact_20260112"
+        ]
+        if compact_edits:
+            beta_set.add("compact-2026-01-12")
+            anthropic_messages_request["context_management"] = {
+                **cm,
+                "edits": compact_edits,
+            }
+        else:
+            anthropic_messages_request.pop("context_management", None)
+
     def _convert_output_format_to_inline_schema(
         self,
         output_format: Dict,
@@ -516,7 +558,29 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
-        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
+        # but older models do not — strip it to avoid request rejection.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
+        if not (
+            _supports_factory(
+                model=model,
+                custom_llm_provider="bedrock",
+                key="supports_output_config",
+            )
+            or AnthropicConfig._model_supports_effort_param(model)
+        ):
+            if anthropic_messages_request.pop("output_config", None) is not None:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripping unsupported `output_config` for "
+                    "model=%s — neither `supports_output_config` nor any "
+                    "`supports_*_reasoning_effort` flag is set in "
+                    "model_prices_and_context_window.json. Add the capability "
+                    "flag to the model JSON entry if this model accepts "
+                    "`output_config`.",
+                    model,
+                )
+
+        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -550,6 +614,11 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
+
+        self._filter_context_management_for_bedrock_invoke(
+            anthropic_messages_request=anthropic_messages_request,
+            beta_set=beta_set,
+        )
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -597,8 +666,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request.pop("output_config", None)
 
         # 7. Final safety net: filter top-level fields to the Bedrock Invoke allowlist.
-        # Catches Anthropic-only extensions (context_management, output_config, speed,
-        # mcp_servers, ...) and any future additions Claude Code may start sending.
+        # Catches Anthropic-only extensions (output_config, speed, mcp_servers, ...)
+        # and any future additions Claude Code may start sending. ``context_management``
+        # has already been pre-filtered to its Bedrock-supported subset above.
         allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
         stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:

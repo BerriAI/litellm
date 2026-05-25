@@ -10,9 +10,11 @@ import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.utils import CustomPricingLiteLLMParams
 
 
 def _get_request_ip_address(
@@ -169,9 +171,13 @@ def _allow_model_level_clientside_configurable_parameters(
 
 # Config dicts whose entries are spread as ``**dict`` into outbound LLM
 # API calls. ``litellm_embedding_config`` is consumed by the Milvus
-# vector store transformer; future nested-config keys with the same
-# threat shape should be added here.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+# vector store transformer. ``extra_body`` is the OpenAI-SDK passthrough
+# container: provider modules pull provider-auth fields out of it
+# (e.g. Azure's ``extra_body.azure_ad_token``, Bedrock's
+# ``extra_body.aws_web_identity_token``) without re-validating, so the
+# banned-key check has to descend into it the same way it descends into
+# ``litellm_embedding_config``.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -246,6 +252,13 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_web_identity_token",
     "aws_role_name",
     "vertex_credentials",
+    # Azure managed-identity / federated-auth token. The Azure provider
+    # transformer reads ``azure_ad_token`` (top-level or via
+    # ``extra_body``) and resolves it through ``get_secret`` before
+    # passing it as the bearer token to the Azure endpoint, so a
+    # caller-supplied value is the same exfil shape as
+    # ``aws_web_identity_token`` on the Bedrock path.
+    "azure_ad_token",
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
@@ -265,6 +278,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # integrations are covered automatically. Sorted for stable iteration
     # order and reviewable diffs.
     *sorted(_build_banned_observability_params()),
+    *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
 
@@ -341,8 +355,8 @@ def is_request_body_safe(
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
     for nested_key in _NESTED_CONFIG_KEYS:
-        nested = request_body.get(nested_key)
-        if isinstance(nested, dict):
+        nested = _coerce_metadata_to_dict(request_body.get(nested_key))
+        if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
@@ -489,18 +503,43 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        if hasattr(request, "base_url") and request.url.path.startswith(
-            request.base_url.path
-        ):
-            # remove base_url from path
-            return request.url.path[len(request.base_url.path) - 1 :]
-        else:
-            return request.url.path
+        scope = request.scope
+        if not isinstance(scope, dict):
+            return str(request.url.path)
+        raw_path: str = str(scope.get("path", request.url.path))
+        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        if not isinstance(raw_path, str):
+            return str(request.url.path)
+        # Only strip root_path when it is a meaningful prefix (not bare "/").
+        # Stripping bare "/" would remove the leading slash from every path
+        # e.g. "/team/new" → "team/new", breaking route matching.
+        if root_path and root_path != "/" and raw_path.startswith(root_path):
+            return raw_path[len(root_path) :]
+        return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
             f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
         )
-        return request.url.path
+        return str(request.url.path)
+
+
+def get_request_route_template(request: Request) -> Optional[str]:
+    """
+    Return the low-cardinality route template, e.g.
+    ``/v1/threads/{thread_id}/runs`` (vs. the literal path from
+    ``get_request_route``). FastAPI sets ``scope["route"]`` before endpoint
+    dependencies run. Returns None if unavailable (unmatched path, Mount).
+    """
+    try:
+        scope = request.scope
+        if not isinstance(scope, dict):
+            return None
+        route = scope.get("route")
+        template = getattr(route, "path", None)
+        return template if isinstance(template, str) and template else None
+    except Exception as e:
+        verbose_proxy_logger.debug(f"error on get_request_route_template: {str(e)}")
+        return None
 
 
 @lru_cache(maxsize=256)
@@ -970,9 +1009,44 @@ def _get_customer_id_from_standard_headers(
     for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
         for header_name, header_value in request_headers.items():
             if header_name.lower() == standard_header.lower():
-                user_id_str = str(header_value) if header_value is not None else ""
-                if user_id_str.strip():
+                user_id_str = _coerce_user_id_to_str(header_value)
+                if user_id_str:
                     return user_id_str
+    return None
+
+
+def _coerce_user_id_to_str(value: Any) -> Optional[str]:
+    """Return a usable end-user identifier string, or None if the value isn't one.
+
+    Always drops non-string structured values (dict/list/tuple/set) because
+    stringifying them produces garbage spend-log rows like
+    ``"{'device_id': ...}"``. Strings that *decode* to a structured payload
+    are only rejected when ``litellm.validate_end_user_id_in_db`` is enabled
+    — operators who currently pass JSON-encoded identifiers keep their
+    existing behavior until they opt in. See
+    auth_utils.py:get_end_user_id_from_request_body for the extraction chain.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # bool is an int subclass; handle explicitly to avoid "True"/"False".
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        # Reject strings that decode to a structured payload (JSON object/array)
+        # only when the operator has opted into end-user validation. Gating
+        # behind the flag preserves backwards compatibility for deployments
+        # that intentionally pass JSON-encoded user identifiers.
+        if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
+            parsed = safe_json_loads(stripped)
+            if isinstance(parsed, (dict, list)):
+                return None
+        return stripped
+    # dict, list, tuple, set, arbitrary objects -> drop.
     return None
 
 
@@ -1014,23 +1088,22 @@ def get_end_user_id_from_request_body(
         if isinstance(custom_header_name_to_check, list):
             headers_lower = {k.lower(): v for k, v in request_headers.items()}
             for expected_header in custom_header_name_to_check:
-                header_value = headers_lower.get(expected_header)
-                if header_value is not None:
-                    user_id_str = str(header_value)
-                    if user_id_str.strip():
-                        return user_id_str
+                user_id_str = _coerce_user_id_to_str(headers_lower.get(expected_header))
+                if user_id_str:
+                    return user_id_str
 
         elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_str = str(header_value) if header_value is not None else ""
-                    if user_id_str.strip():
+                    user_id_str = _coerce_user_id_to_str(header_value)
+                    if user_id_str:
                         return user_id_str
 
     # Check 3: 'user' field in request_body (commonly OpenAI)
-    if "user" in request_body and request_body["user"] is not None:
-        user_from_body_user_field = request_body["user"]
-        return str(user_from_body_user_field)
+    if "user" in request_body:
+        user_id_str = _coerce_user_id_to_str(request_body["user"])
+        if user_id_str:
+            return user_id_str
 
     def _as_dict(value: Any) -> dict:
         # metadata / litellm_metadata can arrive as JSON strings from
@@ -1039,32 +1112,30 @@ def get_end_user_id_from_request_body(
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
-            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-
             parsed = safe_json_loads(value)
             return parsed if isinstance(parsed, dict) else {}
         return {}
 
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
     litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
-    user_from_litellm_metadata = litellm_metadata.get("user")
-    if user_from_litellm_metadata is not None:
-        return str(user_from_litellm_metadata)
+    user_id_str = _coerce_user_id_to_str(litellm_metadata.get("user"))
+    if user_id_str:
+        return user_id_str
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
     metadata_dict = _as_dict(request_body.get("metadata"))
-    user_id_from_metadata_field = metadata_dict.get("user_id")
-    if user_id_from_metadata_field is not None:
-        return str(user_id_from_metadata_field)
+    user_id_str = _coerce_user_id_to_str(metadata_dict.get("user_id"))
+    if user_id_str:
+        return user_id_str
 
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
     # Only use this for end-user identification in trusted environments where you control
     # the calling application. For untrusted callers, prefer using headers or server-side
     # middleware to set the end_user_id to prevent impersonation.
-    if request_body.get("safety_identifier") is not None:
-        user_from_body_user_field = request_body["safety_identifier"]
-        return str(user_from_body_user_field)
+    user_id_str = _coerce_user_id_to_str(request_body.get("safety_identifier"))
+    if user_id_str:
+        return user_id_str
 
     return None
 
