@@ -627,6 +627,29 @@ async def cli_sso_complete(request: Request, login_id: str):
     return HTMLResponse(content=html_content, status_code=200)
 
 
+_OIDC_PROVIDER_GENERIC: Literal["generic"] = "generic"
+_OIDC_PROVIDER_OKTA: Literal["okta"] = "okta"
+_OIDC_PROVIDER_NAMES = Literal["generic", "okta"]
+
+
+def _get_oidc_env_prefix(provider: _OIDC_PROVIDER_NAMES) -> str:
+    return "OKTA" if provider == _OIDC_PROVIDER_OKTA else "GENERIC"
+
+
+def _get_okta_endpoint_from_issuer(
+    okta_issuer: Optional[str], endpoint: str
+) -> Optional[str]:
+    if not okta_issuer:
+        return None
+    return f"{okta_issuer.rstrip('/')}/v1/{endpoint}"
+
+
+def _is_oidc_pkce_enabled(provider: _OIDC_PROVIDER_NAMES) -> bool:
+    env_prefix = _get_oidc_env_prefix(provider)
+    default_value = "true" if provider == _OIDC_PROVIDER_OKTA else "false"
+    return os.getenv(f"{env_prefix}_CLIENT_USE_PKCE", default_value).lower() == "true"
+
+
 def normalize_email(email: Optional[str]) -> Optional[str]:
     """
     Normalize email address to lowercase for consistent storage and comparison.
@@ -841,6 +864,7 @@ async def google_login(
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    okta_client_id = os.getenv("OKTA_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     ####### Check if UI is disabled #######
@@ -854,6 +878,7 @@ async def google_login(
     if (
         microsoft_client_id is not None
         or google_client_id is not None
+        or okta_client_id is not None
         or generic_client_id is not None
     ):
         if premium_user is not True:
@@ -862,7 +887,7 @@ async def google_login(
                 total_users = await prisma_client.db.litellm_usertable.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `OKTA_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -916,6 +941,7 @@ async def google_login(
         SSOAuthenticationHandler.should_use_sso_handler(
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
+            okta_client_id=okta_client_id,
             generic_client_id=generic_client_id,
         )
         is True
@@ -925,6 +951,7 @@ async def google_login(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
+            okta_client_id=okta_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
             request=request,
@@ -951,37 +978,61 @@ async def google_login(
         return HTMLResponse(content=html_form, status_code=200)
 
 
-def generic_response_convertor(
+def generic_response_convertor(  # noqa: PLR0915
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
     role_mappings: Optional["RoleMappings"] = None,
     team_mappings: Optional["TeamMappings"] = None,
+    provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
 ) -> CustomOpenID:
+    env_prefix = _get_oidc_env_prefix(provider)
+    user_id_default = "sub" if provider == _OIDC_PROVIDER_OKTA else "preferred_username"
+    display_name_default = "name" if provider == _OIDC_PROVIDER_OKTA else "sub"
+    first_name_default = (
+        "given_name" if provider == _OIDC_PROVIDER_OKTA else "first_name"
+    )
+    last_name_default = (
+        "family_name" if provider == _OIDC_PROVIDER_OKTA else "last_name"
+    )
+    provider_default = "iss" if provider == _OIDC_PROVIDER_OKTA else "provider"
+
     generic_user_id_attribute_name = os.getenv(
-        "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+        f"{env_prefix}_USER_ID_ATTRIBUTE",
+        os.getenv("GENERIC_USER_ID_ATTRIBUTE", user_id_default),
     )
     generic_user_display_name_attribute_name = os.getenv(
-        "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
+        f"{env_prefix}_USER_DISPLAY_NAME_ATTRIBUTE",
+        os.getenv("GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", display_name_default),
     )
     generic_user_email_attribute_name = os.getenv(
-        "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+        f"{env_prefix}_USER_EMAIL_ATTRIBUTE",
+        os.getenv("GENERIC_USER_EMAIL_ATTRIBUTE", "email"),
     )
 
     generic_user_first_name_attribute_name = os.getenv(
-        "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+        f"{env_prefix}_USER_FIRST_NAME_ATTRIBUTE",
+        os.getenv("GENERIC_USER_FIRST_NAME_ATTRIBUTE", first_name_default),
     )
     generic_user_last_name_attribute_name = os.getenv(
-        "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+        f"{env_prefix}_USER_LAST_NAME_ATTRIBUTE",
+        os.getenv("GENERIC_USER_LAST_NAME_ATTRIBUTE", last_name_default),
     )
 
     generic_provider_attribute_name = os.getenv(
-        "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+        f"{env_prefix}_USER_PROVIDER_ATTRIBUTE",
+        os.getenv("GENERIC_USER_PROVIDER_ATTRIBUTE", provider_default),
     )
 
-    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
+    generic_user_role_attribute_name = os.getenv(
+        f"{env_prefix}_USER_ROLE_ATTRIBUTE",
+        os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role"),
+    )
 
-    generic_user_extra_attributes = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
+    generic_user_extra_attributes = os.getenv(
+        f"{env_prefix}_USER_EXTRA_ATTRIBUTES",
+        os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None),
+    )
 
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
@@ -1081,45 +1132,66 @@ def generic_response_convertor(
 
 
 def _setup_generic_sso_env_vars(
-    generic_client_id: str, redirect_url: str
-) -> Tuple[str, List[str], str, str, str, bool]:
-    """Setup and validate Generic SSO environment variables."""
-    generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-    generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
-    generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
-    generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
-    generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+    generic_client_id: str,
+    redirect_url: str,
+    provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
+) -> Tuple[Optional[str], List[str], str, str, str, bool]:
+    """Setup and validate Generic/Okta SSO environment variables."""
+    env_prefix = _get_oidc_env_prefix(provider)
+    provider_label = "Okta" if provider == _OIDC_PROVIDER_OKTA else "Generic"
+    default_scope = (
+        "openid email profile groups"
+        if provider == _OIDC_PROVIDER_OKTA
+        else "openid email profile"
+    )
+    generic_client_secret = os.getenv(f"{env_prefix}_CLIENT_SECRET", None)
+    generic_scope = os.getenv(f"{env_prefix}_SCOPE", default_scope).split(" ")
+
+    okta_issuer = (
+        os.getenv("OKTA_ISSUER", None) if provider == _OIDC_PROVIDER_OKTA else None
+    )
+    generic_authorization_endpoint = os.getenv(
+        f"{env_prefix}_AUTHORIZATION_ENDPOINT", None
+    ) or _get_okta_endpoint_from_issuer(okta_issuer, "authorize")
+    generic_token_endpoint = os.getenv(
+        f"{env_prefix}_TOKEN_ENDPOINT", None
+    ) or _get_okta_endpoint_from_issuer(okta_issuer, "token")
+    generic_userinfo_endpoint = os.getenv(
+        f"{env_prefix}_USERINFO_ENDPOINT", None
+    ) or _get_okta_endpoint_from_issuer(okta_issuer, "userinfo")
     generic_include_client_id = (
-        os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
+        os.getenv(f"{env_prefix}_INCLUDE_CLIENT_ID", "false").lower() == "true"
     )
 
     # Validate required environment variables
-    if generic_client_secret is None:
+    if generic_client_secret is None and not _is_oidc_pkce_enabled(provider):
         raise ProxyException(
-            message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
+            message=f"{env_prefix}_CLIENT_SECRET not set. Set it in .env file",
             type=ProxyErrorTypes.auth_error,
-            param="GENERIC_CLIENT_SECRET",
+            param=f"{env_prefix}_CLIENT_SECRET",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if generic_authorization_endpoint is None:
         raise ProxyException(
-            message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
+            message=(
+                f"{env_prefix}_AUTHORIZATION_ENDPOINT not set. " f"Set it in .env file"
+            ),
             type=ProxyErrorTypes.auth_error,
-            param="GENERIC_AUTHORIZATION_ENDPOINT",
+            param=f"{env_prefix}_AUTHORIZATION_ENDPOINT",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if generic_token_endpoint is None:
         raise ProxyException(
-            message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
+            message=f"{env_prefix}_TOKEN_ENDPOINT not set. Set it in .env file",
             type=ProxyErrorTypes.auth_error,
-            param="GENERIC_TOKEN_ENDPOINT",
+            param=f"{env_prefix}_TOKEN_ENDPOINT",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if generic_userinfo_endpoint is None:
         raise ProxyException(
-            message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
+            message=f"{env_prefix}_USERINFO_ENDPOINT not set. Set it in .env file",
             type=ProxyErrorTypes.auth_error,
-            param="GENERIC_USERINFO_ENDPOINT",
+            param=f"{env_prefix}_USERINFO_ENDPOINT",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -1127,7 +1199,8 @@ def _setup_generic_sso_env_vars(
         f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
     )
     verbose_proxy_logger.debug(
-        f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+        f"{provider_label.upper()}_REDIRECT_URI: {redirect_url}\n"
+        f"{env_prefix}_CLIENT_ID: {generic_client_id}\n"
     )
 
     return (
@@ -1252,9 +1325,11 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     return role_mappings
 
 
-def _parse_generic_sso_headers() -> dict:
-    """Parse comma-separated GENERIC_SSO_HEADERS env var into a dict."""
-    raw = os.getenv("GENERIC_SSO_HEADERS", None)
+def _parse_generic_sso_headers(
+    provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
+) -> dict:
+    """Parse comma-separated *_SSO_HEADERS env var into a dict."""
+    raw = os.getenv(f"{_get_oidc_env_prefix(provider)}_SSO_HEADERS", None)
     if raw is None:
         return {}
     result: Dict[str, str] = {}
@@ -1271,6 +1346,7 @@ def _handle_generic_sso_error(
     generic_authorization_endpoint: Optional[str],
     generic_token_endpoint: Optional[str],
     additional_headers: dict,
+    provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
 ) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message = str(e)
@@ -1278,7 +1354,9 @@ def _handle_generic_sso_error(
     # Surface a helpful PKCE misconfiguration hint only when:
     # 1. The error mentions PKCE/code verifier, AND
     # 2. PKCE is not currently configured (GENERIC_CLIENT_USE_PKCE != true)
-    pkce_configured = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+    env_prefix = _get_oidc_env_prefix(provider)
+    pkce_env_var = f"{env_prefix}_CLIENT_USE_PKCE"
+    pkce_configured = _is_oidc_pkce_enabled(provider)
     if not pkce_configured and (
         "PKCE" in error_message or "code verifier" in error_message.lower()
     ):
@@ -1286,26 +1364,30 @@ def _handle_generic_sso_error(
             generic_authorization_endpoint
             and "okta" in generic_authorization_endpoint.lower()
         ) or (generic_token_endpoint and "okta" in generic_token_endpoint.lower())
-        provider_name = "Okta" if is_okta else "Your OAuth provider"
+        provider_name = (
+            "Okta"
+            if provider == _OIDC_PROVIDER_OKTA or is_okta
+            else "Your OAuth provider"
+        )
 
         detailed_message = (
             f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
             f"but it's not enabled in your LiteLLM configuration.\n\n"
             f"SOLUTION: Add this environment variable and restart your proxy:\n"
-            f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
+            f"  {pkce_env_var}=true\n\n"
         )
-        if is_okta:
+        if provider == _OIDC_PROVIDER_OKTA or is_okta:
             detailed_message += (
                 "For AWS ECS: Add the environment variable to your task definition.\n"
-                "For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
-                "For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
+                f"For Docker: Add -e {pkce_env_var}=true to your docker run command.\n"
+                f"For .env file: Add {pkce_env_var}=true to your .env file.\n\n"
             )
         detailed_message += f"Original error: {error_message}"
 
         raise ProxyException(
             message=detailed_message,
             type=ProxyErrorTypes.auth_error,
-            param="GENERIC_CLIENT_USE_PKCE",
+            param=pkce_env_var,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -1332,6 +1414,7 @@ async def get_generic_sso_response(
     ],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
+    provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
 ) -> Tuple[
     Union[OpenID, dict], Optional[dict], Optional[dict]
 ]:  # (result, received_response, access_token_payload)
@@ -1349,7 +1432,11 @@ async def get_generic_sso_response(
         generic_token_endpoint,
         generic_userinfo_endpoint,
         generic_include_client_id,
-    ) = _setup_generic_sso_env_vars(generic_client_id, redirect_url)
+    ) = _setup_generic_sso_env_vars(
+        generic_client_id=generic_client_id,
+        redirect_url=redirect_url,
+        provider=provider,
+    )
 
     discovery = DiscoveryDocument(
         authorization_endpoint=generic_authorization_endpoint,
@@ -1369,6 +1456,7 @@ async def get_generic_sso_response(
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
             team_mappings=team_mappings,
+            provider=provider,
         )
 
     SSOProvider = create_provider(
@@ -1384,7 +1472,7 @@ async def get_generic_sso_response(
         scope=generic_scope,
     )
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-    additional_generic_sso_headers_dict = _parse_generic_sso_headers()
+    additional_generic_sso_headers_dict = _parse_generic_sso_headers(provider)
 
     code_verifier: Optional[str] = (
         None  # assigned inside try; initialized for type tracking
@@ -1396,6 +1484,7 @@ async def get_generic_sso_response(
             await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=request,
                 generic_include_client_id=generic_include_client_id,
+                provider=provider,
             )
         )
 
@@ -1441,17 +1530,19 @@ async def get_generic_sso_response(
                     code=status.HTTP_400_BAD_REQUEST,
                 )
             if not generic_client_id:
+                client_id_env = f"{_get_oidc_env_prefix(provider)}_CLIENT_ID"
                 raise ProxyException(
-                    message="GENERIC_CLIENT_ID must be set when PKCE is enabled",
+                    message=f"{client_id_env} must be set when PKCE is enabled",
                     type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_CLIENT_ID",
+                    param=client_id_env,
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             if not generic_token_endpoint:
+                token_endpoint_env = f"{_get_oidc_env_prefix(provider)}_TOKEN_ENDPOINT"
                 raise ProxyException(
-                    message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
+                    message=(f"{token_endpoint_env} must be set when PKCE is enabled"),
                     type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_TOKEN_ENDPOINT",
+                    param=token_endpoint_env,
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             # All guards above raise, so authorization_code is a non-empty str here.
@@ -1516,6 +1607,7 @@ async def get_generic_sso_response(
             generic_authorization_endpoint,
             generic_token_endpoint,
             additional_generic_sso_headers_dict,
+            provider,
         )
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}, received_response, access_token_payload
@@ -1868,6 +1960,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    okta_client_id = os.getenv("OKTA_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
     received_response: Optional[dict] = None
     access_token_payload: Optional[dict] = None
@@ -1896,6 +1989,20 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
+        )
+
+    elif okta_client_id is not None:
+        (
+            result,
+            received_response,
+            access_token_payload,
+        ) = await get_generic_sso_response(
+            request=request,
+            jwt_handler=jwt_handler,
+            generic_client_id=okta_client_id,
+            redirect_url=redirect_url,
+            sso_jwt_handler=sso_jwt_handler,
+            provider=_OIDC_PROVIDER_OKTA,
         )
 
     elif generic_client_id is not None:
@@ -1938,7 +2045,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         result=result,
         request=request,
         received_response=received_response,
-        generic_client_id=generic_client_id,
+        generic_client_id=generic_client_id or okta_client_id,
         ui_access_mode=ui_access_mode,
         access_token_payload=access_token_payload,
         jwt_handler=jwt_handler,
@@ -2406,13 +2513,14 @@ async def get_ui_settings(request: Request):
     tags=["experimental"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def sso_readiness():
+async def sso_readiness():  # noqa: PLR0915
     """
     Health endpoint for checking SSO readiness.
     Checks if the configured SSO provider has all required environment variables set in memory.
     """
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    okta_client_id = os.getenv("OKTA_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     # Determine which SSO provider is configured
@@ -2421,6 +2529,8 @@ async def sso_readiness():
         configured_provider = "google"
     elif microsoft_client_id is not None:
         configured_provider = "microsoft"
+    elif okta_client_id is not None:
+        configured_provider = "okta"
     elif generic_client_id is not None:
         configured_provider = "generic"
 
@@ -2448,6 +2558,23 @@ async def sso_readiness():
         if microsoft_tenant is None:
             missing_vars.append("MICROSOFT_TENANT")
 
+    elif configured_provider == "okta":
+        okta_client_secret = os.getenv("OKTA_CLIENT_SECRET", None)
+        okta_issuer = os.getenv("OKTA_ISSUER", None)
+        okta_authorization_endpoint = os.getenv("OKTA_AUTHORIZATION_ENDPOINT", None)
+        okta_token_endpoint = os.getenv("OKTA_TOKEN_ENDPOINT", None)
+        okta_userinfo_endpoint = os.getenv("OKTA_USERINFO_ENDPOINT", None)
+        if okta_client_secret is None and not _is_oidc_pkce_enabled(
+            _OIDC_PROVIDER_OKTA
+        ):
+            missing_vars.append("OKTA_CLIENT_SECRET")
+        if okta_issuer is None and okta_authorization_endpoint is None:
+            missing_vars.append("OKTA_ISSUER or OKTA_AUTHORIZATION_ENDPOINT")
+        if okta_issuer is None and okta_token_endpoint is None:
+            missing_vars.append("OKTA_ISSUER or OKTA_TOKEN_ENDPOINT")
+        if okta_issuer is None and okta_userinfo_endpoint is None:
+            missing_vars.append("OKTA_ISSUER or OKTA_USERINFO_ENDPOINT")
+
     elif configured_provider == "generic":
         generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
         generic_authorization_endpoint = os.getenv(
@@ -2455,7 +2582,9 @@ async def sso_readiness():
         )
         generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
         generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
-        if generic_client_secret is None:
+        if generic_client_secret is None and not _is_oidc_pkce_enabled(
+            _OIDC_PROVIDER_GENERIC
+        ):
             missing_vars.append("GENERIC_CLIENT_SECRET")
         if generic_authorization_endpoint is None:
             missing_vars.append("GENERIC_AUTHORIZATION_ENDPOINT")
@@ -2527,6 +2656,7 @@ class SSOAuthenticationHandler:
         redirect_url: str,
         google_client_id: Optional[str] = None,
         microsoft_client_id: Optional[str] = None,
+        okta_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
         request: Optional[Request] = None,
@@ -2538,6 +2668,7 @@ class SSOAuthenticationHandler:
             redirect_url (str): The URL to redirect the user to after login
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
+            okta_client_id (Optional[str], optional): The Okta Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
             request: Optional FastAPI request, used to drive the ``Secure``
                 attribute on the ``litellm_oauth_state`` CSRF cookie.
@@ -2587,52 +2718,30 @@ class SSOAuthenticationHandler:
             )
             with microsoft_sso:
                 return await microsoft_sso.get_login_redirect(state=state)
-        elif generic_client_id is not None:
+        elif okta_client_id is not None or generic_client_id is not None:
             from fastapi_sso.sso.base import DiscoveryDocument
             from fastapi_sso.sso.generic import create_provider
 
-            generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-            generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(
-                " "
+            oidc_provider: _OIDC_PROVIDER_NAMES = (
+                _OIDC_PROVIDER_OKTA
+                if okta_client_id is not None
+                else _OIDC_PROVIDER_GENERIC
             )
-            generic_authorization_endpoint = os.getenv(
-                "GENERIC_AUTHORIZATION_ENDPOINT", None
-            )
-            generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
-            generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
-            if generic_client_secret is None:
-                raise ProxyException(
-                    message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                    type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_CLIENT_SECRET",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            if generic_authorization_endpoint is None:
-                raise ProxyException(
-                    message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                    type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_AUTHORIZATION_ENDPOINT",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            if generic_token_endpoint is None:
-                raise ProxyException(
-                    message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                    type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_TOKEN_ENDPOINT",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            if generic_userinfo_endpoint is None:
-                raise ProxyException(
-                    message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                    type=ProxyErrorTypes.auth_error,
-                    param="GENERIC_USERINFO_ENDPOINT",
-                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-            verbose_proxy_logger.debug(
-                f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
-            )
-            verbose_proxy_logger.debug(
-                f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+            oidc_client_id = okta_client_id or generic_client_id
+            if oidc_client_id is None:
+                raise ValueError("OIDC client ID is required for SSO login redirect")
+
+            (
+                generic_client_secret,
+                generic_scope,
+                generic_authorization_endpoint,
+                generic_token_endpoint,
+                generic_userinfo_endpoint,
+                _,
+            ) = _setup_generic_sso_env_vars(
+                generic_client_id=oidc_client_id,
+                redirect_url=redirect_url,
+                provider=oidc_provider,
             )
             discovery = DiscoveryDocument(
                 authorization_endpoint=generic_authorization_endpoint,
@@ -2641,7 +2750,7 @@ class SSOAuthenticationHandler:
             )
             SSOProvider = create_provider(name="oidc", discovery_document=discovery)
             generic_sso = SSOProvider(
-                client_id=generic_client_id,
+                client_id=oidc_client_id,
                 client_secret=generic_client_secret,
                 redirect_uri=redirect_url,
                 allow_insecure_http=True,
@@ -2652,6 +2761,7 @@ class SSOAuthenticationHandler:
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
                 request=request,
+                provider=oidc_provider,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2663,6 +2773,7 @@ class SSOAuthenticationHandler:
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
         request: Optional[Request] = None,
+        provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2685,6 +2796,7 @@ class SSOAuthenticationHandler:
             ) = SSOAuthenticationHandler._get_generic_sso_redirect_params(
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                provider=provider,
             )
 
             # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
@@ -2776,6 +2888,7 @@ class SSOAuthenticationHandler:
     def _get_generic_sso_redirect_params(
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
     ) -> Tuple[dict, Optional[str]]:
         """
         Get redirect parameters for Generic SSO with proper state priority handling.
@@ -2810,9 +2923,8 @@ class SSOAuthenticationHandler:
             else:
                 redirect_params["state"] = uuid.uuid4().hex
 
-        # Handle PKCE (Proof Key for Code Exchange) if enabled
-        # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
-        use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+        # Handle PKCE (Proof Key for Code Exchange) if enabled.
+        use_pkce = _is_oidc_pkce_enabled(provider)
 
         if use_pkce:
             (
@@ -2829,11 +2941,13 @@ class SSOAuthenticationHandler:
     def should_use_sso_handler(
         google_client_id: Optional[str] = None,
         microsoft_client_id: Optional[str] = None,
+        okta_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
     ) -> bool:
         if (
             google_client_id is not None
             or microsoft_client_id is not None
+            or okta_client_id is not None
             or generic_client_id is not None
         ):
             return True
@@ -3383,6 +3497,7 @@ class SSOAuthenticationHandler:
     async def prepare_token_exchange_parameters(
         request: Request,
         generic_include_client_id: bool,
+        provider: _OIDC_PROVIDER_NAMES = _OIDC_PROVIDER_GENERIC,
     ) -> dict:
         """
         Prepare token exchange parameters for Generic SSO.
@@ -3398,20 +3513,22 @@ class SSOAuthenticationHandler:
         token_params: Dict[str, Any] = {"include_client_id": generic_include_client_id}
 
         # Retrieve PKCE code_verifier if PKCE was used in authorization.
-        # Gate on GENERIC_CLIENT_USE_PKCE to avoid an unnecessary Redis round-trip
+        # Gate on provider-specific PKCE config to avoid an unnecessary Redis round-trip
         # on every non-PKCE SSO callback.
         query_params = dict(request.query_params)
         state = query_params.get("state")
 
-        use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+        use_pkce = _is_oidc_pkce_enabled(provider)
 
         if use_pkce and not state:
+            pkce_env_var = f"{_get_oidc_env_prefix(provider)}_CLIENT_USE_PKCE"
             verbose_proxy_logger.warning(
-                "PKCE is enabled (GENERIC_CLIENT_USE_PKCE=true) but no 'state' parameter "
+                "PKCE is enabled (%s=true) but no 'state' parameter "
                 "was found in the callback. The PKCE verifier cannot be retrieved without "
                 "a state value — the token exchange will proceed without code_verifier, "
                 "which the provider may reject. Ensure your OAuth provider returns 'state' "
-                "in the callback redirect."
+                "in the callback redirect.",
+                pkce_env_var,
             )
 
         if state and use_pkce:
@@ -4351,17 +4468,19 @@ async def debug_sso_login(request: Request):
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    okta_client_id = os.getenv("OKTA_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
         microsoft_client_id is not None
         or google_client_id is not None
+        or okta_client_id is not None
         or generic_client_id is not None
     ):
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `OKTA_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
@@ -4378,6 +4497,7 @@ async def debug_sso_login(request: Request):
         SSOAuthenticationHandler.should_use_sso_handler(
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
+            okta_client_id=okta_client_id,
             generic_client_id=generic_client_id,
         )
         is True
@@ -4386,6 +4506,7 @@ async def debug_sso_login(request: Request):
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
+            okta_client_id=okta_client_id,
             generic_client_id=generic_client_id,
             request=request,
         )
@@ -4426,6 +4547,7 @@ async def debug_sso_callback(request: Request):
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    okta_client_id = os.getenv("OKTA_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
@@ -4450,6 +4572,16 @@ async def debug_sso_callback(request: Request):
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=True,
+        )
+
+    elif okta_client_id is not None:
+        result, _, _ = await get_generic_sso_response(
+            request=request,
+            jwt_handler=jwt_handler,
+            generic_client_id=okta_client_id,
+            redirect_url=redirect_url,
+            sso_jwt_handler=sso_jwt_handler,
+            provider=_OIDC_PROVIDER_OKTA,
         )
 
     elif generic_client_id is not None:

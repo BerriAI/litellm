@@ -1553,6 +1553,10 @@ class TestSSOHandlerIntegration:
             is True
         )
         assert (
+            SSOAuthenticationHandler.should_use_sso_handler(okta_client_id="test")
+            is True
+        )
+        assert (
             SSOAuthenticationHandler.should_use_sso_handler(generic_client_id="test")
             is True
         )
@@ -1562,6 +1566,68 @@ class TestSSOHandlerIntegration:
         assert (
             SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
         )
+
+    @patch.dict(
+        os.environ,
+        {
+            "OKTA_CLIENT_SECRET": "test-okta-secret",
+            "OKTA_ISSUER": "https://example.okta.com/oauth2/default",
+        },
+        clear=True,
+    )
+    def test_setup_okta_sso_env_vars_from_issuer(self):
+        """Okta SSO derives standard OIDC endpoints from OKTA_ISSUER."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _OIDC_PROVIDER_OKTA,
+            _setup_generic_sso_env_vars,
+        )
+
+        (
+            client_secret,
+            scope,
+            authorization_endpoint,
+            token_endpoint,
+            userinfo_endpoint,
+            include_client_id,
+        ) = _setup_generic_sso_env_vars(
+            generic_client_id="okta-client-id",
+            redirect_url="https://litellm.example.com/sso/callback",
+            provider=_OIDC_PROVIDER_OKTA,
+        )
+
+        assert client_secret == "test-okta-secret"
+        assert scope == ["openid", "email", "profile", "groups"]
+        assert (
+            authorization_endpoint
+            == "https://example.okta.com/oauth2/default/v1/authorize"
+        )
+        assert token_endpoint == "https://example.okta.com/oauth2/default/v1/token"
+        assert (
+            userinfo_endpoint == "https://example.okta.com/oauth2/default/v1/userinfo"
+        )
+        assert include_client_id is False
+
+    def test_okta_pkce_enabled_by_default(self):
+        """Okta SSO enables PKCE by default for a first-class OIDC flow."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _OIDC_PROVIDER_OKTA,
+            SSOAuthenticationHandler,
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state="okta-state",
+                    generic_authorization_endpoint=(
+                        "https://example.okta.com/oauth2/default/v1/authorize"
+                    ),
+                    provider=_OIDC_PROVIDER_OKTA,
+                )
+            )
+
+        assert redirect_params["state"] == "okta-state"
+        assert code_verifier is not None
+        assert redirect_params["code_challenge_method"] == "S256"
 
     @patch.dict(os.environ, {}, clear=False)
     def test_get_redirect_url_for_sso(self):

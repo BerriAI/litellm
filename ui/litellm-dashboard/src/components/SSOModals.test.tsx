@@ -358,20 +358,14 @@ describe("SSOModals", () => {
     fireEvent.change(urlInput, { target: { value: "https://example.com" } });
 
     // Fill Okta specific fields
-    const clientIdInput = screen.getByLabelText("Generic Client ID");
+    const clientIdInput = screen.getByLabelText("Okta Client ID");
     fireEvent.change(clientIdInput, { target: { value: "test-client-id" } });
 
-    const clientSecretInput = screen.getByLabelText("Generic Client Secret");
+    const clientSecretInput = screen.getByLabelText("Okta Client Secret");
     fireEvent.change(clientSecretInput, { target: { value: "test-client-secret" } });
 
-    const authEndpointInput = screen.getByLabelText("Authorization Endpoint");
-    fireEvent.change(authEndpointInput, { target: { value: "https://example.okta.com/authorize" } });
-
-    const tokenEndpointInput = screen.getByLabelText("Token Endpoint");
-    fireEvent.change(tokenEndpointInput, { target: { value: "https://example.okta.com/token" } });
-
-    const userinfoEndpointInput = screen.getByLabelText("Userinfo Endpoint");
-    fireEvent.change(userinfoEndpointInput, { target: { value: "https://example.okta.com/userinfo" } });
+    const issuerInput = screen.getByLabelText("Okta Issuer");
+    fireEvent.change(issuerInput, { target: { value: "https://example.okta.com/oauth2/default" } });
 
     // Fill role mapping fields
     const groupClaimInput = screen.getByLabelText("Group Claim");
@@ -390,13 +384,11 @@ describe("SSOModals", () => {
         sso_provider: "okta",
         user_email: "admin@example.com",
         proxy_base_url: "https://example.com",
-        generic_client_id: "test-client-id",
-        generic_client_secret: "test-client-secret",
-        generic_authorization_endpoint: "https://example.okta.com/authorize",
-        generic_token_endpoint: "https://example.okta.com/token",
-        generic_userinfo_endpoint: "https://example.okta.com/userinfo",
+        okta_client_id: "test-client-id",
+        okta_client_secret: "test-client-secret",
+        okta_issuer: "https://example.okta.com/oauth2/default",
         role_mappings: {
-          provider: "generic",
+          provider: "okta",
           group_claim: "groups",
           default_role: "internal_user",
           roles: {
@@ -457,6 +449,12 @@ describe("SSOModals", () => {
         microsoft_client_id: null,
         microsoft_client_secret: null,
         microsoft_tenant: null,
+        okta_client_id: null,
+        okta_client_secret: null,
+        okta_issuer: null,
+        okta_authorization_endpoint: null,
+        okta_token_endpoint: null,
+        okta_userinfo_endpoint: null,
         generic_client_id: null,
         generic_client_secret: null,
         generic_authorization_endpoint: null,

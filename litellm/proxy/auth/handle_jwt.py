@@ -97,6 +97,7 @@ class JWTHandler:
     ) -> None:
         self.http_handler = HTTPHandler()
         self.leeway = 0
+        self.litellm_jwtauth = LiteLLM_JWTAuth()
 
     def update_environment(
         self,
@@ -595,12 +596,17 @@ class JWTHandler:
         return jwks_uri
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
-        keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
+        keys_url = self.litellm_jwtauth.public_key_url or os.getenv(
+            "JWT_PUBLIC_KEY_URL"
+        )
 
         if keys_url is None:
             raise Exception("Missing JWT Public Key URL from environment.")
 
-        keys_url_list = [url.strip() for url in keys_url.split(",")]
+        if isinstance(keys_url, list):
+            keys_url_list = [url.strip() for url in keys_url]
+        else:
+            keys_url_list = [url.strip() for url in keys_url.split(",")]
 
         for key_url in keys_url_list:
             key_url = await self._resolve_jwks_url(key_url)
@@ -745,7 +751,9 @@ class JWTHandler:
     _unscoped_jwt_warning_emitted = False
 
     @classmethod
-    def _build_decode_kwargs(cls) -> dict:
+    def _build_decode_kwargs(
+        cls, litellm_jwtauth: Optional[LiteLLM_JWTAuth] = None
+    ) -> dict:
         """Build the audience/issuer/options kwargs for ``jwt.decode``.
 
         Setting ``JWT_AUDIENCE`` (and optionally ``JWT_ISSUER``) turns on the
@@ -754,8 +762,12 @@ class JWTHandler:
         When both are unset PyJWT only checks the signature and expiry, which
         is preserved for backward compatibility but logged once as a warning.
         """
-        audience = os.getenv("JWT_AUDIENCE")
-        issuer = os.getenv("JWT_ISSUER")
+        audience = (
+            litellm_jwtauth.audience if litellm_jwtauth is not None else None
+        ) or os.getenv("JWT_AUDIENCE")
+        issuer = (
+            litellm_jwtauth.issuer if litellm_jwtauth is not None else None
+        ) or os.getenv("JWT_ISSUER")
 
         if (
             audience is None
@@ -783,7 +795,7 @@ class JWTHandler:
         }
 
     async def auth_jwt(self, token: str) -> dict:
-        decode_kwargs = self._build_decode_kwargs()
+        decode_kwargs = self._build_decode_kwargs(self.litellm_jwtauth)
 
         header = jwt.get_unverified_header(token)
 

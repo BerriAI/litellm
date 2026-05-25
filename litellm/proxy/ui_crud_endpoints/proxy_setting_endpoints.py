@@ -633,6 +633,20 @@ async def update_default_team_settings(settings: DefaultTeamSSOParams):
     )
 
 
+# Sentinel returned in place of secret values in GET /get/sso_settings so callers
+# can tell a secret is configured without receiving the plaintext value.
+_REDACTED_SECRET = "**redacted**"
+# SSO fields that contain secrets and must never be returned in plaintext.
+_SSO_SECRET_FIELDS = frozenset(
+    {
+        "google_client_secret",
+        "microsoft_client_secret",
+        "okta_client_secret",
+        "generic_client_secret",
+    }
+)
+
+
 @router.get(
     "/get/sso_settings",
     tags=["SSO Settings"],
@@ -703,6 +717,18 @@ async def get_sso_settings():
             "microsoft_client_secret", None
         ),
         microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
+        okta_client_id=decrypted_sso_settings_dict.get("okta_client_id", None),
+        okta_client_secret=decrypted_sso_settings_dict.get("okta_client_secret", None),
+        okta_issuer=decrypted_sso_settings_dict.get("okta_issuer", None),
+        okta_authorization_endpoint=decrypted_sso_settings_dict.get(
+            "okta_authorization_endpoint", None
+        ),
+        okta_token_endpoint=decrypted_sso_settings_dict.get(
+            "okta_token_endpoint", None
+        ),
+        okta_userinfo_endpoint=decrypted_sso_settings_dict.get(
+            "okta_userinfo_endpoint", None
+        ),
         generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
         generic_client_secret=decrypted_sso_settings_dict.get(
             "generic_client_secret", None
@@ -730,6 +756,12 @@ async def get_sso_settings():
 
     # Convert to dict for response
     sso_dict = sso_config.model_dump()
+
+    # Replace secret values with a redacted sentinel so callers can confirm a
+    # secret is set without receiving the plaintext value.
+    for _secret_field in _SSO_SECRET_FIELDS:
+        if sso_dict.get(_secret_field):
+            sso_dict[_secret_field] = _REDACTED_SECRET
 
     # Add descriptions to the response
     result = {
@@ -789,6 +821,12 @@ async def update_sso_settings(sso_config: SSOConfig):
         "microsoft_client_id": "MICROSOFT_CLIENT_ID",
         "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
         "microsoft_tenant": "MICROSOFT_TENANT",
+        "okta_client_id": "OKTA_CLIENT_ID",
+        "okta_client_secret": "OKTA_CLIENT_SECRET",
+        "okta_issuer": "OKTA_ISSUER",
+        "okta_authorization_endpoint": "OKTA_AUTHORIZATION_ENDPOINT",
+        "okta_token_endpoint": "OKTA_TOKEN_ENDPOINT",
+        "okta_userinfo_endpoint": "OKTA_USERINFO_ENDPOINT",
         "generic_client_id": "GENERIC_CLIENT_ID",
         "generic_client_secret": "GENERIC_CLIENT_SECRET",
         "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
@@ -808,13 +846,31 @@ async def update_sso_settings(sso_config: SSOConfig):
     if "general_settings" not in config:
         config["general_settings"] = {}
 
+    # Load existing SSO record so we can restore secrets that were not changed.
+    # The GET response returns _REDACTED_SECRET for secret fields; if a caller
+    # echoes that sentinel back we must not overwrite the real stored value.
+    existing_sso_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        where={"id": "sso_config"}
+    )
+    existing_plain: dict = {}
+    if existing_sso_record and existing_sso_record.sso_settings:
+        existing_plain = proxy_config._decrypt_and_set_db_env_variables(
+            environment_variables=dict(existing_sso_record.sso_settings)
+        )
+
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump()
+
+    # Restore original secret values when the sentinel is echoed back.
+    for _secret_field in _SSO_SECRET_FIELDS:
+        if sso_data.get(_secret_field) == _REDACTED_SECRET:
+            sso_data[_secret_field] = existing_plain.get(_secret_field)
+
     for field_name, value in sso_data.items():
         if field_name in env_var_mapping:
             env_var_name = env_var_mapping[field_name]
             if value:
-                os.environ[env_var_name] = value
+                os.environ[env_var_name] = str(value)
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)

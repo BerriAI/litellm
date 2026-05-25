@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { detectSSOProvider, extractRoleMappingFields } from "./Settings/AdminSettings/SSOSettings/utils";
 import NotificationsManager from "./molecules/notifications_manager";
 import { parseErrorMessage } from "./shared/errorUtils";
 
@@ -61,25 +62,17 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
   },
   okta: {
     envVarMap: {
-      generic_client_id: "GENERIC_CLIENT_ID",
-      generic_client_secret: "GENERIC_CLIENT_SECRET",
-      generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
-      generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
-      generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
+      okta_client_id: "OKTA_CLIENT_ID",
+      okta_client_secret: "OKTA_CLIENT_SECRET",
+      okta_issuer: "OKTA_ISSUER",
     },
     fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
+      { label: "Okta Client ID", name: "okta_client_id" },
+      { label: "Okta Client Secret", name: "okta_client_secret" },
       {
-        label: "Authorization Endpoint",
-        name: "generic_authorization_endpoint",
-        placeholder: "https://your-domain/authorize",
-      },
-      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
-      {
-        label: "Userinfo Endpoint",
-        name: "generic_userinfo_endpoint",
-        placeholder: "https://your-domain/userinfo",
+        label: "Okta Issuer",
+        name: "okta_issuer",
+        placeholder: "https://your-domain.okta.com/oauth2/default",
       },
     ],
   },
@@ -121,50 +114,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       if (isAddSSOModalVisible && accessToken) {
         try {
           const ssoData = await getSSOSettings(accessToken);
-          console.log("Raw SSO data received:", ssoData); // Debug log
           if (ssoData && ssoData.values) {
-            console.log("SSO values:", ssoData.values); // Debug log
-            console.log("user_email from API:", ssoData.values.user_email); // Debug log
-
-            // Determine which SSO provider is configured
-            let selectedProvider = null;
-            if (ssoData.values.google_client_id) {
-              selectedProvider = "google";
-            } else if (ssoData.values.microsoft_client_id) {
-              selectedProvider = "microsoft";
-            } else if (ssoData.values.generic_client_id) {
-              // Check if it looks like Okta based on endpoints
-              if (
-                ssoData.values.generic_authorization_endpoint?.includes("okta") ||
-                ssoData.values.generic_authorization_endpoint?.includes("auth0")
-              ) {
-                selectedProvider = "okta";
-              } else {
-                selectedProvider = "generic";
-              }
-            }
-
-            // Extract role mappings if they exist
-            let roleMappingFields = {};
-            if (ssoData.values.role_mappings) {
-              const roleMappings = ssoData.values.role_mappings;
-
-              // Helper function to join arrays into comma-separated strings
-              const joinTeams = (teams: string[] | undefined): string => {
-                if (!teams || teams.length === 0) return "";
-                return teams.join(", ");
-              };
-
-              roleMappingFields = {
-                use_role_mappings: true,
-                group_claim: roleMappings.group_claim,
-                default_role: roleMappings.default_role || "internal_user",
-                proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
-                admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
-                internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
-                internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
-              };
-            }
+            const selectedProvider = detectSSOProvider(ssoData.values);
+            const roleMappingFields = extractRoleMappingFields(ssoData.values.role_mappings);
 
             // Set form values with existing data (excluding UI access control fields)
             const formValues = {
@@ -175,13 +127,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               ...roleMappingFields,
             };
 
-            console.log("Setting form values:", formValues); // Debug log
-
             // Clear form first, then set values with a small delay to ensure proper initialization
             form.resetFields();
             setTimeout(() => {
               form.setFieldsValue(formValues);
-              console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
             }, 100);
           }
         } catch (error) {
@@ -218,6 +167,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
 
       // Add role mappings if use_role_mappings is checked
       if (use_role_mappings) {
+        const provider = rest.sso_provider || "generic";
         // Helper function to split comma-separated string into array
         const splitTeams = (teams: string | undefined): string[] => {
           if (!teams || teams.trim() === "") return [];
@@ -236,7 +186,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         };
 
         payload.role_mappings = {
-          provider: "generic",
+          provider,
           group_claim,
           default_role: defaultRoleMapping[default_role] || "internal_user",
           roles: {
@@ -273,6 +223,12 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         microsoft_client_id: null,
         microsoft_client_secret: null,
         microsoft_tenant: null,
+        okta_client_id: null,
+        okta_client_secret: null,
+        okta_issuer: null,
+        okta_authorization_endpoint: null,
+        okta_token_endpoint: null,
+        okta_userinfo_endpoint: null,
         generic_client_id: null,
         generic_client_secret: null,
         generic_authorization_endpoint: null,
@@ -354,10 +310,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                         />
                       )}
                       <span>
-                        {value.toLowerCase() === "okta"
-                          ? "Okta / Auth0"
-                          : value.charAt(0).toUpperCase() + value.slice(1)}{" "}
-                        SSO
+                        {value.charAt(0).toUpperCase() + value.slice(1)} SSO
                       </span>
                     </div>
                   </Select.Option>

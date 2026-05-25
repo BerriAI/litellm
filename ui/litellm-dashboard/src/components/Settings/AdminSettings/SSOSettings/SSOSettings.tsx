@@ -24,6 +24,7 @@ export default function SSOSettings() {
   const isSSOConfigured =
     Boolean(ssoSettings?.values.google_client_id) ||
     Boolean(ssoSettings?.values.microsoft_client_id) ||
+    Boolean(ssoSettings?.values.okta_client_id) ||
     Boolean(ssoSettings?.values.generic_client_id);
 
   const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
@@ -94,23 +95,15 @@ export default function SSOSettings() {
       fields: [
         {
           label: "Client ID",
-          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_id} />,
+          render: (values: SSOSettingsValues) => <RedactableField value={values.okta_client_id} />,
         },
         {
           label: "Client Secret",
-          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_secret} />,
+          render: (values: SSOSettingsValues) => <RedactableField value={values.okta_client_secret} />,
         },
         {
-          label: "Authorization Endpoint",
-          render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_authorization_endpoint),
-        },
-        {
-          label: "Token Endpoint",
-          render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_token_endpoint),
-        },
-        {
-          label: "User Info Endpoint",
-          render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
+          label: "Issuer",
+          render: (values: SSOSettingsValues) => renderEndpointValue(values.okta_issuer),
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled ? {

@@ -4481,6 +4481,18 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
+    public_key_url: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="JWKS URL or OIDC discovery URL used to validate JWTs. Falls back to JWT_PUBLIC_KEY_URL.",
+    )
+    audience: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Expected JWT aud claim. Falls back to JWT_AUDIENCE.",
+    )
+    issuer: Optional[str] = Field(
+        default=None,
+        description="Expected JWT iss claim. Falls back to JWT_ISSUER. Must be a single string — PyJWT performs strict string equality on the 'iss' claim.",
+    )
     public_allowed_routes: List[str] = ["public_routes"]
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings

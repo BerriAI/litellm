@@ -1,4 +1,5 @@
-import { processSSOSettingsPayload } from "./utils";
+import { extractRoleMappingFields, processSSOSettingsPayload } from "./utils";
+import { RoleMappings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { describe, it, expect } from "vitest";
 
 describe("processSSOSettingsPayload", () => {
@@ -392,6 +393,7 @@ describe("processSSOSettingsPayload", () => {
         team_ids_jwt_field: "teams",
       });
       expect(result.role_mappings).toBeDefined();
+      expect(result.role_mappings.provider).toBe("okta");
       expect(result.role_mappings.group_claim).toBe("groups");
     });
   });
@@ -426,5 +428,62 @@ describe("processSSOSettingsPayload", () => {
         array_field: [1, 2, 3],
       });
     });
+  });
+});
+
+describe("extractRoleMappingFields", () => {
+  it("returns an empty object when role_mappings is null/undefined", () => {
+    expect(extractRoleMappingFields(null)).toEqual({});
+    expect(extractRoleMappingFields(undefined)).toEqual({});
+  });
+
+  it("joins role arrays into comma-separated strings", () => {
+    const roleMappings: RoleMappings = {
+      provider: "okta",
+      group_claim: "groups",
+      default_role: "internal_user",
+      roles: {
+        proxy_admin: ["admin1", "admin2"],
+        proxy_admin_viewer: ["viewer1"],
+        internal_user: ["user1", "user2"],
+        internal_user_viewer: ["ro1"],
+      },
+    };
+
+    expect(extractRoleMappingFields(roleMappings)).toEqual({
+      use_role_mappings: true,
+      group_claim: "groups",
+      default_role: "internal_user",
+      proxy_admin_teams: "admin1, admin2",
+      admin_viewer_teams: "viewer1",
+      internal_user_teams: "user1, user2",
+      internal_viewer_teams: "ro1",
+    });
+  });
+
+  it("emits empty strings for missing role arrays", () => {
+    const roleMappings = {
+      provider: "generic",
+      group_claim: "groups",
+      default_role: "proxy_admin",
+      roles: {},
+    } as unknown as RoleMappings;
+
+    const result = extractRoleMappingFields(roleMappings);
+    expect(result.proxy_admin_teams).toBe("");
+    expect(result.admin_viewer_teams).toBe("");
+    expect(result.internal_user_teams).toBe("");
+    expect(result.internal_viewer_teams).toBe("");
+  });
+
+  it("falls back to internal_user when default_role is missing", () => {
+    const roleMappings = {
+      provider: "okta",
+      group_claim: "groups",
+      default_role: "",
+      roles: { proxy_admin: [], proxy_admin_viewer: [], internal_user: [], internal_user_viewer: [] },
+    } as unknown as RoleMappings;
+
+    expect(extractRoleMappingFields(roleMappings).default_role).toBe("internal_user");
   });
 });
