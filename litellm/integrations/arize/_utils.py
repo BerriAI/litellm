@@ -55,19 +55,16 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
 
                 # Additive: emit structured tool_calls / multimodal content
                 # so Arize/Phoenix can render tool-using and image-bearing
-                # turns. Wrapped to ensure a malformed message can't blow up
-                # the rest of the message set. These set NEW attribute keys
-                # (MESSAGE_TOOL_CALLS / MESSAGE_NAME / MESSAGE_TOOL_CALL_ID /
-                # MESSAGE_CONTENTS.*) — never replace the MESSAGE_CONTENT
-                # write above.
-                try:
-                    _emit_input_message_extras(span, prefix, msg)
-                except Exception as e:
-                    verbose_logger.debug(
-                        "[Arize] input message extras skipped (idx=%s): %s",
-                        idx,
-                        e,
-                    )
+                # turns. These set NEW attribute keys (MESSAGE_TOOL_CALLS /
+                # MESSAGE_NAME / MESSAGE_TOOL_CALL_ID / MESSAGE_CONTENTS.*) —
+                # never replace the MESSAGE_CONTENT write above.
+                _safe_emit(
+                    f"input message extras (idx={idx})",
+                    _emit_input_message_extras,
+                    span,
+                    prefix,
+                    msg,
+                )
 
     @staticmethod
     @override
@@ -142,10 +139,13 @@ def _set_choice_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
         # Additive: emit assistant tool_calls so tool-using turns render in
         # Arize/Phoenix. Sets new MESSAGE_TOOL_CALLS keys only — does not
         # change MESSAGE_CONTENT/MESSAGE_ROLE writes above.
-        try:
-            _emit_message_tool_calls(span, prefix, response_message)
-        except Exception as e:
-            verbose_logger.debug("[Arize] output message tool_calls skipped (idx=%s): %s", idx, e)
+        _safe_emit(
+            f"output tool_calls (idx={idx})",
+            _emit_message_tool_calls,
+            span,
+            prefix,
+            response_message,
+        )
 
 
 def _set_image_outputs(span: "Span", response_obj, image_attrs, span_attrs):
@@ -442,20 +442,7 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     # a kind so Arize can render it as an LLM call instead of UNKNOWN.
     # The original late-set call below remains intact (so the TOOL upgrade
     # path still wins when tools are present).
-    try:
-        _standard_logging_payload_early = kwargs.get("standard_logging_object")
-        _early_call_type = (
-            _standard_logging_payload_early.get("call_type")
-            if isinstance(_standard_logging_payload_early, dict)
-            else None
-        )
-        safe_set_attribute(
-            span,
-            SpanAttributes.OPENINFERENCE_SPAN_KIND,
-            _infer_open_inference_span_kind(call_type=_early_call_type),
-        )
-    except Exception as e:
-        verbose_logger.debug("[Arize] early span kind not set: %s", e)
+    _safe_emit("early span kind", _set_early_span_kind, span, kwargs)
 
     try:
         optional_params = _sanitize_optional_params(kwargs.get("optional_params"))
@@ -502,26 +489,18 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     # Additive emitters. Each is independently guarded so a failure can never
     # blank the attributes set by the main try-block above. New attributes are
     # written under new keys; existing attributes are not overwritten.
-    try:
-        _set_session_and_user_attrs(span, kwargs, kwargs.get("standard_logging_object"))
-    except Exception as e:
-        verbose_logger.debug("[Arize] session/user attrs skipped: %s", e)
-
-    try:
-        _set_response_cost_attr(span, kwargs.get("standard_logging_object"))
-    except Exception as e:
-        verbose_logger.debug("[Arize] response cost attr skipped: %s", e)
-
-    try:
-        _maybe_normalize_passthrough(
-            span,
-            kwargs,
-            response_obj,
-            response_obj_for_attrs,
-            kwargs.get("standard_logging_object"),
-        )
-    except Exception as e:
-        verbose_logger.debug("[Arize] passthrough normalization skipped: %s", e)
+    slp = kwargs.get("standard_logging_object")
+    _safe_emit("session/user attrs", _set_session_and_user_attrs, span, kwargs, slp)
+    _safe_emit("response cost", _set_response_cost_attr, span, slp)
+    _safe_emit(
+        "passthrough normalization",
+        _maybe_normalize_passthrough,
+        span,
+        kwargs,
+        response_obj,
+        response_obj_for_attrs,
+        slp,
+    )
 
 
 def _sanitize_optional_params(optional_params: Optional[dict]) -> dict:
@@ -601,6 +580,27 @@ def _set_model_params(span: "Span", model_params: Optional[dict], span_attrs) ->
 # Additive rendering helpers (introduced to enhance Arize/Phoenix rendering
 # without changing any previously-emitted attribute keys or values).
 # ---------------------------------------------------------------------------
+
+
+def _safe_emit(label: str, fn, *args, **kwargs) -> None:
+    """Run an additive attribute emitter, swallowing any error so it cannot
+    blank attributes set elsewhere on the span. Failures are logged at debug.
+    """
+    try:
+        fn(*args, **kwargs)
+    except Exception as e:
+        verbose_logger.debug("[Arize] %s skipped: %s", label, e)
+
+
+def _set_early_span_kind(span: "Span", kwargs: dict) -> None:
+    """Defensively set OPENINFERENCE_SPAN_KIND before any other logic runs."""
+    slp = kwargs.get("standard_logging_object")
+    call_type = slp.get("call_type") if isinstance(slp, dict) else None
+    safe_set_attribute(
+        span,
+        SpanAttributes.OPENINFERENCE_SPAN_KIND,
+        _infer_open_inference_span_kind(call_type=call_type),
+    )
 
 
 def _coerce_response_obj_for_attrs(response_obj):
