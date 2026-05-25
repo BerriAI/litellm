@@ -456,7 +456,7 @@ export function LogDetailsDrawer({
               onNextPage={isSessionMode ? goToNextPage : undefined}
               canGoPreviousPage={canGoPreviousPage}
               canGoNextPage={canGoNextPage}
-              showPageControls={isSessionMode}
+              showPageControls={isSessionPaginated}
               statusLabel={statusLabel}
               statusColor={statusColor}
               environment={environment}
