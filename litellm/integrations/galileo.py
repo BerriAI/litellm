@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
@@ -142,7 +143,7 @@ class GalileoObserve(CustomLogger):
     @staticmethod
     def _record_to_v2_span(record: Dict[str, Any]) -> Dict[str, Any]:
         created_at = record.get("created_at", "")
-        if created_at and "Z" not in created_at and "+" not in created_at:
+        if created_at and not re.search(r"(Z|[+-]\d{2}:?\d{2})$", created_at):
             created_at = f"{created_at}Z"
 
         span: Dict[str, Any] = {
@@ -203,7 +204,7 @@ class GalileoObserve(CustomLogger):
         if isinstance(response_obj, litellm.TextCompletionResponse):
             return response_obj.choices[0].text
         if isinstance(response_obj, litellm.ImageResponse):
-            return json.dumps(response_obj["data"])
+            return json.dumps(response_obj["data"], default=str)
         if isinstance(response_obj, (litellm.ModelResponse, dict)):
             return get_content_from_model_response(response_obj)
         return None
@@ -289,7 +290,7 @@ class GalileoObserve(CustomLogger):
             )
             return
 
-        if response.status_code == 200:
+        if 200 <= response.status_code < 300:
             verbose_logger.debug(
                 "Galileo Logger: successfully flushed in memory records"
             )
