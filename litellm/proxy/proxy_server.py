@@ -2046,34 +2046,20 @@ async def increment_spend_counters(
                 increment=response_cost,
             )
 
-        # Increment per-window budget counters for multi-budget users
-        user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-        if user_obj is not None:
-            user_budget_limits = getattr(user_obj, "budget_limits", None) or (
-                user_obj.get("budget_limits") if isinstance(user_obj, dict) else None
+        # Skip per-window user counter increments on team-key requests:
+        # _user_multi_budget_check (in common_checks) and budget reservation
+        # both skip user windows when team_id is set, so bumping here would
+        # inflate the counter with traffic the enforcement path never reads.
+        if team_id is None:
+            user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+            await _increment_entity_window_spend_counters(
+                entity_type="User",
+                entity_id=user_id,
+                entity_obj=user_obj,
+                counter_key_prefix=f"spend:user:{user_id}",
+                response_cost=response_cost,
+                reserved_counter_keys=reserved_counter_keys,
             )
-            if isinstance(user_budget_limits, str):
-                user_budget_limits = json.loads(user_budget_limits)
-            if isinstance(user_budget_limits, list):
-                for window in user_budget_limits:
-                    duration = (
-                        window["budget_duration"]
-                        if isinstance(window, dict)
-                        else window.budget_duration
-                    )
-                    user_window_counter = f"spend:user:{user_id}:window:{duration}"
-                    if user_window_counter not in reserved_counter_keys:
-                        from litellm.proxy.spend_tracking.budget_reservation import (
-                            get_budget_window_start,
-                        )
-
-                        await _init_and_increment_window_spend_counter(
-                            counter_key=user_window_counter,
-                            entity_type="User",
-                            entity_id=user_id,
-                            window_start=get_budget_window_start(window),
-                            increment=response_cost,
-                        )
 
     await _increment_end_user_and_tag_spend_counters(
         end_user_id=end_user_id,

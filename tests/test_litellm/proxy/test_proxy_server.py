@@ -5747,6 +5747,55 @@ async def test_increment_spend_counters_user_budget_window():
 
 
 @pytest.mark.asyncio
+async def test_increment_spend_counters_skips_user_window_for_team_key():
+    """Team-key requests must not bump the user's per-window counter — the
+    user multi-budget check skips team-key traffic, so an inflated counter
+    would block the user's later personal-key requests with stale spend."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+    user_obj = LiteLLM_UserTable(
+        user_id="user-window-counter",
+        spend=1.0,
+        budget_limits=[{"budget_duration": "1h", "max_budget": 10.0}],
+    )
+    key_cache.in_memory_cache.set_cache(key="user-window-counter", value=user_obj)
+    key_cache.in_memory_cache.set_cache(
+        key="team_id:team-1",
+        value=MagicMock(spend=0.0, budget_limits=None),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import increment_spend_counters
+
+        await increment_spend_counters(
+            token=None,
+            team_id="team-1",
+            user_id="user-window-counter",
+            response_cost=0.30,
+        )
+
+        assert (
+            counter_cache.in_memory_cache.get_cache(
+                key="spend:user:user-window-counter:window:1h"
+            )
+            is None
+        ), "team-key traffic must not bump the user's per-window counter"
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
 async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss():
     """When the Redis counter is missing, the reseed path reads the
     authoritative spend from the DB (not a stale cache), so the next
@@ -5914,15 +5963,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
