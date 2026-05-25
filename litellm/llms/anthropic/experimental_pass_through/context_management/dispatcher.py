@@ -1,6 +1,6 @@
 """Dispatch ``context_management`` edits to registered polyfill editors."""
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit
@@ -21,10 +21,27 @@ def apply_context_management(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]],
     system: Any,
-    context_management_spec: Dict[str, Any],
+    context_management_spec: Union[Dict[str, Any], List[Dict[str, Any]], None],
 ) -> Tuple[List[Dict[str, Any]], List[AppliedEdit]]:
     """Run edits in order; return (messages, applied_edits that fired)."""
-    edits = context_management_spec.get("edits") if context_management_spec else None
+    # Accept both Anthropic-native dict form and OpenAI list form. The other
+    # provider paths normalize via ``map_openai_context_management_to_anthropic``
+    # before dispatching; do the same here so the polyfill path doesn't silently
+    # no-op on list input.
+    if isinstance(context_management_spec, list):
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        context_management_spec = (
+            AnthropicConfig.map_openai_context_management_to_anthropic(
+                context_management_spec
+            )
+        )
+
+    edits = (
+        context_management_spec.get("edits")
+        if isinstance(context_management_spec, dict)
+        else None
+    )
     if not edits or not isinstance(edits, list):
         return messages, []
 
