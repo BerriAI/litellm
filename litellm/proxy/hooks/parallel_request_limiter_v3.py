@@ -344,6 +344,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         data: dict,
         model: Optional[str] = None,
+        min_configured_tpm_limit: Optional[int] = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -351,6 +352,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimated = input_tokens + max_tokens.
 
         Supports chat (messages), completions (prompt), and embeddings (input).
+
+        ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
+        the TPM-bearing descriptors this request will be charged against. When
+        provided, the no-``max_tokens`` output-budget floor is capped at a
+        fraction of that limit so small TPM caps remain usable. Omit to
+        preserve the unconstrained floor.
         """
         messages = data.get("messages")
         prompt = data.get("prompt")
@@ -394,11 +401,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             case _:
                 # No max_tokens specified — reserve at least the input size with a
                 # conservative floor so a stream of small concurrent requests can't
-                # collectively bypass the limit.
-                max_tokens_estimate = max(
-                    estimated_input_tokens,
-                    DEFAULT_MAX_TOKENS_ESTIMATE // 4,
-                )
+                # collectively bypass the limit. Cap the floor by a fraction of
+                # the smallest TPM limit this request will be charged against,
+                # so a small per-tenant TPM cap can't be tripped by the floor
+                # alone.
+                output_floor = DEFAULT_MAX_TOKENS_ESTIMATE // 4
+                if min_configured_tpm_limit is not None:
+                    output_floor = min(
+                        output_floor,
+                        max(1, min_configured_tpm_limit // 4),
+                    )
+                max_tokens_estimate = max(estimated_input_tokens, output_floor)
 
         total_estimated = estimated_input_tokens + max_tokens_estimate
 
@@ -2009,10 +2022,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-memory check otherwise — single-worker protection still holds
             # even without Redis.
             # ----------------------------------------------------------------
-            has_tpm_limits = any(
-                (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            configured_tpm_limits = [
+                (d.get("rate_limit") or {}).get("tokens_per_unit")
                 for d in descriptors
-            )
+                if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            ]
+            has_tpm_limits = bool(configured_tpm_limits)
 
             if has_tpm_limits:
                 # Floor at 1 token so contentless requests (/responses,
@@ -2026,6 +2041,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._estimate_tokens_for_request(
                         data=data,
                         model=requested_model,
+                        min_configured_tpm_limit=min(configured_tpm_limits),
                     ),
                     1,
                 )
