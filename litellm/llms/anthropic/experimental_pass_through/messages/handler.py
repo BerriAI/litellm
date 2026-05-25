@@ -11,6 +11,7 @@ from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     strip_empty_text_blocks_from_anthropic_messages,
@@ -473,14 +474,21 @@ def anthropic_messages_handler(
                 apply_context_management,
             )
 
-            edited_messages, polyfill_applied_edits = apply_context_management(
-                model=model,
-                messages=_shared_kwargs["messages"],
-                tools=_shared_kwargs.get("tools"),
-                system=_shared_kwargs.get("system"),
-                context_management_spec=context_management_spec,
-            )
-            _shared_kwargs["messages"] = edited_messages
+            try:
+                edited_messages, polyfill_applied_edits = apply_context_management(
+                    model=model,
+                    messages=_shared_kwargs["messages"],
+                    tools=_shared_kwargs.get("tools"),
+                    system=_shared_kwargs.get("system"),
+                    context_management_spec=context_management_spec,
+                )
+                _shared_kwargs["messages"] = edited_messages
+            except Exception as e:
+                verbose_logger.exception(
+                    "context_management polyfill: skipping edits due to error: %s",
+                    e,
+                )
+                polyfill_applied_edits = []
 
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
