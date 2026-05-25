@@ -251,7 +251,7 @@ router_settings:
 | database_socket_timeout | float | Maps to the Prisma [`socket_timeout`](https://www.prisma.io/docs/orm/overview/databases/postgresql) URL param (seconds). When set, an idle or slow connection that has not produced data within this window is closed. **Use this to cap idle Prisma connections from LiteLLM.** |
 | database_extra_connection_params | object | Escape hatch — extra key/value pairs appended verbatim to the Prisma `DATABASE_URL` / `DIRECT_URL` query string (e.g. `sslmode`, `pgbouncer`, `statement_cache_size`). Keys here override any default LiteLLM sets. |
 | allow_requests_on_db_unavailable | boolean | If true, allows requests to succeed even if DB is unreachable. **Only use this if running LiteLLM in your VPC** This will allow requests to work even when LiteLLM cannot connect to the DB to verify a Virtual Key [Doc on graceful db unavailability](prod#5-if-running-litellm-on-vpc-gracefully-handle-db-unavailability) |
-| custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
+| custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](./custom_auth) |
 | max_parallel_requests | integer | The max parallel requests allowed per deployment |
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
 | infer_model_from_keys | boolean | If true, infers the model from the provided keys |
@@ -310,7 +310,7 @@ router_settings:
 | always_include_stream_usage | boolean | If true, includes usage metrics in every streaming response chunk |
 | auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects UI login page to SSO provider |
 | control_plane_url | string | URL of the control plane for cross-instance state sharing |
-| custom_auth_run_common_checks | boolean | If true, runs standard auth validation checks alongside custom auth handlers |
+| custom_auth_run_common_checks | boolean | If true, runs LiteLLM's standard auth validation alongside custom auth (key/team/user/project model allowlists, budgets, rate limits). Default is `false` — see [Custom Auth — Enforce model access](./custom_auth#enforce-model-access-budgets-and-teamproject-checks) |
 | custom_ui_sso_sign_in_handler | string | Custom handler for SSO sign-in logic in the UI |
 | database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
 | disable_error_logs | boolean | If true, suppresses error tracking and storage in the database |

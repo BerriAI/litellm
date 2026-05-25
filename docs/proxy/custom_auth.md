@@ -104,7 +104,7 @@ UserAPIKeyAuth(
 ```python
 UserAPIKeyAuth(
     # Model access control
-    models: List = [],                                # Allowed models list
+    models: List = [],                                # Allowed models list (enforced when custom_auth_run_common_checks: true)
     team_models: List = [],                           # Team's allowed models
     aliases: Dict = {},                               # Model aliases
     
@@ -234,6 +234,65 @@ general_settings:
 ```shell
 $ litellm --config /path/to/config.yaml 
 ```
+
+## Enforce model access, budgets, and team/project checks
+
+By default, LiteLLM **does not** run standard proxy auth checks (model allowlists, budgets, team/project restrictions) after your custom auth handler returns a `UserAPIKeyAuth` object. Setting `models=[...]` on the returned object only **records** the allowlist for logging — it does **not** block requests unless you opt in.
+
+To enforce LiteLLM's built-in checks alongside custom auth, set:
+
+```yaml
+general_settings:
+  custom_auth: custom_auth.user_api_key_auth
+  custom_auth_run_common_checks: true
+```
+
+When `custom_auth_run_common_checks: true`, LiteLLM runs the same validation used for virtual keys, including:
+
+- **Key-level model access** — the `models` list on your returned `UserAPIKeyAuth`
+- **Team / user / project model access** — loaded from LiteLLM's DB using `team_id`, `user_id`, and `project_id` on the token
+- **Budget and rate limits** — key, team, user, project, and end-user budgets where configured
+
+### Example: restrict models in custom auth
+
+```python
+async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+    # ... validate api_key and load project_context from your system ...
+    return UserAPIKeyAuth(
+        api_key=api_key,
+        user_id=user_id,
+        team_id=project_context.team_id,
+        project_id=project_context.project_id,
+        models=project_context.models,  # e.g. ["gpt-4o-mini", "claude-3-haiku"]
+    )
+```
+
+```yaml
+general_settings:
+  custom_auth: my_auth.user_api_key_auth
+  custom_auth_run_common_checks: true
+```
+
+Without `custom_auth_run_common_checks: true`, a client can call any model the proxy has configured (for example `gpt-4o`) even if it is not in your `models` list.
+
+### Key `models` vs project `models`
+
+These are separate controls:
+
+| Field | Where it is enforced | Source of truth |
+| --- | --- | --- |
+| `models` on `UserAPIKeyAuth` | Key-level allowlist | Value you return from custom auth |
+| `project_id` on `UserAPIKeyAuth` | Project-level allowlist | `models` on the **project record in LiteLLM's DB** |
+
+If you set `project_id`, also create/update the project in LiteLLM (via `/project/new` or the UI) with the correct `models` list. See [Project Management](./project_management).
+
+**Notes:**
+
+- An empty `models` list (`[]`) means **no restriction** (all models allowed) for that scope.
+- Model names must match the model group name in your proxy config, or use wildcard patterns where supported.
+- Fallback models in the request body are also validated against the key allowlist when common checks are enabled.
+
+See also: [`custom_auth_run_common_checks` in Config Settings](./config_settings#all-settings).
 
 ## ✨ Support LiteLLM Virtual Keys + Custom Auth
 
