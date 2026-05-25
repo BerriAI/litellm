@@ -26,14 +26,12 @@ Usage:
         ...
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Optional
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
+from fastapi import HTTPException, Request
 from fastapi.security.base import SecurityBase
-from starlette.requests import Request as StarletteRequest
 
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.proxy._types import (
     ProxyException,
     SpecialHeaders,

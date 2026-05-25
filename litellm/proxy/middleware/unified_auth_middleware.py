@@ -16,18 +16,15 @@ Usage:
 """
 
 import json
-from typing import Any, Callable, List, MutableMapping, Optional, Set
+from typing import Any, List, MutableMapping, Optional, Set
 
 from fastapi import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
-    get_request_route,
-    route_in_additonal_public_routes,
-)
+from litellm.proxy._types import SpecialHeaders
+from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 
 
 class UnifiedAuthMiddleware:
