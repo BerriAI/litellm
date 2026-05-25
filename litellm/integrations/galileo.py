@@ -290,7 +290,7 @@ class GalileoObserve(CustomLogger):
             )
             return
 
-        if 200 <= response.status_code < 300:
+        if response.is_success:
             verbose_logger.debug(
                 "Galileo Logger: successfully flushed in memory records"
             )

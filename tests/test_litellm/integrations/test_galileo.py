@@ -113,3 +113,33 @@ async def test_galileo_flush_swallows_http_errors(galileo_v2_env):
         await logger.flush_in_memory_records()
 
     assert len(logger.in_memory_records) == 1
+
+
+@pytest.mark.asyncio
+async def test_galileo_flush_clears_records_on_201(galileo_v2_env):
+    logger = GalileoObserve()
+    logger.in_memory_records = [
+        {
+            "latency_ms": 1,
+            "status_code": 200,
+            "input_text": "a",
+            "output_text": "b",
+            "node_type": "acompletion",
+            "model": "gpt-5.2",
+            "num_input_tokens": 0,
+            "num_output_tokens": 0,
+            "created_at": "2026-05-25T12:00:00",
+        }
+    ]
+
+    mock_response = AsyncMock()
+    mock_response.is_success = True
+    mock_response.status_code = 201
+
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
+        mock_post.return_value = mock_response
+        await logger.flush_in_memory_records()
+
+    assert logger.in_memory_records == []
