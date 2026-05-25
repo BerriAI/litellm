@@ -8,15 +8,16 @@ interface UseKeyboardNavigationProps {
   allLogs: LogEntry[];
   onClose: () => void;
   onSelectLog?: (log: LogEntry) => void;
+  onPreviousPage?: () => void;
+  onNextPage?: () => void;
 }
 
 /**
  * Custom hook for keyboard navigation in the log details drawer.
- * Handles J/K for next/previous and Escape for close.
  *
  * Keyboard shortcuts:
- * - J: Navigate to next log (down)
- * - K: Navigate to previous log (up)
+ * - J / K: Navigate to next / previous log within the current page
+ * - Shift+J / Shift+K: Page next / previous (session mode)
  * - Escape: Close drawer
  */
 export function useKeyboardNavigation({
@@ -25,6 +26,8 @@ export function useKeyboardNavigation({
   allLogs,
   onClose,
   onSelectLog,
+  onPreviousPage,
+  onNextPage,
 }: UseKeyboardNavigationProps) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -35,24 +38,29 @@ export function useKeyboardNavigation({
 
       if (!isOpen) return;
 
-      switch (e.key) {
-        case KEY_ESCAPE:
-          onClose();
-          break;
-        case KEY_J_LOWER:
-        case KEY_J_UPPER:
-          selectNextLog();
-          break;
-        case KEY_K_LOWER:
-        case KEY_K_UPPER:
-          selectPreviousLog();
-          break;
+      if (e.key === KEY_ESCAPE) {
+        onClose();
+        return;
+      }
+
+      // With Shift held, e.key is already uppercase ("J"/"K"). Compare against
+      // both cases so the page shortcuts work regardless of caps lock.
+      const isJ = e.key === KEY_J_LOWER || e.key === KEY_J_UPPER;
+      const isK = e.key === KEY_K_LOWER || e.key === KEY_K_UPPER;
+      if (!isJ && !isK) return;
+
+      if (e.shiftKey) {
+        if (isJ) onNextPage?.();
+        else onPreviousPage?.();
+      } else {
+        if (isJ) selectNextLog();
+        else selectPreviousLog();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, currentLog, allLogs]);
+  }, [isOpen, currentLog, allLogs, onClose, onSelectLog, onPreviousPage, onNextPage]);
 
   const selectNextLog = () => {
     if (!currentLog || !allLogs.length || !onSelectLog) return;

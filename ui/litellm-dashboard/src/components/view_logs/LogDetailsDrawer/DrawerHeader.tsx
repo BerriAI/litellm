@@ -1,5 +1,11 @@
 import { Button, Space, Tag, Tooltip, Typography } from "antd";
-import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
+import {
+  CloseOutlined,
+  UpOutlined,
+  DownOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
+} from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -22,6 +28,11 @@ interface DrawerHeaderProps {
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  onPreviousPage?: () => void;
+  onNextPage?: () => void;
+  canGoPreviousPage?: boolean;
+  canGoNextPage?: boolean;
+  showPageControls?: boolean;
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
@@ -36,6 +47,11 @@ export function DrawerHeader({
   onClose,
   onPrevious,
   onNext,
+  onPreviousPage,
+  onNextPage,
+  canGoPreviousPage = false,
+  canGoNextPage = false,
+  showPageControls = false,
   statusLabel,
   statusColor,
   environment,
@@ -60,7 +76,16 @@ export function DrawerHeader({
       {/* Row 1: Request ID + Actions */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}>
         <RequestIdSection requestId={log.request_id} />
-        <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
+        <NavigationSection
+          onPrevious={onPrevious}
+          onNext={onNext}
+          onClose={onClose}
+          onPreviousPage={onPreviousPage}
+          onNextPage={onNextPage}
+          canGoPreviousPage={canGoPreviousPage}
+          canGoNextPage={canGoNextPage}
+          showPageControls={showPageControls}
+        />
       </div>
 
       {/* Row 2: Status + Env + Timestamp */}
@@ -142,10 +167,20 @@ function NavigationSection({
   onPrevious,
   onNext,
   onClose,
+  onPreviousPage,
+  onNextPage,
+  canGoPreviousPage = false,
+  canGoNextPage = false,
+  showPageControls = false,
 }: {
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
+  onPreviousPage?: () => void;
+  onNextPage?: () => void;
+  canGoPreviousPage?: boolean;
+  canGoNextPage?: boolean;
+  showPageControls?: boolean;
 }) {
   const keyboardShortcutStyle = {
     border: "1px solid #d9d9d9",
@@ -167,6 +202,32 @@ function NavigationSection({
         <DownOutlined />
         <span style={keyboardShortcutStyle}>J</span>
       </Button>
+      {showPageControls && (
+        <>
+          <Tooltip title="Previous page (Shift+K)">
+            <Button
+              type="text"
+              size="small"
+              onClick={onPreviousPage}
+              disabled={!canGoPreviousPage}
+            >
+              <DoubleLeftOutlined />
+              <span style={keyboardShortcutStyle}>⇧K</span>
+            </Button>
+          </Tooltip>
+          <Tooltip title="Next page (Shift+J)">
+            <Button
+              type="text"
+              size="small"
+              onClick={onNextPage}
+              disabled={!canGoNextPage}
+            >
+              <DoubleRightOutlined />
+              <span style={keyboardShortcutStyle}>⇧J</span>
+            </Button>
+          </Tooltip>
+        </>
+      )}
       <Tooltip title="ESC to close">
         <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
       </Tooltip>
