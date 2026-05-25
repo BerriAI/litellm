@@ -132,30 +132,47 @@ test.describe("Proxy Admin - Teams", () => {
     await expect(page.getByText(/updated|success/i).first()).toBeVisible({ timeout: 10_000 });
   });
 
-  test("Edit team model selection", async ({ page }) => {
-    await navigateToPage(page, Page.Teams);
-    await dismissFeedbackPopup(page);
+  test("Edit team model selection", async ({ page, request }) => {
+    // Restore the seeded models via API in case a prior run (or a CI retry)
+    // left this team mutated — the assertion below requires fake-anthropic-claude
+    // to be present.
+    const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+    const seededModels = ["fake-openai-gpt-4", "fake-anthropic-claude"];
+    const restore = async () => {
+      await request.post("http://localhost:4000/team/update", {
+        headers: { Authorization: `Bearer ${masterKey}` },
+        data: { team_id: E2E_TEAM_CRUD_ID, models: seededModels },
+      });
+    };
+    await restore();
 
-    await clickTeamId(page, E2E_TEAM_CRUD_ID);
+    try {
+      await navigateToPage(page, Page.Teams);
+      await dismissFeedbackPopup(page);
 
-    await page.getByRole("tab", { name: "Settings" }).click();
-    await page.getByRole("button", { name: "Edit Settings" }).click();
+      await clickTeamId(page, E2E_TEAM_CRUD_ID);
 
-    // E2E Team CRUD seeds with {fake-openai-gpt-4, fake-anthropic-claude}.
-    // Remove the anthropic tag — other tests against this team use "All Team
-    // Models" so they pick up whatever remains.
-    const modelsSelect = page.locator("[data-testid='models-select']");
-    await expect(modelsSelect).toBeVisible({ timeout: 10_000 });
+      await page.getByRole("tab", { name: "Settings" }).click();
+      await page.getByRole("button", { name: "Edit Settings" }).click();
 
-    const anthropicTag = modelsSelect
-      .locator(".ant-select-selection-item")
-      .filter({ hasText: "fake-anthropic-claude" });
-    await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
-    await anthropicTag.locator(".ant-select-selection-item-remove").click();
+      // Remove the anthropic tag — other tests against this team use "All Team
+      // Models" so they pick up whatever remains.
+      const modelsSelect = page.locator("[data-testid='models-select']");
+      await expect(modelsSelect).toBeVisible({ timeout: 10_000 });
 
-    await page.getByRole("button", { name: "Save Changes" }).click();
+      const anthropicTag = modelsSelect
+        .locator(".ant-select-selection-item")
+        .filter({ hasText: "fake-anthropic-claude" });
+      await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
+      await anthropicTag.locator(".ant-select-selection-item-remove").click();
 
-    await expect(page.getByText(/Team settings updated|updated successfully/i).first())
-      .toBeVisible({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Save Changes" }).click();
+
+      await expect(page.getByText(/Team settings updated|updated successfully/i).first())
+        .toBeVisible({ timeout: 10_000 });
+    } finally {
+      // Leave the team in its seeded state for any subsequent test or rerun.
+      await restore();
+    }
   });
 });
