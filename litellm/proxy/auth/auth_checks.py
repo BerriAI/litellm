@@ -1647,6 +1647,7 @@ async def _cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
         key="team_id:{}".format(team_id),
         value=team_table,
@@ -1655,21 +1656,26 @@ async def _cache_team_object(
         model_type=LiteLLM_TeamTableCachedObj,
     )
 
-    # Mirror the write under the alias key too. `get_team_object_by_alias`
-    # (used by the JWT auth path with `team_alias_jwt_field`) reads from
-    # `team_alias:<alias>`, and `_cache_team_object` is the canonical
-    # "refresh this team" primitive — every caller (cache-refreshing team
-    # writes, DB-fetch repopulate, access-group endpoints) needs the
-    # alias-keyed entry to stay in sync, otherwise the alias path keeps
-    # serving stale `team.models` / `object_permission` until cache TTL.
+    # Invalidate the alias-keyed cache so the JWT auth path with
+    # `team_alias_jwt_field` (which reads via `get_team_object_by_alias`)
+    # doesn't keep serving the pre-mutation team after every team-write
+    # endpoint (team_model_add, team_model_delete, update_team, etc.).
+    #
+    # Why DELETE and not WRITE: `team_alias` has no UNIQUE constraint in
+    # schema.prisma. Writing this cache from the generic refresh path
+    # would let a team admin who renamed their team to collide with
+    # another team's alias silently overwrite the cached team for
+    # JWT-by-alias auth (veria-ai review on #28739). Deleting forces the
+    # next reader through `get_team_object_by_alias`, which DOES enforce
+    # uniqueness (len(teams) > 1 raises HTTPException) before populating
+    # the cache from a verified single row.
     if team_table.team_alias:
-        await _cache_management_object(
-            key="team_alias:{}".format(team_table.team_alias),
-            value=team_table,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            model_type=LiteLLM_TeamTableCachedObj,
-        )
+        alias_key = "team_alias:{}".format(team_table.team_alias)
+        user_api_key_cache.delete_cache(key=alias_key)
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+                key=alias_key
+            )
 
 
 async def _cache_key_object(
