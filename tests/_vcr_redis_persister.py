@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import sys
 import warnings
 from typing import Any, Optional
 
@@ -13,6 +15,13 @@ REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
 CASSETTE_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
 VCR_VERBOSE_ENV = "LITELLM_VCR_VERBOSE"
 MAX_EPISODES_PER_CASSETTE = 50
+# GPT-image-1 cost diagnostic: when set, save_cassette dumps per-episode
+# (method, host, path, body-len, body-sha12) tuples to stderr so we can
+# observe whether multipart/image-edit requests are stable or every CI
+# run is generating fresh request bytes (which would force live calls
+# under record_mode="new_episodes"). Mirrors the temporary diagnostic in
+# PR #28110 that was reverted once the boundary fix landed.
+EPISODE_BODY_AUDIT_ENV = "LITELLM_VCR_EPISODE_BODY_AUDIT"
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -179,6 +188,8 @@ def make_redis_persister(
             key = redis_key_for(cassette_path)
             passed = _passed_by_cassette_key.pop(key, True)
             episode_count = len(cassette_dict.get("requests", []) or [])
+            if os.environ.get(EPISODE_BODY_AUDIT_ENV) == "1" and passed:
+                _dump_episode_body_audit(key, cassette_dict)
             if episode_count > MAX_EPISODES_PER_CASSETTE:
                 _log.warning(
                     "VCR redis save refused for %s; cassette has %d episodes "
@@ -219,6 +230,68 @@ def make_redis_persister(
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
 
     return _RedisPersister
+
+
+def _coerce_body_to_bytes(body: Any) -> bytes:
+    if body is None:
+        return b""
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, bytearray):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8", errors="replace")
+    return repr(body).encode("utf-8", errors="replace")
+
+
+def _dump_episode_body_audit(redis_key: str, cassette_dict: dict) -> None:
+    """Emit one stderr line per episode about to be saved.
+
+    Triggered by ``LITELLM_VCR_EPISODE_BODY_AUDIT=1``. Each line includes
+    method, host, path (no query), body length and a 12-char SHA-256
+    prefix so a reviewer can tell at a glance whether the bodies of two
+    consecutive runs are identical (cassette-stable, will replay) or
+    diverging (will record new episodes and burn live API spend on every
+    run). Intentionally read-only and best-effort — never raises.
+    """
+    try:
+        reqs = cassette_dict.get("requests") or []
+        resps = cassette_dict.get("responses") or []
+        sys.stderr.write(
+            f"[VCR_EPISODE_AUDIT] cassette={redis_key} episodes={len(reqs)}\n"
+        )
+        for idx, req in enumerate(reqs):
+            method = getattr(req, "method", None) or (
+                req.get("method") if isinstance(req, dict) else "?"
+            )
+            uri = (
+                getattr(req, "uri", None)
+                or getattr(req, "url", None)
+                or (req.get("uri") or req.get("url") if isinstance(req, dict) else "?")
+            )
+            host_path = (uri or "?").split("?", 1)[0]
+            body = getattr(req, "body", None)
+            if body is None and isinstance(req, dict):
+                body = req.get("body")
+            body_bytes = _coerce_body_to_bytes(body)
+            body_sha = hashlib.sha256(body_bytes).hexdigest()[:12]
+            # Response status (helpful: a 4xx body sometimes still bills).
+            resp = resps[idx] if idx < len(resps) else {}
+            status_code = "?"
+            if isinstance(resp, dict):
+                status = resp.get("status") or {}
+                if isinstance(status, dict):
+                    status_code = status.get("code", "?")
+                elif isinstance(status, int):
+                    status_code = status
+            sys.stderr.write(
+                f"[VCR_EPISODE_AUDIT]   ep{idx:02d} {method} {host_path} "
+                f"body_len={len(body_bytes)} body_sha={body_sha} status={status_code}\n"
+            )
+        sys.stderr.flush()
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        sys.stderr.write(f"[VCR_EPISODE_AUDIT] audit failed: {exc}\n")
+        sys.stderr.flush()
 
 
 def filter_non_2xx_response(response):

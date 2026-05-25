@@ -253,6 +253,30 @@ async def image_generation(session, key, model="gpt-image-1"):
                 response_text = await response.text()
                 print("/images/generations response", response_text)
 
+                # GPT-image-1 cost audit: surface usage/size/quality/n from every
+                # successful response so we can reconcile actual CI spend against
+                # OpenAI's bill. Test name is recovered from PYTEST_CURRENT_TEST.
+                if status == 200:
+                    try:
+                        import json as _json
+                        import os as _os
+
+                        _payload = _json.loads(response_text)
+                        _usage = _payload.get("usage") or {}
+                        _data = _payload.get("data") or []
+                        _test_id = _os.environ.get("PYTEST_CURRENT_TEST", "?")
+                        print(
+                            f"[GPT_IMAGE_AUDIT] source=docker_proxy_test test={_test_id} "
+                            f"model={model!r} size={_payload.get('size')} "
+                            f"quality={_payload.get('quality')} n={len(_data)} usage={_usage}",
+                            flush=True,
+                        )
+                    except Exception as _audit_exc:
+                        print(
+                            f"[GPT_IMAGE_AUDIT] docker proxy audit failed: {_audit_exc}",
+                            flush=True,
+                        )
+
                 print()
 
                 if status != 200:

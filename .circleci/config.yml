@@ -1075,6 +1075,12 @@ jobs:
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
+          # LITELLM_VCR_EPISODE_BODY_AUDIT=1 dumps per-episode body hashes
+          # on every cassette save, so a reviewer can tell whether the
+          # image-edit cassettes are stable or every CI run is recording
+          # fresh bodies (which would silently force live calls).
+          environment:
+            LITELLM_VCR_EPISODE_BODY_AUDIT: "1"
           command: |
             mkdir -p test-results
             TEST_FILES=$(circleci tests glob "tests/image_gen_tests/**/test_*.py")
@@ -1526,6 +1532,15 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
+      # GPT-image-1 cost diagnostic: tee the docker container's stdout to
+      # an artifact file so [GPT_IMAGE_AUDIT] lines survive the CircleCI
+      # 50 MB-per-step output cap and can be downloaded after the run.
+      - run:
+          name: Capture docker logs to artifact
+          command: |
+            mkdir -p test-results
+            docker logs -f my-app > test-results/proxy-docker.log 2>&1
+          background: true
       - wait_for_service:
           url: http://localhost:4000
           timeout: "300"
@@ -1546,9 +1561,23 @@ jobs:
                 --durations=5"
           no_output_timeout: 15m
 
+      # GPT-image-1 cost diagnostic: surface a sortable summary of every
+      # live gpt-image-1 call this build made (test id, model, size,
+      # quality, output tokens, computed cost) so the source of ongoing
+      # OUTPUT spend can be reconciled against OpenAI billing.
+      - run:
+          name: GPT-image-1 audit summary
+          when: always
+          command: |
+            echo "=== GPT_IMAGE_AUDIT summary (build_and_test) ==="
+            grep -h '\[GPT_IMAGE_AUDIT\]' test-results/proxy-docker.log 2>/dev/null | sort -u | head -200 || true
+            echo "=== end summary ==="
       # Store test results
       - store_test_results:
           path: test-results
+      - store_artifacts:
+          path: test-results
+          destination: build_and_test_artifacts
   e2e_openai_endpoints:
     machine:
       image: ubuntu-2204:2024.04.1

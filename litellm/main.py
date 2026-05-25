@@ -7382,6 +7382,48 @@ async def ahealth_check(
 
         if mode in mode_handlers:
             _response = await mode_handlers[mode]()
+            # GPT-image-1 cost audit: log usage for any image_generation
+            # health-check so build_and_test runs (where the proxy actually
+            # invokes aimage_generation for every model the /health pass
+            # touches) leave a paper trail of what was billed. The print()
+            # goes to the proxy's stdout which CircleCI captures.
+            if mode == "image_generation":
+                try:
+                    _usage = getattr(_response, "usage", None) or (
+                        _response.get("usage") if isinstance(_response, dict) else None
+                    )
+                    _size = getattr(_response, "size", None) or (
+                        _response.get("size") if isinstance(_response, dict) else None
+                    )
+                    _quality = getattr(_response, "quality", None) or (
+                        _response.get("quality")
+                        if isinstance(_response, dict)
+                        else None
+                    )
+                    _data = (
+                        getattr(_response, "data", None)
+                        or (
+                            _response.get("data")
+                            if isinstance(_response, dict)
+                            else None
+                        )
+                        or []
+                    )
+                    _n = len(_data) if hasattr(_data, "__len__") else None
+                    _cost = (getattr(_response, "_hidden_params", {}) or {}).get(
+                        "response_cost"
+                    )
+                    print(
+                        f"[GPT_IMAGE_AUDIT] source=health_check model={model!r} "
+                        f"prompt={(prompt or '')[:60]!r} size={_size} quality={_quality} "
+                        f"n={_n} usage={_usage} response_cost={_cost}",
+                        flush=True,
+                    )
+                except Exception as _audit_exc:  # pragma: no cover - diagnostic only
+                    print(
+                        f"[GPT_IMAGE_AUDIT] health_check audit failed: {_audit_exc}",
+                        flush=True,
+                    )
             # Only process headers for chat mode
             _response_headers: dict = (
                 getattr(_response, "_hidden_params", {}).get("headers", {}) or {}

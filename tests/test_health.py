@@ -59,6 +59,25 @@ async def test_health():
             all_healthy_models["healthy_count"] + all_healthy_models["unhealthy_count"]
         )
         assert total_model_count > 0
+        # GPT-image-1 cost audit: enumerate every healthy endpoint so we can
+        # confirm which proxy model entries (e.g. dall-e-2 / openai-dall-e-3
+        # aliased to gpt-image-1) trigger live image_generation calls per
+        # /health invocation.
+        try:
+            for ep in all_healthy_models.get("healthy_endpoints") or []:
+                if not isinstance(ep, dict):
+                    continue
+                print(
+                    f"[GPT_IMAGE_AUDIT] source=health_endpoint "
+                    f"model_in_config={ep.get('model_name')!r} "
+                    f"underlying_model={ep.get('model')!r}",
+                    flush=True,
+                )
+        except Exception as _audit_exc:
+            print(
+                f"[GPT_IMAGE_AUDIT] health endpoint audit failed: {_audit_exc}",
+                flush=True,
+            )
 
 
 @pytest.mark.asyncio
