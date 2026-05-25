@@ -7279,7 +7279,8 @@ class ProxyStartupEvent:
         use_redis_transaction_buffer can run when the proxy cache backend is not
         Redis (e.g. disk, s3).
 
-        Returns None when the buffer is disabled or no Redis env vars are set.
+        Returns None when the buffer is disabled, or when no Redis host or url
+        is set in the environment.
         """
         from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
@@ -7294,7 +7295,7 @@ class ProxyStartupEvent:
             return None
 
         redis_env_kwargs = _redis_kwargs_from_environment()
-        if not redis_env_kwargs:
+        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
             return None
 
         return RedisCache(**redis_env_kwargs)

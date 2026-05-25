@@ -342,3 +342,35 @@ def test_get_transaction_buffer_redis_cache_none_without_redis_env():
             general_settings={"use_redis_transaction_buffer": True},
         )
     assert result is None
+
+
+def test_get_transaction_buffer_redis_cache_none_without_host_or_url():
+    """
+    A REDIS_* var that is not a connection target (e.g. REDIS_SOCKET_TIMEOUT) must not
+    trigger a build. Without a host or url, get_redis_client raises, so return None and
+    let startup validation surface the config error instead of crashing.
+    """
+    with patch(
+        "litellm._redis._redis_kwargs_from_environment",
+        return_value={"socket_timeout": 5.0},
+    ):
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": True},
+        )
+    assert result is None
+
+
+def test_get_transaction_buffer_redis_cache_parses_string_flag(monkeypatch):
+    """
+    use_redis_transaction_buffer accepts a string value (e.g. from env/YAML); "true"
+    is parsed to a bool before the standalone cache is built.
+    """
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+
+    with patch("litellm.proxy.proxy_server.RedisCache") as mock_redis_cache:
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": "true"},
+        )
+
+    mock_redis_cache.assert_called_once()
+    assert result is mock_redis_cache.return_value
