@@ -291,3 +291,77 @@ async def test_tool_policy_registry_not_initialized_returns_untrusted():
     assert not registry.is_initialized()
     result = registry.get_effective_policies(["unknown_tool"])
     assert result == {"unknown_tool": "untrusted"}
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
+    """`ToolPolicyRegistry.sync_tool_policy_from_db` self-heals across one
+    ClientNotConnectedError on the tools read — the perms read still fires
+    after the recovery and the registry initializes cleanly."""
+    import prisma as prisma_pkg
+
+    registry = ToolPolicyRegistry()
+    invocations: list = []
+
+    async def _flaky_find_many():
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma_pkg.errors.ClientNotConnectedError()
+        return []
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(
+        side_effect=_flaky_find_many
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    await registry.sync_tool_policy_from_db(mock_prisma_client)
+
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "sync_tool_policy_from_db_tools_lookup_failure"
+    )
+    assert registry.is_initialized()
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read():
+    """Same as above but the blip happens on the perms read — distinct reason
+    tag in telemetry confirms the second wrap is wired separately."""
+    import prisma as prisma_pkg
+
+    registry = ToolPolicyRegistry()
+    perms_invocations: list = []
+
+    async def _flaky_perms_find_many():
+        perms_invocations.append(None)
+        if len(perms_invocations) == 1:
+            raise prisma_pkg.errors.ClientNotConnectedError()
+        return []
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_tooltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(
+        side_effect=_flaky_perms_find_many
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    await registry.sync_tool_policy_from_db(mock_prisma_client)
+
+    assert len(perms_invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "sync_tool_policy_from_db_perms_lookup_failure"
+    )

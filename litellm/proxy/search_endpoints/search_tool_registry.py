@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.types.search import SearchTool
 
@@ -179,10 +180,12 @@ class SearchToolRegistry:
             List of search tool configurations
         """
         try:
-            search_tools_from_db = (
-                await prisma_client.db.litellm_searchtoolstable.find_many(
+            search_tools_from_db = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: prisma_client.db.litellm_searchtoolstable.find_many(
                     order={"created_at": "desc"},
-                )
+                ),
+                reason="get_all_search_tools_from_db_lookup_failure",
             )
 
             search_tools: List[SearchTool] = []

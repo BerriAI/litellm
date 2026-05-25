@@ -308,7 +308,10 @@ from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
+    call_with_db_reconnect_retry,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -5898,8 +5901,12 @@ class ProxyConfig:
         """
 
         try:
-            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
-                where={"id": "sso_config"}
+            sso_settings = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: prisma_client.db.litellm_ssoconfig.find_unique(
+                    where={"id": "sso_config"}
+                ),
+                reason="init_sso_settings_in_db_lookup_failure",
             )
             if sso_settings is not None:
                 sso_settings.sso_settings.pop("role_mappings", None)
@@ -5934,8 +5941,12 @@ class ProxyConfig:
         )
 
         try:
-            db_record = await prisma_client.db.litellm_configoverrides.find_unique(
-                where={"config_type": "hashicorp_vault"}
+            db_record = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: prisma_client.db.litellm_configoverrides.find_unique(
+                    where={"config_type": "hashicorp_vault"}
+                ),
+                reason="init_hashicorp_vault_config_override_lookup_failure",
             )
 
             if db_record is None or db_record.config_value is None:
