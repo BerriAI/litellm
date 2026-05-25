@@ -37,7 +37,8 @@ import re
 import subprocess
 import sys
 import textwrap
-from typing import Any
+import urllib.parse
+from typing import Any, Iterable
 
 DEFAULT_MODEL = "gpt-5.4-mini"
 
@@ -82,6 +83,46 @@ GRACE_PERIOD_SECONDS = 86400
 # from an external account that has no push permissions to the repo.
 # Listed lower-case so callers compare via `login.lower() in ...`.
 IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
+
+# --- Review-gate ("ready for review" label lifecycle) configuration ----------
+# The review gate keeps a single label in sync with whether a PR currently
+# clears BOTH quality bars: the LLM rubric (clear problem + expected/actual +
+# QA proof, or a linked issue) AND Greptile's most recent confidence score.
+READY_FOR_REVIEW_LABEL = "ready for review"
+DEFAULT_GRACE_DAYS = 1  # 24h before an un-passing, un-tagged PR is auto-closed
+DEFAULT_MIN_GREPTILE_SCORE = 4  # Greptile < 4/5 counts as "not passing"
+
+# Hidden HTML-comment markers stamped into review-gate comments. They never
+# render in the GitHub UI but let the gate detect its own prior actions so it
+# (a) posts the within-grace "what's missing" notice at most once and (b) can
+# tell a first-time pass ("ready for review") from a recovery after a
+# regression ("all clear again").
+READY_MARKER = "<!-- agent-shin:ready -->"
+REGRESSED_MARKER = "<!-- agent-shin:regressed -->"
+WITHIN_GRACE_MARKER = "<!-- agent-shin:within-grace -->"
+
+# Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
+# and `greptile-apps` in `gh pr view --json` output. Accept either form.
+# Mirrors the constant of the same name in `close_low_quality_prs.py`; keep
+# them in sync so the daily sweep and the review gate read the score through
+# the same set of logins.
+GREPTILE_BOT_LOGINS = frozenset({"greptile-apps", "greptile-apps[bot]"})
+
+# Matches lines like:
+#   <h3>Confidence Score: 3/5</h3>
+#   **Confidence Score: 4/5**
+#   Confidence Score: 5 / 5
+SCORE_PATTERN = re.compile(
+    r"confidence\s*score\s*[:\-]?\s*(\d+)\s*/\s*5",
+    re.IGNORECASE,
+)
+
+# Marker phrase Agent Shin always includes in its auto-close comments
+# (see `format_pr_close_comment` / `format_issue_close_comment`). The
+# review-gate close path stamps the same marker so reconsider can recognize
+# the closure as a bot close. Keep the marker in sync with the literal text
+# in those formatter functions.
+AGENT_SHIN_AUTO_CLOSE_MARKER = "I'm **Agent Shin**"
 
 # Model families that require `reasoning_effort` to be set, and that reject
 # `temperature != 1` unless `reasoning_effort` is "none". For these models we
@@ -199,6 +240,35 @@ def reopen_issue(repo: str, number: int) -> None:
         "-f",
         "state_reason=reopened",
     )
+
+
+def add_label(repo: str, number: int, label: str) -> None:
+    """Add a label to a PR/issue (GitHub creates the label if it's missing)."""
+    gh(
+        "api",
+        f"repos/{repo}/issues/{number}/labels",
+        "-X",
+        "POST",
+        "-f",
+        f"labels[]={label}",
+    )
+
+
+def remove_label(repo: str, number: int, label: str) -> None:
+    """Remove a label from a PR/issue. A missing label (404) is not an error."""
+    encoded = urllib.parse.quote(label, safe="")
+    try:
+        gh(
+            "api",
+            f"repos/{repo}/issues/{number}/labels/{encoded}",
+            "-X",
+            "DELETE",
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").lower()
+        if "404" in stderr or "not found" in stderr:
+            return
+        raise
 
 
 def _iter_paginated_json(*api_args: str) -> Any:
@@ -357,6 +427,43 @@ def is_internal_contributor(item: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Greptile score + age helpers (mirrored from close_low_quality_prs.py)
+
+
+def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
+    """Return (score, comment) for the most recent Greptile-authored comment
+    that contains a "Confidence Score: X/5". Returns None if no such comment.
+
+    "Most recent" is determined by the comment's `updated_at` (falling back to
+    `created_at`), so re-reviews override earlier passes.
+    """
+    candidates: list[tuple[str, int, dict]] = []
+    for comment in comments:
+        user = (comment.get("user") or {}).get("login", "")
+        if user not in GREPTILE_BOT_LOGINS:
+            continue
+        body = comment.get("body") or ""
+        match = SCORE_PATTERN.search(body)
+        if not match:
+            continue
+        score = int(match.group(1))
+        timestamp = comment.get("updated_at") or comment.get("created_at") or ""
+        candidates.append((timestamp, score, comment))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda triple: triple[0])
+    _, score, comment = candidates[-1]
+    return score, comment
+
+
+def parse_iso8601(value: str) -> dt.datetime:
+    """Parse a GitHub ISO-8601 timestamp into a timezone-aware datetime."""
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------------------
 # Prompt construction
 
 
@@ -375,8 +482,7 @@ def build_pr_prompt(*, title: str, body: str) -> str:
     # Dedent the static template *before* interpolating dynamic fields so that
     # multi-line bodies (whose 2nd+ lines start at column 0) don't defeat the
     # common-indent computation in textwrap.dedent.
-    template = textwrap.dedent(
-        """
+    template = textwrap.dedent("""
         You are "Agent Shin", the OSS triage bot for the LiteLLM open-source
         repository (BerriAI/litellm). Decide whether this external pull request
         meets the project's contribution standards.
@@ -422,8 +528,7 @@ def build_pr_prompt(*, title: str, body: str) -> str:
         ---
         {cleaned_body}
         ---
-        """
-    ).strip()
+        """).strip()
     return template.format(title=title, cleaned_body=cleaned_body)
 
 
@@ -432,8 +537,7 @@ def build_issue_prompt(*, title: str, body: str) -> str:
     # Dedent the static template *before* interpolating dynamic fields so that
     # multi-line bodies (whose 2nd+ lines start at column 0) don't defeat the
     # common-indent computation in textwrap.dedent.
-    template = textwrap.dedent(
-        """
+    template = textwrap.dedent("""
         You are "Agent Shin", the OSS triage bot for the LiteLLM open-source
         repository (BerriAI/litellm). Decide whether this GitHub issue meets
         the project's reporting standards.
@@ -476,8 +580,7 @@ def build_issue_prompt(*, title: str, body: str) -> str:
         ---
         {cleaned_body}
         ---
-        """
-    ).strip()
+        """).strip()
     return template.format(title=title, cleaned_body=cleaned_body)
 
 
@@ -762,6 +865,282 @@ def format_reconsider_still_failing_comment(kind: str, verdict: dict) -> str:
         "\n"
         f"{RECONSIDER_COMMENT_MARKER}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Review gate — "ready for review" label lifecycle
+
+_UNSET = object()
+
+
+def _combine_missing(
+    verdict: dict, greptile_score: int | None, min_score: int
+) -> list[str]:
+    """Merge the LLM rubric's `missing` list with a Greptile-score shortfall."""
+    missing = list(verdict.get("missing") or [])
+    if greptile_score is not None and greptile_score < min_score:
+        missing.insert(
+            0,
+            f"Greptile's most recent review scored this PR {greptile_score}/5 "
+            f"(below the {min_score}/5 bar)",
+        )
+    return missing or ["(see explanation below)"]
+
+
+def _has_marker(comments: Iterable[dict], marker: str) -> bool:
+    return any(marker in (comment.get("body") or "") for comment in comments)
+
+
+def format_ready_for_review_comment(verdict: dict, greptile_score: int | None) -> str:
+    """Posted the first time a PR clears the bar (label added)."""
+    score_line = (
+        f" Greptile scored it **{greptile_score}/5**."
+        if greptile_score is not None
+        else ""
+    )
+    explanation = verdict.get("explanation") or ""
+    return (
+        "✅ **Triage passed — tagging `ready for review`.**\n"
+        "\n"
+        "Agent Shin checked this PR against the "
+        "[contribution rubric](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md) "
+        "and it clears the bar (a linked issue, or a clear problem description "
+        f"+ expected vs. actual + QA proof).{score_line}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "A maintainer will take it from here. If a later re-check finds the PR "
+        f"has regressed (Greptile drops below {DEFAULT_MIN_GREPTILE_SCORE}/5, "
+        "the QA proof is removed, etc.) I'll pull the tag and comment with "
+        "what's missing — fix it and the tag comes back automatically.\n"
+        f"{READY_MARKER}"
+    )
+
+
+def format_all_clear_comment(verdict: dict, greptile_score: int | None) -> str:
+    """Posted when a PR recovers after a regression (label re-added)."""
+    score_line = (
+        f" Greptile is back to **{greptile_score}/5**."
+        if greptile_score is not None
+        else ""
+    )
+    explanation = verdict.get("explanation") or ""
+    return (
+        "✅ **All clear again — re-adding `ready for review`.**\n"
+        "\n"
+        "Thanks for addressing the earlier feedback. On re-check this PR meets "
+        f"the contribution bar once more.{score_line}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "A maintainer will take another look.\n"
+        f"{READY_MARKER}"
+    )
+
+
+def format_regression_comment(missing: list[str], explanation: str) -> str:
+    """Posted when a previously-tagged PR regresses (label removed, PR stays open)."""
+    return (
+        "⚠️ **Removing the `ready for review` tag.**\n"
+        "\n"
+        "On a re-check this PR no longer meets the contribution bar. What's "
+        "missing now:\n"
+        "\n"
+        f"{_format_missing(missing)}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        "The PR stays open — address the points above and Agent Shin will post "
+        'an "all clear" comment and re-add the tag automatically.\n'
+        f"{REGRESSED_MARKER}"
+    )
+
+
+def format_within_grace_comment(
+    missing: list[str], explanation: str, grace_days: int
+) -> str:
+    """Posted once while a failing PR is still inside its grace window."""
+    window = "24 hours" if grace_days == 1 else f"{grace_days} days"
+    return (
+        "👋 Hi, thanks for the PR! This is **Agent Shin**, the automated triage "
+        "bot. This PR doesn't meet the contribution bar yet:\n"
+        "\n"
+        f"{_format_missing(missing)}\n"
+        "\n"
+        f"> {explanation}\n"
+        "\n"
+        f"You have ~{window} from when this PR was opened to add the missing "
+        "pieces. Once it passes I'll tag it `ready for review`; otherwise I'll "
+        "auto-close it (you can always re-open the conversation with "
+        "`@agent-shin reconsider`).\n"
+        f"{WITHIN_GRACE_MARKER}"
+    )
+
+
+def review_gate(
+    *,
+    repo: str,
+    number: int,
+    close: bool,
+    model: str,
+    judge: Any = None,
+    greptile_score: Any = _UNSET,
+    comments: Any = _UNSET,
+    now: dt.datetime | None = None,
+    grace_days: int = DEFAULT_GRACE_DAYS,
+    min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
+    label: str = READY_FOR_REVIEW_LABEL,
+) -> dict:
+    """Reconcile the `ready for review` label with a PR's current quality.
+
+    A PR is *passing* when it clears BOTH gates: the LLM rubric (linked issue,
+    or problem description + expected/actual + QA proof) AND Greptile's most
+    recent confidence score (>= ``min_greptile_score``; absence of a score is
+    not held against the PR). The gate then drives a small state machine, using
+    the label itself as the persisted state so comments fire only on
+    transitions (never on every scheduled run):
+
+      passing, untagged           -> add label + "ready for review" / "all clear"
+      passing, tagged             -> noop-passing
+      not passing, tagged         -> remove label + regression comment (stays open)
+      not passing, untagged, old  -> close + comment (past the grace window)
+      not passing, untagged, new  -> one-time "what's missing" notice (within grace)
+
+    ``close`` gates every destructive side effect: with ``close=False`` the
+    function returns a ``would-*`` preview and touches nothing, mirroring the
+    dry-run contract of :func:`triage`. ``judge``/``greptile_score``/
+    ``comments``/``now`` are injectable for tests; in production they are
+    resolved from the OpenAI judge, the PR's Greptile comment, the live comment
+    list, and the wall clock respectively.
+    """
+    item = fetch_pr(repo, number)
+
+    title = item.get("title") or ""
+    body = item.get("body") or ""
+    login = (item.get("user") or {}).get("login") or ""
+    association = item.get("author_association") or ""
+    state = item.get("state") or ""
+    labels_now = {(lbl.get("name") or "") for lbl in (item.get("labels") or [])}
+    created_raw = item.get("created_at") or ""
+
+    base_result = {
+        "kind": "pr",
+        "number": number,
+        "title": title,
+        "author": login,
+        "author_association": association,
+        "state": state,
+        "labeled": label in labels_now,
+        "review_gate": True,
+    }
+
+    if state != "open":
+        return {**base_result, "action": "skip-not-open"}
+
+    if is_internal_contributor(item):
+        return {**base_result, "action": "skip-internal-author"}
+
+    # Resolve the comment list once — used for both the Greptile score and the
+    # marker-based dedup below.
+    if comments is _UNSET:
+        comments = list(_iter_paginated_json(f"repos/{repo}/issues/{number}/comments"))
+
+    # --- rubric verdict: linked-issue short-circuit, else the LLM judge -------
+    if has_linked_issue(body):
+        verdict = {
+            "verdict": "pass",
+            "linked_issue": True,
+            "missing": [],
+            "explanation": "Linked-issue regex matched; LLM was not called.",
+        }
+        rubric_pass = True
+    else:
+        prompt = build_pr_prompt(title=title, body=body)
+        if judge is None:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                return {**base_result, "action": "skip-no-llm-key"}
+            base_url = os.environ.get("OPENAI_BASE_URL") or None
+
+            def judge(p: str) -> str:
+                return call_llm_judge(
+                    p, model=model, api_key=api_key, base_url=base_url
+                )
+
+        try:
+            verdict = parse_verdict(judge(prompt))
+        except Exception as exc:  # noqa: BLE001 - judge errors must never act
+            return {**base_result, "action": "skip-llm-error", "error": str(exc)}
+        rubric_pass = (verdict.get("verdict") or "").lower() == "pass"
+
+    # --- Greptile score -------------------------------------------------------
+    if greptile_score is _UNSET:
+        extraction = extract_greptile_score(comments)
+        greptile_score = extraction[0] if extraction else None
+    greptile_ok = greptile_score is None or greptile_score >= min_greptile_score
+    passing = rubric_pass and greptile_ok
+
+    # --- age ------------------------------------------------------------------
+    age_days = None
+    if created_raw:
+        reference = now or dt.datetime.now(dt.timezone.utc)
+        age_days = (reference - parse_iso8601(created_raw)).days
+
+    label_present = label in labels_now
+    explanation = verdict.get("explanation") or ""
+    base_result = {
+        **base_result,
+        "verdict": verdict,
+        "greptile_score": greptile_score,
+        "passing": passing,
+        "age_days": age_days,
+    }
+
+    if passing:
+        if label_present:
+            return {**base_result, "action": "noop-passing"}
+        recovered = _has_marker(comments, REGRESSED_MARKER)
+        comment = (
+            format_all_clear_comment(verdict, greptile_score)
+            if recovered
+            else format_ready_for_review_comment(verdict, greptile_score)
+        )
+        if not close:
+            return {**base_result, "action": "would-label-ready", "comment": comment}
+        post_comment(repo, number, comment)
+        add_label(repo, number, label)
+        return {**base_result, "action": "labeled-ready", "comment": comment}
+
+    missing = _combine_missing(verdict, greptile_score, min_greptile_score)
+
+    if label_present:
+        comment = format_regression_comment(missing, explanation)
+        if not close:
+            return {**base_result, "action": "would-remove-label", "comment": comment}
+        remove_label(repo, number, label)
+        post_comment(repo, number, comment)
+        return {**base_result, "action": "label-removed-regressed", "comment": comment}
+
+    # Not passing and not tagged: close if past the grace window, else notify once.
+    if age_days is not None and age_days >= grace_days:
+        comment = format_pr_close_comment({**verdict, "missing": missing})
+        if not close:
+            return {**base_result, "action": "would-close", "comment": comment}
+        post_comment(repo, number, comment)
+        close_pr(repo, number)
+        return {**base_result, "action": "closed", "comment": comment}
+
+    if _has_marker(comments, WITHIN_GRACE_MARKER):
+        return {**base_result, "action": "within-grace-already-notified"}
+    comment = format_within_grace_comment(missing, explanation, grace_days)
+    if not close:
+        return {
+            **base_result,
+            "action": "would-notify-within-grace",
+            "comment": comment,
+        }
+    post_comment(repo, number, comment)
+    return {**base_result, "action": "within-grace-notified", "comment": comment}
 
 
 def triage(
@@ -1097,20 +1476,60 @@ def main() -> int:
             "PR/issue author or an internal collaborator."
         ),
     )
+    parser.add_argument(
+        "--review-gate",
+        action="store_true",
+        help=(
+            "Reconcile the `ready for review` label for an OPEN PR: tag on "
+            "pass, remove the tag + comment on regression, close after the "
+            "grace window if it never passed. PR-only."
+        ),
+    )
+    parser.add_argument(
+        "--grace-days",
+        type=int,
+        default=DEFAULT_GRACE_DAYS,
+        help=(
+            "Review-gate only: hours/24 a failing, un-tagged PR may stay open "
+            f"before auto-close (default: {DEFAULT_GRACE_DAYS} = 24h)."
+        ),
+    )
+    parser.add_argument(
+        "--min-greptile-score",
+        type=int,
+        default=DEFAULT_MIN_GREPTILE_SCORE,
+        choices=range(1, 6),
+        help=(
+            "Review-gate only: Greptile score below which a PR counts as not "
+            f"passing (default: {DEFAULT_MIN_GREPTILE_SCORE} -> <4/5 regresses)."
+        ),
+    )
     args = parser.parse_args()
 
     kind = "pr" if args.pr is not None else "issue"
     number = args.pr if args.pr is not None else args.issue
 
-    result = triage(
-        repo=args.repo,
-        kind=kind,
-        number=number,
-        close=args.close,
-        model=args.model,
-        print_prompt=args.print_prompt,
-        reconsider=args.reconsider,
-    )
+    if args.review_gate:
+        if kind != "pr":
+            parser.error("--review-gate applies to pull requests only (use --pr).")
+        result = review_gate(
+            repo=args.repo,
+            number=number,
+            close=args.close,
+            model=args.model,
+            grace_days=args.grace_days,
+            min_greptile_score=args.min_greptile_score,
+        )
+    else:
+        result = triage(
+            repo=args.repo,
+            kind=kind,
+            number=number,
+            close=args.close,
+            model=args.model,
+            print_prompt=args.print_prompt,
+            reconsider=args.reconsider,
+        )
 
     if result.get("action") == "print-prompt":
         print(result["prompt"])
