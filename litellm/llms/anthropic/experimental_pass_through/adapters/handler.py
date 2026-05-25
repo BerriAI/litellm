@@ -18,6 +18,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
+from litellm.types.llms.anthropic import AppliedEdit
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -28,14 +29,10 @@ if TYPE_CHECKING:
     pass
 
 
-# Anthropic-only fields that the translator above already maps into the
-# OpenAI-format completion_kwargs (output_config → reasoning_effort /
-# response_format, etc.). They must be filtered out of the raw
-# extra_kwargs re-merge below or non-Anthropic backends reject the call
-# with 400 "Extra inputs are not permitted". Add new entries here when
-# extending AnthropicMessagesRequestOptionalParams with another Anthropic-
-# specific key.
-ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset({"output_config"})
+# Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
+ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset(
+    {"output_config", "context_management", "_polyfill_applied_edits"}
+)
 
 ########################################################
 # init adapter
@@ -306,6 +303,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
+        _polyfill_applied_edits: Optional[List[AppliedEdit]] = None,
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
@@ -338,6 +336,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    applied_edits=_polyfill_applied_edits,
                 )
             )
             if transformed_stream is not None:
@@ -347,6 +346,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                applied_edits=_polyfill_applied_edits,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -369,6 +369,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
         _is_async: bool = False,
+        _polyfill_applied_edits: Optional[List[AppliedEdit]] = None,
         **kwargs,
     ) -> Union[
         AnthropicMessagesResponse,
@@ -392,6 +393,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                _polyfill_applied_edits=_polyfill_applied_edits,
                 **kwargs,
             )
 
@@ -424,6 +426,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    applied_edits=_polyfill_applied_edits,
                 )
             )
             if transformed_stream is not None:
@@ -433,6 +436,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                applied_edits=_polyfill_applied_edits,
             )
             if anthropic_response is not None:
                 return anthropic_response

@@ -87,11 +87,13 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AppliedEdit,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     ContentThinkingBlockDelta,
     ContentThinkingSignatureBlockDelta,
+    ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
@@ -195,6 +197,7 @@ class AnthropicAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Optional[AnthropicMessagesResponse]:
         """
         Translate OpenAI response to Anthropic format.
@@ -204,10 +207,12 @@ class AnthropicAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            applied_edits: Polyfill AppliedEdit list for response context_management.
         """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
+            applied_edits=applied_edits,
         )
 
     def translate_completion_output_params_streaming(
@@ -215,6 +220,7 @@ class AnthropicAdapter:
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[AsyncIterator[bytes], None]:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -223,11 +229,13 @@ class AnthropicAdapter:
             completion_stream: The OpenAI streaming response
             model: The model name
             tool_name_mapping: Optional mapping of truncated tool names to original names.
+            applied_edits: Polyfill AppliedEdit list on final message_delta.
         """
         anthropic_wrapper = AnthropicStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             tool_name_mapping=tool_name_mapping,
+            applied_edits=applied_edits,
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
@@ -1342,6 +1350,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate OpenAI response to Anthropic format.
@@ -1351,6 +1360,7 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            applied_edits: Polyfill AppliedEdit list for response context_management.
         """
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(
@@ -1395,6 +1405,11 @@ class LiteLLMAnthropicMessagesAdapter:
             content=anthropic_content,  # type: ignore
             stop_reason=anthropic_finish_reason,
         )
+
+        if applied_edits:
+            translated_obj["context_management"] = ContextManagementResponse(
+                applied_edits=list(applied_edits)
+            )
 
         return translated_obj
 
@@ -1528,7 +1543,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: ModelResponse, current_content_block_index: int
+        self,
+        response: ModelResponse,
+        current_content_block_index: int,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -1578,9 +1596,14 @@ class LiteLLMAnthropicMessagesAdapter:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
-            return MessageBlockDelta(
+            message_block = MessageBlockDelta(
                 type="message_delta", delta=delta, usage=usage_delta  # type: ignore
             )
+            if applied_edits:
+                message_block["context_management"] = ContextManagementResponse(
+                    applied_edits=list(applied_edits)
+                )
+            return message_block
         (
             type_of_content,
             content_block_delta,

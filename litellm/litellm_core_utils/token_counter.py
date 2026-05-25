@@ -764,7 +764,16 @@ def _format_function_definitions(tools):
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
+        if not isinstance(tool, dict):
+            continue
         function = tool.get("function")
+        if function is None:
+            # Anthropic tool shape → OpenAI function dict for token counting.
+            function = {
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": tool.get("input_schema", tool.get("parameters", {})),
+            }
         if function_description := function.get("description"):
             lines.append(f"// {function_description}")
         function_name = function.get("name")

@@ -3,11 +3,24 @@
 import json
 import traceback
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+)
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.types.llms.anthropic import UsageDelta
+from litellm.types.llms.anthropic import (
+    AppliedEdit,
+    ContextManagementResponse,
+    UsageDelta,
+)
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
@@ -48,11 +61,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        applied_edits: Optional[List[AppliedEdit]] = None,
     ):
         super().__init__(completion_stream)
         self.model = model
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
+        # Polyfill applied_edits on final message_delta.
+        self.applied_edits: List[AppliedEdit] = list(applied_edits or [])
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -125,6 +141,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
+                    applied_edits=self.applied_edits or None,
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
@@ -266,6 +283,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
+                    applied_edits=self.applied_edits or None,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -312,6 +330,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             chunk.usage._cache_read_input_tokens
                         )
                     merged_chunk["usage"] = usage_dict
+                    if self.applied_edits and "context_management" not in merged_chunk:
+                        merged_chunk["context_management"] = ContextManagementResponse(
+                            applied_edits=list(self.applied_edits)
+                        )
 
                     # Queue the merged chunk and reset
                     self.chunk_queue.append(merged_chunk)

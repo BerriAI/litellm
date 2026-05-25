@@ -573,6 +573,9 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+
+        if base_model.startswith("anthropic"):
+            supported_params.append("context_management")
         return supported_params
 
     def map_tool_choice_values(
@@ -931,6 +934,13 @@ class AmazonConverseConfig(BaseConfig):
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
+                )
+            if param == "context_management" and isinstance(value, (dict, list)):
+                # Forward context_management; later filter keeps compact_20260112 only.
+                optional_params["context_management"] = (
+                    AnthropicConfig.map_openai_context_management_to_anthropic(
+                        cast(Union[dict, list], value)
+                    )
                 )
             if param == "requestMetadata":
                 if value is not None and isinstance(value, dict):
@@ -1430,12 +1440,46 @@ class AmazonConverseConfig(BaseConfig):
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
 
+            # Bedrock Converse: compact_20260112 edits only (+ beta header).
+            AmazonConverseConfig._filter_context_management_for_bedrock_converse(
+                additional_request_params, anthropic_beta_list
+            )
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         if anthropic_beta_list and base_model.startswith("anthropic"):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
+
+    @staticmethod
+    def _filter_context_management_for_bedrock_converse(
+        additional_request_params: dict,
+        anthropic_beta_list: list,
+    ) -> None:
+        """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
+        cm = additional_request_params.get("context_management")
+        if not isinstance(cm, dict):
+            return
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            additional_request_params.pop("context_management", None)
+            return
+
+        compact_edits = [
+            e
+            for e in edits
+            if isinstance(e, dict) and e.get("type") == "compact_20260112"
+        ]
+        if compact_edits:
+            if "compact-2026-01-12" not in anthropic_beta_list:
+                anthropic_beta_list.append("compact-2026-01-12")
+            additional_request_params["context_management"] = {
+                **cm,
+                "edits": compact_edits,
+            }
+        else:
+            additional_request_params.pop("context_management", None)
 
     def _transform_request_helper(
         self,

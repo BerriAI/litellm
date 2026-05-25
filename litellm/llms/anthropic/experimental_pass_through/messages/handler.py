@@ -20,6 +20,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic import AppliedEdit
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -456,9 +457,29 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
+
+        # In-gateway context_management polyfill on the chat-completions adapter
+        # (native on Anthropic/Responses paths). Skipped when drop_params is on.
+        context_management_spec = _shared_kwargs.pop("context_management", None)
+        polyfill_applied_edits: List[AppliedEdit] = []
+        if context_management_spec and not litellm.drop_params:
+            from litellm.llms.anthropic.experimental_pass_through.context_management import (
+                apply_context_management,
+            )
+
+            edited_messages, polyfill_applied_edits = apply_context_management(
+                model=model,
+                messages=_shared_kwargs["messages"],
+                tools=_shared_kwargs.get("tools"),
+                system=_shared_kwargs.get("system"),
+                context_management_spec=context_management_spec,
+            )
+            _shared_kwargs["messages"] = edited_messages
+
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                **_shared_kwargs
+                _polyfill_applied_edits=polyfill_applied_edits,
+                **_shared_kwargs,
             )
         )
 
