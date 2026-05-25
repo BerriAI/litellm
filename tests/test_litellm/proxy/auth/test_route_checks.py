@@ -381,6 +381,47 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
     assert exc_info.value.status_code == 403
 
 
+def test_spend_logs_v2_classified_as_management_not_llm_api():
+    """Paginated spend logs are a management/spend read route, not an LLM API."""
+
+    assert RouteChecks.is_llm_api_route(route="/spend/logs/v2") is False
+    assert RouteChecks.is_management_route(route="/spend/logs/v2") is True
+
+
+def test_virtual_key_management_routes_allows_spend_logs_v2():
+    """Management virtual keys should be allowed to call the v2 spend logs endpoint."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["management_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/v2",
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
+    """AI API virtual keys should not gain spend-log access."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/spend/logs/v2",
+            valid_token=valid_token,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -1435,6 +1476,7 @@ ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     "/cost/estimate",
     # Public spend logs / spend tracking routes that admin viewer should read
     "/spend/logs",
+    "/spend/logs/v2",
     "/spend/keys",
     "/spend/users",
     "/spend/tags",

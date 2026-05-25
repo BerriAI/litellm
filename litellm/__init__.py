@@ -413,6 +413,12 @@ internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
+# When True, end-user IDs extracted from requests are validated against
+# LiteLLM_EndUserTable / LiteLLM_UserTable. Values that do not resolve to a
+# known row are dropped before reaching spend logs. Defaults to False for
+# backwards compatibility — arbitrary client-supplied identifiers still
+# pass through unchanged.
+validate_end_user_id_in_db: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -1870,6 +1876,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure.completion.transformation import (
         AzureOpenAITextConfig as AzureOpenAITextConfig,
+    )
+    from .llms.azure.audio_transcription.transformation import (
+        AzureSpeechAudioTranscriptionConfig as AzureSpeechAudioTranscriptionConfig,
     )
     from .llms.hosted_vllm.chat.transformation import (
         HostedVLLMChatConfig as HostedVLLMChatConfig,

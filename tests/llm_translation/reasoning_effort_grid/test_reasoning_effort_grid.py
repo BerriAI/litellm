@@ -15,7 +15,6 @@ from .grid_spec import (
     all_cells,
 )
 
-
 _PROMPT_MESSAGES: List[Dict[str, str]] = [
     {"role": "user", "content": "Step by step, calculate 47 * 53. Show your work."}
 ]
@@ -167,6 +166,9 @@ async def test_reasoning_effort_grid(
     skip_reason = _required_env_missing(model)
     if skip_reason:
         pytest.skip(skip_reason)
+
+    if model.fail_reason:
+        pytest.xfail(model.fail_reason)
 
     if route_name == "bedrock_invoke_messages":
         status, exc = await _call_messages(model, effort)
