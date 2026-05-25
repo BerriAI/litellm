@@ -147,7 +147,12 @@ class TestReviewGatePass:
         # A regression marker in history -> this is a recovery, not a first pass.
         monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr())
         rec = _Recorder(triage_module, monkeypatch)
-        prior = [{"user": {"login": "x"}, "body": triage_module.REGRESSED_MARKER}]
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.REGRESSED_MARKER,
+            }
+        ]
 
         result = _gate(triage_module, judge=_pass, greptile_score=5, comments=prior)
 
@@ -241,7 +246,12 @@ class TestReviewGateGraceAndClose:
             triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW)
         )
         rec = _Recorder(triage_module, monkeypatch)
-        prior = [{"user": {"login": "b"}, "body": triage_module.WITHIN_GRACE_MARKER}]
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.WITHIN_GRACE_MARKER,
+            }
+        ]
 
         result = _gate(triage_module, judge=_fail, greptile_score=None, comments=prior)
 
@@ -345,7 +355,7 @@ class TestReviewGateGuards:
             triage_module,
             "post_comment",
             lambda repo, n, body: state["comments"].append(
-                {"user": {"login": "agent-shin[bot]"}, "body": body}
+                {"user": {"login": "github-actions[bot]"}, "body": body}
             ),
         )
         monkeypatch.setattr(

@@ -49,14 +49,15 @@ from typing import Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
-    AGENT_SHIN_DEFAULT_BOT_LOGIN,
     GRACE_COMMENT_MARKER,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
     IMMEDIATE_CLOSE_LOGINS,
     SCORE_PATTERN,
     extract_greptile_score,
+    gh,
     parse_iso8601,
+    seconds_since_latest_marker_comment,
 )
 
 # `GREPTILE_BOT_LOGINS` and `SCORE_PATTERN` (Greptile's GitHub App login
@@ -82,24 +83,13 @@ DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
 # imported from `agent_shin_shared` so the Agent Shin LLM judge and
 # this daily Greptile sweep agree on the same marker and duration.
 #
-# `AGENT_SHIN_DEFAULT_BOT_LOGIN` (the GitHub identity that performs
-# Agent Shin's writes; used for matching the author of a grace-warning
-# comment so we don't count somebody quoting the marker; the env
-# override `AGENT_SHIN_BOT_LOGIN` works the same here) and
 # `IMMEDIATE_CLOSE_LOGINS` (case-insensitive logins that bypass BOTH
 # the grace period AND the dry-run gating; useful for dogfooding the
-# bot from external test accounts) are imported too.
-
-
-def gh(*args: str) -> str:
-    """Run a `gh` CLI command and return stdout. Raises on non-zero exit."""
-    result = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout
+# bot from external test accounts) is imported too. Author-matching
+# against the bot login (`AGENT_SHIN_DEFAULT_BOT_LOGIN` plus the
+# `AGENT_SHIN_BOT_LOGIN` env override) now happens inside
+# `seconds_since_latest_marker_comment` itself, so this script no
+# longer needs to reach for the constant directly.
 
 
 def fetch_open_prs(repo: str | None) -> list[dict]:
@@ -196,42 +186,19 @@ def seconds_since_last_grace_warning(
     """Return seconds since the bot's most recent grace-period warning, or
     None if no such warning has ever been posted on this PR.
 
-    Detects warnings by matching `GRACE_COMMENT_MARKER` in comments
-    authored by the bot identity. Operates on an already-fetched
-    comments list (avoids a second `gh api` call when the caller has
-    already pulled the page for Greptile-score extraction).
-
-    `now` is injectable so callers (and tests) can pin the reference
-    time. The closer runs everything against a single `now` snapshot
-    captured at the top of `main()` so age calculations stay consistent
-    across many PRs in a single run.
+    Thin wrapper over
+    `agent_shin_shared.seconds_since_latest_marker_comment` — the
+    centralized helper handles the bot-author filter, marker match,
+    timestamp parsing, and `now` injection. Keeping this wrapper
+    preserves the closer's "already-fetched comments + injectable now"
+    interface so callers (and tests) don't need to change.
     """
-    expected_login = (
-        bot_login
-        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
-        or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
-    latest: dt.datetime | None = None
-    for comment in comments:
-        author = ((comment.get("user") or {}).get("login") or "").lower()
-        if author != expected_login:
-            continue
-        body = comment.get("body") or ""
-        if GRACE_COMMENT_MARKER not in body:
-            continue
-        created = comment.get("created_at")
-        if not created:
-            continue
-        try:
-            ts = parse_iso8601(created)
-        except ValueError:
-            continue
-        if latest is None or ts > latest:
-            latest = ts
-    if latest is None:
-        return None
-    reference = now if now is not None else dt.datetime.now(dt.timezone.utc)
-    return (reference - latest).total_seconds()
+    return seconds_since_latest_marker_comment(
+        comments,
+        marker=GRACE_COMMENT_MARKER,
+        bot_login=bot_login,
+        now=now,
+    )
 
 
 def format_grace_warning_comment(score: int, threshold: int) -> str:

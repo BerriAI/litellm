@@ -27,7 +27,9 @@ enforced it.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
+import subprocess
 from typing import Iterable
 
 GREPTILE_BOT_LOGINS = frozenset({"greptile-apps", "greptile-apps[bot]"})
@@ -77,3 +79,67 @@ def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
 def parse_iso8601(value: str) -> dt.datetime:
     """Parse a GitHub ISO-8601 timestamp into a timezone-aware datetime."""
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def gh(*args: str) -> str:
+    """Run a `gh` CLI command and return stdout. Raises on non-zero exit.
+
+    Shared by both Agent Shin entrypoints so a future change here
+    (timeout handling, logging, retry on transient failures) only needs
+    to be made once.
+    """
+    result = subprocess.run(
+        ["gh", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def seconds_since_latest_marker_comment(
+    comments: Iterable[dict],
+    *,
+    marker: str,
+    bot_login: str | None = None,
+    now: dt.datetime | None = None,
+) -> float | None:
+    """Return seconds since the bot's most recent comment containing ``marker``.
+
+    Filters comments by author so a contributor who quotes the HTML
+    marker (e.g. via GitHub's "Quote reply" feature, which preserves
+    HTML comments in the raw markdown of the quoted text) is not
+    mistaken for a bot warning — that would silently reset cooldown
+    timers and suppress legitimate notifications.
+
+    ``bot_login`` defaults to the `AGENT_SHIN_BOT_LOGIN` env override or
+    ``AGENT_SHIN_DEFAULT_BOT_LOGIN`` so callers normally don't need to
+    pass it. ``now`` is injectable for tests / callers (like the daily
+    sweep) that want every age calculation pinned to one snapshot.
+    """
+    expected_login = (
+        bot_login
+        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
+        or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
+    latest: dt.datetime | None = None
+    for comment in comments:
+        author = ((comment.get("user") or {}).get("login") or "").lower()
+        if author != expected_login:
+            continue
+        body = comment.get("body") or ""
+        if marker not in body:
+            continue
+        created = comment.get("created_at")
+        if not created:
+            continue
+        try:
+            ts = parse_iso8601(created)
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    if latest is None:
+        return None
+    reference = now if now is not None else dt.datetime.now(dt.timezone.utc)
+    return (reference - latest).total_seconds()

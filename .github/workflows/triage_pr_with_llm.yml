@@ -60,7 +60,13 @@ jobs:
       - name: Run Agent Shin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Only expose the LLM key when the bot is enabled or a collaborator
+          # triggers it manually, so an external user can't force paid LLM
+          # calls by churning a fork PR while the bot is still in dry-run.
+          # The Python script calls the LLM whenever this var is set
+          # (regardless of `--close`); stripping `--close` doesn't suppress
+          # the API call, only the destructive side effects.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}

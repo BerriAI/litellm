@@ -55,7 +55,9 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     IMMEDIATE_CLOSE_LOGINS,
     SCORE_PATTERN,
     extract_greptile_score,
+    gh,
     parse_iso8601,
+    seconds_since_latest_marker_comment,
 )
 
 DEFAULT_MODEL = "gpt-5.4-mini"
@@ -152,17 +154,9 @@ HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # ---------------------------------------------------------------------------
 # gh helpers
-
-
-def gh(*args: str) -> str:
-    """Run a `gh` CLI command and return stdout. Raises on non-zero exit."""
-    result = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout
+#
+# `gh` is imported from `agent_shin_shared` so a future change (timeout,
+# logging, retry) only needs to be made once.
 
 
 def fetch_pr(repo: str, number: int) -> dict:
@@ -339,39 +333,22 @@ def _seconds_since_latest_marker_comment(
     marker: str,
     bot_login: str | None = None,
 ) -> float | None:
-    """Shared helper: return seconds since the bot's most recent comment
-    that contains the given HTML marker, or None if no such comment exists.
+    """Return seconds since the bot's most recent comment with ``marker``.
 
-    Used by both the reconsider-verdict cooldown and the grace-period
-    warning detection — keeping the iteration logic centralized stops the
-    two paths from drifting (e.g. one fixing a tz parsing bug and the
-    other forgetting to mirror it).
+    Fetches comments via `_iter_paginated_json` and delegates the
+    iteration / author-filter / timestamp logic to
+    `agent_shin_shared.seconds_since_latest_marker_comment` so the daily
+    Greptile sweep and the LLM judge use one source of truth for the
+    "bot already posted X" detection. The wall-clock `now` is resolved
+    against this module's `dt` so tests that freeze time via
+    `monkeypatch.setattr(triage_module, "dt", ...)` still apply.
     """
-    expected_login = (
-        bot_login
-        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
-        or AGENT_SHIN_DEFAULT_BOT_LOGIN
-    ).lower()
-    latest: dt.datetime | None = None
-    for comment in _iter_paginated_json(f"repos/{repo}/issues/{number}/comments"):
-        author = ((comment.get("user") or {}).get("login") or "").lower()
-        if author != expected_login:
-            continue
-        body = comment.get("body") or ""
-        if marker not in body:
-            continue
-        created = comment.get("created_at")
-        if not created:
-            continue
-        try:
-            ts = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if latest is None or ts > latest:
-            latest = ts
-    if latest is None:
-        return None
-    return (dt.datetime.now(dt.timezone.utc) - latest).total_seconds()
+    return seconds_since_latest_marker_comment(
+        _iter_paginated_json(f"repos/{repo}/issues/{number}/comments"),
+        marker=marker,
+        bot_login=bot_login,
+        now=dt.datetime.now(dt.timezone.utc),
+    )
 
 
 def seconds_since_last_reconsider_verdict(
@@ -861,8 +838,30 @@ def _combine_missing(
     return missing or ["(see explanation below)"]
 
 
-def _has_marker(comments: Iterable[dict], marker: str) -> bool:
-    return any(marker in (comment.get("body") or "") for comment in comments)
+def _has_marker(
+    comments: Iterable[dict], marker: str, *, bot_login: str | None = None
+) -> bool:
+    """Return True iff the bot itself posted a comment containing ``marker``.
+
+    Filters by author so a contributor who quotes the marker (e.g. via
+    GitHub's "Quote reply" feature, which preserves HTML comments in
+    raw markdown) is not mistaken for a bot action — that would
+    silently suppress notifications or change which "recovered" wording
+    is selected. Matches the author-filter pattern used by the sibling
+    `_seconds_since_latest_marker_comment` helper.
+    """
+    expected_login = (
+        bot_login
+        or os.environ.get("AGENT_SHIN_BOT_LOGIN")
+        or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
+    for comment in comments:
+        author = ((comment.get("user") or {}).get("login") or "").lower()
+        if author != expected_login:
+            continue
+        if marker in (comment.get("body") or ""):
+            return True
+    return False
 
 
 def format_ready_for_review_comment(verdict: dict, greptile_score: int | None) -> str:
