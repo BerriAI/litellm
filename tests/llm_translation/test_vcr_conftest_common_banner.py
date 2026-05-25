@@ -9,7 +9,9 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from tests._vcr_conftest_common import (  # noqa: E402
+    VCR_DIAG_EMIT_MAX_LINES,
     emit_cassette_cache_session_banner,
+    emit_vcr_diagnostic_log,
 )
 from tests._vcr_redis_persister import (  # noqa: E402
     _cache_health,
@@ -162,6 +164,55 @@ def test_banner_silent_when_vcr_disabled(
 
     emit_cassette_cache_session_banner(reporter)
 
+
+# ---------------------------------------------------------------------------
+# Diagnostic-log dedup + cap. CircleCI truncates step output to the last
+# ~400 KB; an unbounded diagnostic dump pushes the VCR classification summary
+# out of the retrievable window, so the dump must dedupe and cap.
+# ---------------------------------------------------------------------------
+
+
+def test_diagnostic_log_dedupes_repeated_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_VCR_DIAG_DIR", str(tmp_path))
+    (tmp_path / "123.log").write_text(
+        "\n".join(["[vcr-key-fingerprint-matcher] differ"] * 40 + ["unique line"]),
+        encoding="utf-8",
+    )
+    reporter = _FakeTerminalReporter()
+
+    emit_vcr_diagnostic_log(reporter)
+
+    out = reporter.output
+    # The repeated block collapses to a single line with an occurrence count.
+    assert out.count("[vcr-key-fingerprint-matcher] differ") == 1
+    assert "(x40)" in out
+    assert "unique line" in out
+
+
+def test_diagnostic_log_caps_unique_lines(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_VCR_DIAG_DIR", str(tmp_path))
+    total = VCR_DIAG_EMIT_MAX_LINES + 50
+    (tmp_path / "123.log").write_text(
+        "\n".join(f"unique-diagnostic-{i}" for i in range(total)), encoding="utf-8"
+    )
+    reporter = _FakeTerminalReporter()
+
+    emit_vcr_diagnostic_log(reporter)
+
+    out = reporter.output
+    emitted = sum(1 for ln in out.splitlines() if ln.startswith("unique-diagnostic-"))
+    assert emitted == VCR_DIAG_EMIT_MAX_LINES
+    assert "more unique diagnostic line(s) suppressed" in out
+
+
+def test_diagnostic_log_silent_when_no_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_VCR_DIAG_DIR", str(tmp_path / "does-not-exist"))
+    reporter = _FakeTerminalReporter()
+
+    emit_vcr_diagnostic_log(reporter)
+
+    assert reporter.output == ""
+
     assert reporter.output == ""
 
 
@@ -179,3 +230,84 @@ def test_banner_silent_on_xdist_worker(
     emit_cassette_cache_session_banner(reporter)
 
     assert reporter.output == ""
+
+
+# ---------------------------------------------------------------------------
+# Telemetry-leak suppression. Several modules set ``litellm.success_callback``
+# at import time, so observability logging is globally enabled and an async
+# flush can land in an unrelated test's VCR window and be saved as a spurious
+# MISS:RECORDED episode. ``_should_drop_telemetry_record`` refuses to record a
+# telemetry call for a non-telemetry test (it passes through live instead),
+# while tests that actually assert on telemetry keep recording.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRequest:
+    def __init__(self, host, scheme="https"):
+        self.host = host
+        self.scheme = scheme
+        self.uri = f"{scheme}://{host}/api/public/ingestion"
+        self.headers = {}
+        self.method = "POST"
+        self.body = b"{}"
+
+
+@pytest.fixture
+def current_test(monkeypatch):
+    """Set the module-global current-test nodeid the suppressor reads."""
+    import tests._vcr_conftest_common as common
+
+    def _set(nodeid):
+        monkeypatch.setattr(common, "_current_test_nodeid", nodeid)
+
+    return _set
+
+
+@pytest.mark.parametrize(
+    "nodeid,host,expected_drop",
+    [
+        # Non-telemetry test: incidental telemetry leak is dropped (not recorded).
+        (
+            "tests/local_testing/test_lowest_latency_routing.py::test_lowest_latency_routing_buffer[1]",
+            "us.cloud.langfuse.com",
+            True,
+        ),
+        (
+            "tests/local_testing/test_function_call_parsing.py::test_parse",
+            "us.cloud.langfuse.com",
+            True,
+        ),
+        (
+            "tests/llm_translation/test_x.py::test_y",
+            "otlp.arize.com",
+            True,
+        ),
+        # Non-telemetry host on a non-telemetry test: never dropped.
+        (
+            "tests/local_testing/test_lowest_latency_routing.py::test_lowest_latency_routing_buffer[1]",
+            "api.openai.com",
+            False,
+        ),
+        # Tests that legitimately assert on telemetry keep recording it.
+        (
+            "tests/local_testing/test_alangfuse.py::test_langfuse_logging",
+            "us.cloud.langfuse.com",
+            False,
+        ),
+        (
+            "tests/logging_callback_tests/test_langfuse_e2e_test.py::test_e2e",
+            "us.cloud.langfuse.com",
+            False,
+        ),
+        (
+            "tests/logging_callback_tests/test_dynamic_otel_keys.py::test_keys",
+            "otlp.arize.com",
+            False,
+        ),
+    ],
+)
+def test_should_drop_telemetry_record(current_test, nodeid, host, expected_drop):
+    import tests._vcr_conftest_common as common
+
+    current_test(nodeid)
+    assert common._should_drop_telemetry_record(_FakeRequest(host)) is expected_drop
