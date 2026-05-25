@@ -117,7 +117,12 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
-        if ".well-known" in str(request.url):  # public routes
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        if get_request_route(request).startswith("/.well-known/"):  # public routes
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally

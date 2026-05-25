@@ -102,11 +102,16 @@ def is_allowed_to_call_vector_store_endpoint(
         provider_config.get_vector_store_endpoints_by_type()
     )
 
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    request_route = get_request_route(request)
+
     # Determine the permission type based on the request
     permission_type = None
     for endpoint in provider_vector_store_endpoints["read"]:
         if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request.url.path
+            endpoint[1], request_route
         ):
             permission_type = "read"
             break
@@ -114,7 +119,7 @@ def is_allowed_to_call_vector_store_endpoint(
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints["write"]:
             if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request.url.path
+                endpoint[1], request_route
             ):
                 permission_type = "write"
                 break
@@ -164,10 +169,15 @@ def is_allowed_to_call_vector_store_files_endpoint(
         provider_config.get_vector_store_file_endpoints_by_type()
     )
 
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    request_route = get_request_route(request)
+
     permission_type: Optional[str] = None
     for endpoint in provider_vector_store_endpoints.get("read", ()):
         if request.method == endpoint[0] and _does_endpoint_match(
-            endpoint[1], request.url.path
+            endpoint[1], request_route
         ):
             permission_type = "read"
             break
@@ -175,7 +185,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
     if permission_type is None:
         for endpoint in provider_vector_store_endpoints.get("write", ()):
             if request.method == endpoint[0] and _does_endpoint_match(
-                endpoint[1], request.url.path
+                endpoint[1], request_route
             ):
                 permission_type = "write"
                 break

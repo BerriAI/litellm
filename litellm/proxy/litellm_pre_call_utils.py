@@ -104,8 +104,10 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata"
     """
-    path = request.url.path
+    # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
+    path = get_request_route(request)
     if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
