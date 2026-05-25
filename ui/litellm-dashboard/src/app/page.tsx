@@ -551,7 +551,7 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
-                  ) : page == "api_ref" ? (
+                  ) : page == "api_ref" || page == "api-reference" ? (
                     <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
