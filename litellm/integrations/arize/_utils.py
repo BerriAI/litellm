@@ -45,7 +45,9 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
             for idx, msg in enumerate(messages):
                 prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
                 # Set the role per message.
-                safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role"))
+                safe_set_attribute(
+                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
+                )
                 # Set the content per message.
                 safe_set_attribute(
                     span,
@@ -66,35 +68,11 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
                     msg,
                 )
 
-    @staticmethod
-    @override
-    def set_response_output_messages(span: "Span", response_obj):
-        """
-        Sets output message attributes on the span from the LLM response.
-        Args:
-            span: The OpenTelemetry span to set attributes on
-            response_obj: The response object containing choices with messages
-        """
-        for idx, choice in enumerate(response_obj.get("choices", [])):
-            response_message = choice.get("message", {})
-            safe_set_attribute(
-                span,
-                SpanAttributes.OUTPUT_VALUE,
-                response_message.get("content", ""),
-            )
-
-            # This shows up under `output_messages` tab on the span page.
-            prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
-            safe_set_attribute(
-                span,
-                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
-                response_message.get("role"),
-            )
-            safe_set_attribute(
-                span,
-                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                response_message.get("content", ""),
-            )
+    # Note: `BaseLLMObsOTELAttributes.set_response_output_messages` is not
+    # overridden here. The live code path uses `_set_choice_outputs` (called
+    # via `_set_response_attributes` from `set_attributes`) which handles
+    # tool_calls, multimodal output, embeddings, audio, images, and structured
+    # outputs in a single place.
 
 
 def _set_response_attributes(span: "Span", response_obj):
@@ -183,7 +161,9 @@ def _set_audio_outputs(span: "Span", response_obj, audio_attrs, span_attrs):
 
         audio_transcript = audio_item.get("transcript")
         if audio_transcript:
-            safe_set_attribute(span, f"{audio_attrs.AUDIO_TRANSCRIPT}.{i}", audio_transcript)
+            safe_set_attribute(
+                span, f"{audio_attrs.AUDIO_TRANSCRIPT}.{i}", audio_transcript
+            )
 
 
 def _set_embedding_outputs(span: "Span", response_obj, embedding_attrs, span_attrs):
@@ -237,7 +217,9 @@ def _set_structured_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
                 message_content = getattr(first_content, "text", "")
             message_role = getattr(item, "role", "assistant")
             safe_set_attribute(span, span_attrs.OUTPUT_VALUE, message_content)
-            safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_CONTENT}", message_content)
+            safe_set_attribute(
+                span, f"{prefix}.{msg_attrs.MESSAGE_CONTENT}", message_content
+            )
             safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_ROLE}", message_role)
 
 
@@ -268,11 +250,19 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     if not usage:
         return
 
-    safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_TOTAL, _safe_get(usage, "total_tokens"))
-    completion_tokens = _safe_get(usage, "completion_tokens") or _safe_get(usage, "output_tokens")
+    safe_set_attribute(
+        span, span_attrs.LLM_TOKEN_COUNT_TOTAL, _safe_get(usage, "total_tokens")
+    )
+    completion_tokens = _safe_get(usage, "completion_tokens") or _safe_get(
+        usage, "output_tokens"
+    )
     if completion_tokens:
-        safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
-    prompt_tokens = _safe_get(usage, "prompt_tokens") or _safe_get(usage, "input_tokens")
+        safe_set_attribute(
+            span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+        )
+    prompt_tokens = _safe_get(usage, "prompt_tokens") or _safe_get(
+        usage, "input_tokens"
+    )
     if prompt_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
 
@@ -280,7 +270,9 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     # API (Usage) and in `output_tokens_details` for Responses API
     # (ResponseAPIUsage). Both nested objects may be plain Pydantic models
     # without `.get`.
-    token_details = _safe_get(usage, "completion_tokens_details") or _safe_get(usage, "output_tokens_details")
+    token_details = _safe_get(usage, "completion_tokens_details") or _safe_get(
+        usage, "output_tokens_details"
+    )
     reasoning_tokens = _safe_get(token_details, "reasoning_tokens")
     if reasoning_tokens:
         safe_set_attribute(
@@ -296,17 +288,21 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     #     `cache_creation_input_tokens`
     # All emits are conditional, so when none of these fields exist (the
     # situation in the existing test fixtures) no extra attributes are set.
-    prompt_token_details = _safe_get(usage, "prompt_tokens_details") or _safe_get(usage, "input_tokens_details")
-    cache_read = _safe_get(prompt_token_details, "cached_tokens") or _safe_get(usage, "cache_read_input_tokens")
+    prompt_token_details = _safe_get(usage, "prompt_tokens_details") or _safe_get(
+        usage, "input_tokens_details"
+    )
+    cache_read = _safe_get(prompt_token_details, "cached_tokens") or _safe_get(
+        usage, "cache_read_input_tokens"
+    )
     if cache_read:
         safe_set_attribute(
             span,
             span_attrs.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
             cache_read,
         )
-    cache_write = _safe_get(prompt_token_details, "cache_creation_tokens") or _safe_get(
-        usage, "cache_creation_input_tokens"
-    )
+    # Anthropic / Bedrock-Anthropic only — OpenAI's `prompt_tokens_details`
+    # does not expose a cache-write count, so we read straight off `usage`.
+    cache_write = _safe_get(usage, "cache_creation_input_tokens")
     if cache_write:
         safe_set_attribute(
             span,
@@ -375,24 +371,33 @@ def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     ):
         return OpenInferenceSpanKindValues.LLM.value
 
-    if any(keyword in lowered for keyword in ("file", "batch", "container", "fine_tuning_job")):
+    if any(
+        keyword in lowered
+        for keyword in ("file", "batch", "container", "fine_tuning_job")
+    ):
         return OpenInferenceSpanKindValues.CHAIN.value
 
     return OpenInferenceSpanKindValues.UNKNOWN.value
 
 
-def _set_tool_attributes(span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]):
+def _set_tool_attributes(
+    span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]
+):
     """set tool attributes on span from optional_params or tool call metadata"""
     if optional_tools:
         for idx, tool in enumerate(optional_tools):
             if not isinstance(tool, dict):
                 continue
-            function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+            function = (
+                tool.get("function") if isinstance(tool.get("function"), dict) else None
+            )
             if not function:
                 continue
             tool_name = function.get("name")
             if tool_name:
-                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.name", tool_name)
+                safe_set_attribute(
+                    span, f"{SpanAttributes.LLM_TOOLS}.{idx}.name", tool_name
+                )
             tool_description = function.get("description")
             if tool_description:
                 safe_set_attribute(
@@ -429,7 +434,9 @@ def _set_tool_attributes(span: "Span", optional_tools: Optional[list], metadata_
                 )
 
 
-def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]):
+def set_attributes(
+    span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]
+):
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -448,11 +455,17 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
     try:
         optional_params = _sanitize_optional_params(kwargs.get("optional_params"))
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
         if standard_logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
-        metadata = standard_logging_payload.get("metadata") if standard_logging_payload else None
+        metadata = (
+            standard_logging_payload.get("metadata")
+            if standard_logging_payload
+            else None
+        )
         _set_metadata_attributes(span, metadata, SpanAttributes)
 
         metadata_tools = _extract_metadata_tools(metadata)
@@ -477,13 +490,19 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: Type[BaseLLMO
         _set_tool_attributes(span, optional_tools, metadata_tools)
         attributes.set_messages(span, kwargs)
 
-        model_params = standard_logging_payload.get("model_parameters") if standard_logging_payload else None
+        model_params = (
+            standard_logging_payload.get("model_parameters")
+            if standard_logging_payload
+            else None
+        )
         _set_model_params(span, model_params, SpanAttributes)
 
         _set_response_attributes(span=span, response_obj=response_obj_for_attrs)
 
     except Exception as e:
-        verbose_logger.error(f"[Arize/Phoenix] Failed to set OpenInference span attributes: {e}")
+        verbose_logger.error(
+            f"[Arize/Phoenix] Failed to set OpenInference span attributes: {e}"
+        )
         if hasattr(span, "record_exception"):
             span.record_exception(e)
 
@@ -541,7 +560,9 @@ def _set_request_attributes(
     if kwargs.get("model"):
         safe_set_attribute(span, span_attrs.LLM_MODEL_NAME, kwargs.get("model"))
 
-    safe_set_attribute(span, "llm.request.type", standard_logging_payload.get("call_type"))
+    safe_set_attribute(
+        span, "llm.request.type", standard_logging_payload.get("call_type")
+    )
     safe_set_attribute(
         span,
         span_attrs.LLM_PROVIDER,
@@ -549,13 +570,19 @@ def _set_request_attributes(
     )
 
     if optional_params.get("max_tokens"):
-        safe_set_attribute(span, "llm.request.max_tokens", optional_params.get("max_tokens"))
+        safe_set_attribute(
+            span, "llm.request.max_tokens", optional_params.get("max_tokens")
+        )
     if optional_params.get("temperature"):
-        safe_set_attribute(span, "llm.request.temperature", optional_params.get("temperature"))
+        safe_set_attribute(
+            span, "llm.request.temperature", optional_params.get("temperature")
+        )
     if optional_params.get("top_p"):
         safe_set_attribute(span, "llm.request.top_p", optional_params.get("top_p"))
 
-    safe_set_attribute(span, "llm.is_streaming", str(optional_params.get("stream", False)))
+    safe_set_attribute(
+        span, "llm.is_streaming", str(optional_params.get("stream", False))
+    )
 
     if optional_params.get("user"):
         safe_set_attribute(span, "llm.user", optional_params.get("user"))
@@ -570,7 +597,9 @@ def _set_model_params(span: "Span", model_params: Optional[dict], span_attrs) ->
     if not model_params:
         return
 
-    safe_set_attribute(span, span_attrs.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params))
+    safe_set_attribute(
+        span, span_attrs.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params)
+    )
     if model_params.get("user"):
         user_id = model_params.get("user")
         if user_id is not None:
@@ -736,7 +765,9 @@ def _emit_message_tool_calls(span: "Span", prefix: str, message) -> None:
             continue
         tc_prefix = f"{prefix}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tc_idx}"
         if tc["id"]:
-            safe_set_attribute(span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tc["id"])
+            safe_set_attribute(
+                span, f"{tc_prefix}.{ToolCallAttributes.TOOL_CALL_ID}", tc["id"]
+            )
         fn = tc["function"]
         if fn["name"]:
             safe_set_attribute(
@@ -829,8 +860,17 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
                     )
 
 
-def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_payload) -> None:
+def _set_session_and_user_attrs(
+    span: "Span", kwargs: dict, standard_logging_payload
+) -> None:
     """Emit `SESSION_ID` / `USER_ID` / team metadata when source data exists.
+
+    `SESSION_ID` is emitted only when an explicit end-user identifier exists
+    (`metadata.user_api_key_end_user_id`). We deliberately do NOT fall back
+    to `trace_id`, because that would create a distinct "session" for every
+    single request and distort Arize's Session-grouping analytics. The
+    `trace_id` is still emitted under its own `litellm.trace_id` key so
+    spans remain filterable by trace.
 
     USER_ID is *only* emitted when no upstream path (model_params.user or
     optional_params.user) has already set it, to avoid overwriting an
@@ -842,9 +882,13 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
     if not isinstance(metadata, dict):
         return
 
-    session_id = metadata.get("user_api_key_end_user_id") or standard_logging_payload.get("trace_id")
+    session_id = metadata.get("user_api_key_end_user_id")
     if session_id:
         safe_set_attribute(span, SpanAttributes.SESSION_ID, str(session_id))
+
+    trace_id = standard_logging_payload.get("trace_id")
+    if trace_id:
+        safe_set_attribute(span, "litellm.trace_id", str(trace_id))
 
     optional_params = kwargs.get("optional_params") or {}
     model_params = standard_logging_payload.get("model_parameters") or {}
@@ -915,13 +959,21 @@ def _maybe_normalize_passthrough(
     helper exits silently. Existing chat/completion paths never enter this
     helper because their call_type doesn't contain "passthrough".
     """
-    call_type = standard_logging_payload.get("call_type") if isinstance(standard_logging_payload, dict) else None
+    call_type = (
+        standard_logging_payload.get("call_type")
+        if isinstance(standard_logging_payload, dict)
+        else None
+    )
     if not _is_passthrough_call_type(call_type):
         return
 
     # --- INPUT --------------------------------------------------------------
     additional_args = kwargs.get("additional_args") or {}
-    complete_input_dict = additional_args.get("complete_input_dict") if isinstance(additional_args, dict) else None
+    complete_input_dict = (
+        additional_args.get("complete_input_dict")
+        if isinstance(additional_args, dict)
+        else None
+    )
     if isinstance(complete_input_dict, dict):
         messages = complete_input_dict.get("messages")
         if isinstance(messages, list) and messages:
@@ -955,7 +1007,9 @@ def _maybe_normalize_passthrough(
                     )
 
     # --- OUTPUT -------------------------------------------------------------
-    parsed_response = _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs)
+    parsed_response = _parse_passthrough_response(
+        raw_response_obj, coerced_response_obj, kwargs
+    )
     if not isinstance(parsed_response, dict):
         return
 
@@ -1010,12 +1064,19 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
     candidates = []
     if isinstance(coerced_response_obj, dict):
         candidates.append(coerced_response_obj)
-    if isinstance(raw_response_obj, dict) and raw_response_obj is not coerced_response_obj:
+    if (
+        isinstance(raw_response_obj, dict)
+        and raw_response_obj is not coerced_response_obj
+    ):
         candidates.append(raw_response_obj)
 
     for candidate in candidates:
         # StandardPassThroughResponseObject wrapper: {"response": "..."}.
-        if "response" in candidate and "content" not in candidate and "choices" not in candidate:
+        if (
+            "response" in candidate
+            and "content" not in candidate
+            and "choices" not in candidate
+        ):
             inner = candidate.get("response")
             if isinstance(inner, str):
                 try:
