@@ -29,7 +29,6 @@ Usage:
 from typing import Optional
 
 from fastapi import HTTPException, Request
-from fastapi.security.base import SecurityBase
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
@@ -39,7 +38,7 @@ from litellm.proxy._types import (
 )
 
 
-class LiteLLMSecurityScheme(SecurityBase):
+class LiteLLMSecurityScheme:
     """
     Custom security scheme that supports multiple authentication methods:
     - API Key (via various headers)
@@ -54,19 +53,13 @@ class LiteLLMSecurityScheme(SecurityBase):
     def __init__(
         self,
         *,
-        scheme_name: Optional[str] = "LiteLLM API Key",
+        scheme_name: str = "LiteLLM API Key",
         description: str = "API key authentication supporting multiple header formats",
         auto_error: bool = True,
     ):
         self.scheme_name = scheme_name
         self.description = description
         self.auto_error = auto_error
-        self.model = {
-            "type": "apiKey",
-            "in": "header",
-            "name": SpecialHeaders.openai_authorization.value,
-            "description": description,
-        }
 
     async def __call__(self, request: Request) -> Optional[str]:
         """Extract API key from request headers using LiteLLM's multi-header pattern."""
