@@ -725,7 +725,7 @@ def test_arize_does_not_overwrite_user_id_from_optional_params():
 
 
 def test_arize_emits_response_cost():
-    """StandardLoggingPayload.response_cost → llm.response.cost float."""
+    """StandardLoggingPayload.response_cost → llm.cost.total (+ legacy llm.response.cost)."""
     from unittest.mock import MagicMock
 
     from litellm.types.utils import Choices, ModelResponse
@@ -751,7 +751,8 @@ def test_arize_emits_response_cost():
     )
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
     attrs = _collect_calls(span)
-    assert attrs["llm.response.cost"] == 0.0012345
+    assert attrs["llm.cost.total"] == 0.0012345
+    assert attrs["llm.response.cost"] == 0.0012345  # legacy key still emitted
 
 
 def test_arize_passthrough_bedrock_anthropic_normalization():
