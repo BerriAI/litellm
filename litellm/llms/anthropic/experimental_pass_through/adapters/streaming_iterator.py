@@ -138,10 +138,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if should_start_new_block:
                     self._increment_content_block_index()
 
+                # applied_edits only needs to flow to the final message_delta
+                # (when finish_reason is set); skip threading it through every
+                # intermediate chunk so context_management is attached exactly
+                # once, on the truly final event.
+                is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=self.applied_edits or None,
+                    applied_edits=self.applied_edits if is_final_chunk else None,
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
@@ -280,10 +285,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if should_start_new_block:
                     self._increment_content_block_index()
 
+                # applied_edits only needs to flow to the final message_delta
+                # (when finish_reason is set); skip threading it through every
+                # intermediate chunk. For the hold-and-merge path below,
+                # context_management is attached directly to the merged chunk.
+                is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=self.applied_edits or None,
+                    applied_edits=self.applied_edits if is_final_chunk else None,
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk

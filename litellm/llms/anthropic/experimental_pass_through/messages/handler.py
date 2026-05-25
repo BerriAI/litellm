@@ -468,7 +468,7 @@ def anthropic_messages_handler(
             if _request_drop_params is not None
             else litellm.drop_params
         )
-        polyfill_applied_edits: List[AppliedEdit] = []
+        polyfill_applied_edits: Optional[List[AppliedEdit]] = None
         if context_management_spec and not _drop_params:
             from litellm.llms.anthropic.experimental_pass_through.context_management import (
                 apply_context_management,
@@ -488,7 +488,7 @@ def anthropic_messages_handler(
                     "context_management polyfill: skipping edits due to error: %s",
                     e,
                 )
-                polyfill_applied_edits = []
+                polyfill_applied_edits = None
 
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
