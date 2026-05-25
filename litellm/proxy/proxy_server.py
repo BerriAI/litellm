@@ -7449,24 +7449,29 @@ class ProxyStartupEvent:
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(
-            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
-        )
-        from litellm.proxy.utils import update_daily_tag_spend
+        if general_settings.get("disable_daily_spend_aggregation", False) is False:
+            tag_spend_update_interval = int(
+                batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+            )
+            from litellm.proxy.utils import update_daily_tag_spend
 
-        scheduler.add_job(
-            update_daily_tag_spend,
-            "interval",
-            seconds=tag_spend_update_interval,
-            args=[prisma_client, proxy_logging_obj],
-            id="update_daily_tag_spend_job",
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-        verbose_proxy_logger.info(
-            f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
-            f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
-        )
+            scheduler.add_job(
+                update_daily_tag_spend,
+                "interval",
+                seconds=tag_spend_update_interval,
+                args=[prisma_client, proxy_logging_obj],
+                id="update_daily_tag_spend_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info(
+                f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
+                f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "disable_daily_spend_aggregation=True. Skipping daily tag spend update job."
+            )
 
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:

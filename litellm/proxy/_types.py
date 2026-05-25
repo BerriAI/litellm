@@ -2524,6 +2524,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
+    disable_daily_spend_aggregation: Optional[bool] = Field(
+        None,
+        description=(
+            "If True, disables daily spend aggregation writes to DailyUser/Team/Tag/Org/EndUser/Agent "
+            "spend tables. Use this when you do not use the Usage dashboard and want to prevent "
+            "Redis buffer keys (litellm_daily_*_spend_update_buffer) from growing and causing OOM."
+        ),
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

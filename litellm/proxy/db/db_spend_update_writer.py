@@ -435,6 +435,32 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
+        await self._enqueue_daily_spend_updates(
+            payload_copy=payload_copy,
+            org_id=org_id,
+            prisma_client=prisma_client,
+        )
+
+    async def _enqueue_daily_spend_updates(
+        self,
+        *,
+        payload_copy: SpendLogsPayload,
+        org_id: Optional[str],
+        prisma_client: Optional[PrismaClient],
+    ) -> None:
+        """
+        Enqueue daily aggregation transactions for user/team/org/end_user/agent/tag tables.
+
+        Skipped entirely when disable_daily_spend_aggregation=True in general_settings.
+        """
+        from litellm.proxy.utils import ProxyUpdateSpend
+
+        if ProxyUpdateSpend.disable_daily_spend_aggregation():
+            verbose_proxy_logger.debug(
+                "disable_daily_spend_aggregation=True. Skipping daily spend aggregation."
+            )
+            return
+
         try:
             await self.add_spend_log_transaction_to_daily_user_transaction(
                 payload=payload_copy,

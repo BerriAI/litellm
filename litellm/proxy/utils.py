@@ -5310,6 +5310,20 @@ class ProxyUpdateSpend:
             return True
         return False
 
+    @staticmethod
+    def disable_daily_spend_aggregation() -> bool:
+        """
+        Returns True if daily spend aggregation should be skipped.
+
+        When True, skips enqueueing to DailyUser/Team/Tag/Org/EndUser/Agent spend tables.
+        Use this to prevent Redis buffer key growth when the Usage dashboard is not needed.
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_daily_spend_aggregation") is True:
+            return True
+        return False
+
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
