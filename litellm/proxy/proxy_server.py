@@ -15,6 +15,7 @@ import threading
 import time
 import traceback
 import warnings
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -1974,46 +1975,134 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     DualCache.async_get_cache returns stale per-pod values because each
     pod's in-memory cache is only updated by that pod's own increments.
 
+    When ``prefetch_spend_counters`` ran earlier in the same request,
+    returns the prefetched value without an extra Redis round trip.
+
     Fallback chain:
-    1. Redis counter (cross-pod, authoritative)
-    2. In-memory counter (single-instance or Redis failure)
-    3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
-    4. Caller-supplied fallback (DB unavailable, cold start)
+    1. Request-scoped prefetch (from ``prefetch_spend_counters``)
+    2. Redis counter (cross-pod, authoritative)
+    3. In-memory counter (single-instance or Redis failure)
+    4. Reseed from authoritative DB spend (counter expired, cross-pod stale)
+    5. Caller-supplied fallback (DB unavailable, cold start)
     """
-    # 1. Redis first (cross-pod authoritative). On clean miss, skip
-    # in-memory: per-pod in-memory only has this pod's writes, so it
-    # would mask cross-pod increments.
-    redis_clean_miss = False
+    prefetched = _spend_counter_prefetch_ctx.get()
+    if prefetched is not None and counter_key in prefetched:
+        return prefetched[counter_key]
+
+    resolved = await _resolve_spend_counters_batch(
+        {counter_key: fallback_spend},
+        prefetched=prefetched,
+    )
+    return resolved[counter_key]
+
+
+_spend_counter_prefetch_ctx: ContextVar[Optional[Dict[str, float]]] = ContextVar(
+    "_spend_counter_prefetch_ctx",
+    default=None,
+)
+
+
+def clear_spend_counter_prefetch() -> None:
+    """Clear request-scoped spend counter prefetch state."""
+    _spend_counter_prefetch_ctx.set(None)
+
+
+async def prefetch_spend_counters(counter_requests: Dict[str, float]) -> None:
+    """
+    Batch-fetch spend counters for auth budget checks using a single Redis MGET.
+
+    Merges into any prefetch already stored on this request context so builder-
+    and common-check paths can prefetch incrementally without duplicate reads.
+    """
+    if not counter_requests:
+        return
+
+    existing = _spend_counter_prefetch_ctx.get()
+    pending = {
+        key: fallback
+        for key, fallback in counter_requests.items()
+        if existing is None or key not in existing
+    }
+    if not pending:
+        return
+
+    resolved = await _resolve_spend_counters_batch(
+        pending,
+        prefetched=existing,
+    )
+    merged = {**(existing or {}), **resolved}
+    _spend_counter_prefetch_ctx.set(merged)
+
+
+async def _resolve_spend_counters_batch(
+    counter_requests: Dict[str, float],
+    prefetched: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    """
+    Resolve multiple spend counters with one Redis MGET when possible.
+
+    Mirrors ``get_current_spend`` semantics per key: Redis-first, skip stale
+    in-memory on a clean Redis miss, then DB reseed, then caller fallback.
+    """
+    results: Dict[str, float] = {}
+    keys_to_fetch: List[str] = []
+
+    for counter_key, fallback_spend in counter_requests.items():
+        if prefetched is not None and counter_key in prefetched:
+            results[counter_key] = prefetched[counter_key]
+            continue
+        keys_to_fetch.append(counter_key)
+        results[counter_key] = fallback_spend
+
+    if not keys_to_fetch:
+        return results
+
+    redis_values: Dict[str, Any] = {}
+    resolved_from_redis: set[str] = set()
+    redis_failed = False
+
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-            if val is not None:
-                return float(val)
-            redis_clean_miss = True
+            redis_values = await spend_counter_cache.redis_cache.async_batch_get_cache(
+                keys_to_fetch
+            )
+            for counter_key in keys_to_fetch:
+                val = redis_values.get(counter_key)
+                if val is not None:
+                    results[counter_key] = float(val)
+                    resolved_from_redis.add(counter_key)
         except Exception as e:
+            redis_failed = True
             verbose_proxy_logger.debug(
-                "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
-                counter_key,
+                "resolve_spend_counters_batch: Redis MGET failed, "
+                "falling back per key: %s",
                 e,
             )
 
-    # 2. In-memory only when Redis is unreachable.
-    if not redis_clean_miss:
-        val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-        if val is not None:
-            return float(val)
+    for counter_key in keys_to_fetch:
+        if counter_key in resolved_from_redis:
+            continue
 
-    # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
-    db_spend = await SpendCounterReseed.coalesced(
-        prisma_client=prisma_client,
-        spend_counter_cache=spend_counter_cache,
-        counter_key=counter_key,
-    )
-    if db_spend is not None:
-        return db_spend
+        fallback_spend = counter_requests[counter_key]
 
-    # 4. Caller-supplied fallback (DB unavailable).
-    return fallback_spend
+        # In-memory only when Redis is unreachable — not on a clean miss.
+        if redis_failed:
+            val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+            if val is not None:
+                results[counter_key] = float(val)
+                continue
+
+        db_spend = await SpendCounterReseed.coalesced(
+            prisma_client=prisma_client,
+            spend_counter_cache=spend_counter_cache,
+            counter_key=counter_key,
+        )
+        if db_spend is not None:
+            results[counter_key] = db_spend
+        else:
+            results[counter_key] = fallback_spend
+
+    return results
 
 
 async def increment_spend_counters(

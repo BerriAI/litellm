@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportGeneralTypeIssues=false, reportFunctionMemberAccess=false, reportOptionalMemberAccess=false
 import asyncio
 import json
 import os
@@ -2056,6 +2057,7 @@ async def test_virtual_key_max_budget_alert_check_global_fallback():
         await asyncio.sleep(0.1)
 
         assert alert_triggered is True
+        assert captured_call_info is not None
         assert captured_call_info.max_budget_alert_emails == global_config
     finally:
         litellm.default_key_max_budget_alert_emails = original
@@ -2096,6 +2098,7 @@ async def test_virtual_key_max_budget_alert_check_per_key_merges_with_global():
         await asyncio.sleep(0.1)
 
         # Additive merge: both thresholds present, recipients merged per threshold
+        assert captured_call_info is not None
         assert captured_call_info.max_budget_alert_emails == {
             "50": ["per-key@co.com"],
             "75": ["global@co.com"],
@@ -2223,6 +2226,197 @@ async def test_custom_auth_common_checks_opt_in():
 # Spend counter budget check tests (v2 — Redis-backed spend counters)
 # =====================================================================
 
+from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+
+class _CountingSpendRedis(RedisCache):
+    """Tracks how many Redis batch reads occur during spend counter resolution."""
+
+    def __init__(self, values: dict[str, float] | None = None):  # noqa: super().__init__ skipped intentionally
+        self.values = values or {}
+        self.batch_get_calls = 0
+        self.batch_get_key_lists: list[list[str]] = []
+
+    async def async_batch_get_cache(self, key_list, **kwargs):  # type: ignore[override]
+        self.batch_get_calls += 1
+        self.batch_get_key_lists.append(list(key_list))
+        return {key: self.values.get(key, 0.25) for key in key_list}
+
+    async def async_get_cache(self, key, **kwargs):  # type: ignore[override]
+        return self.values.get(key, 0.25)
+
+
+@pytest.mark.asyncio
+async def test_spend_counter_auth_path_before_prefetch_uses_one_redis_round_trip_per_counter():
+    """
+    Baseline (pre-fix): each budget dimension called get_current_spend() independently,
+    issuing one Redis MGET per counter — the pattern that caused pool exhaustion
+    under high concurrency (LIT-3263).
+    """
+    from litellm.caching.dual_cache import DualCache
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import (
+        clear_spend_counter_prefetch,
+        get_current_spend,
+    )
+
+    counter_requests = {
+        "spend:team:team-1": 0.0,
+        "spend:team:team-1:window:24h": 0.0,
+        "spend:team:team-1:window:30d": 0.0,
+        "spend:key:token-hash": 0.0,
+        "spend:key:token-hash:window:24h": 0.0,
+        "spend:team_member:user-1:team-1": 0.0,
+    }
+
+    counter_cache = DualCache()
+    counting_redis = _CountingSpendRedis()
+    counter_cache.redis_cache = counting_redis
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    clear_spend_counter_prefetch()
+    try:
+        for counter_key, fallback_spend in counter_requests.items():
+            spend = await get_current_spend(
+                counter_key=counter_key,
+                fallback_spend=fallback_spend,
+            )
+            assert spend == 0.25
+
+        assert counting_redis.batch_get_calls == len(counter_requests)
+    finally:
+        clear_spend_counter_prefetch()
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
+async def test_spend_counter_auth_path_after_prefetch_uses_single_mget():
+    """
+    Post-fix: prefetch_spend_counters batches all counters into one Redis MGET,
+    and subsequent get_current_spend() calls hit the request-scoped cache.
+    """
+    from litellm.caching.dual_cache import DualCache
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import (
+        clear_spend_counter_prefetch,
+        get_current_spend,
+        prefetch_spend_counters,
+    )
+
+    counter_requests = {
+        "spend:team:team-1": 0.0,
+        "spend:team:team-1:window:24h": 0.0,
+        "spend:team:team-1:window:30d": 0.0,
+        "spend:key:token-hash": 0.0,
+        "spend:key:token-hash:window:24h": 0.0,
+        "spend:team_member:user-1:team-1": 0.0,
+    }
+
+    counter_cache = DualCache()
+    counting_redis = _CountingSpendRedis()
+    counter_cache.redis_cache = counting_redis
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    clear_spend_counter_prefetch()
+    try:
+        await prefetch_spend_counters(counter_requests)
+
+        for counter_key, fallback_spend in counter_requests.items():
+            spend = await get_current_spend(
+                counter_key=counter_key,
+                fallback_spend=fallback_spend,
+            )
+            assert spend == 0.25
+
+        assert counting_redis.batch_get_calls == 1
+        assert set(counting_redis.batch_get_key_lists[0]) == set(counter_requests)
+    finally:
+        clear_spend_counter_prefetch()
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
+async def test_common_checks_budget_enforcement_after_prefetch_adds_no_extra_redis_reads():
+    """
+    End-to-end auth slice: prefetch for common_checks, then run the budget hooks
+    that would previously each hit Redis independently.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import (
+        _prefetch_common_check_spend_counters,
+        _team_max_budget_check,
+        _team_multi_budget_check,
+        _virtual_key_multi_budget_check,
+    )
+    from litellm.proxy.utils import ProxyLogging
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import clear_spend_counter_prefetch
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        max_budget=100.0,
+        spend=10.0,
+        budget_limits=[
+            {"budget_duration": "24h", "max_budget": 50.0, "reset_at": None},
+            {"budget_duration": "30d", "max_budget": 500.0, "reset_at": None},
+        ],
+    )
+    valid_token = UserAPIKeyAuth(
+        token="token-hash",
+        user_id="user-1",
+        team_id="team-1",
+        spend=1.0,
+        budget_limits=[
+            {"budget_duration": "24h", "max_budget": 10.0, "reset_at": None},
+        ],
+        models=["gpt-4"],
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    counter_cache = DualCache()
+    counting_redis = _CountingSpendRedis(
+        values={
+            "spend:team:team-1": 10.0,
+            "spend:team:team-1:window:24h": 5.0,
+            "spend:team:team-1:window:30d": 5.0,
+            "spend:key:token-hash:window:24h": 1.0,
+        }
+    )
+    counter_cache.redis_cache = counting_redis
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    clear_spend_counter_prefetch()
+    try:
+        await _prefetch_common_check_spend_counters(
+            request_body={"model": "gpt-4", "messages": []},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            valid_token=valid_token,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert counting_redis.batch_get_calls == 1
+
+        await _team_max_budget_check(
+            team_object=team_object,
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await _team_multi_budget_check(team_object=team_object)
+        await _virtual_key_multi_budget_check(valid_token=valid_token)
+
+        assert counting_redis.batch_get_calls == 1
+    finally:
+        clear_spend_counter_prefetch()
+        ps.spend_counter_cache = orig_counter
+
 
 @pytest.mark.asyncio
 async def test_virtual_key_budget_check_reads_from_spend_counter():
@@ -2237,7 +2431,7 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
         user_id="test-user",
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.budget_alerts = AsyncMock()
 
     async def mock_get_current_spend(counter_key, fallback_spend):
@@ -2268,7 +2462,7 @@ async def test_virtual_key_budget_check_fallback_no_counter():
         user_id="test-user",
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.budget_alerts = AsyncMock()
 
     # get_current_spend returns fallback_spend when no counter exists
@@ -2296,7 +2490,7 @@ async def test_team_budget_check_reads_from_spend_counter():
     )
     valid_token = UserAPIKeyAuth(token="test-token", team_id="test-team")
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.budget_alerts = AsyncMock()
 
     async def mock_get_current_spend(counter_key, fallback_spend):
@@ -2368,7 +2562,7 @@ async def test_tag_budget_check_reads_from_spend_counter():
                 request_body={"metadata": {"tags": ["paid-tag"]}},
                 prisma_client=MagicMock(),
                 user_api_key_cache=MagicMock(),
-                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
                 valid_token=UserAPIKeyAuth(token="test-token"),
             )
         assert exc_info.value.current_cost == 1.5
@@ -2396,7 +2590,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     async def mock_get_current_spend(counter_key, fallback_spend):
         if counter_key == "spend:team_member:test-user:test-team":
@@ -2618,7 +2812,7 @@ async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
         litellm_budget_table=None,
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     fake_budget_row = MagicMock()
     fake_budget_row.max_budget = 50.0
@@ -2714,7 +2908,7 @@ async def test_team_member_budget_check_per_member_override_wins_over_team_defau
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=200.0),
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     # Team-default row resolves to $50. If the fallback fired (it must
     # not here), spend $70 would exceed that $50 cap and raise.
@@ -2805,7 +2999,7 @@ async def test_team_member_budget_check_null_clone_falls_back_to_team_default():
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=None),
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     fake_default_row = MagicMock()
     fake_default_row.max_budget = 65.0
@@ -2872,7 +3066,7 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=None),
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     fake_default_row = MagicMock()
     fake_default_row.max_budget = None
@@ -2938,7 +3132,7 @@ async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
         litellm_budget_table=None,
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     # Team default budget row with max_budget=0.0 (the regression trigger).
     fake_default_row = MagicMock()
@@ -3005,7 +3199,7 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.0),
     )
 
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
