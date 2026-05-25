@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Veto">
+  <title>Veto</title>
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.2" result="blur"/>
+      <feColorMatrix in="blur" type="matrix"
+        values="0 0 0 0 0.937
+                0 0 0 0 0.267
+                0 0 0 0 0.267
+                0 0 0 0.35 0"/>
+      <feComposite in2="SourceGraphic" operator="in" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#glow)">
+    <rect x="1.5" y="1.5" width="21" height="21" rx="5"
+          fill="none" stroke="#ef4444" stroke-width="1.6"/>
+    <rect x="4.5" y="4.5" width="15" height="15" rx="3"
+          fill="none" stroke="#ef4444" stroke-opacity="0.35" stroke-width="1"/>
+    <line x1="5.5" y1="18.5" x2="18.5" y2="5.5"
+          stroke="#ef4444" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="12" cy="12" r="1.5" fill="#ef4444"/>
+  </g>
+</svg>
