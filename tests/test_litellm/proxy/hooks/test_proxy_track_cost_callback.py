@@ -1067,3 +1067,153 @@ async def test_failure_hook_drops_error_information_traceback_when_env_set(
     assert "traceback" not in error_information
     assert error_information["error_class"] == "RuntimeError"
     assert error_information["error_message"] == "boom-with-traceback"
+
+
+# ---------------------------------------------------------------------------
+# LIT-2457: background/manual health checks must not produce SpendLogs rows.
+#
+# Health check requests go through ``ahealth_check``, which stamps
+# ``LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME`` onto the synthetic
+# ``UserAPIKeyAuth`` and the per-call metadata
+# (see ``HealthCheckHelpers._update_model_params_with_health_check_tracking_information``).
+# The success path goes through ``_should_track_cost_callback`` and the
+# failure path goes through ``async_post_call_failure_hook``. Both must
+# short-circuit before any DB write.
+# ---------------------------------------------------------------------------
+
+
+def test_should_track_cost_callback_skips_internal_health_check_service_account():
+    """The success-path gate must return False when any spend-attribution
+    identifier matches the proxy-internal health-check sentinel."""
+    from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _is_litellm_internal_health_check_call,
+        _should_track_cost_callback,
+    )
+
+    sentinel = LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+    # The shape produced by
+    # ``HealthCheckHelpers._update_model_params_with_health_check_tracking_information``
+    # is: api_key == team_id == sentinel, user_id is None, end_user_id is None.
+    assert _is_litellm_internal_health_check_call(
+        user_api_key=sentinel,
+        user_id=None,
+        team_id=sentinel,
+        end_user_id=None,
+    )
+    assert (
+        _should_track_cost_callback(
+            user_api_key=sentinel,
+            user_id=None,
+            team_id=sentinel,
+            end_user_id=None,
+        )
+        is False
+    )
+
+    # A regular call (real hashed token, normal team_id) must still be tracked.
+    assert not _is_litellm_internal_health_check_call(
+        user_api_key="hashed-real-key",
+        user_id="user-1",
+        team_id="team-1",
+        end_user_id=None,
+    )
+    assert (
+        _should_track_cost_callback(
+            user_api_key="hashed-real-key",
+            user_id="user-1",
+            team_id="team-1",
+            end_user_id=None,
+        )
+        is True
+    )
+
+    # Defensive: the sentinel showing up in *any* identifier slot is enough
+    # to skip — guards against future refactors that move the sentinel onto
+    # user_id / end_user_id.
+    for slot in ("user_api_key", "user_id", "team_id", "end_user_id"):
+        kwargs = {
+            "user_api_key": None,
+            "user_id": None,
+            "team_id": None,
+            "end_user_id": None,
+            slot: sentinel,
+        }
+        assert _is_litellm_internal_health_check_call(**kwargs), slot
+        assert _should_track_cost_callback(**kwargs) is False, slot
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_skips_internal_health_check_service_account():
+    """The failure-path hook must skip the DB write when the
+    ``UserAPIKeyAuth`` is the synthetic health-check service account."""
+    from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+    logger = _ProxyDBLogger()
+    health_check_user_api_key_dict = (
+        UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth()
+    )
+    assert (
+        health_check_user_api_key_dict.api_key
+        == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    )
+
+    request_data = {
+        "model": "fake-openai-endpoint",
+        "messages": [{"role": "user", "content": "health check"}],
+        "metadata": {},
+    }
+    original_exception = Exception("upstream-down")
+
+    # Patch proxy_server / update_database so any call is observable.
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_proxy_logging_obj:
+        mock_db_writer = AsyncMock()
+        mock_proxy_logging_obj.db_spend_update_writer = mock_db_writer
+
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=health_check_user_api_key_dict,
+        )
+
+        mock_db_writer.update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_still_writes_for_real_keys():
+    """Sanity check that the health-check guard didn't accidentally
+    suppress the failure DB write for normal user keys."""
+    logger = _ProxyDBLogger()
+    real_user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-real-key",
+        key_alias="real-alias",
+        user_id="user-1",
+        team_id="team-1",
+        team_alias="team-alias",
+        end_user_id=None,
+        org_id=None,
+    )
+
+    request_data = {
+        "model": "fake-openai-endpoint",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+    }
+    original_exception = Exception("upstream-down")
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_proxy_logging_obj:
+        mock_db_writer = AsyncMock()
+        mock_proxy_logging_obj.db_spend_update_writer = mock_db_writer
+
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=real_user_api_key_dict,
+        )
+
+        mock_db_writer.update_database.assert_called_once()
