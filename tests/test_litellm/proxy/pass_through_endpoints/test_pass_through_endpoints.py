@@ -2698,3 +2698,49 @@ class TestRemoveStaleEndpointRoute:
 
         # After 50 cycles, only the last cycle's 2 keys should remain
         assert len(_registered_pass_through_routes) == 2
+
+    def test_helper_also_clears_openai_routes_allowlist(self):
+        """Stale-route cleanup must also remove the path from
+        LiteLLMRoutes.openai_routes — that list is the authorization
+        allowlist consulted by RouteChecks; leaving stale paths there causes
+        the allowlist to grow unboundedly across reload cycles.
+        """
+        from litellm.proxy._types import LiteLLMRoutes
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            _remove_stale_pass_through_routes,
+        )
+
+        path = "/stale-passthrough-allowlist-test"
+        wildcard_path = path + "/*"
+        exact_key = "stale-uuid:exact:" + path + ":GET"
+        subpath_key = "stale-uuid:subpath:" + path + ":GET"
+
+        openai_routes = LiteLLMRoutes.openai_routes.value
+        try:
+            _registered_pass_through_routes[exact_key] = {
+                "endpoint_id": "stale-uuid",
+                "path": path,
+                "type": "exact",
+            }
+            _registered_pass_through_routes[subpath_key] = {
+                "endpoint_id": "stale-uuid",
+                "path": path,
+                "type": "subpath",
+            }
+            openai_routes.append(path)
+            openai_routes.append(wildcard_path)
+
+            _remove_stale_pass_through_routes(
+                registered_keys=[exact_key, subpath_key],
+                visited_keys=set(),
+            )
+
+            assert exact_key not in _registered_pass_through_routes
+            assert subpath_key not in _registered_pass_through_routes
+            assert path not in openai_routes
+            assert wildcard_path not in openai_routes
+        finally:
+            if path in openai_routes:
+                openai_routes.remove(path)
+            if wildcard_path in openai_routes:
+                openai_routes.remove(wildcard_path)
