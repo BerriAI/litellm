@@ -1249,12 +1249,12 @@ class MCPApprovalStatus(str, enum.Enum):
     rejected = "rejected"
 
 
-class MCPEnvVarScope(str, enum.Enum):
-    """Scope for an MCP server environment variable.
+class MCPVariableScope(str, enum.Enum):
+    """Scope for an MCP server variable.
 
     - ``global``: value is provided by the admin and used for all users.
     - ``user``: each user must provide their own value via the per-user
-      env-var endpoint. The admin-supplied ``value`` is treated as a
+      variable endpoint. The admin-supplied ``value`` is treated as a
       placeholder/hint and is not used at request time.
     """
 
@@ -1262,18 +1262,18 @@ class MCPEnvVarScope(str, enum.Enum):
     user = "user"
 
 
-class MCPEnvVar(LiteLLMPydanticObjectBase):
-    """One environment variable for an MCP server.
+class MCPVariable(LiteLLMPydanticObjectBase):
+    """One variable for an MCP server.
 
     Variables can be interpolated into ``static_headers`` (and the server
     URL) using ``${NAME}`` syntax. ``scope=global`` values are stored on
     the server. ``scope=user`` values are stored per-user in
-    ``LiteLLM_MCPUserEnvVars`` and supplied by each user.
+    ``LiteLLM_MCPUserVariables`` and supplied by each user.
     """
 
     name: str
     value: str = ""
-    scope: MCPEnvVarScope = MCPEnvVarScope.global_
+    scope: MCPVariableScope = MCPVariableScope.global_
     description: Optional[str] = None
 
 
@@ -1295,7 +1295,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
-    env_vars: Optional[List[MCPEnvVar]] = None
+    variables: Optional[List[MCPVariable]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1380,7 +1380,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
-    env_vars: Optional[List[MCPEnvVar]] = None
+    variables: Optional[List[MCPVariable]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1447,7 +1447,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
-    env_vars: Optional[List[MCPEnvVar]] = None
+    variables: Optional[List[MCPVariable]] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
@@ -1526,14 +1526,14 @@ class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     connected_at: Optional[str] = None  # ISO-8601
 
 
-class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
-    """Payload for storing the calling user's per-user env var values."""
+class MCPUserVariablesRequest(LiteLLMPydanticObjectBase):
+    """Payload for storing the calling user's per-user variable values."""
 
     values: Dict[str, str]
 
 
-class MCPUserEnvVarSpec(LiteLLMPydanticObjectBase):
-    """Describes one per-user env var slot for the calling user."""
+class MCPUserVariableSpec(LiteLLMPydanticObjectBase):
+    """Describes one per-user variable slot for the calling user."""
 
     name: str
     description: Optional[str] = None
@@ -1541,13 +1541,13 @@ class MCPUserEnvVarSpec(LiteLLMPydanticObjectBase):
     is_set: bool = False
 
 
-class MCPUserEnvVarsStatus(LiteLLMPydanticObjectBase):
-    """Per-user env var status for a single MCP server."""
+class MCPUserVariablesStatus(LiteLLMPydanticObjectBase):
+    """Per-user variable status for a single MCP server."""
 
     server_id: str
     server_name: Optional[str] = None
     alias: Optional[str] = None
-    required: List[MCPUserEnvVarSpec] = Field(default_factory=list)
+    required: List[MCPUserVariableSpec] = Field(default_factory=list)
     missing_count: int = 0
     setup_url: Optional[str] = None  # frontend URL where the user can fill these in
 

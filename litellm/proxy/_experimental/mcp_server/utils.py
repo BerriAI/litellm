@@ -295,9 +295,9 @@ def validate_mcp_server_name(
             raise Exception(error_message)
 
 
-class MCPMissingUserEnvVarsError(Exception):
+class MCPMissingUserVariablesError(Exception):
     """Raised when an MCP request can't be built because the calling user has
-    not supplied one or more required per-user environment variables.
+    not supplied one or more required per-user variables.
 
     The error message is user-facing and includes a URL the user can visit
     to fill them in.
@@ -318,7 +318,7 @@ class MCPMissingUserEnvVarsError(Exception):
         label = server_name or server_id
         vars_list = ", ".join(missing)
         message = (
-            f"MCP server '{label}' is missing the following per-user environment "
+            f"MCP server '{label}' is missing the following per-user "
             f"variable{'s' if len(missing) != 1 else ''} that you need to fill in "
             f"before this server can be used: {vars_list}.\n\n"
             f"Go to {setup_url} to set them, then try again."
@@ -326,17 +326,17 @@ class MCPMissingUserEnvVarsError(Exception):
         super().__init__(message)
 
 
-# Pattern for ``${NAME}`` substitution. Matches the standard env-var
+# Pattern for ``${NAME}`` substitution. Matches the standard variable
 # identifier rules — letters, digits, underscores, can't start with a digit.
-_ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def parse_admin_env_vars(
-    env_vars: Optional[Iterable[Any]],
+def parse_admin_variables(
+    variables: Optional[Iterable[Any]],
 ) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
-    """Split admin-configured env var entries into globals and per-user specs.
+    """Split admin-configured variable entries into globals and per-user specs.
 
-    Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
+    Accepts the raw value of ``MCPServer.variables`` (list of dicts or Pydantic
     models). Returns:
 
     - ``global_values``: ``{name: value}`` for entries with ``scope=="global"``.
@@ -347,9 +347,9 @@ def parse_admin_env_vars(
     """
     global_values: Dict[str, str] = {}
     user_specs: List[Dict[str, Any]] = []
-    if not env_vars:
+    if not variables:
         return global_values, user_specs
-    for raw in env_vars:
+    for raw in variables:
         if raw is None:
             continue
         if hasattr(raw, "model_dump"):
@@ -370,26 +370,26 @@ def parse_admin_env_vars(
     return global_values, user_specs
 
 
-def find_env_var_references(value: str) -> Set[str]:
+def find_variable_references(value: str) -> Set[str]:
     """Return the set of ``${NAME}`` identifiers referenced inside ``value``."""
     if not value:
         return set()
-    return set(_ENV_VAR_PATTERN.findall(value))
+    return set(_VARIABLE_PATTERN.findall(value))
 
 
-def collect_env_var_references(*, strings: Iterable[str]) -> Set[str]:
+def collect_variable_references(*, strings: Iterable[str]) -> Set[str]:
     """Union of every ``${NAME}`` reference across a collection of strings."""
     refs: Set[str] = set()
     for s in strings:
         if isinstance(s, str):
-            refs |= find_env_var_references(s)
+            refs |= find_variable_references(s)
     return refs
 
 
-def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
+def interpolate_variables(value: str, variables: Mapping[str, str]) -> str:
     """Replace ``${NAME}`` references in ``value`` with the matching mapping
     entry. Unknown names are left untouched so callers can detect them via
-    ``find_env_var_references`` on the result if needed.
+    ``find_variable_references`` on the result if needed.
     """
     if not value:
         return value
@@ -400,20 +400,20 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
             return variables[name]
         return match.group(0)
 
-    return _ENV_VAR_PATTERN.sub(_sub, value)
+    return _VARIABLE_PATTERN.sub(_sub, value)
 
 
 def interpolate_headers(
     headers: Mapping[str, str], variables: Mapping[str, str]
 ) -> Dict[str, str]:
-    """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
-    return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
+    """Return a copy of ``headers`` with every value passed through ``interpolate_variables``."""
+    return {k: interpolate_variables(v, variables) for k, v in headers.items()}
 
 
-def build_env_var_setup_url(server_id: str) -> str:
-    """The frontend URL where a user can fill in their per-user env vars."""
+def build_variable_setup_url(server_id: str) -> str:
+    """The frontend URL where a user can fill in their per-user variables."""
     base = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
-    path = f"/ui/?page=mcp-servers&fill_env_vars={server_id}"
+    path = f"/ui/?page=mcp-servers&fill_variables={server_id}"
     return f"{base}{path}" if base else path
 
 

@@ -20,7 +20,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
-    MCPMissingUserEnvVarsError,
+    MCPMissingUserVariablesError,
     merge_mcp_headers,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -888,16 +888,16 @@ if MCP_AVAILABLE:
                 requested_server_id=canonical_server_id,
             )
             return result
-        except MCPMissingUserEnvVarsError as e:
+        except MCPMissingUserVariablesError as e:
             verbose_logger.info(
-                "MCP tool call missing per-user env vars: server_id=%s missing=%s",
+                "MCP tool call missing per-user variables: server_id=%s missing=%s",
                 e.server_id,
                 e.missing,
             )
             raise HTTPException(
                 status_code=412,
                 detail={
-                    "error": "missing_user_env_vars",
+                    "error": "missing_user_variables",
                     "message": str(e),
                     "server_id": e.server_id,
                     "server_name": e.server_name,

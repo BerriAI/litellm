@@ -311,11 +311,11 @@ model LiteLLM_MCPServerTable {
   tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
-  // Admin-configured environment variables interpolated into static_headers
+  // Admin-configured variables interpolated into static_headers
   // (and the URL) via ${NAME} syntax. Stored as an array of
   // {name, value, scope, description}. scope is "global" (value used as-is)
-  // or "user" (value supplied per-user via LiteLLM_MCPUserEnvVars).
-  env_vars     Json?          @default("[]")
+  // or "user" (value supplied per-user via LiteLLM_MCPUserVariables).
+  variables    Json?          @default("[]")
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -368,9 +368,9 @@ model LiteLLM_MCPUserCredentials {
   @@unique([user_id, server_id])
 }
 
-// Per-user environment variable values for MCP servers.
+// Per-user variable values for MCP servers.
 // values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
-model LiteLLM_MCPUserEnvVars {
+model LiteLLM_MCPUserVariables {
   id         String   @id @default(uuid())
   user_id    String
   server_id  String

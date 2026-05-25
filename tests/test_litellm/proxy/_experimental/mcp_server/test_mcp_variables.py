@@ -1,4 +1,4 @@
-"""Tests for MCP env-var interpolation utilities.
+"""Tests for MCP variable interpolation utilities.
 
 These cover the pure helpers in
 ``litellm.proxy._experimental.mcp_server.utils`` and do not require a DB
@@ -10,9 +10,9 @@ import pytest
 
 # Look up these names lazily on every access. Tests in this directory call
 # ``importlib.reload`` on the utils module to exercise registration logic,
-# which replaces ``MCPMissingUserEnvVarsError`` with a freshly-constructed
+# which replaces ``MCPMissingUserVariablesError`` with a freshly-constructed
 # class. A direct ``from ... import`` at module load time would freeze the
-# old class object and ``pytest.raises(_u("MCPMissingUserEnvVarsError"))`` would
+# old class object and ``pytest.raises(_u("MCPMissingUserVariablesError"))`` would
 # stop matching the new class. Accessing the attribute through the module
 # always picks up the current version.
 import litellm.proxy._experimental.mcp_server.utils as _mcp_utils
@@ -22,8 +22,8 @@ def _u(name: str):
     return getattr(_mcp_utils, name)
 
 
-def test_parse_admin_env_vars_splits_global_and_user():
-    g, u = _u("parse_admin_env_vars")(
+def test_parse_admin_variables_splits_global_and_user():
+    g, u = _u("parse_admin_variables")(
         [
             {"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"},
             {"name": "DB_HOST", "value": "localhost", "scope": "global"},
@@ -43,13 +43,13 @@ def test_parse_admin_env_vars_splits_global_and_user():
     ]
 
 
-def test_parse_admin_env_vars_handles_none_and_empty():
-    assert _u("parse_admin_env_vars")(None) == ({}, [])
-    assert _u("parse_admin_env_vars")([]) == ({}, [])
+def test_parse_admin_variables_handles_none_and_empty():
+    assert _u("parse_admin_variables")(None) == ({}, [])
+    assert _u("parse_admin_variables")([]) == ({}, [])
 
 
-def test_parse_admin_env_vars_skips_malformed_entries():
-    g, u = _u("parse_admin_env_vars")(
+def test_parse_admin_variables_skips_malformed_entries():
+    g, u = _u("parse_admin_variables")(
         [
             None,
             {"name": "", "value": "x"},
@@ -61,25 +61,25 @@ def test_parse_admin_env_vars_skips_malformed_entries():
     assert u == []
 
 
-def test_find_env_var_references():
-    assert _u("find_env_var_references")("") == set()
-    assert _u("find_env_var_references")("plain") == set()
-    assert _u("find_env_var_references")("${A}") == {"A"}
-    assert _u("find_env_var_references")("${A}/${B}/${A}") == {"A", "B"}
+def test_find_variable_references():
+    assert _u("find_variable_references")("") == set()
+    assert _u("find_variable_references")("plain") == set()
+    assert _u("find_variable_references")("${A}") == {"A"}
+    assert _u("find_variable_references")("${A}/${B}/${A}") == {"A", "B"}
     # Invalid identifier patterns should not match
-    assert _u("find_env_var_references")("${1abc}") == set()
-    assert _u("find_env_var_references")("${a-b}") == set()
+    assert _u("find_variable_references")("${1abc}") == set()
+    assert _u("find_variable_references")("${a-b}") == set()
 
 
-def test_collect_env_var_references():
-    refs = _u("collect_env_var_references")(
+def test_collect_variable_references():
+    refs = _u("collect_variable_references")(
         strings=["${A}", "static", "${B}-${C}", None]
     )
     assert refs == {"A", "B", "C"}
 
 
-def test_interpolate_env_vars_replaces_known_and_leaves_unknown():
-    assert _u("interpolate_env_vars")(
+def test_interpolate_variables_replaces_known_and_leaves_unknown():
+    assert _u("interpolate_variables")(
         "${A}://${B}/${C}", {"A": "https", "B": "host"}
     ) == ("https://host/${C}")
 
@@ -92,40 +92,40 @@ def test_interpolate_headers_returns_independent_copy():
     assert headers == {"X-Url": "${A}://x"}
 
 
-def test_build_env_var_setup_url_includes_server_id(monkeypatch):
+def test_build_variable_setup_url_includes_server_id(monkeypatch):
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
-    url = _u("build_env_var_setup_url")("abc-123")
+    url = _u("build_variable_setup_url")("abc-123")
     assert url.startswith("/ui/?page=mcp-servers")
-    assert "fill_env_vars=abc-123" in url
+    assert "fill_variables=abc-123" in url
 
 
-def test_build_env_var_setup_url_prepends_proxy_base_url(monkeypatch):
+def test_build_variable_setup_url_prepends_proxy_base_url(monkeypatch):
     monkeypatch.setenv("PROXY_BASE_URL", "https://proxy.example.com/")
-    url = _u("build_env_var_setup_url")("abc-123")
+    url = _u("build_variable_setup_url")("abc-123")
     assert url.startswith("https://proxy.example.com/ui/")
-    assert "fill_env_vars=abc-123" in url
+    assert "fill_variables=abc-123" in url
 
 
-def test_missing_user_env_vars_error_message_is_friendly():
-    with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc_info:
-        raise _u("MCPMissingUserEnvVarsError")(
+def test_missing_user_variables_error_message_is_friendly():
+    with pytest.raises(_u("MCPMissingUserVariablesError")) as exc_info:
+        raise _u("MCPMissingUserVariablesError")(
             server_id="abc-123",
             server_name="CorporateDB",
             missing=["CORP_USERNAME", "CORP_PASSWORD"],
-            setup_url="https://proxy.example.com/ui/?page=mcp-servers&fill_env_vars=abc-123",
+            setup_url="https://proxy.example.com/ui/?page=mcp-servers&fill_variables=abc-123",
         )
     err = exc_info.value
     text = str(err)
     assert "CorporateDB" in text
     assert "CORP_USERNAME" in text
     assert "CORP_PASSWORD" in text
-    assert "fill_env_vars=abc-123" in text
+    assert "fill_variables=abc-123" in text
     assert err.server_id == "abc-123"
     assert err.missing == ["CORP_USERNAME", "CORP_PASSWORD"]
 
 
-def test_missing_user_env_vars_error_singular_message():
-    err = _u("MCPMissingUserEnvVarsError")(
+def test_missing_user_variables_error_singular_message():
+    err = _u("MCPMissingUserVariablesError")(
         server_id="abc",
         server_name=None,
         missing=["X"],
@@ -138,7 +138,7 @@ def test_missing_user_env_vars_error_singular_message():
     assert "abc" in text
 
 
-# ── _resolve_static_headers_with_env_vars ────────────────────────────────
+# ── _resolve_static_headers_with_variables ────────────────────────────────
 
 
 @pytest.fixture
@@ -156,7 +156,7 @@ def mock_server():
             "X-DB-URL": "${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOST}/db",
             "X-Other": "literal",
         },
-        env_vars=[
+        variables=[
             {"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"},
             {"name": "DB_HOST", "value": "db.local", "scope": "global"},
             {
@@ -181,12 +181,12 @@ async def test_resolve_static_headers_interpolates_globals_and_user(
     manager = MCPServerManager()
 
     # Stub the per-user lookup so we don't need a real DB.
-    async def fake_load_user_env_vars(server, user_api_key_auth):
+    async def fake_load_user_variables(server, user_api_key_auth):
         return {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
 
-    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+    monkeypatch.setattr(manager, "_load_user_variables", fake_load_user_variables)
 
-    headers = await manager._resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_variables(
         mock_server, user_api_key_auth=object()
     )
     assert headers == {
@@ -205,19 +205,19 @@ async def test_resolve_static_headers_raises_when_user_vars_missing(
 
     manager = MCPServerManager()
 
-    async def fake_load_user_env_vars(server, user_api_key_auth):
+    async def fake_load_user_variables(server, user_api_key_auth):
         # User has only filled in one of the two required vars
         return {"CORP_USERNAME": "alice"}
 
-    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+    monkeypatch.setattr(manager, "_load_user_variables", fake_load_user_variables)
 
-    with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc:
-        await manager._resolve_static_headers_with_env_vars(
+    with pytest.raises(_u("MCPMissingUserVariablesError")) as exc:
+        await manager._resolve_static_headers_with_variables(
             mock_server, user_api_key_auth=object()
         )
     assert exc.value.missing == ["CORP_PASSWORD"]
     assert exc.value.server_id == "srv-1"
-    assert "fill_env_vars=srv-1" in exc.value.setup_url
+    assert "fill_variables=srv-1" in exc.value.setup_url
 
 
 @pytest.mark.asyncio
@@ -233,13 +233,13 @@ async def test_resolve_static_headers_missing_is_non_blocking_for_listing(
 
     manager = MCPServerManager()
 
-    async def fake_load_user_env_vars(server, user_api_key_auth):
+    async def fake_load_user_variables(server, user_api_key_auth):
         # User has only filled in one of the two required vars.
         return {"CORP_USERNAME": "alice"}
 
-    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+    monkeypatch.setattr(manager, "_load_user_variables", fake_load_user_variables)
 
-    headers = await manager._resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_variables(
         mock_server, user_api_key_auth=object(), raise_on_missing=False
     )
     # Globals + the supplied user var are interpolated; the still-missing
@@ -251,8 +251,8 @@ async def test_resolve_static_headers_missing_is_non_blocking_for_listing(
 
 
 @pytest.mark.asyncio
-async def test_resolve_static_headers_passthrough_when_no_env_vars():
-    """Servers without env_vars should keep static_headers untouched."""
+async def test_resolve_static_headers_passthrough_when_no_variables():
+    """Servers without variables should keep static_headers untouched."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
@@ -265,9 +265,9 @@ async def test_resolve_static_headers_passthrough_when_no_env_vars():
         transport="http",
         url="https://example.com",
         static_headers={"Authorization": "Bearer admin-static"},
-        env_vars=None,
+        variables=None,
     )
-    headers = await manager._resolve_static_headers_with_env_vars(server, None)
+    headers = await manager._resolve_static_headers_with_variables(server, None)
     assert headers == {"Authorization": "Bearer admin-static"}
 
 
@@ -290,27 +290,27 @@ async def test_resolve_static_headers_unreferenced_user_var_is_not_blocking(
         transport="http",
         url="https://example.com",
         static_headers={"X-Static": "${GLOBAL_VAR}"},
-        env_vars=[
+        variables=[
             {"name": "GLOBAL_VAR", "value": "ok", "scope": "global"},
             # User var declared but not referenced anywhere — should be ignored.
             {"name": "UNUSED_USER_VAR", "value": "", "scope": "user"},
         ],
     )
 
-    async def fake_load_user_env_vars(server, user_api_key_auth):
+    async def fake_load_user_variables(server, user_api_key_auth):
         return {}
 
-    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+    monkeypatch.setattr(manager, "_load_user_variables", fake_load_user_variables)
 
-    headers = await manager._resolve_static_headers_with_env_vars(server, object())
+    headers = await manager._resolve_static_headers_with_variables(server, object())
     assert headers == {"X-Static": "ok"}
 
 
-# ── _load_user_env_vars guard paths ────────────────────────────────────────
+# ── _load_user_variables guard paths ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_load_user_env_vars_returns_empty_without_user():
+async def test_load_user_variables_returns_empty_without_user():
     """No user auth → no per-user lookup is attempted."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
@@ -321,11 +321,11 @@ async def test_load_user_env_vars_returns_empty_without_user():
     server = MCPServer(
         server_id="s", name="s", transport="http", url="https://example.com"
     )
-    assert await manager._load_user_env_vars(server, None) == {}
+    assert await manager._load_user_variables(server, None) == {}
 
 
 @pytest.mark.asyncio
-async def test_load_user_env_vars_returns_empty_without_user_id():
+async def test_load_user_variables_returns_empty_without_user_id():
     """User auth without a user_id (e.g. anonymous virtual key) → empty dict."""
     from unittest.mock import MagicMock
 
@@ -340,11 +340,11 @@ async def test_load_user_env_vars_returns_empty_without_user_id():
     )
     fake_auth = MagicMock()
     fake_auth.user_id = None
-    assert await manager._load_user_env_vars(server, fake_auth) == {}
+    assert await manager._load_user_variables(server, fake_auth) == {}
 
 
 @pytest.mark.asyncio
-async def test_load_user_env_vars_returns_empty_when_db_unavailable(monkeypatch):
+async def test_load_user_variables_returns_empty_when_db_unavailable(monkeypatch):
     """If prisma_client is None, the lookup short-circuits rather than crashing."""
     from unittest.mock import MagicMock
 
@@ -360,34 +360,34 @@ async def test_load_user_env_vars_returns_empty_when_db_unavailable(monkeypatch)
     fake_auth = MagicMock()
     fake_auth.user_id = "alice"
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    assert await manager._load_user_env_vars(server, fake_auth) == {}
+    assert await manager._load_user_variables(server, fake_auth) == {}
 
 
-# ── DB helpers: per-user env vars ─────────────────────────────────────────
+# ── DB helpers: per-user variables ─────────────────────────────────────────
 
-_SALT_KEY = "test-salt-key-for-env-vars-tests-1234"
+_SALT_KEY = "test-salt-key-for-variables-tests-1234"
 
 
 @pytest.fixture
-def env_vars_salt_key(monkeypatch):
+def variables_salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", _SALT_KEY)
 
 
-def _mock_env_vars_prisma(row=None):
-    """Build a MagicMock prisma_client whose env-vars table returns ``row``."""
+def _mock_variables_prisma(row=None):
+    """Build a MagicMock prisma_client whose variables table returns ``row``."""
     from unittest.mock import AsyncMock, MagicMock
 
     prisma = MagicMock()
-    prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(return_value=row)
-    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[])
-    prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
-    prisma.db.litellm_mcpuserenvvars.delete = AsyncMock()
+    prisma.db.litellm_mcpuservariables.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_mcpuservariables.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpuservariables.upsert = AsyncMock()
+    prisma.db.litellm_mcpuservariables.delete = AsyncMock()
     return prisma
 
 
 def _captured_values_blob(prisma) -> str:
     """Pull the values_b64 value passed to the most recent upsert."""
-    call = prisma.db.litellm_mcpuserenvvars.upsert.call_args
+    call = prisma.db.litellm_mcpuservariables.upsert.call_args
     data = call.kwargs["data"]
     create_value = data["create"]["values_b64"]
     update_value = data["update"]["values_b64"]
@@ -396,11 +396,11 @@ def _captured_values_blob(prisma) -> str:
 
 
 @pytest.mark.asyncio
-async def test_store_user_env_vars_does_not_persist_plaintext(env_vars_salt_key):
-    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
+async def test_store_user_variables_does_not_persist_plaintext(variables_salt_key):
+    from litellm.proxy._experimental.mcp_server.db import store_user_variables
 
-    prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(
+    prisma = _mock_variables_prisma()
+    await store_user_variables(
         prisma, "alice", "srv-1", {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
     )
     stored = _captured_values_blob(prisma)
@@ -410,50 +410,50 @@ async def test_store_user_env_vars_does_not_persist_plaintext(env_vars_salt_key)
 
 
 @pytest.mark.asyncio
-async def test_get_user_env_vars_round_trip(env_vars_salt_key):
+async def test_get_user_variables_round_trip(variables_salt_key):
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server.db import (
-        get_user_env_vars,
-        store_user_env_vars,
+        get_user_variables,
+        store_user_variables,
     )
 
-    prisma = _mock_env_vars_prisma()
+    prisma = _mock_variables_prisma()
     payload = {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
-    await store_user_env_vars(prisma, "alice", "srv-1", payload)
+    await store_user_variables(prisma, "alice", "srv-1", payload)
     stored = _captured_values_blob(prisma)
 
     # Now simulate the read returning that blob.
     row = MagicMock()
     row.values_b64 = stored
-    prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_mcpuservariables.find_unique = AsyncMock(return_value=row)
 
-    result = await get_user_env_vars(prisma, "alice", "srv-1")
+    result = await get_user_variables(prisma, "alice", "srv-1")
     assert result == payload
 
 
 @pytest.mark.asyncio
-async def test_get_user_env_vars_returns_empty_for_missing_row():
-    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars
+async def test_get_user_variables_returns_empty_for_missing_row():
+    from litellm.proxy._experimental.mcp_server.db import get_user_variables
 
-    prisma = _mock_env_vars_prisma(row=None)
-    assert await get_user_env_vars(prisma, "alice", "srv-1") == {}
+    prisma = _mock_variables_prisma(row=None)
+    assert await get_user_variables(prisma, "alice", "srv-1") == {}
 
 
 @pytest.mark.asyncio
-async def test_get_user_env_vars_bulk_distributes_results(env_vars_salt_key):
+async def test_get_user_variables_bulk_distributes_results(variables_salt_key):
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server.db import (
-        get_user_env_vars_bulk,
-        store_user_env_vars,
+        get_user_variables_bulk,
+        store_user_variables,
     )
 
-    # Use store_user_env_vars to get correctly-encrypted blobs.
-    prisma1 = _mock_env_vars_prisma()
-    await store_user_env_vars(prisma1, "alice", "srv-1", {"A": "1"})
+    # Use store_user_variables to get correctly-encrypted blobs.
+    prisma1 = _mock_variables_prisma()
+    await store_user_variables(prisma1, "alice", "srv-1", {"A": "1"})
     blob1 = _captured_values_blob(prisma1)
-    await store_user_env_vars(prisma1, "alice", "srv-2", {"B": "2"})
+    await store_user_variables(prisma1, "alice", "srv-2", {"B": "2"})
     blob2 = _captured_values_blob(prisma1)
 
     row1 = MagicMock()
@@ -463,30 +463,30 @@ async def test_get_user_env_vars_bulk_distributes_results(env_vars_salt_key):
     row2.server_id = "srv-2"
     row2.values_b64 = blob2
 
-    prisma = _mock_env_vars_prisma()
-    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[row1, row2])
-    result = await get_user_env_vars_bulk(prisma, "alice", ["srv-1", "srv-2", "srv-3"])
+    prisma = _mock_variables_prisma()
+    prisma.db.litellm_mcpuservariables.find_many = AsyncMock(return_value=[row1, row2])
+    result = await get_user_variables_bulk(prisma, "alice", ["srv-1", "srv-2", "srv-3"])
     assert result == {"srv-1": {"A": "1"}, "srv-2": {"B": "2"}}
 
 
 @pytest.mark.asyncio
-async def test_get_user_env_vars_bulk_empty_ids_short_circuits():
-    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars_bulk
+async def test_get_user_variables_bulk_empty_ids_short_circuits():
+    from litellm.proxy._experimental.mcp_server.db import get_user_variables_bulk
 
-    prisma = _mock_env_vars_prisma()
-    assert await get_user_env_vars_bulk(prisma, "alice", []) == {}
+    prisma = _mock_variables_prisma()
+    assert await get_user_variables_bulk(prisma, "alice", []) == {}
     # find_many should never have been called
-    assert prisma.db.litellm_mcpuserenvvars.find_many.await_count == 0
+    assert prisma.db.litellm_mcpuservariables.find_many.await_count == 0
 
 
 @pytest.mark.asyncio
-async def test_delete_user_env_vars_calls_unique_key():
-    from litellm.proxy._experimental.mcp_server.db import delete_user_env_vars
+async def test_delete_user_variables_calls_unique_key():
+    from litellm.proxy._experimental.mcp_server.db import delete_user_variables
 
-    prisma = _mock_env_vars_prisma()
-    await delete_user_env_vars(prisma, "alice", "srv-1")
-    prisma.db.litellm_mcpuserenvvars.delete.assert_awaited_once()
-    call = prisma.db.litellm_mcpuserenvvars.delete.call_args
+    prisma = _mock_variables_prisma()
+    await delete_user_variables(prisma, "alice", "srv-1")
+    prisma.db.litellm_mcpuservariables.delete.assert_awaited_once()
+    call = prisma.db.litellm_mcpuservariables.delete.call_args
     assert call.kwargs["where"] == {
         "user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}
     }
@@ -496,17 +496,17 @@ async def test_delete_user_env_vars_calls_unique_key():
 
 
 @pytest.mark.asyncio
-async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
-    """The MCP ``call_tool`` handler must turn ``MCPMissingUserEnvVarsError``
+async def test_missing_user_variables_error_renders_in_mcp_call_tool():
+    """The MCP ``call_tool`` handler must turn ``MCPMissingUserVariablesError``
     into a friendly ``CallToolResult`` with ``isError=True`` so Claude Code
     surfaces the setup URL instead of an opaque internal error."""
     from mcp.types import TextContent
 
-    err = _u("MCPMissingUserEnvVarsError")(
+    err = _u("MCPMissingUserVariablesError")(
         server_id="srv-99",
         server_name="CorporateDB",
         missing=["CORP_USERNAME"],
-        setup_url="/ui/?page=mcp-servers&fill_env_vars=srv-99",
+        setup_url="/ui/?page=mcp-servers&fill_variables=srv-99",
     )
     # We don't want to spin up the full MCP server framework — just
     # mimic the except-clause behavior the @server.call_tool handler uses.
@@ -520,4 +520,4 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
     text = result.content[0].text  # type: ignore[union-attr]
     assert "CorporateDB" in text
     assert "CORP_USERNAME" in text
-    assert "fill_env_vars=srv-99" in text
+    assert "fill_variables=srv-99" in text

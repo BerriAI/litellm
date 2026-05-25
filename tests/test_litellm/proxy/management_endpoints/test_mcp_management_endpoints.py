@@ -3288,17 +3288,17 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.alias == server.alias
 
 
-def _make_env_var_server(
+def _make_variable_server(
     *,
     server_id: str = "srv-1",
     server_name: str = "DB Server",
     alias: str = "db_server",
-    env_vars=None,
+    variables=None,
     static_headers=None,
 ):
-    """Lightweight server stand-in for the per-user env-var endpoints.
+    """Lightweight server stand-in for the per-user variable endpoints.
 
-    The handlers only read ``server_id``/``server_name``/``alias``/``env_vars``/
+    The handlers only read ``server_id``/``server_name``/``alias``/``variables``/
     ``static_headers`` via ``getattr``, so a SimpleNamespace is enough and keeps
     the test decoupled from the full Prisma model.
     """
@@ -3306,14 +3306,14 @@ def _make_env_var_server(
         server_id=server_id,
         server_name=server_name,
         alias=alias,
-        env_vars=env_vars,
+        variables=variables,
         static_headers=static_headers,
     )
 
 
-# env_vars with two referenced per-user fields, one unreferenced per-user field
+# variables with two referenced per-user fields, one unreferenced per-user field
 # (must NOT be blocking), and a global value.
-_ENV_VARS_MIXED = [
+_VARIABLES_MIXED = [
     {"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"},
     {
         "name": "CORP_USERNAME",
@@ -3329,14 +3329,14 @@ _STATIC_HEADERS_MIXED = {
 }
 
 
-class TestComputeUserEnvVarStatus:
-    """Unit tests for the _compute_user_env_var_status helper."""
+class TestComputeUserVariableStatus:
+    """Unit tests for the _compute_user_variable_status helper."""
 
     def test_only_referenced_per_user_vars_are_required(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
-        status = mgmt_endpoints._compute_user_env_var_status(
+        status = mgmt_endpoints._compute_user_variable_status(
             server=server, stored_values={"CORP_USERNAME": "alice"}
         )
         names = {spec.name for spec in status.required}
@@ -3355,10 +3355,10 @@ class TestComputeUserEnvVarStatus:
         assert status.setup_url and "srv-1" in status.setup_url
 
     def test_all_filled_has_zero_missing(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
-        status = mgmt_endpoints._compute_user_env_var_status(
+        status = mgmt_endpoints._compute_user_variable_status(
             server=server,
             stored_values={"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"},
         )
@@ -3366,11 +3366,11 @@ class TestComputeUserEnvVarStatus:
         assert all(spec.is_set for spec in status.required)
 
     def test_static_headers_as_json_string_is_parsed(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED,
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED,
             static_headers='{"Authorization": "${CORP_USERNAME}"}',
         )
-        status = mgmt_endpoints._compute_user_env_var_status(
+        status = mgmt_endpoints._compute_user_variable_status(
             server=server, stored_values={}
         )
         # Only CORP_USERNAME is referenced via the JSON-string headers.
@@ -3378,10 +3378,10 @@ class TestComputeUserEnvVarStatus:
         assert status.missing_count == 1
 
     def test_static_headers_invalid_json_string_yields_no_required(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers="not-json{"
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers="not-json{"
         )
-        status = mgmt_endpoints._compute_user_env_var_status(
+        status = mgmt_endpoints._compute_user_variable_status(
             server=server, stored_values={}
         )
         assert status.required == []
@@ -3390,22 +3390,22 @@ class TestComputeUserEnvVarStatus:
         assert status.setup_url is None
 
     def test_no_per_user_vars_referenced_yields_no_required(self):
-        server = _make_env_var_server(
-            env_vars=[{"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"}],
+        server = _make_variable_server(
+            variables=[{"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"}],
             static_headers={"Authorization": "${DB_PROTOCOL}://host"},
         )
-        status = mgmt_endpoints._compute_user_env_var_status(
+        status = mgmt_endpoints._compute_user_variable_status(
             server=server, stored_values={}
         )
         assert status.required == []
         assert status.setup_url is None
 
 
-class TestGetMCPUserEnvVars:
+class TestGetMCPUserVariables:
     @pytest.mark.asyncio
     async def test_returns_status_for_server(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
         with (
             patch.object(
@@ -3416,11 +3416,11 @@ class TestGetMCPUserEnvVars:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_user_env_vars",
+                "get_user_variables",
                 AsyncMock(return_value={"CORP_USERNAME": "alice"}),
             ),
         ):
-            result = await mgmt_endpoints.get_mcp_user_env_vars(
+            result = await mgmt_endpoints.get_mcp_user_variables(
                 server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
@@ -3434,7 +3434,7 @@ class TestGetMCPUserEnvVars:
             mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.get_mcp_user_env_vars(
+                await mgmt_endpoints.get_mcp_user_variables(
                     server_id="srv-1",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
@@ -3451,18 +3451,18 @@ class TestGetMCPUserEnvVars:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.get_mcp_user_env_vars(
+                await mgmt_endpoints.get_mcp_user_variables(
                     server_id="missing",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
                 )
         assert exc.value.status_code == 404
 
 
-class TestStoreMCPUserEnvVars:
+class TestStoreMCPUserVariables:
     @pytest.mark.asyncio
     async def test_persists_only_allowed_non_empty_values(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
         store_mock = AsyncMock()
         with (
@@ -3472,11 +3472,11 @@ class TestStoreMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
-            patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
+            patch.object(mgmt_endpoints, "store_user_variables", store_mock),
         ):
-            result = await mgmt_endpoints.store_mcp_user_env_vars(
+            result = await mgmt_endpoints.store_mcp_user_variables(
                 server_id="srv-1",
-                payload=mgmt_endpoints.MCPUserEnvVarsRequest(
+                payload=mgmt_endpoints.MCPUserVariablesRequest(
                     values={
                         "CORP_USERNAME": "alice",
                         "CORP_PASSWORD": "",  # empty -> dropped
@@ -3498,9 +3498,9 @@ class TestStoreMCPUserEnvVars:
             mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.store_mcp_user_env_vars(
+                await mgmt_endpoints.store_mcp_user_variables(
                     server_id="srv-1",
-                    payload=mgmt_endpoints.MCPUserEnvVarsRequest(values={}),
+                    payload=mgmt_endpoints.MCPUserVariablesRequest(values={}),
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
         assert exc.value.status_code == 400
@@ -3516,19 +3516,19 @@ class TestStoreMCPUserEnvVars:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.store_mcp_user_env_vars(
+                await mgmt_endpoints.store_mcp_user_variables(
                     server_id="missing",
-                    payload=mgmt_endpoints.MCPUserEnvVarsRequest(values={}),
+                    payload=mgmt_endpoints.MCPUserVariablesRequest(values={}),
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
                 )
         assert exc.value.status_code == 404
 
 
-class TestClearMCPUserEnvVars:
+class TestClearMCPUserVariables:
     @pytest.mark.asyncio
     async def test_clears_and_returns_empty_status(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
         delete_mock = AsyncMock()
         with (
@@ -3538,9 +3538,9 @@ class TestClearMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
-            patch.object(mgmt_endpoints, "delete_user_env_vars", delete_mock),
+            patch.object(mgmt_endpoints, "delete_user_variables", delete_mock),
         ):
-            result = await mgmt_endpoints.clear_mcp_user_env_vars(
+            result = await mgmt_endpoints.clear_mcp_user_variables(
                 server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
@@ -3551,8 +3551,8 @@ class TestClearMCPUserEnvVars:
 
     @pytest.mark.asyncio
     async def test_delete_error_is_swallowed(self):
-        server = _make_env_var_server(
-            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
         with (
             patch.object(
@@ -3563,12 +3563,12 @@ class TestClearMCPUserEnvVars:
             ),
             patch.object(
                 mgmt_endpoints,
-                "delete_user_env_vars",
+                "delete_user_variables",
                 AsyncMock(side_effect=Exception("already gone")),
             ),
         ):
             # Should not raise even though delete blows up.
-            result = await mgmt_endpoints.clear_mcp_user_env_vars(
+            result = await mgmt_endpoints.clear_mcp_user_variables(
                 server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
@@ -3580,7 +3580,7 @@ class TestClearMCPUserEnvVars:
             mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.clear_mcp_user_env_vars(
+                await mgmt_endpoints.clear_mcp_user_variables(
                     server_id="srv-1",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
@@ -3597,20 +3597,20 @@ class TestClearMCPUserEnvVars:
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.clear_mcp_user_env_vars(
+                await mgmt_endpoints.clear_mcp_user_variables(
                     server_id="missing",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
                 )
         assert exc.value.status_code == 404
 
 
-class TestListMCPUserEnvVarStatus:
+class TestListMCPUserVariableStatus:
     @pytest.mark.asyncio
     async def test_no_user_id_returns_empty(self):
         with patch.object(
             mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
         ):
-            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+            result = await mgmt_endpoints.list_mcp_user_variable_status(
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="")
             )
         assert result == []
@@ -3627,22 +3627,22 @@ class TestListMCPUserEnvVarStatus:
                 AsyncMock(return_value=[]),
             ),
         ):
-            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+            result = await mgmt_endpoints.list_mcp_user_variable_status(
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice")
             )
         assert result == []
 
     @pytest.mark.asyncio
     async def test_only_servers_with_required_fields_are_returned(self):
-        server_with = _make_env_var_server(
+        server_with = _make_variable_server(
             server_id="srv-with",
-            env_vars=_ENV_VARS_MIXED,
+            variables=_VARIABLES_MIXED,
             static_headers=_STATIC_HEADERS_MIXED,
         )
         # No per-user var is referenced -> contributes no status entry.
-        server_without = _make_env_var_server(
+        server_without = _make_variable_server(
             server_id="srv-without",
-            env_vars=[{"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"}],
+            variables=[{"name": "DB_PROTOCOL", "value": "postgres", "scope": "global"}],
             static_headers={"Authorization": "${DB_PROTOCOL}://host"},
         )
         with (
@@ -3656,11 +3656,11 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_user_env_vars_bulk",
+                "get_user_variables_bulk",
                 AsyncMock(return_value={"srv-with": {"CORP_USERNAME": "alice"}}),
             ),
         ):
-            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+            result = await mgmt_endpoints.list_mcp_user_variable_status(
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice")
             )
         assert [s.server_id for s in result] == ["srv-with"]

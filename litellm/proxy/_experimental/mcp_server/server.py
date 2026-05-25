@@ -48,7 +48,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
-    MCPMissingUserEnvVarsError,
+    MCPMissingUserVariablesError,
     add_server_prefix_to_name,
     get_server_prefix,
     iter_known_server_prefixes,
@@ -469,9 +469,9 @@ if MCP_AVAILABLE:
                 host_progress_callback=host_progress_callback,
                 **data,  # for logging
             )
-        except MCPMissingUserEnvVarsError as e:
+        except MCPMissingUserVariablesError as e:
             verbose_logger.info(
-                "MCP mcp_server_tool_call missing per-user env vars: server_id=%s missing=%s",
+                "MCP mcp_server_tool_call missing per-user variables: server_id=%s missing=%s",
                 e.server_id,
                 e.missing,
             )

@@ -61,12 +61,12 @@ def _prepare_mcp_server_data(
     if data.static_headers is not None:
         data_dict["static_headers"] = safe_dumps(data.static_headers)
 
-    # Handle env_vars serialization. Pydantic models are dumped to a list of
+    # Handle variables serialization. Pydantic models are dumped to a list of
     # plain dicts so the JSON column receives ``[{name, value, scope, ...}]``.
-    env_vars = getattr(data, "env_vars", None)
-    if env_vars is not None:
-        data_dict["env_vars"] = safe_dumps(
-            [v.model_dump() if hasattr(v, "model_dump") else dict(v) for v in env_vars]
+    variables = getattr(data, "variables", None)
+    if variables is not None:
+        data_dict["variables"] = safe_dumps(
+            [v.model_dump() if hasattr(v, "model_dump") else dict(v) for v in variables]
         )
 
     # Handle mcp_info serialization
@@ -947,21 +947,21 @@ async def get_mcp_submissions(
     )
 
 
-# ── Per-user MCP environment variables ────────────────────────────────────
+# ── Per-user MCP variables ────────────────────────────────────
 
 
-async def store_user_env_vars(
+async def store_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
     server_id: str,
     values: Dict[str, str],
 ) -> None:
-    """Persist (or overwrite) the calling user's env var values for ``server_id``.
+    """Persist (or overwrite) the calling user's variable values for ``server_id``.
 
     Values are JSON-serialised and stored encrypted in ``values_b64``.
     """
     encoded = encrypt_value_helper(json.dumps(values))
-    await prisma_client.db.litellm_mcpuserenvvars.upsert(
+    await prisma_client.db.litellm_mcpuservariables.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
             "create": {
@@ -974,11 +974,11 @@ async def store_user_env_vars(
     )
 
 
-def _decode_user_env_vars(stored: str) -> Dict[str, str]:
+def _decode_user_variables(stored: str) -> Dict[str, str]:
     """Decrypt a ``values_b64`` blob and parse it as a flat ``{name: value}`` dict."""
     decrypted = decrypt_value_helper(
         value=stored,
-        key="mcp_user_env_vars",
+        key="mcp_user_variables",
         exception_type="debug",
         return_original_value=False,
     )
@@ -993,21 +993,21 @@ def _decode_user_env_vars(stored: str) -> Dict[str, str]:
     return {str(k): str(v) for k, v in parsed.items()}
 
 
-async def get_user_env_vars(
+async def get_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
     server_id: str,
 ) -> Dict[str, str]:
-    """Return the calling user's env var dict for ``server_id`` (empty if none)."""
-    row = await prisma_client.db.litellm_mcpuserenvvars.find_unique(
+    """Return the calling user's variable dict for ``server_id`` (empty if none)."""
+    row = await prisma_client.db.litellm_mcpuservariables.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
         return {}
-    return _decode_user_env_vars(row.values_b64)
+    return _decode_user_variables(row.values_b64)
 
 
-async def get_user_env_vars_bulk(
+async def get_user_variables_bulk(
     prisma_client: PrismaClient,
     user_id: str,
     server_ids: Iterable[str],
@@ -1019,18 +1019,18 @@ async def get_user_env_vars_bulk(
     ids = list(server_ids)
     if not ids:
         return {}
-    rows = await prisma_client.db.litellm_mcpuserenvvars.find_many(
+    rows = await prisma_client.db.litellm_mcpuservariables.find_many(
         where={"user_id": user_id, "server_id": {"in": ids}}
     )
-    return {row.server_id: _decode_user_env_vars(row.values_b64) for row in rows}
+    return {row.server_id: _decode_user_variables(row.values_b64) for row in rows}
 
 
-async def delete_user_env_vars(
+async def delete_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
     server_id: str,
 ) -> None:
-    """Remove the calling user's env var values for ``server_id``."""
-    await prisma_client.db.litellm_mcpuserenvvars.delete(
+    """Remove the calling user's variable values for ``server_id``."""
+    await prisma_client.db.litellm_mcpuservariables.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
