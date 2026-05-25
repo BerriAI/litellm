@@ -202,6 +202,103 @@ class MCPRequestHandler:
         )
 
     @staticmethod
+    async def authenticate_request(
+        request: Request,
+        *,
+        allow_oauth2_passthrough: bool = True,
+    ) -> UserAPIKeyAuth:
+        """
+        Unified auth method for MCP endpoints using FastAPI Request object.
+
+        This method follows FastAPI best practices by accepting a Request object
+        and can be used as a dependency in FastAPI routes:
+
+            @router.get("/mcp/endpoint")
+            async def endpoint(
+                request: Request,
+                auth: UserAPIKeyAuth = Depends(
+                    lambda r: MCPRequestHandler.authenticate_request(r)
+                )
+            ):
+                ...
+
+        Args:
+            request: FastAPI Request object
+            allow_oauth2_passthrough: If True, allow OAuth2 token passthrough
+                for servers configured with delegate_auth_to_upstream
+
+        Returns:
+            UserAPIKeyAuth: The authenticated user context
+
+        Raises:
+            HTTPException: If authentication fails
+        """
+        from litellm.proxy.auth.auth_utils import get_request_route
+
+        headers = request.headers
+        route = get_request_route(request)
+
+        has_explicit_litellm_key = (
+            headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
+            is not None
+        )
+
+        litellm_api_key = (
+            MCPRequestHandler.get_litellm_api_key_from_headers(Headers(dict(headers)))
+            or ""
+        )
+
+        mcp_servers_header = headers.get(
+            MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME
+        )
+        mcp_servers = None
+        if mcp_servers_header:
+            mcp_servers = [
+                s.strip() for s in mcp_servers_header.split(",") if s.strip()
+            ]
+
+        if route.startswith("/.well-known/"):
+            return UserAPIKeyAuth()
+
+        if (
+            allow_oauth2_passthrough
+            and not litellm_api_key
+            and MCPRequestHandler._target_servers_delegate_auth_to_upstream(
+                path=route, mcp_servers=mcp_servers
+            )
+        ):
+            return UserAPIKeyAuth()
+
+        if has_explicit_litellm_key or not allow_oauth2_passthrough:
+            return await user_api_key_auth(api_key=litellm_api_key, request=request)
+
+        oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
+            Headers(dict(headers))
+        )
+
+        if oauth2_headers:
+            try:
+                return await user_api_key_auth(api_key=litellm_api_key, request=request)
+            except (HTTPException, ProxyException) as e:
+                status = e.status_code if isinstance(e, HTTPException) else e.code
+                if status in (
+                    401,
+                    403,
+                    "401",
+                    "403",
+                ) and MCPRequestHandler._target_servers_use_oauth2(
+                    path=route, mcp_servers=mcp_servers
+                ):
+                    verbose_logger.debug(
+                        "MCP OAuth2: target server is OAuth2-mode, treating "
+                        "Authorization as upstream OAuth2 token passthrough"
+                    )
+                    return UserAPIKeyAuth()
+                raise
+
+        return await user_api_key_auth(api_key=litellm_api_key, request=request)
+
+    @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:
         """
         Extract the target MCP server name(s) from the standard MCP transport
