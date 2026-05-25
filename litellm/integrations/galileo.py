@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 GALILEO_CLOUD_API_BASE_URL = "https://api.galileo.ai"
 
@@ -132,7 +133,9 @@ class GalileoObserve(CustomLogger):
             galileo_messages.append(
                 {
                     "role": str(role),
-                    "content": convert_content_list_to_str(message=message),
+                    "content": convert_content_list_to_str(
+                        message=cast(AllMessageValues, message)
+                    ),
                 }
             )
 
