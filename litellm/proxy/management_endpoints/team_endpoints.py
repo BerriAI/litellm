@@ -2491,6 +2491,11 @@ async def team_member_add(
                 prisma_client=prisma_client,
             )
 
+    # Snapshot pre-add member count so we can compute the real ``+N`` delta for
+    # the Prometheus team-members gauge below (independent of any duplicates
+    # silently skipped by ``_update_team_members_list``).
+    members_before_count = len(complete_team_data.members_with_roles or [])
+
     (
         updated_team,
         updated_users,
@@ -2509,10 +2514,16 @@ async def team_member_add(
             status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
         )
 
-    # Emit team-members gauge delta (+N) for the just-added members. Duplicates
-    # are rejected earlier by ``team_member_add_duplication_check``, so every
-    # entry in ``data.member`` corresponds to a real net-new membership.
-    members_added = 1 if isinstance(data.member, Member) else len(data.member)
+    # Emit team-members gauge delta for *actual* net-new memberships only.
+    # ``team_member_add_duplication_check`` above only raises when *every*
+    # member in a bulk request is already a duplicate; partial-duplicate bulk
+    # adds fall through and ``_update_team_members_list`` silently skips the
+    # already-present ones. We therefore read the real delta off the
+    # team_members list we just persisted (``complete_team_data.members_with_roles``
+    # is mutated in-place by ``_add_team_members_to_team``) rather than
+    # trusting ``len(data.member)``.
+    members_after_count = len(complete_team_data.members_with_roles or [])
+    members_added = max(0, members_after_count - members_before_count)
     _emit_team_members_metric_delta(
         team_id=updated_team.team_id,
         team_alias=updated_team.team_alias,

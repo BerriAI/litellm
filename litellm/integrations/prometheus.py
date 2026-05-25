@@ -480,7 +480,7 @@ class PrometheusLogger(CustomLogger):
             # Per-team member count (incremented on add, decremented on remove)
             self.litellm_team_members_metric = self._gauge_factory(
                 "litellm_team_members_metric",
-                "Current number of members per team. Incremented when a member is added, decremented when a member is removed.",
+                "Net change in team member count since proxy startup, per team. Incremented by 1 on each successful /team/member_add and decremented by 1 on each /team/member_delete. NOTE: this is delta-since-startup, not absolute current membership - the gauge resets to 0 on proxy restart and is never reseeded from the database, so consumers should treat it as a rate-of-change signal rather than a ground-truth count.",
                 labelnames=self.get_labels_for_metric("litellm_team_members_metric"),
             )
 
