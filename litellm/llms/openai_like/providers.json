@@ -114,5 +114,17 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "deapi": {
+    "base_url": "https://oai.deapi.ai/v1",
+    "api_key_env": "DEAPI_API_KEY",
+    "api_base_env": "DEAPI_API_BASE",
+    "supported_endpoints": [
+      "/v1/embeddings",
+      "/v1/images/generations",
+      "/v1/images/edits",
+      "/v1/audio/speech",
+      "/v1/audio/transcriptions"
+    ]
   }
 }
