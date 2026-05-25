@@ -460,7 +460,12 @@ async def _emit_management_endpoint_otel_span(
 
     http_request: Optional[Request] = kwargs.get("http_request")
     if http_request is not None:
-        route = http_request.url.path
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        route = get_request_route(http_request)
         request_body: dict = await _read_request_body(request=http_request)
     else:
         route = func.__name__
