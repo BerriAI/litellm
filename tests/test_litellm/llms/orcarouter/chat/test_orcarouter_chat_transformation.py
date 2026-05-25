@@ -73,6 +73,24 @@ class TestOrcaRouterChatCompletionStreamingHandler:
         assert "KeyError" in str(exc_info.value)
         assert exc_info.value.status_code == 400
 
+    def test_chunk_parser_no_reasoning_keeps_choice_unchanged(self):
+        """When a streaming chunk has no `reasoning` field, the parser
+        should NOT synthesize a `reasoning_content: None` key; callers that
+        key on field presence would mis-classify a plain content chunk."""
+        handler = OrcaRouterChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+        chunk = {
+            "id": "x",
+            "created": 1,
+            "model": "openai/gpt-4o",
+            "choices": [{"delta": {"content": "hello"}}],
+        }
+        result = handler.chunk_parser(chunk)
+        delta = result.choices[0]["delta"]
+        assert "reasoning_content" not in delta
+        assert delta["content"] == "hello"
+
 
 class TestOrcaRouterExtraBody:
     def test_map_openai_params_extracts_models_and_route(self):
@@ -245,6 +263,28 @@ class TestOrcaRouterReasoningPerVendor:
         assert "reasoning_effort" not in params
         assert "thinking" not in params
 
+    def test_anthropic_unknown_reasoning_effort_warns_and_falls_back(self, caplog):
+        """Unknown reasoning_effort strings should log a warning and fall back
+        to the 'medium' budget instead of silently defaulting."""
+        import logging
+
+        # litellm.verbose_logger writes via the standard logging tree; capture
+        # at WARNING level on the LiteLLM logger.
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params = OrcaRouterConfig().map_openai_params(
+                non_default_params={"reasoning_effort": "extreme"},
+                optional_params={},
+                model="orcarouter/anthropic/claude-opus-4.7",
+                drop_params=False,
+            )
+        # Falls back to medium budget (4096 per _REASONING_EFFORT_TO_BUDGET).
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+        # Warning was emitted and mentions the bad value.
+        assert any(
+            "unknown reasoning_effort" in rec.message and "'extreme'" in rec.message
+            for rec in caplog.records
+        )
+
 
 class TestOrcaRouterModelQuirks:
     def test_opus47_drops_temperature_and_top_k(self):
@@ -369,6 +409,52 @@ class TestOrcaRouterCacheControl:
         assert transformed[0]["content"] == [
             {"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}
         ]
+
+    def test_remove_cache_control_short_circuits_for_supported_models(self):
+        """For cache_control-supported models, the cleanup step is a no-op
+        so messages reach OrcaRouter with the hints intact."""
+        config = OrcaRouterConfig()
+        msgs = [
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}
+        ]
+        out_msgs, out_tools = config.remove_cache_control_flag_from_messages_and_tools(
+            "orcarouter/anthropic/claude-opus-4.7", msgs, tools=None
+        )
+        assert out_msgs == msgs  # passed through unchanged
+        assert out_tools is None
+
+    def test_remove_cache_control_strips_for_unsupported_models(self):
+        """For non-supporting vendors (e.g. OpenAI), the parent class
+        strips the cache_control flag so we don't forward an unknown field."""
+        config = OrcaRouterConfig()
+        msgs = [
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}
+        ]
+        out_msgs, _ = config.remove_cache_control_flag_from_messages_and_tools(
+            "orcarouter/openai/gpt-5", msgs, tools=None
+        )
+        # OpenAIGPTConfig parent removed the cache_control key
+        assert "cache_control" not in out_msgs[0]
+
+
+class TestOrcaRouterSupportedParams:
+    def test_returns_list_with_reasoning_for_reasoning_capable_model(self):
+        """`reasoning_effort` and `thinking` should appear in supported params
+        when the model is flagged as reasoning-capable."""
+        params = OrcaRouterConfig().get_supported_openai_params(
+            "orcarouter/anthropic/claude-opus-4.7"
+        )
+        assert isinstance(params, list)
+        # No duplicates (the dedup pass at the end)
+        assert len(params) == len(set(params))
+
+    def test_non_reasoning_model_returns_base_params(self):
+        """Non-reasoning models still get the OpenAI base param list and
+        don't crash if litellm.supports_reasoning raises internally."""
+        params = OrcaRouterConfig().get_supported_openai_params(
+            "orcarouter/openai/text-embedding-3-small"
+        )
+        assert isinstance(params, list)
 
 
 class TestOrcaRouterTransformResponse:

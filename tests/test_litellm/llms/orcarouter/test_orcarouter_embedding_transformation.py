@@ -130,3 +130,53 @@ def test_map_openai_params_filters_unsupported():
         drop_params=False,
     )
     assert params == {"dimensions": 512}
+
+
+def test_transform_embedding_response_parses_openai_compatible_payload():
+    """Smoke check that the inherited LiteLLM response converter handles
+    OrcaRouter's OpenAI-compatible embedding payload."""
+    from unittest.mock import Mock
+
+    import httpx
+
+    from litellm.types.utils import EmbeddingResponse
+
+    raw = Mock(spec=httpx.Response)
+    raw.status_code = 200
+    raw.text = ""
+    raw.headers = {}
+    raw.json.return_value = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
+        ],
+        "model": "openai/text-embedding-3-small",
+        "usage": {"prompt_tokens": 5, "total_tokens": 5},
+    }
+
+    result = OrcaRouterEmbeddingConfig().transform_embedding_response(
+        model="orcarouter/openai/text-embedding-3-small",
+        raw_response=raw,
+        model_response=EmbeddingResponse(),
+        logging_obj=Mock(),
+        api_key="sk-test",
+        request_data={"input": ["hi"]},
+        optional_params={},
+        litellm_params={},
+    )
+    assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert result.usage.prompt_tokens == 5
+
+
+def test_get_error_class_wraps_with_orcarouter_exception():
+    """The error class hook should return our provider-specific exception
+    so callers see a consistent error type from OrcaRouter."""
+    from litellm.llms.orcarouter.common_utils import OrcaRouterException
+
+    err = OrcaRouterEmbeddingConfig().get_error_class(
+        error_message="upstream said no",
+        status_code=503,
+        headers={"x-trace": "abc"},
+    )
+    assert isinstance(err, OrcaRouterException)
+    assert err.status_code == 503
