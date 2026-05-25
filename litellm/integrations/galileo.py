@@ -8,6 +8,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
     get_content_from_model_response,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -69,30 +70,27 @@ class GalileoObserve(CustomLogger):
             return bool(self.api_key)
         return bool(self.username and self.password)
 
-    def set_galileo_headers(self) -> None:
-        headers = {
-            "accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-        galileo_login_response = litellm.module_level_client.post(
+    async def async_set_galileo_headers(self) -> None:
+        galileo_login_response = await self.async_httpx_handler.post(
             url=f"{self.base_url}/login",
-            headers=headers,
+            headers={
+                "accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
             data={
                 "username": self.username,
                 "password": self.password,
             },
         )
         galileo_login_response.raise_for_status()
-
         access_token = galileo_login_response.json()["access_token"]
-
         self.headers = {
             "accept": "application/json",
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
         }
 
-    def _ensure_headers(self) -> bool:
+    async def _ensure_headers(self) -> bool:
         if self.headers is not None:
             return True
 
@@ -110,11 +108,36 @@ class GalileoObserve(CustomLogger):
             return False
 
         try:
-            self.set_galileo_headers()
+            await self.async_set_galileo_headers()
             return True
         except Exception as e:
             verbose_logger.debug("Galileo Logger: failed to authenticate: %s", e)
             return False
+
+    @staticmethod
+    def _galileo_input_messages(
+        messages: Optional[List[Any]], input_text: str
+    ) -> List[Dict[str, str]]:
+        if not messages:
+            return [{"role": "user", "content": input_text}]
+
+        galileo_messages: List[Dict[str, str]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if not role:
+                continue
+            galileo_messages.append(
+                {
+                    "role": str(role),
+                    "content": convert_content_list_to_str(message=message),
+                }
+            )
+
+        if galileo_messages:
+            return galileo_messages
+        return [{"role": "user", "content": input_text}]
 
     @staticmethod
     def _record_to_v2_span(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,7 +149,9 @@ class GalileoObserve(CustomLogger):
             "type": "llm",
             "name": record.get("node_type", "litellm"),
             "created_at": created_at,
-            "input": [{"role": "user", "content": record.get("input_text", "")}],
+            "input": GalileoObserve._galileo_input_messages(
+                record.get("messages"), record.get("input_text", "")
+            ),
             "output": {
                 "role": "assistant",
                 "content": record.get("output_text", ""),
@@ -226,6 +251,9 @@ class GalileoObserve(CustomLogger):
             )
 
             request_dict = request_record.model_dump()
+            messages = kwargs.get("messages")
+            if messages:
+                request_dict["messages"] = messages
             self.in_memory_records.append(request_dict)
 
             if len(self.in_memory_records) >= self.batch_size:
@@ -242,7 +270,7 @@ class GalileoObserve(CustomLogger):
             )
             return
 
-        if not self._ensure_headers():
+        if not await self._ensure_headers():
             verbose_logger.debug("Galileo Logger: could not set request headers")
             return
 

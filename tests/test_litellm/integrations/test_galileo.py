@@ -18,7 +18,8 @@ def galileo_v2_env(monkeypatch):
     monkeypatch.setenv("GALILEO_BASE_URL", "https://api.galileo.ai")
 
 
-def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
+@pytest.mark.asyncio
+async def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
     logger = GalileoObserve()
     logger.in_memory_records = [
         {
@@ -43,8 +44,31 @@ def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
     assert payload["spans"][0]["type"] == "llm"
     assert payload["spans"][0]["output"]["content"] == "hello"
 
-    assert logger._ensure_headers() is True
+    assert await logger._ensure_headers() is True
     assert logger.headers["Galileo-API-Key"] == "test-api-key"
+
+
+def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
+    record = {
+        "latency_ms": 1,
+        "status_code": 200,
+        "input_text": "fallback",
+        "output_text": "ok",
+        "node_type": "acompletion",
+        "model": "gpt-5.2",
+        "num_input_tokens": 0,
+        "num_output_tokens": 0,
+        "created_at": "2026-05-25T12:00:00",
+        "messages": [
+            {"role": "system", "content": "be helpful"},
+            {"role": "user", "content": "hello"},
+        ],
+    }
+    span = GalileoObserve._record_to_v2_span(record)
+    assert span["input"] == [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "hello"},
+    ]
 
 
 def test_galileo_output_text_from_model_response(galileo_v2_env):
@@ -81,10 +105,6 @@ async def test_galileo_flush_swallows_http_errors(galileo_v2_env):
             "created_at": "2026-05-25T12:00:00",
         }
     ]
-
-    mock_response = AsyncMock()
-    mock_response.status_code = 404
-    mock_response.text = "not found"
 
     with patch.object(
         logger.async_httpx_handler, "post", new_callable=AsyncMock
