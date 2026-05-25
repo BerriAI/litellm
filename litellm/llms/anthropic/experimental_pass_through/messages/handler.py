@@ -12,6 +12,9 @@ from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, c
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import (
+    strip_empty_text_blocks_from_anthropic_messages,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -23,6 +26,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
+
+from ..utils import is_reasoning_auto_summary_enabled
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
@@ -186,8 +191,20 @@ async def anthropic_messages(
     **kwargs,
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
-    Async: Make llm api request in Anthropic /messages API spec
+    Async: Make llm api request in Anthropic /messages API spec.
+
+    Runs the empty-text-block sanitizer before any backend dispatch.
     """
+    # Anthropic's API rejects requests containing empty / whitespace-only
+    # text content blocks with "messages: text content blocks must be
+    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
+    # loop assistant responses that contain {"type": "text", "text": ""}
+    # alongside tool_use blocks back as conversation history, which then
+    # causes the next /v1/messages call to 400.  /v1/chat/completions
+    # already handles this in anthropic_messages_pt; sanitize the native
+    # Anthropic Messages path here for the same guarantee.  See #22930.
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False
     )
@@ -276,6 +293,12 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
+        # messages were already empty-text-block sanitized at the top of this
+        # function and are NOT reassigned before this dispatch, so the handler
+        # can skip its (otherwise redundant) second full-messages scan. Passed
+        # explicitly (not via **kwargs) so it only affects this direct
+        # dispatch -- interceptor / sync entry points still sanitize.
+        _litellm_messages_presanitized=True,
         **kwargs,
     )
     ctx = contextvars.copy_context()
@@ -333,6 +356,15 @@ def anthropic_messages_handler(
         container: Container config with skills for code execution
     """
     from litellm.types.utils import LlmProviders
+
+    # Sanitize empty text blocks so the sync entry point
+    # (litellm.messages.create -> anthropic_messages_handler) gets the same
+    # protection as the async wrapper. The async wrapper already sanitized and
+    # does not reassign messages before dispatch, so it sets
+    # ``_litellm_messages_presanitized`` to skip this redundant second
+    # full-messages scan. Pop it so it never leaks into provider params.
+    if not kwargs.pop("_litellm_messages_presanitized", False):
+        messages = strip_empty_text_blocks_from_anthropic_messages(messages)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -441,6 +473,17 @@ def anthropic_messages_handler(
             params=local_vars
         )
     )
+    if is_reasoning_auto_summary_enabled():
+        thinking_param = anthropic_messages_optional_request_params.get("thinking")
+        if (
+            isinstance(thinking_param, dict)
+            and thinking_param.get("type") != "disabled"
+        ):
+            anthropic_messages_optional_request_params["thinking"] = {
+                **thinking_param,
+                "display": "summarized",
+            }
+
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=messages,

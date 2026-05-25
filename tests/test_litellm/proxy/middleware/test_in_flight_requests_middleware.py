@@ -4,6 +4,7 @@ Tests for InFlightRequestsMiddleware.
 Verifies that in_flight_requests is incremented during a request and
 decremented after it completes, including on errors.
 """
+
 import asyncio
 
 import pytest
@@ -92,7 +93,5 @@ def test_non_http_scopes_not_counted():
 
     mw = InFlightRequestsMiddleware(_InnerApp())
 
-    asyncio.run(
-        mw({"type": "lifespan"}, None, None)  # type: ignore[arg-type]
-    )
+    asyncio.run(mw({"type": "lifespan"}, None, None))  # type: ignore[arg-type]
     assert get_in_flight_requests() == 0

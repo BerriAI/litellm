@@ -9,7 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 import openai
@@ -281,7 +281,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
+class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
     def __init__(
         self,
         message,
@@ -847,6 +847,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
+        self.status_code = 429
         message = (
             message
             or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
@@ -917,9 +918,11 @@ class GuardrailRaisedException(Exception):
         guardrail_name: Optional[str] = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
+        status_code: int = 400,
     ):
         default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
+        self.status_code = status_code
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
@@ -929,12 +932,14 @@ class BlockedPiiEntityError(Exception):
         self,
         entity_type: str,
         guardrail_name: Optional[str] = None,
+        status_code: int = 400,
     ):
         """
         Raised when a blocked entity is detected by a guardrail.
         """
         self.entity_type = entity_type
         self.guardrail_name = guardrail_name
+        self.status_code = status_code
         self.message = f"Blocked entity detected: {entity_type} by Guardrail: {guardrail_name}. This entity is not allowed to be used in this request."
         super().__init__(self.message)
 
@@ -1014,6 +1019,35 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
 
     def __repr__(self):
         return self.__str__()
+
+
+class ModifyResponseException(Exception):
+    """
+    Exception raised when a guardrail wants to modify the response.
+
+    This exception carries the synthetic response that should be returned
+    to the user instead of calling the LLM or instead of the LLM's response.
+    It should be caught by the proxy and returned with a 200 status code.
+
+    This is a base exception that all guardrails can use to replace responses,
+    allowing violation messages to be returned as successful responses
+    rather than errors.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        request_data: Dict[str, Any],
+        guardrail_name: Optional[str] = None,
+        detection_info: Optional[Dict[str, Any]] = None,
+    ):
+        self.message = message
+        self.model = model
+        self.request_data = request_data
+        self.guardrail_name = guardrail_name
+        self.detection_info = detection_info or {}
+        super().__init__(message)
 
 
 class GuardrailInterventionNormalStringError(

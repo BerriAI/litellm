@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from litellm.caching import DualCache
 from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
@@ -12,6 +11,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient
@@ -65,7 +65,7 @@ class TeamMemberPermissionChecks:
         user_api_key_dict: UserAPIKeyAuth,
         route: KeyManagementRoutes,
         prisma_client: PrismaClient,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         existing_key_row: LiteLLM_VerificationToken,
     ):
         """
@@ -98,11 +98,20 @@ class TeamMemberPermissionChecks:
         )
 
         # 5. Check if the team member has permissions for the endpoint
-        TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_object=key_assigned_user_in_team,
-            team_table=team_table,
-            route=route,
+        has_permission = (
+            TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+                team_member_object=key_assigned_user_in_team,
+                team_table=team_table,
+                route=route,
+            )
         )
+        if not has_permission:
+            raise ProxyException(
+                message=f"User {user_api_key_dict.user_id} does not belong to team {team_table.team_id}. Team-scoped key management endpoints can only be used for keys in your own team.",
+                type=ProxyErrorTypes.team_member_permission_error,
+                param=route,
+                code=401,
+            )
 
     @staticmethod
     def does_team_member_have_permissions_for_endpoint(

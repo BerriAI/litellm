@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-import { Card, Title, Text, TextInput } from "@tremor/react";
-import { List, Empty, Spin, Checkbox } from "antd";
+import { Card, List, Empty, Spin, Input, Typography } from "antd";
 import { ExperimentOutlined, SearchOutlined } from "@ant-design/icons";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "../networking";
@@ -117,18 +116,18 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
 
   return (
     <div className="w-full h-[calc(100vh-200px)]">
-      <Card className="h-full">
+      <Card className="h-full" styles={{ body: { padding: 0, height: "100%" } }}>
         <div className="flex h-full">
           {/* Left Sidebar - Guardrails List */}
           <div className="w-1/4 border-r border-gray-200 flex flex-col overflow-hidden">
             <div className="p-4 border-b border-gray-200">
               <div className="mb-3">
-                <Title className="text-lg font-semibold mb-3">Guardrails</Title>
-                <TextInput
-                  icon={SearchOutlined}
+                <h3 className="text-lg font-semibold mb-3">Guardrails</h3>
+                <Input
+                  prefix={<SearchOutlined />}
                   placeholder="Search guardrails..."
                   value={searchQuery}
-                  onValueChange={setSearchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
             </div>
@@ -156,24 +155,14 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                           toggleGuardrailSelection(guardrail.guardrail_name);
                         }
                       }}
-                      className={`cursor-pointer hover:bg-gray-50 transition-colors px-4 ${
+                      style={{ paddingLeft: 24, paddingRight: 16 }}
+                      className={`cursor-pointer hover:bg-gray-50 transition-colors ${
                         selectedGuardrails.has(guardrail.guardrail_name || "")
                           ? "bg-blue-50 border-l-4 border-l-blue-500"
                           : "border-l-4 border-l-transparent"
                       }`}
                     >
                       <List.Item.Meta
-                        avatar={
-                          <Checkbox
-                            checked={selectedGuardrails.has(guardrail.guardrail_name || "")}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (guardrail.guardrail_name) {
-                                toggleGuardrailSelection(guardrail.guardrail_name);
-                              }
-                            }}
-                          />
-                        }
                         title={
                           <div className="flex items-center space-x-2">
                             <ExperimentOutlined className="text-gray-400" />
@@ -206,29 +195,31 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
             </div>
 
             <div className="p-3 border-t border-gray-200 bg-gray-50">
-              <Text className="text-xs text-gray-600">
+              <Typography.Text className="text-xs text-gray-600">
                 {selectedGuardrails.size} of {filteredGuardrails.length} selected
-              </Text>
+              </Typography.Text>
             </div>
           </div>
 
           {/* Right Panel - Test Area */}
           <div className="w-3/4 flex flex-col bg-white">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Guardrail Testing Playground</Title>
+              <Typography.Title level={2} className="text-xl font-semibold mb-0">
+                Guardrail Testing Playground
+              </Typography.Title>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
               {selectedGuardrails.size === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                   <ExperimentOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text className="text-lg font-medium text-gray-600 mb-2">
+                  <Typography.Paragraph className="text-lg font-medium text-gray-600 mb-2">
                     Select Guardrails to Test
-                  </Text>
-                  <Text className="text-center text-gray-500 max-w-md">
+                  </Typography.Paragraph>
+                  <Typography.Paragraph className="text-center text-gray-500 max-w-md">
                     Choose one or more guardrails from the left sidebar to start testing and
                     comparing results.
-                  </Text>
+                  </Typography.Paragraph>
                 </div>
               ) : (
                 <div className="h-full">

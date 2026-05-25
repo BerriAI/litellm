@@ -76,9 +76,9 @@ class TestTransformRequestWithResponseFormat:
                 "schema": {
                     "type": "object",
                     "properties": {"result": {"type": "string"}},
-                    "required": ["result"]
-                }
-            }
+                    "required": ["result"],
+                },
+            },
         }
 
         request = config.transform_request(
@@ -132,18 +132,20 @@ class TestTransformRequestWithResponseFormat:
         """transform_request should include both tools and response_format."""
         config = GenAIHubOrchestrationConfig()
 
-        user_tools = [{
-            "type": "function",
-            "function": {
-                "name": "search_web",
-                "description": "Search the web",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"]
-                }
+        user_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_web",
+                    "description": "Search the web",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
             }
-        }]
+        ]
 
         response_format = {
             "type": "json_schema",
@@ -151,9 +153,9 @@ class TestTransformRequestWithResponseFormat:
                 "name": "result",
                 "schema": {
                     "type": "object",
-                    "properties": {"answer": {"type": "string"}}
-                }
-            }
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
         }
 
         request = config.transform_request(
@@ -203,6 +205,7 @@ class TestStreamIterators:
         )
 
         from litellm.llms.sap.chat.handler import SAPStreamIterator
+
         assert isinstance(iterator, SAPStreamIterator)
 
     def test_get_model_response_iterator_async(self):
@@ -218,6 +221,7 @@ class TestStreamIterators:
         )
 
         from litellm.llms.sap.chat.handler import AsyncSAPStreamIterator
+
         assert isinstance(iterator, AsyncSAPStreamIterator)
 
 
@@ -240,21 +244,18 @@ class TestNestedSchema:
                                 "type": "object",
                                 "properties": {
                                     "street": {"type": "string"},
-                                    "city": {"type": "string"}
-                                }
-                            }
-                        }
-                    }
+                                    "city": {"type": "string"},
+                                },
+                            },
+                        },
+                    },
                 }
-            }
+            },
         }
 
         response_format = {
             "type": "json_schema",
-            "json_schema": {
-                "name": "nested",
-                "schema": nested_schema
-            }
+            "json_schema": {"name": "nested", "schema": nested_schema},
         }
 
         request = config.transform_request(
@@ -268,7 +269,9 @@ class TestNestedSchema:
         # Verify the nested schema is preserved
         prompt_config = request["config"]["modules"]["prompt_templating"]["prompt"]
         assert "response_format" in prompt_config
-        assert prompt_config["response_format"]["json_schema"]["schema"] == nested_schema
+        assert (
+            prompt_config["response_format"]["json_schema"]["schema"] == nested_schema
+        )
 
 
 class TestTransformResponseWithResponseFormat:
@@ -286,12 +289,17 @@ class TestTransformResponseWithResponseFormat:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"result": "success"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-3-5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"result": "success"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-3-5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -301,7 +309,7 @@ class TestTransformResponseWithResponseFormat:
 
         response_format = {
             "type": "json_schema",
-            "json_schema": {"name": "test", "schema": {"type": "object"}}
+            "json_schema": {"name": "test", "schema": {"type": "object"}},
         }
 
         result = config.transform_response(
@@ -329,12 +337,17 @@ class TestTransformResponseWithResponseFormat:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"answer": 42}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-3-5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"answer": 42}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-3-5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -366,12 +379,17 @@ class TestTransformResponseWithResponseFormat:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"data": "keep me"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-3-5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"data": "keep me"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-3-5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -404,12 +422,17 @@ class TestTransformResponseWithResponseFormat:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"preserve": true}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-3-5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"preserve": true}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-3-5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -442,12 +465,16 @@ class TestMarkdownStripping:
         config = GenAIHubOrchestrationConfig()
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content='```json\n{"answer": 4}\n```'),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant", content='```json\n{"answer": 4}\n```'
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
@@ -460,12 +487,16 @@ class TestMarkdownStripping:
         config = GenAIHubOrchestrationConfig()
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content='```\n{"answer": 4}\n```'),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant", content='```\n{"answer": 4}\n```'
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
@@ -478,12 +509,14 @@ class TestMarkdownStripping:
         config = GenAIHubOrchestrationConfig()
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content='{"answer": 4}'),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content='{"answer": 4}'),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
@@ -507,21 +540,27 @@ class TestMarkdownStripping:
             choices=[
                 Choices(
                     index=0,
-                    message=Message(role="assistant", content='```json\n{"choice": 0}\n```'),
-                    finish_reason="stop"
+                    message=Message(
+                        role="assistant", content='```json\n{"choice": 0}\n```'
+                    ),
+                    finish_reason="stop",
                 ),
                 Choices(
                     index=1,
-                    message=Message(role="assistant", content='```json\n{"choice": 1}\n```'),
-                    finish_reason="stop"
+                    message=Message(
+                        role="assistant", content='```json\n{"choice": 1}\n```'
+                    ),
+                    finish_reason="stop",
                 ),
                 Choices(
                     index=2,
-                    message=Message(role="assistant", content='```\n{"choice": 2}\n```'),
-                    finish_reason="stop"
+                    message=Message(
+                        role="assistant", content='```\n{"choice": 2}\n```'
+                    ),
+                    finish_reason="stop",
                 ),
             ],
-            model="test"
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
@@ -539,23 +578,30 @@ class TestMarkdownStripping:
         test_cases = [
             ('```json\n{"a":1}\n```', '{"a":1}'),  # Standard
             ('```json\n  {"a":1}  \n```', '{"a":1}'),  # Extra spaces inside
-            ('  ```json\n{"a":1}\n```  ', '{"a":1}'),  # Extra spaces outside (stripped by .strip())
+            (
+                '  ```json\n{"a":1}\n```  ',
+                '{"a":1}',
+            ),  # Extra spaces outside (stripped by .strip())
             ('```json\n\n{"a":1}\n\n```', '{"a":1}'),  # Extra newlines
         ]
 
         for input_content, expected in test_cases:
             response = ModelResponse(
                 id="test",
-                choices=[Choices(
-                    index=0,
-                    message=Message(role="assistant", content=input_content),
-                    finish_reason="stop"
-                )],
-                model="test"
+                choices=[
+                    Choices(
+                        index=0,
+                        message=Message(role="assistant", content=input_content),
+                        finish_reason="stop",
+                    )
+                ],
+                model="test",
             )
 
             result = config._strip_markdown_json(response)
-            assert result.choices[0].message.content == expected, f"Failed for input: {repr(input_content)}"
+            assert (
+                result.choices[0].message.content == expected
+            ), f"Failed for input: {repr(input_content)}"
 
     def test_no_strip_partial_markdown(self):
         """Should not corrupt content with incomplete markdown (only opening ```)."""
@@ -566,12 +612,16 @@ class TestMarkdownStripping:
         # Only opening backticks - should be preserved
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content='```json\n{"incomplete": true}'),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant", content='```json\n{"incomplete": true}'
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
@@ -588,17 +638,22 @@ class TestMarkdownStripping:
         content_with_nested = '```json\n{"code": "```python\\nprint(1)\\n```"}\n```'
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content=content_with_nested),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=content_with_nested),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response)
         # Only the outer wrapper should be stripped, inner markdown preserved
-        assert result.choices[0].message.content == '{"code": "```python\\nprint(1)\\n```"}'
+        assert (
+            result.choices[0].message.content
+            == '{"code": "```python\\nprint(1)\\n```"}'
+        )
 
 
 class TestResponseFormatErrorHandling:
@@ -613,12 +668,14 @@ class TestResponseFormatErrorHandling:
         # Test with None content
         response_none = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content=None),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=None),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response_none)
@@ -627,12 +684,14 @@ class TestResponseFormatErrorHandling:
         # Test with empty string content
         response_empty = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content=""),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=""),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         result = config._strip_markdown_json(response_empty)
@@ -645,11 +704,7 @@ class TestResponseFormatErrorHandling:
         config = GenAIHubOrchestrationConfig()
 
         # Empty choices list
-        response = ModelResponse(
-            id="test",
-            choices=[],
-            model="test"
-        )
+        response = ModelResponse(id="test", choices=[], model="test")
 
         # Should not raise an error
         result = config._strip_markdown_json(response)
@@ -664,12 +719,14 @@ class TestResponseFormatErrorHandling:
         # Choice with message but content is None
         response = ModelResponse(
             id="test",
-            choices=[Choices(
-                index=0,
-                message=Message(role="assistant", content=None),
-                finish_reason="stop"
-            )],
-            model="test"
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=None),
+                    finish_reason="stop",
+                )
+            ],
+            model="test",
         )
 
         # Should not raise an error and content should remain None
@@ -699,7 +756,9 @@ class TestStrictParameterFiltering:
         )
 
         # strict should NOT be in model.params
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         # Other params should still be there
         assert model_params.get("temperature") == 0.7
@@ -716,9 +775,9 @@ class TestStrictParameterFiltering:
                 "schema": {
                     "type": "object",
                     "properties": {"result": {"type": "string"}},
-                    "required": ["result"]
-                }
-            }
+                    "required": ["result"],
+                },
+            },
         }
 
         request = config.transform_request(
@@ -745,9 +804,9 @@ class TestStrictParameterFiltering:
                 "strict": True,
                 "schema": {
                     "type": "object",
-                    "properties": {"answer": {"type": "string"}}
-                }
-            }
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
         }
 
         request = config.transform_request(
@@ -756,14 +815,16 @@ class TestStrictParameterFiltering:
             optional_params={
                 "strict": True,  # Top-level strict from LangChain - should be filtered
                 "response_format": response_format,
-                "temperature": 0.5
+                "temperature": 0.5,
             },
             litellm_params={},
             headers={},
         )
 
         # Top-level strict should NOT be in model.params
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         assert model_params.get("temperature") == 0.5
 
@@ -783,7 +844,9 @@ class TestStrictParameterFiltering:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         # Anthropic models CAN have strict in model.params (SAP API accepts it)
         assert model_params.get("strict") is True
         assert model_params.get("max_tokens") == 1000
@@ -825,12 +888,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"result": "success"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "gpt-4o"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"result": "success"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "gpt-4o",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -839,7 +907,7 @@ class TestMarkdownStrippingModelGating:
 
         response_format = {
             "type": "json_schema",
-            "json_schema": {"name": "test", "schema": {"type": "object"}}
+            "json_schema": {"name": "test", "schema": {"type": "object"}},
         }
 
         result = config.transform_response(
@@ -855,7 +923,9 @@ class TestMarkdownStrippingModelGating:
         )
 
         # Markdown should NOT be stripped for GPT models
-        assert result.choices[0].message.content == '```json\n{"result": "success"}\n```'
+        assert (
+            result.choices[0].message.content == '```json\n{"result": "success"}\n```'
+        )
 
     def test_gpt_model_no_markdown_strip_json_object(self):
         """GPT models should NOT have markdown stripped for json_object response_format."""
@@ -868,12 +938,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"answer": 42}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "gpt-4o"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"answer": 42}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "gpt-4o",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -906,12 +981,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"data": "gemini"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "gemini-1.5-pro"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"data": "gemini"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "gemini-1.5-pro",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -944,12 +1024,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"model": "mistral"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "mistral-large"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"model": "mistral"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "mistral-large",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -963,7 +1048,12 @@ class TestMarkdownStrippingModelGating:
             logging_obj=logging_obj,
             request_data={},
             messages=[{"role": "user", "content": "test"}],
-            optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "test", "schema": {}}}},
+            optional_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "test", "schema": {}},
+                }
+            },
             litellm_params={},
             encoding=None,
         )
@@ -982,12 +1072,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"result": "anthropic"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-3-5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"result": "anthropic"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-3-5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'
@@ -1001,7 +1096,12 @@ class TestMarkdownStrippingModelGating:
             logging_obj=logging_obj,
             request_data={},
             messages=[{"role": "user", "content": "test"}],
-            optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "test", "schema": {}}}},
+            optional_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "test", "schema": {}},
+                }
+            },
             litellm_params={},
             encoding=None,
         )
@@ -1020,12 +1120,17 @@ class TestMarkdownStrippingModelGating:
         raw_response.json.return_value = {
             "final_result": {
                 "id": "test-id",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": '```json\n{"model": "claude-4"}\n```'},
-                    "finish_reason": "stop"
-                }],
-                "model": "anthropic--claude-4.5-sonnet"
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"model": "claude-4"}\n```',
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "model": "anthropic--claude-4.5-sonnet",
             }
         }
         raw_response.text = '{"final_result": {...}}'

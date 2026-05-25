@@ -1,7 +1,9 @@
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import httpx
+from httpx import Response
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.secret_managers.main import get_secret_str
@@ -10,6 +12,8 @@ from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     from httpx import URL
+
+    from litellm.types.utils import CostResponseTypes
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
@@ -83,3 +87,36 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         return super().get_models(api_key, api_base)
+
+    def logging_non_streaming_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: Response,
+        request_data: dict,
+        logging_obj: Logging,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        from litellm import encoding
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+        from litellm.types.utils import ModelResponse
+
+        if "chat/completions" not in endpoint:
+            return None
+
+        openai_chat_config = OpenAIGPTConfig()
+
+        litellm_model_response: ModelResponse = openai_chat_config.transform_response(
+            model=model,
+            messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            raw_response=httpx_response,
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            optional_params={},
+            litellm_params={},
+            api_key="",
+            request_data=request_data,
+            encoding=encoding,
+        )
+
+        return litellm_model_response

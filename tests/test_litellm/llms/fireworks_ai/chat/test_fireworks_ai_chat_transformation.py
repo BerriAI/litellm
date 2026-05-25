@@ -6,14 +6,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm import supports_reasoning
+from litellm import get_model_info, supports_reasoning
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+
+@pytest.fixture(autouse=True)
+def force_local_model_cost(monkeypatch):
+    """Force local model cost map usage for all tests in this file."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    # Refresh model_cost from local map
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+
+    litellm.model_cost = get_model_cost_map(url=litellm.model_cost_map_url)
 
 
 def test_handle_message_content_with_tool_calls():
@@ -62,7 +75,6 @@ def test_handle_message_content_with_tool_calls():
 
 def test_supports_reasoning_effort():
     """Test that reasoning_effort is only supported for specific Fireworks AI models."""
-    # Models that support reasoning_effort
     supported_models = [
         "fireworks_ai/accounts/fireworks/models/qwen3-8b",
         "fireworks_ai/accounts/fireworks/models/qwen3-32b",
@@ -72,11 +84,13 @@ def test_supports_reasoning_effort():
         "fireworks_ai/accounts/fireworks/models/glm-4p5",
         "fireworks_ai/accounts/fireworks/models/glm-4p5-air",
         "fireworks_ai/accounts/fireworks/models/glm-4p6",
+        "fireworks_ai/accounts/fireworks/models/glm-4p7",
+        "fireworks_ai/accounts/fireworks/models/glm-5p1",
         "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
         "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
+        "fireworks_ai/glm-5p1",
     ]
 
-    # Models that don't support reasoning_effort
     unsupported_models = [
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct",
         "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
@@ -97,17 +111,72 @@ def test_get_supported_openai_params_reasoning_effort():
     """Test that reasoning_effort is only included in supported params for models that support it."""
     config = FireworksAIConfig()
 
-    # Model that supports reasoning_effort
     supported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/qwen3-8b"
+        "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "reasoning_effort" in supported_params
 
-    # Model that doesn't support reasoning_effort
     unsupported_params = config.get_supported_openai_params(
         "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct"
     )
     assert "reasoning_effort" not in unsupported_params
+
+
+def test_get_supported_openai_params_parallel_tool_calls():
+    """Test that parallel_tool_calls is included for models that support function calling."""
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-4p6"
+    )
+    assert "parallel_tool_calls" in supported_params
+
+    unsupported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p1"
+    )
+    assert "parallel_tool_calls" not in unsupported_params
+
+
+def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
+    monkeypatch,
+):
+    """Test that parallel_tool_calls is gated on tools, not tool_choice."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-tools-without-tool-choice"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_function_calling": True,
+            "supports_tool_choice": False,
+        },
+    )
+
+    supported_params = config.get_supported_openai_params(model)
+
+    assert "tools" in supported_params
+    assert "parallel_tool_calls" in supported_params
+    assert "tool_choice" not in supported_params
+
+
+def test_get_model_info_respects_explicit_fireworks_capabilities():
+    """Test that get_model_info preserves explicit capability flags from the model map."""
+    model_info = get_model_info("fireworks_ai/accounts/fireworks/models/glm-5p1")
+
+    assert model_info["supports_function_calling"] is False
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is False
+
+
+def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
+    """Test that Fireworks only overrides supports_reasoning for supported models."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-reasoning-false"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_reasoning": False})
+
+    info = config.get_provider_info(model)
+
+    assert "supports_reasoning" not in info
 
 
 def test_add_transform_inline_image_block_skips_data_urls():
@@ -131,14 +200,20 @@ def test_add_transform_inline_image_block_skips_data_urls():
     result = config._add_transform_inline_image_block(
         dict_content, model="gpt-4", disable_add_transform_inline_image_block=False
     )
-    assert result["image_url"]["url"] == data_url, "data URL must not be modified (dict branch)"
+    assert (
+        result["image_url"]["url"] == data_url
+    ), "data URL must not be modified (dict branch)"
 
     # regular https URL should still get the suffix
     https_content = {"type": "image_url", "image_url": "https://example.com/image.jpg"}
     result = config._add_transform_inline_image_block(
         https_content, model="gpt-4", disable_add_transform_inline_image_block=False
     )
-    assert result["image_url"].endswith("#transform=inline"), "https URL should get #transform=inline"
+    assert result["image_url"].endswith(
+        "#transform=inline"
+    ), "https URL should get #transform=inline"
+
+
 @pytest.mark.parametrize(
     "api_base, expected_url_prefix",
     [
@@ -173,7 +248,9 @@ def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
     }
 
     with (
-        patch("litellm.module_level_client.get", return_value=mock_response) as mock_get,
+        patch(
+            "litellm.module_level_client.get", return_value=mock_response
+        ) as mock_get,
         patch(
             "litellm.llms.fireworks_ai.chat.transformation.get_secret_str",
             side_effect=lambda key: {
@@ -185,11 +262,13 @@ def test_get_models_url_no_double_v1(api_base, expected_url_prefix):
     ):
         result = config.get_models(api_key="test-key", api_base=api_base)
 
-        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get("url", "")
-        assert "/v1/v1/" not in called_url, f"Double /v1/ detected in URL: {called_url}"
-        assert called_url.startswith(expected_url_prefix), (
-            f"URL {called_url} does not start with {expected_url_prefix}"
+        called_url = mock_get.call_args.kwargs.get("url") or mock_get.call_args[1].get(
+            "url", ""
         )
+        assert "/v1/v1/" not in called_url, f"Double /v1/ detected in URL: {called_url}"
+        assert called_url.startswith(
+            expected_url_prefix
+        ), f"URL {called_url} does not start with {expected_url_prefix}"
         assert result == ["fireworks_ai/accounts/fireworks/models/llama-v3-70b"]
 
 
@@ -214,9 +293,39 @@ def test_transform_messages_helper_removes_provider_specific_fields():
             "role": "user",
             "content": "How are you?",
             # no provider_specific_fields
-        }
+        },
     ]
     # Call helper
-    out = config._transform_messages_helper(messages, model="fireworks/test", litellm_params={})
+    out = config._transform_messages_helper(
+        messages, model="fireworks/test", litellm_params={}
+    )
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+def test_unmapped_model_fallback_function_calling():
+    """Test that a model not in model_cost still defaults to supporting function calling for Fireworks."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/unmapped-future-model"
+    info = config.get_provider_info(model)
+    assert info["supports_function_calling"] is True
+
+
+def test_transform_messages_helper_strips_thinking_blocks():
+    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+    config = FireworksAIConfig()
+    messages = [
+        {"role": "user", "content": "Translate a poem."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "internal", "signature": ""}
+            ],
+        },
+    ]
+    out = config._transform_messages_helper(
+        messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
+    )
+    assert "thinking_blocks" not in out[1]
+    assert out[1]["content"] == "I can help."

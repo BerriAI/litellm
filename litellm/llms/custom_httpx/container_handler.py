@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Type, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -72,17 +73,18 @@ def _build_url(
 
     # Substitute path parameters
     for param, value in path_params.items():
-        path_template = path_template.replace(f"{{{param}}}", value)
+        encoded_value = encode_url_path_segment(value, field_name=param)
+        path_template = path_template.replace(f"{{{param}}}", encoded_value)
 
     # Parse the api_base to extract existing query params
     parsed_base = httpx.URL(api_base)
-    
+
     # Append the path to the existing path (before query params)
     new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
-    
+
     # Rebuild URL with new path, preserving query params
     final_url = parsed_base.copy_with(path=new_path)
-    
+
     return str(final_url)
 
 
@@ -255,14 +257,19 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
                 response = http_client.get(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "DELETE":
                 response = http_client.delete(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
@@ -270,11 +277,11 @@ class GenericContainerHandler:
                         kwargs["file"], headers
                     )
                     response = http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
+                        url=url, headers=headers, params=effective_params, files=files
                     )
                 else:
                     response = http_client.post(
-                        url=url, headers=headers, params=query_params
+                        url=url, headers=headers, params=effective_params
                     )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
@@ -374,14 +381,19 @@ class GenericContainerHandler:
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
 
+        # An empty dict passed as `params` to httpx strips any existing query
+        # string from the URL (e.g. ?api-version=...).  Use None instead so
+        # httpx leaves the URL's own query string intact.
+        effective_params = query_params or None
+
         try:
             if method == "GET":
                 response = await http_client.get(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "DELETE":
                 response = await http_client.delete(
-                    url=url, headers=headers, params=query_params
+                    url=url, headers=headers, params=effective_params
                 )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
@@ -389,11 +401,11 @@ class GenericContainerHandler:
                         kwargs["file"], headers
                     )
                     response = await http_client.post(
-                        url=url, headers=headers, params=query_params, files=files
+                        url=url, headers=headers, params=effective_params, files=files
                     )
                 else:
                     response = await http_client.post(
-                        url=url, headers=headers, params=query_params
+                        url=url, headers=headers, params=effective_params
                     )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")

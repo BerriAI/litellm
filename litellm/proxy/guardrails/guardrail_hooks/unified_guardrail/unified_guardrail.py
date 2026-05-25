@@ -52,6 +52,20 @@ def _get_a2a_request_id(
 endpoint_guardrail_translation_mappings = None
 
 
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
+    if "litellm_metadata" not in data:
+        from litellm.llms.base_llm.guardrail_translation.base_translation import (
+            BaseTranslation,
+        )
+
+        user_metadata = BaseTranslation.transform_user_api_key_dict_to_metadata(
+            user_api_key_dict
+        )
+        if user_metadata:
+            data["litellm_metadata"] = user_metadata
+
+
 class UnifiedLLMGuardrails(CustomLogger):
     def __init__(
         self,
@@ -120,6 +134,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -177,6 +193,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
         return await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -226,6 +244,16 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = call_types[0]  # type: ignore
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
+
+        # Fallback: resolve call_type from logging_obj for pass-through endpoints
+        if call_type is None:
+            litellm_logging_obj = data.get("litellm_logging_obj")
+            if (
+                litellm_logging_obj is not None
+                and getattr(litellm_logging_obj, "call_type", None)
+                == CallTypes.pass_through.value
+            ):
+                call_type = CallTypes.pass_through.value
 
         if call_type is None:
             return response

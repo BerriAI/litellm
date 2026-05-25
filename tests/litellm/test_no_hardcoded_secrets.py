@@ -16,9 +16,7 @@ LITELLM_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "litellm")
 
 # Regex for Base64 Basic Auth patterns: 'Basic <base64string>'
 # Matches strings like: Basic YW55dGhpbmc6YW55dGhpbmc=
-BASIC_AUTH_PATTERN = re.compile(
-    r"""['"]Basic\s+([A-Za-z0-9+/]{16,}={0,2})['"]"""
-)
+BASIC_AUTH_PATTERN = re.compile(r"""['"]Basic\s+([A-Za-z0-9+/]{16,}={0,2})['"]""")
 
 # Directories/files to skip
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".mypy_cache", ".ruff_cache"}
@@ -62,9 +60,7 @@ def test_no_hardcoded_basic_auth_secrets():
                     b64_value = match.group(1)
                     if _is_real_base64_credentials(b64_value):
                         rel_path = os.path.relpath(filepath, LITELLM_ROOT)
-                        violations.append(
-                            f"  {rel_path}:{line_num}: {match.group(0)}"
-                        )
+                        violations.append(f"  {rel_path}:{line_num}: {match.group(0)}")
 
     assert not violations, (
         "Found hardcoded Base64 Basic Auth credentials that will be flagged by "

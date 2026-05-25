@@ -184,9 +184,13 @@ class TestAnthropicLoggingHandlerModelFallback:
         logging_obj = self._create_mock_logging_obj()  # Empty dict
 
         model = request_body.get("model", "")
-        if not model and hasattr(logging_obj, 'model_call_details') and logging_obj.model_call_details.get('model'):
-            model = logging_obj.model_call_details.get('model')
-            
+        if (
+            not model
+            and hasattr(logging_obj, "model_call_details")
+            and logging_obj.model_call_details.get("model")
+        ):
+            model = logging_obj.model_call_details.get("model")
+
         assert model == ""  # Should remain empty
 
 
@@ -339,10 +343,10 @@ class TestAnthropicBatchPassthroughCostTracking:
                 "errored": 0,
                 "expired": 0,
                 "processing": 1,
-                "succeeded": 0
+                "succeeded": 0,
             },
             "results_url": "https://api.anthropic.com/v1/messages/batches/msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2/results",
-            "type": "message_batch"
+            "type": "message_batch",
         }
         return mock_response
 
@@ -364,21 +368,20 @@ class TestAnthropicBatchPassthroughCostTracking:
                     "custom_id": "my-custom-id-1",
                     "params": {
                         "max_tokens": 1024,
-                        "messages": [
-                            {
-                                "content": "Hello, world",
-                                "role": "user"
-                            }
-                        ],
-                        "model": "claude-sonnet-4-5-20250929"
-                    }
+                        "messages": [{"content": "Hello, world", "role": "user"}],
+                        "model": "claude-sonnet-4-5-20250929",
+                    },
                 }
             ]
         }
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
-    @patch('litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
+    @patch("litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig")
     def test_batch_creation_handler_success(
         self,
         mock_batches_config,
@@ -386,14 +389,14 @@ class TestAnthropicBatchPassthroughCostTracking:
         mock_store_batch,
         mock_httpx_response,
         mock_logging_obj,
-        mock_request_body
+        mock_request_body,
     ):
         """Test successful batch creation and managed object storage"""
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2",
             object="batch",
@@ -416,11 +419,13 @@ class TestAnthropicBatchPassthroughCostTracking:
             request_counts={"total": 1, "completed": 0, "failed": 0},
             metadata={},
         )
-        
+
         mock_batches_config_instance = MagicMock()
-        mock_batches_config_instance.transform_retrieve_batch_response.return_value = mock_batch_response
+        mock_batches_config_instance.transform_retrieve_batch_response.return_value = (
+            mock_batch_response
+        )
         mock_batches_config.return_value = mock_batches_config_instance
-        
+
         # Test the handler
         result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
             httpx_response=mock_httpx_response,
@@ -432,7 +437,7 @@ class TestAnthropicBatchPassthroughCostTracking:
             cache_hit=False,
             request_body=mock_request_body,
         )
-        
+
         # Verify the result
         assert result is not None
         assert "result" in result
@@ -442,33 +447,33 @@ class TestAnthropicBatchPassthroughCostTracking:
         assert result["kwargs"]["batch_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
         assert result["kwargs"]["batch_job_state"] == "in_progress"
         assert "unified_object_id" in result["kwargs"]
-        
+
         # Verify batch was stored
         mock_store_batch.assert_called_once()
         call_kwargs = mock_store_batch.call_args[1]
         assert call_kwargs["model_object_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
         assert call_kwargs["batch_object"].status == "validating"
-        
+
         # Verify the response object
         assert result["result"].model == "claude-sonnet-4-5-20250929"
         assert result["result"].object == "batch"
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
     def test_batch_creation_handler_model_extraction_from_nested_request(
-        self,
-        mock_get_model_id,
-        mock_store_batch,
-        mock_httpx_response,
-        mock_logging_obj
+        self, mock_get_model_id, mock_store_batch, mock_httpx_response, mock_logging_obj
     ):
         """Test that model is correctly extracted from nested request structure"""
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -479,8 +484,12 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
+
+        with patch.object(
+            AnthropicBatchesConfig,
+            "transform_retrieve_batch_response",
+            return_value=mock_batch_response,
+        ):
             # Request body with nested model in requests[0].params.model
             request_body = {
                 "requests": [
@@ -488,12 +497,12 @@ class TestAnthropicBatchPassthroughCostTracking:
                         "custom_id": "test-1",
                         "params": {
                             "model": "claude-sonnet-4-5-20250929",
-                            "messages": [{"role": "user", "content": "test"}]
-                        }
+                            "messages": [{"role": "user", "content": "test"}],
+                        },
                     }
                 ]
             }
-            
+
             result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                 httpx_response=mock_httpx_response,
                 logging_obj=mock_logging_obj,
@@ -504,26 +513,28 @@ class TestAnthropicBatchPassthroughCostTracking:
                 cache_hit=False,
                 request_body=request_body,
             )
-            
+
             # Verify model was extracted correctly
             assert result["kwargs"]["model"] == "claude-sonnet-4-5-20250929"
 
-    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router"
+    )
     def test_batch_creation_handler_model_prefix_when_not_in_router(
         self,
         mock_get_model_id,
         mock_httpx_response,
         mock_logging_obj,
-        mock_request_body
+        mock_request_body,
     ):
         """Test that model gets 'anthropic/' prefix when not found in router"""
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
         import base64
-        
+
         # Model not in router - returns same model name
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
-        
+
         mock_batch_response = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -534,9 +545,15 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
-            with patch.object(AnthropicPassthroughLoggingHandler, '_store_batch_managed_object'):
+
+        with patch.object(
+            AnthropicBatchesConfig,
+            "transform_retrieve_batch_response",
+            return_value=mock_batch_response,
+        ):
+            with patch.object(
+                AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
+            ):
                 result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                     httpx_response=mock_httpx_response,
                     logging_obj=mock_logging_obj,
@@ -547,22 +564,74 @@ class TestAnthropicBatchPassthroughCostTracking:
                     cache_hit=False,
                     request_body=mock_request_body,
                 )
-                
+
                 # Verify unified_object_id contains anthropic/ prefix
                 unified_object_id = result["kwargs"]["unified_object_id"]
                 decoded = base64.urlsafe_b64decode(unified_object_id + "==").decode()
-                assert "anthropic/claude-sonnet-4-5-20250929" in decoded or "claude-sonnet-4-5-20250929" in decoded
+                assert (
+                    "anthropic/claude-sonnet-4-5-20250929" in decoded
+                    or "claude-sonnet-4-5-20250929" in decoded
+                )
 
-    def test_batch_creation_handler_failure_status_code(
+    @pytest.mark.parametrize(
+        "kwargs,expected_user_id,expected_team_id",
+        [
+            (
+                {
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key_user_id": "real-user-123",
+                            "user_api_key_team_id": "team-456",
+                        }
+                    }
+                },
+                "real-user-123",
+                "team-456",
+            ),
+            ({}, "default-user", None),
+        ],
+    )
+    def test_store_batch_managed_object_propagates_user_identity_from_metadata(
         self,
         mock_logging_obj,
-        mock_request_body
+        kwargs,
+        expected_user_id,
+        expected_team_id,
+    ):
+        """The fabricated UserAPIKeyAuth must inherit user_id/team_id from the
+        request's litellm_params.metadata, not the (always-empty) top-level
+        kwargs lookup. Falls back to "default-user" only when metadata is
+        absent."""
+        mock_managed_files_hook = MagicMock()
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                **kwargs,
+            )
+
+            mock_managed_files_hook.store_unified_object_id.assert_called_once()
+            call_kwargs = mock_managed_files_hook.store_unified_object_id.call_args[1]
+            assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
+            assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
+
+    def test_batch_creation_handler_failure_status_code(
+        self, mock_logging_obj, mock_request_body
     ):
         """Test batch creation handler with non-200 status code"""
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.json.return_value = {"error": "Bad request"}
-        
+
         result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
             httpx_response=mock_response,
             logging_obj=mock_logging_obj,
@@ -573,26 +642,24 @@ class TestAnthropicBatchPassthroughCostTracking:
             cache_hit=False,
             request_body=mock_request_body,
         )
-        
+
         # Verify error response
         assert result is not None
         assert result["kwargs"]["batch_job_state"] == "failed"
         assert result["kwargs"]["response_cost"] == 0.0
 
-    @patch('litellm.proxy.proxy_server.proxy_logging_obj')
+    @patch("litellm.proxy.proxy_server.proxy_logging_obj")
     def test_store_batch_managed_object_success(
-        self,
-        mock_proxy_logging_obj,
-        mock_logging_obj
+        self, mock_proxy_logging_obj, mock_logging_obj
     ):
         """Test storing batch managed object"""
         from litellm.types.utils import LiteLLMBatch
-        
+
         # Setup mocks
         mock_managed_files_hook = MagicMock()
         mock_managed_files_hook.store_unified_object_id = AsyncMock()
         mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files_hook
-        
+
         batch_object = LiteLLMBatch(
             id="msgbatch_123",
             object="batch",
@@ -603,15 +670,376 @@ class TestAnthropicBatchPassthroughCostTracking:
             created_at=1704067200,
             request_counts={"total": 1, "completed": 0, "failed": 0},
         )
-        
-        with patch('asyncio.create_task'):
+
+        with patch("asyncio.create_task"):
             AnthropicPassthroughLoggingHandler._store_batch_managed_object(
                 unified_object_id="test-unified-id",
                 batch_object=batch_object,
                 model_object_id="msgbatch_123",
                 logging_obj=mock_logging_obj,
-                user_id="test-user"
+                user_id="test-user",
             )
-            
+
             # Verify managed files hook was called
-            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files") 
+            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with(
+                "managed_files"
+            )
+
+
+class TestPureTextFastPathParity:
+    """
+    The pure-text fast path in _build_complete_streaming_response must produce
+    a response (and downstream logging/cost payload) byte-identical to the
+    legacy stream_chunk_builder path. Anything non-text must fall back.
+    """
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @staticmethod
+    def _to_all_chunks(raw_frames):
+        # Mirror production: raw bytes -> _convert_raw_bytes_to_str_lines.
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        return PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_frames)
+
+    @staticmethod
+    def _norm(resp):
+        if resp is None:
+            return None
+        d = resp.model_dump()
+        # id / created are non-deterministic even between two legacy runs.
+        d.pop("id", None)
+        d.pop("created", None)
+        return d
+
+    def _text_stream(
+        self,
+        texts,
+        *,
+        input_tokens=12,
+        cache_creation=0,
+        cache_read=0,
+        stop_reason="end_turn",
+        with_ping=True,
+        blocks=1,
+    ):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": 0,
+                            "cache_creation_input_tokens": cache_creation,
+                            "cache_read_input_tokens": cache_read,
+                        },
+                    },
+                },
+            )
+        ]
+        per_block = max(1, len(texts) // blocks)
+        ti = 0
+        for b in range(blocks):
+            frames.append(
+                self._sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": b,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+            )
+            if with_ping:
+                frames.append(self._sse("ping", {"type": "ping"}))
+            chunk_texts = texts[ti : ti + per_block] if b < blocks - 1 else texts[ti:]
+            ti += per_block
+            for t in chunk_texts:
+                frames.append(
+                    self._sse(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": b,
+                            "delta": {"type": "text_delta", "text": t},
+                        },
+                    )
+                )
+            frames.append(
+                self._sse(
+                    "content_block_stop", {"type": "content_block_stop", "index": b}
+                )
+            )
+        frames.append(
+            self._sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": len(texts)},
+                },
+            )
+        )
+        frames.append(self._sse("message_stop", {"type": "message_stop"}))
+        return frames
+
+    def _assert_parity(self, raw_frames):
+        all_chunks = self._to_all_chunks(raw_frames)
+        lo1 = MagicMock()
+        lo1.model_call_details = {}
+        lo2 = MagicMock()
+        lo2.model_call_details = {}
+
+        legacy = AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
+            all_chunks=list(all_chunks),
+            litellm_logging_obj=lo1,
+            model="claude-3-5-sonnet-20241022",
+        )
+        fast = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=list(all_chunks),
+            litellm_logging_obj=lo2,
+            model="claude-3-5-sonnet-20241022",
+        )
+        assert self._norm(fast) == self._norm(legacy)
+
+        # Downstream logged/billed payload must also match.
+        start = datetime.now()
+        end = datetime.now()
+        k_legacy = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=legacy,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+            logging_obj=lo1,
+        )
+        k_fast = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=fast,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+            logging_obj=lo2,
+        )
+        # Usage drives cost; it must be byte-identical between paths.
+        assert getattr(fast, "usage", None) == getattr(legacy, "usage", None)
+
+        # And the full logged payload (sans non-deterministic response id).
+        def _scrub(p):
+            d = dict(p)
+            r = d.get("complete_streaming_response_in_db") or d.get(
+                "complete_streaming_response"
+            )
+            return d, getattr(r, "usage", None)
+
+        assert _scrub(k_fast)[1] == _scrub(k_legacy)[1]
+
+    def test_parity_simple_text(self):
+        self._assert_parity(self._text_stream(["Hello", " ", "world", "!"]))
+
+    def test_parity_single_delta(self):
+        self._assert_parity(self._text_stream(["Just one piece of text."]))
+
+    def test_parity_cache_tokens(self):
+        self._assert_parity(
+            self._text_stream(
+                ["a", "b", "c"], input_tokens=20, cache_creation=5, cache_read=7
+            )
+        )
+
+    def test_parity_max_tokens_stop(self):
+        self._assert_parity(self._text_stream(["tok"] * 8, stop_reason="max_tokens"))
+
+    def test_parity_no_ping(self):
+        self._assert_parity(self._text_stream(["x", "y"], with_ping=False))
+
+    def test_parity_empty_text_deltas(self):
+        self._assert_parity(self._text_stream(["", "hi", "", "there"]))
+
+    def test_parity_multi_text_block(self):
+        self._assert_parity(self._text_stream(["p1", "p2", "p3", "p4"], blocks=2))
+
+    def test_parity_multibyte_batched_frames(self):
+        # Several SSE events delivered in one network chunk.
+        frames = self._text_stream(["alpha", "beta", "gamma"])
+        merged = b"".join(frames)
+        self._assert_parity([merged])
+
+    def test_collapse_returns_none_for_tool_use(self):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "m",
+                        "model": "x",
+                        "role": "assistant",
+                        "type": "message",
+                        "content": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                },
+            ),
+            self._sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = self._to_all_chunks(frames)
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+                list(all_chunks)
+            )
+            is None
+        )
+
+    def test_collapse_returns_none_for_thinking(self):
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "m",
+                        "model": "x",
+                        "role": "assistant",
+                        "type": "message",
+                        "content": [],
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "hmm"},
+                },
+            ),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = self._to_all_chunks(frames)
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+                list(all_chunks)
+            )
+            is None
+        )
+
+    def test_collapse_actually_shrinks_chunk_count(self):
+        frames = self._text_stream(["a"] * 50)
+        all_chunks = list(self._to_all_chunks(frames))
+        collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+            all_chunks
+        )
+        assert collapsed is not None
+        # 50 text deltas + 50 event markers + 1 ping collapse to far fewer.
+        assert len(collapsed) < len(all_chunks) / 2
+
+    def test_collapse_returns_none_for_interleaved_block_indexes(self):
+        """
+        Anthropic sends content blocks strictly sequentially (start/deltas/stop
+        for one, then the next). If a stream ever interleaves deltas across
+        block indexes, the fast path must bail to legacy rather than merge text
+        from different blocks under a single index.
+        """
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-sonnet-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            # Interleave: delta for block 0, then delta for block 1, with no
+            # content_block_stop between them.
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hello "},
+                },
+            ),
+            self._sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": "world"},
+                },
+            ),
+            self._sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = list(self._to_all_chunks(frames))
+        assert (
+            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
+            is None
+        )

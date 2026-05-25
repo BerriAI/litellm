@@ -72,6 +72,23 @@ def _build_responses_kwargs(
     anthropic_request = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
     responses_kwargs = _ADAPTER.translate_request(anthropic_request)
 
+    # Normalize reasoning effort based on model capabilities
+    # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
+    reasoning = responses_kwargs.get("reasoning")
+    if isinstance(reasoning, dict) and "effort" in reasoning:
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            normalize_reasoning_effort_value,
+        )
+
+        effort = reasoning["effort"]
+        normalized = normalize_reasoning_effort_value(
+            effort,
+            model=model,
+            custom_llm_provider=(extra_kwargs or {}).get("custom_llm_provider"),
+        )
+        if normalized != effort:
+            responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+
     if stream:
         responses_kwargs["stream"] = True
 
@@ -88,7 +105,7 @@ def _build_responses_kwargs(
                 # Reclassify as acompletion so the success handler doesn't try to
                 # validate the Responses API event as an AnthropicResponse.
                 # (Mirrors the pattern used in LiteLLMMessagesToCompletionTransformationHandler.)
-                setattr(value, "call_type", CallTypes.acompletion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value

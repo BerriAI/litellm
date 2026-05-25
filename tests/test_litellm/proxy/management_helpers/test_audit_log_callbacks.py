@@ -160,9 +160,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
             mock_prisma.db.litellm_auditlog.create = AsyncMock()
 
             audit_log = _make_audit_log()
@@ -180,8 +182,9 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", False), patch(
-            "litellm.store_audit_logs", True
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch("litellm.store_audit_logs", True),
         ):
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
@@ -209,9 +212,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client", None):
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
             await asyncio.sleep(0.1)
@@ -226,9 +231,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
             mock_prisma.db.litellm_auditlog.create = AsyncMock(
                 side_effect=RuntimeError("DB connection lost")
             )
@@ -280,9 +287,7 @@ class TestAuditLogTaskDoneCallback:
 class TestS3LoggerAuditLogEvent:
     @pytest.mark.asyncio
     async def test_queues_audit_log_with_correct_s3_key(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()
@@ -315,9 +320,7 @@ class TestS3LoggerAuditLogEvent:
 
     @pytest.mark.asyncio
     async def test_s3_key_format_no_path(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()
@@ -343,3 +346,126 @@ class TestS3LoggerAuditLogEvent:
             element = logger.log_queue[0]
             assert element.s3_object_key.startswith("audit_logs/")
             assert "audit-456" in element.s3_object_key
+
+
+class TestS3AuditCallbackParamsDecoupling:
+    """`s3_audit_callback_params` should give the audit-log path its own
+    S3Logger instance, distinct from the singleton serving normal logs."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_caches_and_globals(self):
+        from litellm.litellm_core_utils import litellm_logging as ll_logging
+        from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+        original_s3 = litellm.s3_callback_params
+        original_audit = getattr(litellm, "s3_audit_callback_params", None)
+        ll_audit_logs._audit_log_callback_cache.clear()
+        ll_logging._in_memory_loggers.clear()
+        yield
+        litellm.s3_callback_params = original_s3
+        litellm.s3_audit_callback_params = original_audit
+        ll_audit_logs._audit_log_callback_cache.clear()
+        ll_logging._in_memory_loggers.clear()
+
+    def test_opt_in_constructs_separate_instance_with_audit_config(self):
+        """Audit config set → audit resolver returns a fresh S3Logger pointing
+        at the audit bucket, distinct from the normal-log singleton."""
+        from litellm.integrations.s3_v2 import S3Logger
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+        from litellm.proxy.management_helpers.audit_logs import (
+            _resolve_audit_log_callback,
+        )
+
+        litellm.s3_callback_params = {"s3_bucket_name": "normal-bucket"}
+        litellm.s3_audit_callback_params = {"s3_bucket_name": "audit-bucket"}
+
+        with patch("asyncio.create_task"):
+            audit_instance = _resolve_audit_log_callback("s3_v2")
+            normal_instance = _init_custom_logger_compatible_class(
+                logging_integration="s3_v2",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+
+        assert isinstance(audit_instance, S3Logger)
+        assert isinstance(normal_instance, S3Logger)
+        assert id(audit_instance) != id(normal_instance)
+        assert audit_instance.s3_bucket_name == "audit-bucket"
+        assert normal_instance.s3_bucket_name == "normal-bucket"
+
+    def test_opt_out_preserves_singleton_behavior(self):
+        """No `s3_audit_callback_params` → audit and normal share the singleton
+        (existing behavior, regression guard)."""
+        from litellm.integrations.s3_v2 import S3Logger
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+        from litellm.proxy.management_helpers.audit_logs import (
+            _resolve_audit_log_callback,
+        )
+
+        litellm.s3_callback_params = {"s3_bucket_name": "shared-bucket"}
+        litellm.s3_audit_callback_params = None
+
+        with patch("asyncio.create_task"):
+            normal_instance = _init_custom_logger_compatible_class(
+                logging_integration="s3_v2",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            audit_instance = _resolve_audit_log_callback("s3_v2")
+
+        assert isinstance(audit_instance, S3Logger)
+        assert id(audit_instance) == id(normal_instance)
+        assert audit_instance.s3_bucket_name == "shared-bucket"
+
+    def test_empty_dict_opts_in(self):
+        """`s3_audit_callback_params = {}` is opt-in (truthy-by-presence) and
+        produces a separate instance with no bucket configured (env/IAM-only)."""
+        from litellm.integrations.s3_v2 import S3Logger
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+        from litellm.proxy.management_helpers.audit_logs import (
+            _resolve_audit_log_callback,
+        )
+
+        litellm.s3_callback_params = {"s3_bucket_name": "normal-bucket"}
+        litellm.s3_audit_callback_params = {}
+
+        with patch("asyncio.create_task"):
+            audit_instance = _resolve_audit_log_callback("s3_v2")
+            normal_instance = _init_custom_logger_compatible_class(
+                logging_integration="s3_v2",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+
+        assert id(audit_instance) != id(normal_instance)
+        assert audit_instance.s3_bucket_name is None
+        assert normal_instance.s3_bucket_name == "normal-bucket"
+
+    def test_reset_audit_log_callback_cache_clears_audit_instance(self):
+        """`reset_audit_log_callback_cache()` must drop the cached audit
+        instance so a config reload picks up the new params."""
+        from litellm.proxy.management_helpers.audit_logs import (
+            _audit_log_callback_cache,
+            _resolve_audit_log_callback,
+            reset_audit_log_callback_cache,
+        )
+
+        litellm.s3_audit_callback_params = {"s3_bucket_name": "first"}
+        with patch("asyncio.create_task"):
+            first = _resolve_audit_log_callback("s3_v2")
+            assert first is not None and "s3_v2" in _audit_log_callback_cache
+
+            reset_audit_log_callback_cache()
+            assert "s3_v2" not in _audit_log_callback_cache
+
+            litellm.s3_audit_callback_params = {"s3_bucket_name": "second"}
+            second = _resolve_audit_log_callback("s3_v2")
+            assert second is not None
+            assert id(second) != id(first)
+            assert second.s3_bucket_name == "second"

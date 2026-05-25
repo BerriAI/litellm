@@ -1,7 +1,7 @@
 import React from "react";
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
-import { Form, Tooltip } from "antd";
+import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -182,16 +182,18 @@ export function ToolTestPanel({
 
     Object.entries(values).forEach(([key, value]) => {
       const prop = schemaToUse.properties?.[key];
-      if (prop && value !== null && value !== undefined && value !== "") {
+      // Strip leading/trailing whitespace from string inputs before submitting
+      const normalizedValue = typeof value === "string" ? value.trim() : value;
+      if (prop && normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
         switch (prop.type) {
           case "boolean":
-            convertedValues[key] = value === "true" || value === true;
+            convertedValues[key] = normalizedValue === "true" || normalizedValue === true;
             break;
           case "number":
           case "integer": {
-            const numericValue = Number(value);
+            const numericValue = Number(normalizedValue);
             convertedValues[key] = Number.isNaN(numericValue)
-              ? value
+              ? normalizedValue
               : prop.type === "integer"
                 ? Math.trunc(numericValue)
                 : numericValue;
@@ -200,28 +202,28 @@ export function ToolTestPanel({
           case "object":
           case "array": {
             try {
-              const parsed = typeof value === "string" ? JSON.parse(value) : value;
+              const parsed = typeof normalizedValue === "string" ? JSON.parse(normalizedValue) : normalizedValue;
               const isValidObject =
                 prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
               const isValidArray = prop.type === "array" && Array.isArray(parsed);
               if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
                 convertedValues[key] = parsed;
               } else {
-                convertedValues[key] = value;
+                convertedValues[key] = normalizedValue;
               }
             } catch (err) {
-              convertedValues[key] = value;
+              convertedValues[key] = normalizedValue;
             }
             break;
           }
           case "string":
-            convertedValues[key] = String(value);
+            convertedValues[key] = String(normalizedValue);
             break;
           default:
-            convertedValues[key] = value;
+            convertedValues[key] = normalizedValue;
         }
-      } else if (value !== null && value !== undefined && value !== "") {
-        convertedValues[key] = value;
+      } else if (normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
+        convertedValues[key] = normalizedValue;
       }
     });
 
@@ -480,14 +482,14 @@ export function ToolTestPanel({
                         )}
 
                         {prop.type === "boolean" && (
-                          <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                            defaultValue={(initialValue ?? false).toString()}
+                          <Select
+                            placeholder={`Select ${key}`}
+                            allowClear={!actualSchema.required?.includes(key)}
+                            className="w-full"
                           >
-                            {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
-                            <option value="true">True</option>
-                            <option value="false">False</option>
-                          </select>
+                            <Select.Option value={true}>True</Select.Option>
+                            <Select.Option value={false}>False</Select.Option>
+                          </Select>
                         )}
 
                         {(prop.type === "object" || prop.type === "array") && (

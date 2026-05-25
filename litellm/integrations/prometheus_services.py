@@ -38,7 +38,9 @@ class PrometheusServicesLogger:
 
             _custom_buckets = litellm.prometheus_latency_buckets
             self.latency_buckets = (
-                tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
+                tuple(_custom_buckets)
+                if _custom_buckets is not None
+                else LATENCY_BUCKETS
             )
 
             self.Histogram = Histogram

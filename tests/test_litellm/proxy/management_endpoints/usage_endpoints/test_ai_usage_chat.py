@@ -213,12 +213,15 @@ class TestStreamUsageAiChat:
             chunk.choices[0].delta.content = "Total spend is $50.25"
             yield chunk
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
@@ -285,12 +288,15 @@ class TestStreamUsageAiChat:
             chunk.choices[0].delta.content = "Engineering is the top team."
             yield chunk
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
-            new_callable=AsyncMock,
-        ) as mock_fetch:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
@@ -367,17 +373,20 @@ class TestStreamUsageAiChat:
 
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
-        with patch(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
-        ) as mock_litellm, patch.dict(
-            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
-            {
-                "get_usage_data": {
-                    "fetch": mock_fetch,
-                    "summarise": _summarise_usage_data,
-                    "label": "global usage data",
-                }
-            },
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch.dict(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
+                {
+                    "get_usage_data": {
+                        "fetch": mock_fetch,
+                        "summarise": _summarise_usage_data,
+                        "label": "global usage data",
+                    }
+                },
+            ),
         ):
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
@@ -400,3 +409,60 @@ class TestStreamUsageAiChat:
                 end_date="2025-01-31",
                 user_id="my-user-id",
             )
+
+
+class TestUsageAiChatServiceAccountGuard:
+    """
+    Security regression: a non-admin caller with user_id=None (service-account
+    key) must be rejected at the endpoint boundary, before any tool dispatch.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_admin_with_user_id_none_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
+            ChatMessage,
+            UsageAIChatRequest,
+            usage_ai_chat,
+        )
+
+        service_account_key = UserAPIKeyAuth(
+            user_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        request = MagicMock()
+        body = UsageAIChatRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            model="gpt-4o-mini",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await usage_ai_chat(
+                data=body,
+                request=request,
+                user_api_key_dict=service_account_key,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Service-account keys" in str(exc_info.value.detail)
+
+    def test_resolve_fetch_kwargs_tripwire_fires_on_none_user_id(self):
+        """
+        Defense-in-depth: if a future endpoint forgets the entry guard and
+        a non-admin caller with user_id=None reaches _resolve_fetch_kwargs,
+        the tripwire must fire rather than issuing an unscoped query.
+        """
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _resolve_fetch_kwargs,
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            _resolve_fetch_kwargs(
+                fn_name="get_usage_data",
+                fn_args={"start_date": "2025-01-01", "end_date": "2025-01-31"},
+                user_id=None,
+                is_admin=False,
+            )
+        assert "Endpoint-level guard missing" in str(exc_info.value)

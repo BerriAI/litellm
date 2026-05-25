@@ -103,9 +103,9 @@ class AmazonNovaCanvasConfig:
                 imageGenerationConfig=image_generation_config_typed,
             )
         if task_type == "COLOR_GUIDED_GENERATION":
-            color_guided_generation_params: Dict[
-                str, Any
-            ] = image_generation_config.pop("colorGuidedGenerationParams", {})
+            color_guided_generation_params: Dict[str, Any] = (
+                image_generation_config.pop("colorGuidedGenerationParams", {})
+            )
             color_guided_generation_params = {
                 "text": text,
                 **color_guided_generation_params,

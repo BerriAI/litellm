@@ -159,7 +159,7 @@ async def test_completion_with_retries(sync_mode):
 async def test_responses_with_retries(sync_mode):
     """
     Test that responses() and aresponses() properly handle num_retries parameter.
-    If responses_with_retries is called with num_retries=3, and max_retries=0, 
+    If responses_with_retries is called with num_retries=3, and max_retries=0,
     then litellm.responses should receive num_retries=0, max_retries=0
     """
     from unittest.mock import patch, MagicMock, AsyncMock
@@ -172,7 +172,11 @@ async def test_responses_with_retries(sync_mode):
         retry_function = aresponses_with_retries
 
     # Mock the responses/aresponses function
-    with patch("litellm.responses.main.responses" if sync_mode else "litellm.responses.main.aresponses") as mock_responses:
+    with patch(
+        "litellm.responses.main.responses"
+        if sync_mode
+        else "litellm.responses.main.aresponses"
+    ) as mock_responses:
         if sync_mode:
             mock_responses.return_value = MagicMock()
             retry_function(
@@ -189,7 +193,7 @@ async def test_responses_with_retries(sync_mode):
                 num_retries=3,
                 original_function=mock_responses,
             )
-        
+
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["num_retries"] == 0
         assert mock_responses.call_args.kwargs["max_retries"] == 0
@@ -206,7 +210,7 @@ async def test_responses_retry_on_auth_error(sync_mode):
     import openai
 
     num_retries = 2
-    
+
     # Mock the responses/aresponses to raise an authentication error
     if sync_mode:
         with patch.object(litellm, "responses_with_retries") as mock_retry:
@@ -220,7 +224,7 @@ async def test_responses_retry_on_auth_error(sync_mode):
                 )
             except Exception:
                 pass  # Expected to fail with invalid key
-            
+
             # Check if retry function was called (means @client decorator triggered retry)
             if mock_retry.called:
                 assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
@@ -236,7 +240,7 @@ async def test_responses_retry_on_auth_error(sync_mode):
                 )
             except Exception:
                 pass  # Expected to fail with invalid key
-            
+
             # Check if retry function was called (means @client decorator triggered retry)
             if mock_retry.called:
                 assert mock_retry.call_args.kwargs.get("num_retries") == num_retries

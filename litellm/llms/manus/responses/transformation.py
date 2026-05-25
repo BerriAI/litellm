@@ -6,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -270,7 +271,10 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         Reference: https://open.manus.im/docs/openai-compatibility
         """
-        url = f"{api_base}/{response_id}"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        url = f"{api_base}/{encoded_response_id}"
         data: Dict = {}
         return url, data
 

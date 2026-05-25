@@ -1,9 +1,11 @@
 import os
+import re
 import time
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -262,8 +264,31 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             cancelling_at=None,
             cancelled_at=None,
             request_counts=None,
-            metadata=original_request.get("metadata", {}),
+            metadata=self._get_openai_compatible_batch_metadata(
+                original_request.get("metadata", {})
+            ),
         )
+
+    @staticmethod
+    def _get_openai_compatible_batch_metadata(metadata: Any) -> Dict[str, str]:
+        """
+        OpenAI Batch metadata only accepts string values.
+        """
+        if not isinstance(metadata, dict):
+            return {}
+
+        sanitized_metadata: Dict[str, str] = {}
+        for key, value in metadata.items():
+            if key == "standard_logging_guardrail_information" or value is None:
+                continue
+
+            str_key = str(key)
+            if isinstance(value, str):
+                sanitized_metadata[str_key] = value
+            else:
+                sanitized_metadata[str_key] = safe_dumps(value)
+
+        return sanitized_metadata
 
     def transform_retrieve_batch_request(
         self,
@@ -294,7 +319,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             raise ValueError(f"Invalid ARN format: {batch_id}")
 
         region = arn_parts[3]
-        # arn_parts[5] contains "model-invocation-job/{jobId}"
+        if not re.match(r"^[a-z][a-z0-9-]*$", region):
+            raise ValueError(f"Invalid region in ARN: {batch_id}")
 
         # Build the endpoint URL for GetModelInvocationJob
         # AWS API format: GET /model-invocation-job/{jobIdentifier}

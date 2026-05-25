@@ -61,7 +61,8 @@ for root, dirs, files in os.walk(repo_base):
                 # Find all keys using os.getenv()
                 getenv_matches = getenv_pattern.findall(content)
                 env_keys.update(
-                    match for match in getenv_matches
+                    match
+                    for match in getenv_matches
                     if match not in EXCLUDED_TERMINAL_VARS
                 )  # Extract only the key part, excluding terminal vars
 

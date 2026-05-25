@@ -24,7 +24,9 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 ):
     class RaiseOnInit:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("LiteLLM_Params should not be instantiated in hot path")
+            raise AssertionError(
+                "LiteLLM_Params should not be instantiated in hot path"
+            )
 
     monkeypatch.setattr(
         "litellm.router_strategy.budget_limiter.LiteLLM_Params",
@@ -199,7 +201,9 @@ def _legacy_provider_resolution(deployment):
     Reference implementation used before hot-path optimization.
     """
     try:
-        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
+        _litellm_params = LiteLLM_Params(
+            **deployment.get("litellm_params", {"model": ""})
+        )
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=_litellm_params.model,
             litellm_params=_litellm_params,

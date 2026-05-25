@@ -122,7 +122,10 @@ class FakeAnthropicMessagesStreamIterator:
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
-                "delta": {"type": "input_json_delta", "partial_json": json.dumps(input_data)},
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(input_data),
+                },
             }
             chunks.append(
                 f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()

@@ -180,6 +180,19 @@ class TestAnthropicFilesConfig:
         assert url == "https://custom.api.com/v1/files/file-abc123"
         assert params == {}
 
+    def test_transform_retrieve_file_request_encodes_path_traversal(self):
+        url, params = self.config.transform_retrieve_file_request(
+            file_id="../../v1/messages/batches?limit=1#frag",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert (
+            url
+            == f"{ANTHROPIC_FILES_API_BASE}/v1/files/..%2F..%2Fv1%2Fmessages%2Fbatches%3Flimit%3D1%23frag"
+        )
+        assert params == {}
+
     def test_transform_retrieve_file_response(self):
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {
@@ -295,6 +308,14 @@ class TestAnthropicFilesConfig:
         )
         assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/files/file-abc123/content"
         assert params == {}
+
+    def test_transform_file_content_request_rejects_dot_segment(self):
+        with pytest.raises(ValueError, match="file_id cannot be a dot path segment"):
+            self.config.transform_file_content_request(
+                file_content_request={"file_id": ".."},
+                optional_params={},
+                litellm_params={},
+            )
 
     def test_transform_file_content_response(self):
         mock_response = Mock(spec=httpx.Response)

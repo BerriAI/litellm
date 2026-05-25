@@ -4,6 +4,11 @@ from typing import Any, Coroutine, Dict, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import (
+    async_safe_get,
+    encode_url_path_segment,
+    safe_get,
+)
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -73,8 +78,10 @@ class VertexAIBatchPrediction(VertexLLM):
             "Authorization": f"Bearer {access_token}",
         }
 
-        vertex_batch_request: VertexAIBatchPredictionJob = VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
-            request=create_batch_data
+        vertex_batch_request: VertexAIBatchPredictionJob = (
+            VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
+                request=create_batch_data
+            )
         )
 
         if _is_async is True:
@@ -167,7 +174,8 @@ class VertexAIBatchPrediction(VertexLLM):
         )
 
         # Append batch_id to the URL
-        default_api_base = f"{default_api_base}/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        default_api_base = f"{default_api_base}/{encoded_batch_id}"
 
         if len(default_api_base.split(":")) > 1:
             endpoint = default_api_base.split(":")[-1]
@@ -222,8 +230,14 @@ class VertexAIBatchPrediction(VertexLLM):
                     },
                 )
 
-        response = sync_handler.get(
-            url=api_base,
+        # ``api_base`` here can come from caller-supplied request kwargs
+        # (clientside override). Wrap the fetch in ``safe_get`` so DNS
+        # rebind / private / cloud-metadata targets are rejected; the
+        # proxy auth gate already blocks malicious clientside ``api_base``
+        # at the boundary — this is defense-in-depth for SDK callers.
+        response = safe_get(
+            sync_handler,
+            api_base,
             headers=headers,
         )
 
@@ -268,8 +282,13 @@ class VertexAIBatchPrediction(VertexLLM):
                     },
                 )
 
-        response = await client.get(
-            url=api_base,
+        # Mirror the sync path: ``api_base`` may come from caller-supplied
+        # request kwargs, so wrap the fetch in ``async_safe_get`` to reject
+        # DNS-rebind / private / cloud-metadata targets. Defense-in-depth
+        # behind the proxy auth gate's clientside ``api_base`` check.
+        response = await async_safe_get(
+            client,
+            api_base,
             headers=headers,
         )
         if response.status_code != 200:
@@ -399,7 +418,8 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_project=vertex_project or project_id,
         )
 
-        retrieve_api_base_default = f"{default_api_base}/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        retrieve_api_base_default = f"{default_api_base}/{encoded_batch_id}"
         cancel_api_base_default = f"{retrieve_api_base_default}:cancel"
 
         _, api_base = self._check_custom_proxy(

@@ -103,6 +103,7 @@ export enum Providers {
   WATSONX_TEXT = "Watsonx Text",
   xAI = "xAI",
   XINFERENCE = "Xinference",
+  ZAI = "Z.AI (Zhipu AI)",
 }
 
 export const provider_map: Record<string, string> = {
@@ -210,6 +211,7 @@ export const provider_map: Record<string, string> = {
   WATSONX_TEXT: "watsonx_text",
   xAI: "xai",
   XINFERENCE: "xinference",
+  ZAI: "zai",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -366,6 +368,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "watsonx/ibm/granite-3-3-8b-instruct";
   } else if (selectedProvider === Providers.Cursor) {
     return "cursor/claude-4-sonnet";
+  } else if (selectedProvider === Providers.ZAI) {
+    return "zai/glm-4.5";
   } else {
     return "gpt-3.5-turbo";
   }
@@ -385,7 +389,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
         const litellmProvider = (value as any)["litellm_provider"];
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          (typeof litellmProvider === "string" &&
+            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+              litellmProvider.startsWith(`${custom_llm_provider}-`)))
         ) {
           providerModels.push(key);
         }

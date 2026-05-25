@@ -7,8 +7,8 @@ import {
 } from "./networking";
 import AddPluginForm from "./claude_code_plugins/add_plugin_form";
 import PluginTable from "./claude_code_plugins/plugin_table";
+import SkillDetail from "./claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
-import PluginInfoView from "./claude_code_plugins/plugin_info";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Plugin, ListPluginsResponse } from "./claude_code_plugins/types";
 
@@ -29,27 +29,22 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
     name: string;
     displayName: string;
   } | null>(null);
-  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(
-    null
-  );
+  const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchPlugins = async () => {
-    if (!accessToken) {
-      return;
-    }
+    if (!accessToken) return;
 
     setIsLoading(true);
     try {
       const response: ListPluginsResponse = await getClaudeCodePluginsList(
         accessToken,
-        false // Get all plugins (enabled and disabled)
+        false
       );
-      console.log(`Claude Code plugins: ${JSON.stringify(response)}`);
       setPluginsList(response.plugins);
     } catch (error) {
-      console.error("Error fetching Claude Code plugins:", error);
+      console.error("Error fetching skills:", error);
     } finally {
       setIsLoading(false);
     }
@@ -58,21 +53,6 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
   useEffect(() => {
     fetchPlugins();
   }, [accessToken]);
-
-  const handleAddPlugin = () => {
-    if (selectedPluginId) {
-      setSelectedPluginId(null);
-    }
-    setIsAddModalVisible(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsAddModalVisible(false);
-  };
-
-  const handleSuccess = () => {
-    fetchPlugins();
-  };
 
   const handleDeleteClick = (pluginName: string, displayName: string) => {
     setPluginToDelete({ name: pluginName, displayName });
@@ -84,79 +64,76 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
-      NotificationsManager.success(
-        `Plugin "${pluginToDelete.displayName}" deleted successfully`
-      );
+      NotificationsManager.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
       fetchPlugins();
     } catch (error) {
-      console.error("Error deleting plugin:", error);
-      NotificationsManager.error("Failed to delete plugin");
+      console.error("Error deleting skill:", error);
+      NotificationsManager.error("Failed to delete skill");
     } finally {
       setIsDeleting(false);
       setPluginToDelete(null);
     }
   };
 
-  const handleDeleteCancel = () => {
-    setPluginToDelete(null);
-  };
-
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">Claude Code Plugins</h1>
-        <p className="text-sm text-gray-600">
-          Manage Claude Code marketplace plugins. Add, enable, disable, or
-          delete plugins that will be available in your marketplace catalog.
-          Enabled plugins will appear in the public marketplace at{" "}
-          <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
-        </p>
-        <div className="mt-2">
-          <Button onClick={handleAddPlugin} disabled={!accessToken || !isAdmin}>
-            + Add New Plugin
-          </Button>
-        </div>
-      </div>
-
-      {selectedPluginId ? (
-        <PluginInfoView
-          pluginId={selectedPluginId}
-          onClose={() => setSelectedPluginId(null)}
-          accessToken={accessToken}
+      {selectedSkill ? (
+        <SkillDetail
+          skill={selectedSkill}
+          onBack={() => setSelectedSkill(null)}
           isAdmin={isAdmin}
-          onPluginUpdated={fetchPlugins}
+          accessToken={accessToken}
+          onPublishClick={fetchPlugins}
         />
       ) : (
-        <PluginTable
-          pluginsList={pluginsList}
-          isLoading={isLoading}
-          onDeleteClick={handleDeleteClick}
-          accessToken={accessToken}
-          onPluginUpdated={fetchPlugins}
-          isAdmin={isAdmin}
-          onPluginClick={(id) => setSelectedPluginId(id)}
-        />
+        <>
+          <div className="flex flex-col gap-2 mb-4">
+            <h1 className="text-2xl font-bold">Skills</h1>
+            <p className="text-sm text-gray-600">
+              Register Claude Code skills. Published skills appear in the Skill Hub for all users and
+              are served via{" "}
+              <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>
+                + Add Skill
+              </Button>
+            </div>
+          </div>
+
+          <PluginTable
+            pluginsList={pluginsList}
+            isLoading={isLoading}
+            onDeleteClick={handleDeleteClick}
+            accessToken={accessToken}
+            isAdmin={isAdmin}
+            onPluginClick={(id) => {
+              const skill = pluginsList.find((p) => p.id === id);
+              if (skill) setSelectedSkill(skill);
+            }}
+          />
+        </>
       )}
 
       <AddPluginForm
         visible={isAddModalVisible}
-        onClose={handleCloseModal}
+        onClose={() => setIsAddModalVisible(false)}
         accessToken={accessToken}
-        onSuccess={handleSuccess}
+        onSuccess={fetchPlugins}
       />
 
       {pluginToDelete && (
         <Modal
-          title="Delete Plugin"
+          title="Delete Skill"
           open={pluginToDelete !== null}
           onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
+          onCancel={() => setPluginToDelete(null)}
           confirmLoading={isDeleting}
           okText="Delete"
           okButtonProps={{ danger: true }}
         >
           <p>
-            Are you sure you want to delete plugin:{" "}
+            Are you sure you want to delete skill:{" "}
             <strong>{pluginToDelete.displayName}</strong>?
           </p>
           <p>This action cannot be undone.</p>

@@ -39,6 +39,8 @@ import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPoliciesView from "@/components/ToolPoliciesView";
+import { MemoryView } from "@/components/MemoryView";
+import WorkflowRuns from "@/components/workflow_runs";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -323,9 +325,6 @@ function CreateKeyPageContent() {
       if (decoded.user_role) {
         const formattedUserRole = formatUserRole(decoded.user_role);
         setUserRole(formattedUserRole);
-        if (formattedUserRole == "Admin Viewer") {
-          setPage("usage");
-        }
       }
 
       if (decoded.user_email) {
@@ -620,7 +619,7 @@ function CreateKeyPageContent() {
                     <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tag-management" ? (
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                  ) : page == "claude-code-plugins" ? (
+                  ) : page == "skills" || page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "access-groups" ? (
                     <AccessGroupsPage />
@@ -630,6 +629,14 @@ function CreateKeyPageContent() {
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
                     <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
+                  ) : page == "workflows" ? (
+                    <WorkflowRuns accessToken={accessToken} />
+                  ) : page == "memory" ? (
+                    <MemoryView
+                      accessToken={accessToken}
+                      userID={userID}
+                      userRole={userRole}
+                    />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (

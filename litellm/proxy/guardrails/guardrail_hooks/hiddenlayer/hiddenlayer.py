@@ -401,9 +401,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": inputs["texts"][0]
-                                if inputs.get("texts")
-                                else "",
+                                "content": (
+                                    inputs["texts"][0] if inputs.get("texts") else ""
+                                ),
                             },
                             "finish_reason": "stop",
                         }
@@ -414,9 +414,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             else:
                 payload = {}
 
-        response = await self._call_hiddenlayer(
-            payload, input_type, hl_headers
-        )
+        response = await self._call_hiddenlayer(payload, input_type, hl_headers)
         output = response.json()
 
         if response.headers.get("hl-runtime-action", "").lower() == "block":

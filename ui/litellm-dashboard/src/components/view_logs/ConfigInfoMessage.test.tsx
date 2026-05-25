@@ -1,6 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
 
 describe("ConfigInfoMessage", () => {
@@ -19,23 +18,8 @@ describe("ConfigInfoMessage", () => {
     expect(screen.getByText(/store_prompts_in_spend_logs: true/)).toBeInTheDocument();
   });
 
-  it("should render the settings button when onOpenSettings is provided", () => {
-    render(<ConfigInfoMessage show={true} onOpenSettings={() => {}} />);
-    expect(screen.getByText("open the settings")).toBeInTheDocument();
-  });
-
-  it("should not render the settings button when onOpenSettings is omitted", () => {
+  it("should reference Admin Settings \u2192 Logging Settings", () => {
     render(<ConfigInfoMessage show={true} />);
-    expect(screen.queryByText("open the settings")).not.toBeInTheDocument();
-  });
-
-  it("should call onOpenSettings when the settings button is clicked", async () => {
-    const user = userEvent.setup();
-    const onOpenSettings = vi.fn();
-
-    render(<ConfigInfoMessage show={true} onOpenSettings={onOpenSettings} />);
-    await user.click(screen.getByText("open the settings"));
-
-    expect(onOpenSettings).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Admin Settings → Logging Settings/)).toBeInTheDocument();
   });
 });

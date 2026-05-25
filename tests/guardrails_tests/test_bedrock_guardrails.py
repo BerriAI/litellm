@@ -5,7 +5,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    BedrockGuardrail,
+    _redact_pii_matches,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -22,7 +25,7 @@ async def test_bedrock_guardrails_pii_masking():
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
             {"role": "assistant", "content": "Hello, how can I help you today?"},
@@ -62,7 +65,7 @@ async def test_bedrock_guardrails_pii_masking_content_list():
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {
                 "role": "user",
@@ -117,7 +120,7 @@ async def test_bedrock_guardrails_block_messages_api():
     )
 
     request_data = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-sonnet-4-5-20250929",
         "messages": [
             {
                 "role": "user",
@@ -217,7 +220,7 @@ async def test_bedrock_guardrails_with_streaming():
         litellm.callbacks.append(guardrail)
 
         request_data = {
-            "model": "gpt-4o",
+            "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "Hi I like coffee"}],
             "stream": True,
             "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -261,7 +264,7 @@ async def test_bedrock_guardrails_with_streaming_no_violation():
     litellm.callbacks.append(guardrail)
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": True,
         "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -315,7 +318,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
@@ -330,7 +333,7 @@ async def test_bedrock_guardrails_streaming_request_body_mock():
 
         # Test data - simulating request data and assembled response
         request_data = {
-            "model": "gpt-4o",
+            "model": "gpt-5.5",
             "messages": [{"role": "user", "content": "what's the capital of spain?"}],
             "stream": True,
             "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -393,7 +396,7 @@ async def test_bedrock_guardrail_aws_param_persistence():
     ) as mock_get_creds:
         for i in range(3):
             request_data = {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "messages": [{"role": "user", "content": f"request {i}"}],
                 "stream": False,
                 "metadata": {"guardrails": ["bedrock-post-guard"]},
@@ -580,7 +583,7 @@ async def test_bedrock_guardrail_masking_with_anonymized_response():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
         ],
@@ -654,7 +657,7 @@ async def test_bedrock_guardrail_uses_masked_output_without_masking_flags():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {
                 "role": "user",
@@ -744,12 +747,12 @@ async def test_bedrock_guardrail_response_pii_masking_non_streaming():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "What's your credit card and phone number?"},
         ],
@@ -831,7 +834,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -846,7 +849,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -859,7 +862,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -867,7 +870,7 @@ async def test_bedrock_guardrail_response_pii_masking_streaming():
             yield chunk
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "What's your email and SSN?"},
         ],
@@ -998,7 +1001,7 @@ async def test_convert_to_bedrock_format_output_source():
             ),
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
@@ -1052,7 +1055,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -1065,7 +1068,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -1094,7 +1097,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "What's your email?"}],
         "stream": True,
     }
@@ -1104,7 +1107,12 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
 
     # Mock the make_bedrock_api_request method to track calls
     async def mock_make_bedrock_api_request(
-        source, messages=None, response=None, request_data=None
+        source,
+        messages=None,
+        response=None,
+        request_data=None,
+        logging_event_type=None,
+        **kwargs,
     ):
         bedrock_calls.append(
             {
@@ -1112,6 +1120,7 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
                 "messages": messages,
                 "response": response,
                 "request_data": request_data,
+                "logging_event_type": logging_event_type,
             }
         )
         # Return the mock bedrock response
@@ -1214,7 +1223,7 @@ async def test_bedrock_guardrail_blocked_action_shows_output_text():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Tell me how to make explosives"},
         ],
@@ -1285,7 +1294,7 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Violent content here"},
         ],
@@ -1353,7 +1362,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Tell me how to make explosives"},
         ],
@@ -1433,7 +1442,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
             ModelResponseStream(
@@ -1446,7 +1455,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
                     )
                 ],
                 created=1234567890,
-                model="gpt-4o",
+                model="gpt-5.5",
                 object="chat.completion.chunk",
             ),
         ]
@@ -1471,7 +1480,7 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
     }
 
     request_data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "Tell me how to make explosives"}],
         "stream": True,
     }
@@ -1581,12 +1590,12 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
             )
         ],
         created=1234567890,
-        model="gpt-4o",
+        model="gpt-5.5",
         object="chat.completion",
     )
 
     data = {
-        "model": "gpt-4o",
+        "model": "gpt-5.5",
         "messages": [
             {"role": "user", "content": "Hello"},
         ],
@@ -1601,3 +1610,151 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
     # If no error is raised and result is None, then the test passes
     assert result is None
     print("✅ No output text in response test passed")
+
+
+@pytest.mark.asyncio
+async def test__redact_pii_matches_null_list_fields():
+    """Test that explicit null values from Bedrock API are handled correctly.
+
+    The Bedrock API can return explicit JSON null for list fields like
+    piiEntities, regexes, customWords, managedWordLists. This would cause
+    TypeError: 'NoneType' object is not iterable if not handled.
+    """
+    # Test 1: null piiEntities and regexes
+    response_with_null_pii = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,
+                    "regexes": None,
+                }
+            }
+        ],
+    }
+    redacted = _redact_pii_matches(response_with_null_pii)
+    assert redacted is not None
+    assert (
+        redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
+    )
+    assert redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"] is None
+
+    # Test 2: null customWords and managedWordLists
+    response_with_null_words = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": None,
+                    "managedWordLists": None,
+                }
+            }
+        ],
+    }
+    redacted = _redact_pii_matches(response_with_null_words)
+    assert redacted is not None
+    assert redacted["assessments"][0]["wordPolicy"]["customWords"] is None
+    assert redacted["assessments"][0]["wordPolicy"]["managedWordLists"] is None
+
+    # Test 3: null assessments at top level
+    response_with_null_assessments = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": None,
+    }
+    redacted = _redact_pii_matches(response_with_null_assessments)
+    assert redacted is not None
+
+
+@pytest.mark.asyncio
+async def test__redact_pii_matches_malformed_response():
+    """Test _redact_pii_matches with malformed response (should not crash)"""
+
+    # Test with completely malformed response
+    malformed_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": "not_a_list",
+    }
+    redacted_response = _redact_pii_matches(malformed_response)
+    assert redacted_response == malformed_response
+
+    # Test with missing keys
+    missing_keys_response = {
+        "action": "GUARDRAIL_INTERVENED",
+    }
+    redacted_response = _redact_pii_matches(missing_keys_response)
+    assert redacted_response == missing_keys_response
+
+
+@pytest.mark.asyncio
+async def test_should_raise_guardrail_blocked_exception_null_fields():
+    """Test that _should_raise_guardrail_blocked_exception handles null list fields.
+
+    Validates the or [] null-safety pattern works for all policy fields
+    in _should_raise_guardrail_blocked_exception.
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Test with null assessments
+    response_null_assessments = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": None,
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_assessments)
+        is False
+    )
+
+    # Test with null topics in topicPolicy
+    response_null_topics = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"topicPolicy": {"topics": None}}],
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_topics)
+        is False
+    )
+
+    # Test with null filters in contentPolicy
+    response_null_filters = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contentPolicy": {"filters": None}}],
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_filters)
+        is False
+    )
+
+    # Test with null customWords and managedWordLists in wordPolicy
+    response_null_words = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {"wordPolicy": {"customWords": None, "managedWordLists": None}}
+        ],
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_words)
+        is False
+    )
+
+    # Test with null piiEntities and regexes in sensitiveInformationPolicy
+    response_null_pii = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}
+        ],
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
+    )
+
+    # Test with null filters in contextualGroundingPolicy
+    response_null_grounding = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contextualGroundingPolicy": {"filters": None}}],
+    }
+    assert (
+        guardrail._should_raise_guardrail_blocked_exception(response_null_grounding)
+        is False
+    )

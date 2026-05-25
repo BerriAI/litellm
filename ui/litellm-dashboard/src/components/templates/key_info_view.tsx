@@ -34,6 +34,21 @@ interface KeyInfoViewProps {
   backButtonText?: string;
 }
 
+// Must stay in sync with LiteLLM_ManagementEndpoint_MetadataFields_Premium
+// in litellm/proxy/_types.py — limited to fields the key-edit form submits.
+const PREMIUM_METADATA_FIELDS = [
+  "policies",
+  "guardrails",
+  "prompts",
+  "tags",
+  "allowed_passthrough_routes",
+] as const;
+
+const isEmptyValue = (v: unknown): boolean =>
+  v == null ||
+  (Array.isArray(v) && v.length === 0) ||
+  (typeof v === "string" && v.trim() === "");
+
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -144,6 +159,19 @@ export default function KeyInfoView({
       if (!canEditGuardrails) {
         delete formValues.guardrails;
         delete formValues.prompts;
+      }
+
+      // Drop premium metadata fields that are empty AND were empty before.
+      // The /key/update response echoes defaults like `policies: []` back into
+      // state; without this, the next save resends `[]` and trips the premium
+      // gate in prepare_metadata_fields for non-premium users.
+      for (const field of PREMIUM_METADATA_FIELDS) {
+        const previousValue =
+          (currentKeyData.metadata as Record<string, unknown> | undefined)?.[field] ??
+          (currentKeyData as unknown as Record<string, unknown>)[field];
+        if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
+          delete formValues[field];
+        }
       }
 
       // Handle max budget empty string
@@ -368,17 +396,23 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full h-full overflow-y-auto p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
-          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          userAlias: currentKeyData.user?.user_alias ?? null,
+          createdBy:
+            currentKeyData.created_by_user?.user_alias ||
+            currentKeyData.created_by_user?.user_email ||
+            currentKeyData.created_by ||
+            "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+          expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
@@ -586,7 +620,7 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card className="overflow-y-auto max-h-[65vh]">
+            <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && canModifyKey && (

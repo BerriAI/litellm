@@ -1,6 +1,7 @@
+import asyncio
 import json
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,8 +47,7 @@ def _make_mock_proxy_config():
     )
     cfg._decrypt_db_variables = MagicMock(
         side_effect=lambda d: {
-            k: v.replace("enc_", "") if isinstance(v, str) else v
-            for k, v in d.items()
+            k: v.replace("enc_", "") if isinstance(v, str) else v for k, v in d.items()
         }
     )
     return cfg
@@ -89,17 +89,22 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
     try:
         # 1. POST: create
-        r = client.post(VAULT_URL, json={
-            "vault_addr": "https://vault.example.com",
-            "vault_token": "my-secret-vault-token",
-            "vault_namespace": "admin",
-            "vault_mount_name": "secret",
-        })
+        r = client.post(
+            VAULT_URL,
+            json={
+                "vault_addr": "https://vault.example.com",
+                "vault_token": "my-secret-vault-token",
+                "vault_namespace": "admin",
+                "vault_mount_name": "secret",
+            },
+        )
         assert r.status_code == 200
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.example.com"
         data = _upserted_data(mock_db)
         assert data["vault_token"] == "enc_my-secret-vault-token"
-        mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="hashicorp_vault")
+        mock_cfg.initialize_secret_manager.assert_called_with(
+            key_management_system="hashicorp_vault"
+        )
         assert mock_cfg._last_hashicorp_vault_config is not None
 
         # 2. GET: sensitive fields masked
@@ -120,7 +125,11 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
         assert data["vault_namespace"] == "enc_admin"
 
         # 4. POST empty string: clears field, preserves others
-        step3 = {**data, "approle_role_id": "enc_role", "approle_secret_id": "enc_secret"}
+        step3 = {
+            **data,
+            "approle_role_id": "enc_role",
+            "approle_secret_id": "enc_secret",
+        }
         mock_db.find_unique = AsyncMock(return_value=_db_record(step3))
         mock_db.upsert = AsyncMock(return_value=None)
         r = client.post(VAULT_URL, json={"vault_token": ""})
@@ -134,9 +143,14 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
             os.environ.pop(v, None)
         mock_db.find_unique = AsyncMock(return_value=None)
         mock_db.upsert = AsyncMock(return_value=None)
-        r = client.post(VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"})
+        r = client.post(
+            VAULT_URL, json={"vault_addr": "https://v.com", "vault_token": "tok"}
+        )
         assert r.status_code == 200
-        assert _upserted_data(mock_db) == {"vault_addr": "enc_https://v.com", "vault_token": "enc_tok"}
+        assert _upserted_data(mock_db) == {
+            "vault_addr": "enc_https://v.com",
+            "vault_token": "enc_tok",
+        }
 
         # 6. DELETE: clears everything
         litellm.secret_manager_client = MagicMock()
@@ -148,7 +162,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
         # 7. DELETE idempotent
         mock_db.delete = AsyncMock(
-            side_effect=RecordNotFoundError(data={"clientVersion": "0.0.0"}, message="Not found")
+            side_effect=RecordNotFoundError(
+                data={"clientVersion": "0.0.0"}, message="Not found"
+            )
         )
         assert client.delete(VAULT_URL).status_code == 200
 
@@ -183,6 +199,7 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
         # 12. encrypt/decrypt roundtrip
         from litellm.proxy.proxy_server import ProxyConfig
+
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
         pc = ProxyConfig()
         orig = {"vault_addr": "https://v.com", "vault_token": "secret"}
@@ -198,7 +215,9 @@ async def test_hashicorp_vault_crud_lifecycle(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_vault_validation_errors_and_access_control(client, monkeypatch):
+async def test_hashicorp_vault_validation_errors_and_access_control(
+    client, monkeypatch
+):
     """Validation (missing fields, init failure rollback), DELETE preserves
     non-Vault secret managers, non-admin 403 on all endpoints."""
     mock_prisma, mock_db = _make_mock_db()
@@ -224,7 +243,9 @@ async def test_hashicorp_vault_validation_errors_and_access_control(client, monk
         mock_cfg.initialize_secret_manager = MagicMock(side_effect=Exception("fail"))
         monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.old.com")
         monkeypatch.setenv("HCP_VAULT_TOKEN", "old-token")
-        r = client.post(VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"})
+        r = client.post(
+            VAULT_URL, json={"vault_addr": "https://bad.com", "vault_token": "bad"}
+        )
         assert r.status_code == 500
         assert os.environ["HCP_VAULT_ADDR"] == "https://vault.old.com"
         mock_db.upsert.assert_not_awaited()
@@ -242,10 +263,199 @@ async def test_hashicorp_vault_validation_errors_and_access_control(client, monk
             user_role=LitellmUserRoles.INTERNAL_USER, user_id="user"
         )
         assert client.get(VAULT_URL).status_code == 403
-        assert client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code == 403
+        assert (
+            client.post(VAULT_URL, json={"vault_addr": "https://v.com"}).status_code
+            == 403
+        )
         assert client.delete(VAULT_URL).status_code == 403
 
     finally:
         litellm.secret_manager_client = old_client
         litellm._key_management_system = old_kms
         _cleanup()
+
+
+# ── Audit-log emission for /config_overrides/hashicorp_vault ─────────────────
+
+
+class TestHashicorpVaultAuditLog:
+    """The KMS config endpoint controls every secret retrieval on the proxy.
+    A mutation (create/update/delete) must emit an audit-log row when
+    ``litellm.store_audit_logs`` is True, with credential values redacted
+    so the audit table can't itself be a credential-harvest sink."""
+
+    @pytest.mark.asyncio
+    async def test_post_emits_audit_log_with_redacted_values(self, client, monkeypatch):
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "my-very-secret-token",
+                    },
+                )
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            log = audit_calls[0]
+            assert log.action == "created"
+            assert log.object_id == "hashicorp_vault"
+            # Plaintext credentials must NOT appear anywhere in the row.
+            assert "my-very-secret-token" not in log.updated_values
+            assert "vault.example.com" not in log.updated_values
+            # Field names are kept so the auditor can see what changed.
+            after = json.loads(log.updated_values)
+            assert "vault_token" in after["config"]
+            assert "vault_addr" in after["config"]
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_post_action_is_updated_when_row_exists_with_null_config_value(
+        self, client, monkeypatch
+    ):
+        """A row can exist in ``litellm_configoverrides`` with a NULL
+        ``config_value`` (e.g. an earlier failed write left a stub).
+        Re-POSTing must label the audit row as ``updated`` — the row
+        already exists — not ``created``."""
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        # Row exists but ``config_value`` is NULL.
+        null_record = MagicMock()
+        null_record.config_value = None
+        mock_db.find_unique = AsyncMock(return_value=null_record)
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "tok",
+                    },
+                )
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            assert audit_calls[0].action == "updated"
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_delete_emits_audit_log_only_when_row_existed(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                # Idempotent delete on an empty table → no row, no audit log.
+                mock_db.find_unique = AsyncMock(return_value=None)
+                mock_db.delete = AsyncMock(side_effect=RecordNotFoundError(MagicMock()))
+                r = client.delete(VAULT_URL)
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                assert audit_calls == []
+
+                # Delete a real row → audit log fires with action="deleted".
+                mock_db.find_unique = AsyncMock(
+                    return_value=_db_record(
+                        {
+                            "vault_addr": "enc_https://v.example.com",
+                            "vault_token": "enc_t",
+                        }
+                    )
+                )
+                mock_db.delete = AsyncMock(return_value=None)
+                r = client.delete(VAULT_URL)
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            log = audit_calls[0]
+            assert log.action == "deleted"
+            # The before-snapshot must redact the token before logging.
+            assert "enc_t" not in log.before_value
+            assert "v.example.com" not in log.before_value
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_no_audit_when_store_audit_logs_is_off(self, client, monkeypatch):
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "tok",
+                    },
+                )
+                assert r.status_code == 200
+
+            assert audit_calls == []
+        finally:
+            _cleanup()

@@ -46,9 +46,7 @@ class MetadataCaptureCallback(CustomLogger):
         self.captured_kwargs: Optional[dict] = None
         self.event = asyncio.Event()
 
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.captured_kwargs = kwargs
         self.event.set()
 

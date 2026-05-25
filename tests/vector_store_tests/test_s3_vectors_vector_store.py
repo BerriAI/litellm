@@ -10,7 +10,9 @@ class TestS3VectorsVectorStore(BaseVectorStoreTest):
         required_vars = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
-            pytest.skip(f"Missing required environment variables: {', '.join(missing_vars)}")
+            pytest.skip(
+                f"Missing required environment variables: {', '.join(missing_vars)}"
+            )
 
     def get_base_request_args(self) -> dict:
         """

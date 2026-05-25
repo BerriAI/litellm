@@ -187,7 +187,9 @@ class TestVoyageRerankTransform:
         )
 
         assert len(result.results) == 2
-        assert result.results[0]["document"]["text"] == "Paris is the capital of France."
+        assert (
+            result.results[0]["document"]["text"] == "Paris is the capital of France."
+        )
         assert result.results[1]["document"]["text"] == "France is a country in Europe."
 
     def test_transform_rerank_response_missing_data(self):

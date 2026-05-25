@@ -5,13 +5,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
-from mcp.types import BlobResourceContents, Prompt, ResourceTemplate, TextResourceContents
+from mcp.types import (
+    BlobResourceContents,
+    Prompt,
+    ResourceTemplate,
+    TextResourceContents,
+)
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -130,6 +136,152 @@ def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
     assert extra_headers == {"Authorization": "Bearer token"}
 
 
+def test_prepare_mcp_server_headers_oauth2_m2m_omits_litellm_caller_authorization():
+    """M2M OAuth must not put caller Bearer (LiteLLM API key) into extra_headers (#23652)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="m2m-server",
+        name="m2m",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://auth.example.com/token",
+    )
+    caller_key = {"Authorization": "Bearer sk-litellm-caller"}
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=caller_key,
+        raw_headers=None,
+    )
+
+    assert server_auth_header is None
+    assert extra_headers is None
+
+
+def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
+    """Interactive OAuth still forwards the user's OAuth token in extra_headers."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_oauth = {"Authorization": "Bearer upstream-user-token"}
+
+    server = MCPServer(
+        server_id="3lo-server",
+        name="3lo",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow=None,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers=user_oauth,
+        raw_headers=None,
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == user_oauth
+
+
+def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
+    """M2M must not merge caller Authorization from raw_headers when extra_headers lists it."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _prepare_mcp_server_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="m2m-raw",
+        name="m2m",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://auth.example.com/token",
+        extra_headers=["Authorization", "X-Custom"],
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer sk-1234"},
+        raw_headers={
+            "authorization": "Bearer sk-1234",
+            "x-custom": "trace",
+        },
+    )
+
+    assert server_auth_header is None
+    assert extra_headers is not None
+    assert "Authorization" not in extra_headers
+    assert extra_headers.get("X-Custom") == "trace"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_m2m_skips_authorization_headers():
+    """M2M call_tool must not forward caller Authorization in oauth2/raw headers."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="m2m-call-tool",
+        name="m2m-call-tool",
+        server_name="m2m-call-tool",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://auth.example.com/token",
+        client_id="cid",
+        client_secret="csecret",
+        extra_headers=["Authorization", "X-Custom"],
+    )
+
+    mock_client = MagicMock()
+    mock_client.call_tool = AsyncMock(return_value=MagicMock())
+
+    with patch.object(
+        manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)
+    ) as create_client_mock:
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="echo",
+            arguments={"message": "hello"},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer sk-1234"},
+            raw_headers={"authorization": "Bearer sk-1234", "x-custom": "trace"},
+            proxy_logging_obj=None,
+        )
+
+    create_kwargs = create_client_mock.await_args.kwargs
+    extra_headers = create_kwargs["extra_headers"] or {}
+    assert "Authorization" not in extra_headers
+    assert extra_headers.get("X-Custom") == "trace"
+
+
 @pytest.mark.asyncio
 async def test_get_prompts_from_mcp_servers_success():
     try:
@@ -157,15 +309,19 @@ async def test_get_prompts_from_mcp_servers_success():
     server_b.auth_type = None
     server_b.extra_headers = None
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server_a, server_b]),
-    ) as mock_allowed, patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=(None, None),
-    ) as mock_headers, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ) as mock_headers,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+    ):
         mock_manager.get_prompts_from_server = AsyncMock(
             side_effect=[
                 [Prompt(name="hello", description="hi")],
@@ -213,15 +369,19 @@ async def test_get_resources_from_mcp_servers_success():
     server_b.auth_type = None
     server_b.extra_headers = None
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server_a, server_b]),
-    ) as mock_allowed, patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=(None, None),
-    ) as mock_headers, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ) as mock_headers,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+    ):
         mock_manager.get_resources_from_server = AsyncMock(
             side_effect=[
                 [
@@ -274,15 +434,19 @@ async def test_get_resource_templates_from_mcp_servers_success():
     server.auth_type = None
     server.extra_headers = None
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server]),
-    ) as mock_allowed, patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=(None, None),
-    ) as mock_headers, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ) as mock_headers,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+    ):
         mock_manager.get_resource_templates_from_server = AsyncMock(
             return_value=[
                 ResourceTemplate(
@@ -320,15 +484,19 @@ async def test_mcp_get_prompt_success():
 
     prompt_result = MagicMock(name="prompt_result")
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server]),
-    ) as mock_allowed, patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=({"Authorization": "token"}, {"X-Test": "1"}),
-    ) as mock_headers, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=({"Authorization": "token"}, {"X-Test": "1"}),
+        ) as mock_headers,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+    ):
         mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
 
         result = await mcp_get_prompt(
@@ -378,15 +546,19 @@ async def test_mcp_read_resource_success():
         ]
     )
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server]),
-    ) as mock_allowed, patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=({"Authorization": "token"}, {"X-Test": "1"}),
-    ) as mock_headers, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=({"Authorization": "token"}, {"X-Test": "1"}),
+        ) as mock_headers,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+    ):
         mock_manager.read_resource_from_server = AsyncMock(return_value=read_result)
 
         result = await mcp_read_resource(
@@ -591,7 +763,10 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -599,6 +774,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         if server.name == "working_server":
             # Working server returns tools
@@ -693,7 +869,10 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -701,6 +880,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
@@ -830,12 +1010,14 @@ async def test_concurrent_initialize_session_managers():
         mcp_server._sse_session_manager_cm = None
 
         # Mock the session managers to avoid actual MCP initialization
-        with patch(
-            "litellm.proxy._experimental.mcp_server.server.session_manager"
-        ) as mock_session_manager, patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
-        ) as mock_sse_session_manager, patch(
-            "litellm.proxy._experimental.mcp_server.server.verbose_logger"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.session_manager"
+            ) as mock_session_manager,
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
+            ) as mock_sse_session_manager,
+            patch("litellm.proxy._experimental.mcp_server.server.verbose_logger"),
         ):
             # Mock the run() method to return a mock context manager
             mock_cm = AsyncMock()
@@ -961,15 +1143,19 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
         return_value=[specific_server.server_id, other_server.server_id]
     )
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
-        mock_get_allowed,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler._get_mcp_servers_from_access_groups",
-        mock_db_lookup,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
-        mock_get_tools_spy,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            mock_get_allowed,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            mock_db_lookup,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            mock_get_tools_spy,
+        ),
     ):
         mcp_servers_from_path = _get_mcp_servers_in_path(test_path)
 
@@ -1044,6 +1230,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
+        subject_token=None,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -1052,6 +1239,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
                 "mcp_auth_header": mcp_auth_header,
                 "extra_headers": extra_headers,
                 "stdio_env": stdio_env,
+                "subject_token": subject_token,
             }
         )
         # Return a mock client that doesn't actually connect
@@ -1062,17 +1250,21 @@ async def test_oauth2_headers_passed_to_mcp_client():
     async def mock_fetch_tools_with_timeout(client, server_name):
         return []  # Return empty list of tools
 
-    with patch.object(
-        global_mcp_server_manager,
-        "_create_mcp_client",
-        side_effect=mock_create_mcp_client,
-    ) as mock_create_client, patch.object(
-        global_mcp_server_manager,
-        "_fetch_tools_with_timeout",
-        side_effect=mock_fetch_tools_with_timeout,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        AsyncMock(return_value=[oauth2_server]),
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "_create_mcp_client",
+            side_effect=mock_create_mcp_client,
+        ) as mock_create_client,
+        patch.object(
+            global_mcp_server_manager,
+            "_fetch_tools_with_timeout",
+            side_effect=mock_fetch_tools_with_timeout,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[oauth2_server]),
+        ),
     ):
         # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
         await _get_tools_from_mcp_servers(
@@ -1138,7 +1330,10 @@ async def test_list_tools_single_server_unprefixed_names():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1146,6 +1341,7 @@ async def test_list_tools_single_server_unprefixed_names():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
@@ -1216,7 +1412,10 @@ async def test_list_tools_multiple_servers_prefixed_names():
         server1 if server_id == "server1" else server2
     )
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1224,6 +1423,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         tool = MagicMock()
         # When multiple servers, add_prefix should be True -> prefixed names
@@ -1270,12 +1470,15 @@ async def test_mcp_manager_allows_public_servers_without_permissions():
     )
     manager.registry = {public_server.server_id: public_server}
 
-    with patch(
-        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
-        return_value=False,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
-        AsyncMock(return_value=[]),
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
     ):
         allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
 
@@ -1302,12 +1505,15 @@ async def test_mcp_manager_returns_public_when_permission_lookup_fails():
     )
     manager.registry = {public_server.server_id: public_server}
 
-    with patch(
-        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
-        return_value=False,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
-        AsyncMock(side_effect=Exception("boom")),
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(side_effect=Exception("boom")),
+        ),
     ):
         allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
 
@@ -1342,12 +1548,15 @@ async def test_mcp_manager_merges_public_and_restricted_servers():
         scoped_server.server_id: scoped_server,
     }
 
-    with patch(
-        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
-        return_value=False,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
-        AsyncMock(return_value=["restricted"]),
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=["restricted"]),
+        ),
     ):
         allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
 
@@ -1399,12 +1608,15 @@ async def test_call_mcp_tool_user_unauthorized_access():
             return another_server_obj
         return None
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
-        AsyncMock(return_value=["allowed_server", "another_server"]),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
-        side_effect=mock_get_server_by_id,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=["allowed_server", "another_server"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            side_effect=mock_get_server_by_id,
+        ),
     ):
         # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
         with pytest.raises(HTTPException) as exc_info:
@@ -1467,7 +1679,10 @@ async def test_list_tools_filters_by_key_team_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1475,6 +1690,7 @@ async def test_list_tools_filters_by_key_team_permissions():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools, but only 2 should be allowed
         tool1 = MagicMock()
@@ -1573,7 +1789,10 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1581,6 +1800,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 4 tools
         tool1 = MagicMock()
@@ -1665,7 +1885,10 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1673,6 +1896,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return 3 tools
         tool1 = MagicMock()
@@ -1760,7 +1984,10 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
-    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
 
     async def mock_get_tools_from_server(
         server,
@@ -1768,6 +1995,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
+        user_api_key_auth=None,
     ):
         # Return tools WITH prefix (as they come from MCP server)
         tool1 = MagicMock()
@@ -2002,12 +2230,15 @@ class TestMCPServerManagerReload:
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
             return_value=[db_row]
         )
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma,
-        ), patch.object(
-            manager, "build_mcp_server_from_table", AsyncMock()
-        ) as mock_build:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager, "build_mcp_server_from_table", AsyncMock()
+            ) as mock_build,
+        ):
             await manager.reload_servers_from_database()
 
         mock_build.assert_not_awaited()
@@ -2045,18 +2276,159 @@ class TestMCPServerManagerReload:
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
             return_value=[db_row]
         )
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma,
-        ), patch.object(
-            manager,
-            "build_mcp_server_from_table",
-            AsyncMock(return_value=rebuilt_server),
-        ) as mock_build:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(return_value=rebuilt_server),
+            ) as mock_build,
+        ):
             await manager.reload_servers_from_database()
 
         mock_build.assert_awaited_once_with(db_row)
         assert manager.registry["server-1"] is rebuilt_server
+
+    @pytest.mark.asyncio
+    async def test_skips_server_when_build_from_database_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_row = _make_db_mcp_server("bad-server", timestamp)
+        another_healthy_row = _make_db_mcp_server("another-healthy-server", timestamp)
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        another_healthy_server = MCPServer(
+            server_id="another-healthy-server",
+            name="another-healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "bad-server":
+                raise RuntimeError("transient build failure")
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return another_healthy_server
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_row, another_healthy_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server", "another-healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert manager.registry["another-healthy-server"] is another_healthy_server
+        assert "Skipping MCP server bad-server" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_skips_server_when_openapi_registration_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_openapi_row = _make_db_mcp_server("bad-openapi-server", timestamp)
+        existing_server = MCPServer(
+            server_id="existing-server",
+            name="existing",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        manager.registry = {existing_server.server_id: existing_server}
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        bad_openapi_server = MCPServer(
+            server_id="bad-openapi-server",
+            name="bad-openapi",
+            transport=MCPTransport.http,
+            spec_path="https://example.invalid/openapi.json",
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return bad_openapi_server
+
+        observed_registries = []
+
+        async def register_openapi_tools(server, **kwargs):
+            observed_registries.append(set(manager.registry))
+            assert kwargs == {"initialize_mapping": False}
+            if server.server_id == "bad-openapi-server":
+                raise RuntimeError("blocked address")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_openapi_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(
+                manager,
+                "_maybe_register_openapi_tools",
+                AsyncMock(side_effect=register_openapi_tools),
+            ),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert observed_registries == [
+            {"existing-server"},
+            {"existing-server"},
+        ]
+        assert "Skipping MCP server bad-openapi-server" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2090,26 +2462,32 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
 
     user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
 
-    with patch.object(
-        global_mcp_server_manager,
-        "get_allowed_mcp_servers",
-        new_callable=AsyncMock,
-        return_value=[mock_server.server_id],
-    ), patch.object(
-        global_mcp_server_manager,
-        "get_mcp_server_by_id",
-        return_value=mock_server,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
-        new_callable=AsyncMock,
-        return_value=[mock_server],
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
-        new_callable=AsyncMock,
-        side_effect=Exception("boom"),
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj",
-        proxy_logging_mock,
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=mock_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            new_callable=AsyncMock,
+            side_effect=Exception("boom"),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            proxy_logging_mock,
+        ),
     ):
         with pytest.raises(Exception):
             await call_mcp_tool(
@@ -2157,23 +2535,30 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
     dummy_logging_obj.async_success_handler = AsyncMock()
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        new=AsyncMock(return_value=[server_a]),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
-        return_value=(None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager, patch(
-        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
-        side_effect=lambda tools, _server: tools,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
-        new=AsyncMock(side_effect=lambda tools, **_: tools),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.function_setup",
-        return_value=(dummy_logging_obj, None),
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server_a]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.function_setup",
+            return_value=(dummy_logging_obj, None),
+        ),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
 
@@ -2188,12 +2573,87 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
 
     assert tools == [tool_1]
     dummy_logging_obj.async_success_handler.assert_awaited_once()
-    assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [tool_1]
+    assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [
+        tool_1
+    ]
 
     spend_meta = dummy_logging_obj.model_call_details["metadata"]["spend_logs_metadata"]
     assert spend_meta["tool_count_total"] == 1
     assert spend_meta["allowed_server_count"] == 1
     assert spend_meta["per_server_tool_counts"]["server_a"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fails():
+    """
+    Regression test: list_tools should still return fetched tools even if
+    async_success_handler raises (e.g. serialization errors in logging path).
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    server_a = MagicMock(name="server_a_obj")
+    server_a.name = "server_a"
+    server_a.alias = "server_a"
+    server_a.server_name = "server_a"
+    server_a.server_id = "a"
+    server_a.auth_type = None
+    server_a.extra_headers = None
+
+    tool_1 = MagicMock()
+    tool_1.name = "server_a-tool_1"
+
+    dummy_logging_obj = MagicMock()
+    dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
+    dummy_logging_obj.async_success_handler = AsyncMock(
+        side_effect=TypeError("Object of type Tool is not JSON serializable")
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server_a]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.function_setup",
+            return_value=(dummy_logging_obj, None),
+        ),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["server_a"],
+            mcp_server_auth_headers=None,
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="mcp_protocol",
+        )
+
+    assert tools == [tool_1]
+    dummy_logging_obj.async_success_handler.assert_awaited_once()
 
 
 def test_tool_name_matches_case_insensitive():
@@ -2381,26 +2841,34 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     oauth2_server.extra_headers = None
 
     # Simulate the DB returning a valid credential for this user+server
-    prefetched_creds = {SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}}
+    prefetched_creds = {
+        SERVER_ID: {"access_token": STORED_TOKEN, "server_id": SERVER_ID}
+    }
 
     tool_1 = MagicMock()
     tool_1.name = "atlassian_test-search"
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-        new=AsyncMock(return_value=[oauth2_server]),
-    ), patch(
-        # Patch the bulk prefetch so no real DB connection is needed
-        "litellm.proxy._experimental.mcp_server.server._prefetch_oauth_creds_for_user",
-        new=AsyncMock(return_value=prefetched_creds),
-    ) as mock_prefetch, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
-    ) as mock_manager, patch(
-        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
-        side_effect=lambda tools, _server: tools,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
-        new=AsyncMock(side_effect=lambda tools, **_: tools),
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[oauth2_server]),
+        ),
+        patch(
+            # Patch the bulk prefetch so no real DB connection is needed
+            "litellm.proxy._experimental.mcp_server.server._prefetch_oauth_creds_for_user",
+            new=AsyncMock(return_value=prefetched_creds),
+        ) as mock_prefetch,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
 
@@ -2421,3 +2889,712 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     assert call_kwargs["extra_headers"] == {"Authorization": f"Bearer {STORED_TOKEN}"}
 
     assert tools == [tool_1]
+
+
+# ---------------------------------------------------------------------------
+# _merge_gateway_initialize_instructions + ContextVar / InitializationOptions
+# ---------------------------------------------------------------------------
+
+
+def _make_instruction_server(
+    server_id="s1",
+    name="s1",
+    *,
+    alias=None,
+    server_name=None,
+    instructions=None,
+    spec_path=None,
+    url="https://example.com",
+):
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=server_name,
+        url=url,
+        transport=MCPTransport.http,
+        instructions=instructions,
+        spec_path=spec_path,
+    )
+
+
+class TestMergeGatewayInitializeInstructions:
+    """Tests for _merge_gateway_initialize_instructions."""
+
+    def _merge(self, servers):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _merge_gateway_initialize_instructions,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+        return _merge_gateway_initialize_instructions(servers)
+
+    def test_empty_server_list_returns_none(self):
+        """No servers yields no instructions."""
+        assert self._merge([]) is None
+
+    def test_single_server_yaml_instructions(self):
+        """A single server with YAML instructions returns them verbatim."""
+        s = _make_instruction_server(instructions="Use add() for sums.")
+        assert self._merge([s]) == "Use add() for sums."
+
+    def test_yaml_instructions_strips_whitespace(self):
+        """Leading/trailing whitespace is stripped."""
+        s = _make_instruction_server(instructions="  padded  \n")
+        assert self._merge([s]) == "padded"
+
+    def test_yaml_override_beats_upstream_cache(self):
+        """YAML/DB instructions take precedence over upstream cache."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "s1"
+        ] = "upstream"
+        try:
+            s = _make_instruction_server(instructions="yaml wins")
+            assert self._merge([s]) == "yaml wins"
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "s1", None
+            )
+
+    def test_upstream_cache_used_when_no_yaml(self):
+        """Upstream cached instructions are used when no YAML override is set."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "s1"
+        ] = "from upstream"
+        try:
+            s = _make_instruction_server(instructions=None)
+            assert self._merge([s]) == "from upstream"
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "s1", None
+            )
+
+    def test_spec_path_servers_skipped(self):
+        """OpenAPI (spec_path) servers do not contribute instructions."""
+        s = _make_instruction_server(spec_path="/openapi.json", url=None)
+        assert self._merge([s]) is None
+
+    def test_no_instructions_no_cache_returns_none(self):
+        """Server with no instructions and no cache yields None."""
+        s = _make_instruction_server()
+        assert self._merge([s]) is None
+
+    def test_multiple_servers_merged_with_labels(self):
+        """Multiple servers get label-prefixed and separator-joined."""
+        s1 = _make_instruction_server(
+            server_id="a", name="a", alias="Alpha", instructions="instr A"
+        )
+        s2 = _make_instruction_server(
+            server_id="b", name="b", alias="Beta", instructions="instr B"
+        )
+        result = self._merge([s1, s2])
+        assert result is not None
+        assert "[Alpha]" in result and "[Beta]" in result
+        assert "instr A" in result and "instr B" in result
+        assert "---" in result
+
+    def test_single_server_no_label_wrapping(self):
+        """A single server's instructions are not wrapped with a label."""
+        s = _make_instruction_server(alias="MyServer", instructions="single")
+        result = self._merge([s])
+        assert result == "single"
+        assert "[MyServer]" not in result
+
+    def test_mixed_yaml_cache_specpath(self):
+        """YAML, upstream-cache, and spec_path servers are handled correctly together."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "c"
+        ] = "cached C"
+        try:
+            s_yaml = _make_instruction_server(
+                server_id="a", name="a", alias="A", instructions="yaml A"
+            )
+            s_spec = _make_instruction_server(
+                server_id="b", name="b", alias="B", spec_path="/spec.json", url=None
+            )
+            s_cached = _make_instruction_server(server_id="c", name="c", alias="C")
+            result = self._merge([s_yaml, s_spec, s_cached])
+            assert "yaml A" in result
+            assert "cached C" in result
+            assert "[B]" not in result
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "c", None
+            )
+
+
+class TestEnsureUpstreamInitializeInstructionsCached:
+    @pytest.mark.asyncio
+    async def test_skips_when_yaml_instructions_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="yaml-only", instructions="from yaml"
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_already_cached(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cached-only", instructions=None)
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "cached-only"
+        ] = "warm"
+        try:
+            with patch.object(
+                global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+            ) as mock_create:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+            mock_create.assert_not_awaited()
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "cached-only", None
+            )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_spec_path_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="openapi-spec", spec_path="/openapi.json", url=None
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runs_upstream_session_and_caches(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cold-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = "  upstream says hi  "
+
+        with patch.object(
+            global_mcp_server_manager,
+            "_create_mcp_client",
+            AsyncMock(return_value=fake_client),
+        ):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert (
+                    global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+                        "cold-server"
+                    ]
+                    == "upstream says hi"
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                    "cold-server", None
+                )
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "cold-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_empty_upstream_response(self):
+        """Upstream returns no instructions → next call within cooldown must not reconnect."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="empty-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = None  # upstream sent nothing
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect to upstream"
+                )
+                assert (
+                    "empty-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "empty-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "empty-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_upstream_failure(self):
+        """run_with_session raises → cooldown applies, no immediate retry."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="boom-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
+        fake_client._last_initialize_instructions = None
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect after failure"
+                )
+                assert (
+                    "boom-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "boom-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "boom-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_reload_resets_probe_cooldown(self):
+        """load_servers_from_config clears the negative-cache map so reloads re-probe."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_probed_at[
+            "reload-target"
+        ] = 1.0
+        try:
+            await global_mcp_server_manager.load_servers_from_config({})
+            assert (
+                "reload-target"
+                not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+            )
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                "reload-target", None
+            )
+
+
+class TestGatewayCreateInitializationOptions:
+    """Tests for the patched server.create_initialization_options via ContextVar."""
+
+    def test_no_contextvar_returns_default_options(self):
+        """When ContextVar is None, instructions are absent."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set(None)
+        try:
+            opts = server.create_initialization_options()
+            assert getattr(opts, "instructions", None) is None
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
+
+    def test_contextvar_set_injects_instructions(self):
+        """When ContextVar has a value, it appears in InitializationOptions."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set("hello from merge")
+        try:
+            opts = server.create_initialization_options()
+            assert opts.instructions == "hello from merge"
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
+
+    def test_contextvar_reset_removes_instructions(self):
+        """After resetting the ContextVar, instructions disappear."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set("temporary")
+        _mcp_gateway_initialize_instructions.reset(tok)
+        opts = server.create_initialization_options()
+        assert getattr(opts, "instructions", None) is None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
+    """
+    P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
+    rows where oauth2_flow is NULL but M2M credentials are present.
+
+    Without this fix, has_client_credentials returns False and the caller's
+    Authorization header is forwarded upstream instead of being blocked.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+
+    # Simulate a legacy DB row: OAuth2 with M2M credentials but oauth2_flow=None
+    legacy_server = MagicMock(name="legacy_m2m_server")
+    legacy_server.name = "legacy_m2m"
+    legacy_server.alias = "legacy_m2m"
+    legacy_server.server_name = "legacy_m2m"
+    legacy_server.server_id = "legacy-m2m-id"
+    legacy_server.auth_type = MCPAuth.oauth2
+    legacy_server.oauth2_flow = None  # Legacy: field not set in DB
+    legacy_server.token_url = "https://oauth.example.com/token"
+    legacy_server.authorization_url = None
+    legacy_server.client_id = "client-id"
+    legacy_server.client_secret = "client-secret"
+    legacy_server.extra_headers = None
+    legacy_server.has_client_credentials = False  # This is the bug: should be True
+    legacy_server.model_copy = MagicMock(
+        side_effect=lambda update: MCPServer(
+            server_id=legacy_server.server_id,
+            name=legacy_server.name,
+            transport=MCPTransport.http,
+            auth_type=legacy_server.auth_type,
+            oauth2_flow=update.get("oauth2_flow", legacy_server.oauth2_flow),
+            token_url=legacy_server.token_url,
+            authorization_url=legacy_server.authorization_url,
+            client_id=legacy_server.client_id,
+            client_secret=legacy_server.client_secret,
+        )
+    )
+
+    tool_1 = MagicMock()
+    tool_1.name = "legacy_m2m-tool"
+
+    captured_extra_headers = None
+
+    async def capture_extra_headers(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = kwargs.get("extra_headers")
+        return [tool_1]
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+    ):
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+        mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
+            return_value=(["legacy-m2m-id"], 0)
+        )
+        mock_manager._get_tools_from_server = AsyncMock(
+            side_effect=capture_extra_headers
+        )
+
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["legacy_m2m"],
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer sk-1234"},  # Caller's token
+        )
+
+    # With P1 fix: _get_allowed_mcp_servers applies _resolve_oauth2_flow,
+    # so has_client_credentials becomes True and extra_headers should be None
+    # (caller's Authorization blocked)
+    assert captured_extra_headers is None, (
+        "P1 security issue: caller's Authorization header was forwarded to M2M server. "
+        "Expected None, got: " + str(captured_extra_headers)
+    )
+    assert tools == [tool_1]
+
+
+@pytest.mark.asyncio
+async def test_call_tool_empty_extra_headers_returns_none():
+    """
+    P2 Regression: When all configured extra_headers are filtered out (e.g.
+    Authorization for M2M), the resulting extra_headers should be None, not {}.
+
+    Downstream code that checks `if extra_headers is None` will behave
+    differently if an empty dict is passed instead.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+
+    # M2M server with only Authorization in extra_headers
+    m2m_server = MCPServer(
+        server_id="m2m-srv",
+        name="m2m_test",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://oauth.example.com/token",
+        client_id="client-id",
+        client_secret="client-secret",
+        extra_headers=["Authorization"],  # Will be filtered out for M2M
+    )
+
+    raw_headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+
+    captured_extra_headers = None
+
+    async def capture_create_mcp_client(*args, **kwargs):
+        nonlocal captured_extra_headers
+        captured_extra_headers = kwargs.get("extra_headers")
+        # Return a mock client
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=MagicMock(content=[]))
+        return mock_client
+
+    with (
+        patch.object(
+            manager,
+            "_create_mcp_client",
+            side_effect=capture_create_mcp_client,
+        ),
+        patch.object(
+            manager,
+            "get_mcp_server_by_id",
+            return_value=m2m_server,
+        ),
+    ):
+        try:
+            await manager._call_regular_mcp_tool(
+                mcp_server=m2m_server,
+                original_tool_name="test_tool",
+                arguments={},
+                mcp_auth_header=None,
+                oauth2_headers=None,
+                raw_headers=raw_headers,
+            )
+        except Exception:
+            pass  # We only care about the captured headers
+
+    # With P2 fix: extra_headers should be None (not {}) when all headers filtered
+    assert (
+        captured_extra_headers is None
+    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
+        captured_extra_headers
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight upstream auth check tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_returns_upstream_status():
+    """_probe_upstream_auth forwards the status code from the upstream server."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+    mock_client.post.assert_awaited_once()
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer some-token"
+    assert kwargs["json"]["method"] == "initialize"
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_surfaces_httpx_status_error():
+    """Probe extracts status + WWW-Authenticate from httpx.HTTPStatusError.
+
+    AsyncHTTPHandler.post() calls raise_for_status() internally, so when the
+    upstream returns 401/403 the call raises httpx.HTTPStatusError rather than
+    returning the response. The probe must catch that specifically (before the
+    fail-open `except Exception`) so the auth check is not silently defeated.
+    """
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.headers = {"www-authenticate": 'Bearer realm="test"'}
+    request = httpx.Request("POST", "http://upstream/mcp")
+    error = httpx.HTTPStatusError(
+        message="401 Unauthorized", request=request, response=mock_response
+    )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=error)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 401
+    assert www_auth == 'Bearer realm="test"'
+
+
+@pytest.mark.asyncio
+async def test_probe_upstream_auth_fails_open_on_network_error():
+    """_probe_upstream_auth returns (200, None) when the network call fails."""
+    from litellm.proxy._experimental.mcp_server.server import _probe_upstream_auth
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=Exception("connection refused"))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        status, www_auth = await _probe_upstream_auth(
+            "http://upstream/mcp", "Bearer some-token"
+        )
+
+    assert status == 200
+    assert www_auth is None
+
+
+def test_get_forwarded_auth_from_scope_extracts_header():
+    """Returns Authorization value when x-litellm-api-key is also present."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+            (b"authorization", b"Bearer my-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) == "Bearer my-token"
+
+
+def test_get_forwarded_auth_from_scope_returns_none_when_missing():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    assert _get_forwarded_auth_from_scope({"headers": []}) is None
+
+
+def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
+    """Skip when ``x-litellm-api-key`` is absent.
+
+    Without ``x-litellm-api-key``, the ``Authorization`` header may itself be
+    the LiteLLM proxy API key (backward-compat). Forwarding it upstream would
+    leak the proxy key, so the helper must return None and the probe must
+    not fire.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_forwarded_auth_from_scope,
+    )
+
+    scope = {
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer ambiguous-token"),
+        ]
+    }
+    assert _get_forwarded_auth_from_scope(scope) is None
