@@ -29,9 +29,7 @@ BEDROCK_RESPONSE = {
             "topicPolicy": {
                 "topics": [{"name": "Fiduciary Advice", "action": "BLOCKED"}]
             },
-            "contentPolicy": {
-                "filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]
-            },
+            "contentPolicy": {"filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]},
         }
     ],
 }
