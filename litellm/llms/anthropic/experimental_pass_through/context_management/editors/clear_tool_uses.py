@@ -177,7 +177,7 @@ def apply_clear_tool_uses_20250919(
         ids_to_clear.discard(last_completed_id)
 
     edited, cleared_count = _clear_tool_results(messages, ids_to_clear)
-    verbose_logger.debug(f"context_management polyfill: edited: {edited}")
+    verbose_logger.debug("context_management polyfill: edited: %s", edited)
     if cleared_count == 0:
         return messages, None
 
