@@ -113,7 +113,7 @@ class TestUnifiedAuth:
             "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
             new=AsyncMock(return_value=UserAPIKeyAuth()),
         ) as mock_auth:
-            result = await unified_auth(request)
+            _result = await unified_auth(request)
 
             mock_auth.assert_called_once()
             call_kwargs = mock_auth.call_args
