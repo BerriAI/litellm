@@ -1,0 +1,18 @@
+model_list:
+  - model_name: gpt-mock
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: sk-fake-unused
+
+litellm_settings:
+  callbacks: ["otel_file_exporter.otel_logger"]
+
+guardrails:
+  - guardrail_name: "verify-guardrail"
+    litellm_params:
+      guardrail: verify_guardrail.VerifyGuardrail
+      mode: "pre_call"
+      default_on: true
+
+general_settings:
+  master_key: sk-1234

@@ -180,3 +180,49 @@ def test_admin_endpoint_failure_stamps_server_span(
         expected_url_path=path,
         where=f"{path} {expected_status}",
     )
+
+
+def test_management_wrapper_success_ends_server_span_without_http_request(
+    server_span_factory, otel_with_exporter, monkeypatch
+):
+    """Regression: management endpoints whose handler does not declare an
+    ``http_request`` parameter (``/key/generate``, ``/user/new``, ``/mcp/*``,
+    ...) must still get their parent SERVER span stamped + ended on success.
+
+    The success hook itself stamps 200 and ``end()``s the parent, but the
+    wrapper only invoked it when ``http_request`` was present — so on success
+    the span (created in auth) was never ended and never exported. This drives
+    the real wrapper around an ``http_request``-less handler and asserts the
+    SERVER span reaches the exporter with status 200.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    otel, exporter = otel_with_exporter
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", otel, raising=False)
+
+    async def _noop_alert(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mgmt_utils, "send_management_endpoint_alert", _noop_alert)
+
+    server_span = server_span_factory(KEY_GENERATE_PATH)
+
+    @mgmt_utils.management_endpoint_wrapper
+    async def fake_generate_key_fn(data=None, user_api_key_dict=None):
+        # No ``http_request`` parameter — mirrors generate_key_fn et al.
+        return {"key": "sk-xyz", "key_name": "k"}
+
+    asyncio.run(
+        fake_generate_key_fn(
+            data={},
+            user_api_key_dict=_real_user_api_key_dict(server_span),
+        )
+    )
+
+    assert_server_span_attrs(
+        exporter,
+        expected_status=200,
+        expected_url_path=KEY_GENERATE_PATH,
+        where="management wrapper success without http_request",
+    )

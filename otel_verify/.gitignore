@@ -1,0 +1,7 @@
+# Runtime artifacts produced by a verification run (incl. a live virtual key)
+.team_id
+.team_key
+spans.jsonl
+spans_admin.jsonl
+proxy.log
+__pycache__/

@@ -468,25 +468,35 @@ def management_endpoint_wrapper(func):
                     from litellm.proxy.proxy_server import open_telemetry_logger
 
                     if open_telemetry_logger is not None:
+                        # Run the success hook regardless of whether the handler
+                        # declares an ``http_request`` parameter. The hook ends the
+                        # parent SERVER span; gating it on ``http_request`` leaked the
+                        # span (created in auth, never ended → never exported) for the
+                        # many management endpoints without that param (e.g.
+                        # ``/key/generate``). Fall back to ``func.__name__`` for the
+                        # route, mirroring the failure branch.
                         if _http_request:
                             _route = _http_request.url.path
                             _request_body: dict = await _read_request_body(
                                 request=_http_request
                             )
-                            _response = dict(result) if result is not None else None
+                        else:
+                            _route = func.__name__
+                            _request_body = {}
+                        _response = dict(result) if result is not None else None
 
-                            logging_payload = ManagementEndpointLoggingPayload(
-                                route=_route,
-                                request_data=_request_body,
-                                response=_response,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
+                        logging_payload = ManagementEndpointLoggingPayload(
+                            route=_route,
+                            request_data=_request_body,
+                            response=_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
 
-                            await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
-                                logging_payload=logging_payload,
-                                parent_otel_span=parent_otel_span,
-                            )
+                        await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
+                            logging_payload=logging_payload,
+                            parent_otel_span=parent_otel_span,
+                        )
 
                 # Delete updated/deleted info from cache
                 _delete_api_key_from_cache(kwargs=kwargs)
