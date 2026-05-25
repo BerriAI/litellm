@@ -89,7 +89,11 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 }));
 
 // Create mock functions that can be controlled in tests
-let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
+let mockUseThemeImpl = () => ({
+  logoUrl: null as string | null,
+  isDarkMode: false,
+  toggleDarkMode: vi.fn(),
+});
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 let mockUseAuthorizedImpl = () => ({
@@ -236,7 +240,11 @@ describe("Navbar", () => {
   });
 
   it("should use custom logo from theme context", () => {
-    mockUseThemeImpl = () => ({ logoUrl: "https://example.com/custom-logo.png" });
+    mockUseThemeImpl = () => ({
+      logoUrl: "https://example.com/custom-logo.png",
+      isDarkMode: false,
+      toggleDarkMode: vi.fn(),
+    });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -244,7 +252,7 @@ describe("Navbar", () => {
     expect(logoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
 
     // Reset mock
-    mockUseThemeImpl = () => ({ logoUrl: null });
+    mockUseThemeImpl = () => ({ logoUrl: null, isDarkMode: false, toggleDarkMode: vi.fn() });
   });
 
   it("should hide user dropdown on public pages", () => {
@@ -304,10 +312,38 @@ describe("Navbar", () => {
     expect(window.location.href).toBe("");
   });
 
-  it("should not render dark mode toggle slider", () => {
+  it("should render dark mode toggle", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
-    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("dark-mode-toggle")).toBeInTheDocument();
+  });
+
+  it("should call toggleDarkMode when toggle is clicked", async () => {
+    const user = userEvent.setup();
+    const mockToggle = vi.fn();
+    renderWithProviders(<Navbar {...defaultProps} isDarkMode={false} toggleDarkMode={mockToggle} />);
+
+    await user.click(screen.getByTestId("dark-mode-toggle"));
+
+    expect(mockToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("should fall back to ThemeContext when toggle props are not provided", async () => {
+    const user = userEvent.setup();
+    const ctxToggle = vi.fn();
+    mockUseThemeImpl = () => ({
+      logoUrl: null,
+      isDarkMode: true,
+      toggleDarkMode: ctxToggle,
+    });
+
+    const { isDarkMode, toggleDarkMode, ...rest } = defaultProps;
+    renderWithProviders(<Navbar {...rest} />);
+
+    await user.click(screen.getByTestId("dark-mode-toggle"));
+    expect(ctxToggle).toHaveBeenCalledTimes(1);
+
+    // Reset mock
+    mockUseThemeImpl = () => ({ logoUrl: null, isDarkMode: false, toggleDarkMode: vi.fn() });
   });
 });

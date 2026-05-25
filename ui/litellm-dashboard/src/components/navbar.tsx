@@ -25,8 +25,10 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
-  isDarkMode: boolean;
-  toggleDarkMode: () => void;
+  /** Optional override; defaults to the value from ThemeContext. */
+  isDarkMode?: boolean;
+  /** Optional override; defaults to the toggler from ThemeContext. */
+  toggleDarkMode?: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -40,12 +42,14 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
-  isDarkMode,
-  toggleDarkMode,
+  isDarkMode: isDarkModeProp,
+  toggleDarkMode: toggleDarkModeProp,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
-  const { logoUrl } = useTheme();
+  const { logoUrl, isDarkMode: isDarkModeCtx, toggleDarkMode: toggleDarkModeCtx } = useTheme();
+  const isDarkMode = isDarkModeProp ?? isDarkModeCtx;
+  const toggleDarkMode = toggleDarkModeProp ?? toggleDarkModeCtx;
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -87,14 +91,14 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
           <div className="flex items-center flex-shrink-0">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
@@ -142,17 +146,14 @@ const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center space-x-5 ml-auto">
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
             <CommunityEngagementButtons />
-            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
-            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
-            {false && (
-              <Switch
-                data-testid="dark-mode-toggle"
-                checked={isDarkMode}
-                onChange={toggleDarkMode}
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<SunOutlined />}
-              />
-            )}
+            <Switch
+              data-testid="dark-mode-toggle"
+              aria-label="Toggle dark mode"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />
             <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
               Docs
             </Button>

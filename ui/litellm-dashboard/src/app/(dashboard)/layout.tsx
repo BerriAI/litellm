@@ -2,7 +2,7 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -34,10 +34,11 @@ const MIGRATED_PAGES: Record<string, string> = {
   "api-reference": "api-reference",
 };
 
-function LayoutContent({ children }: { children: React.ReactNode }) {
+function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
+  const { isDarkMode, toggleDarkMode } = useTheme();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
@@ -64,34 +65,36 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const toggleSidebar = () => setSidebarCollapsed((v) => !v);
 
   return (
-    <ThemeProvider accessToken={""}>
-      <div className="flex flex-col min-h-screen">
-        <Navbar
-          isPublicPage={false}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
-          userID={userId}
-          userEmail={userEmail}
-          userRole={userRole}
-          premiumUser={premiumUser}
-          proxySettings={undefined}
-          setProxySettings={() => { }}
-          accessToken={accessToken}
-          isDarkMode={false}
-          toggleDarkMode={() => { }}
-        />
-        <DebugWarningBanner accessToken={accessToken} />
-        <div className="flex flex-1 overflow-auto">
-          <div className="mt-2">
-            <SidebarProvider
-              setPage={handleSetPage}
-              defaultSelectedKey={page}
-              sidebarCollapsed={sidebarCollapsed}
-            />
-          </div>
-          <main className="flex-1">{children}</main>
+    <div className="flex flex-col min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+      <Navbar
+        isPublicPage={false}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
+        userID={userId}
+        userEmail={userEmail}
+        userRole={userRole}
+        premiumUser={premiumUser}
+        proxySettings={undefined}
+        setProxySettings={() => {}}
+        accessToken={accessToken}
+        isDarkMode={isDarkMode}
+        toggleDarkMode={toggleDarkMode}
+      />
+      <DebugWarningBanner accessToken={accessToken} />
+      <div className="flex flex-1 overflow-auto">
+        <div className="mt-2">
+          <SidebarProvider setPage={handleSetPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
         </div>
+        <main className="flex-1">{children}</main>
       </div>
+    </div>
+  );
+}
+
+function LayoutContent({ children }: { children: React.ReactNode }) {
+  return (
+    <ThemeProvider accessToken={""}>
+      <DashboardShell>{children}</DashboardShell>
     </ThemeProvider>
   );
 }

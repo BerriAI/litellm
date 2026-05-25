@@ -13,6 +13,20 @@ export const metadata: Metadata = {
   icons: { icon: "./favicon.ico" },
 };
 
+// Sets the `dark` class on <html> synchronously before React hydrates, so
+// returning dark-mode users don't see a flash of light theme on page load.
+const darkModeInitScript = `
+(function () {
+  try {
+    var stored = window.localStorage.getItem('litellm-dark-mode');
+    if (stored === 'true') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.style.colorScheme = 'dark';
+    }
+  } catch (e) {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -20,6 +34,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: darkModeInitScript }} />
+      </head>
       <body className={inter.className}>
         <ReactQueryProvider>
           <AntdGlobalProvider>{children}</AntdGlobalProvider>
