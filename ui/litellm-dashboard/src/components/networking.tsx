@@ -7510,11 +7510,17 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 /**
  * Get all spend logs for a particular session
  */
-export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string,
+  page: number = 1,
+  page_size: number = 50,
+) => {
   try {
+    const query = `session_id=${encodeURIComponent(session_id)}&page=${page}&page_size=${page_size}`;
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+      ? `${proxyBaseUrl}/spend/logs/session/ui?${query}`
+      : `/spend/logs/session/ui?${query}`;
 
     const response = await fetch(url, {
       method: "GET",
