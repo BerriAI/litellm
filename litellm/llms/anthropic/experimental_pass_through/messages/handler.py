@@ -461,7 +461,12 @@ def anthropic_messages_handler(
         # In-gateway context_management polyfill on the chat-completions adapter
         # (native on Anthropic/Responses paths). Skipped when drop_params is on.
         context_management_spec = _shared_kwargs.pop("context_management", None)
-        _drop_params = _shared_kwargs.pop("drop_params", None) or litellm.drop_params
+        _request_drop_params = _shared_kwargs.get("drop_params")
+        _drop_params = (
+            _request_drop_params
+            if _request_drop_params is not None
+            else litellm.drop_params
+        )
         polyfill_applied_edits: List[AppliedEdit] = []
         if context_management_spec and not _drop_params:
             from litellm.llms.anthropic.experimental_pass_through.context_management import (
