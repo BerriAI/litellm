@@ -214,18 +214,26 @@ export function LogDetailsDrawer({
     setSelectedSessionRequestId(null);
   }, [sessionId, isSessionMode]);
 
+  // Memoized to keep the reference stable across renders so the keyboard
+  // listener inside useKeyboardNavigation does not re-attach on every render
+  // and never sees a stale onSelectLog closure.
+  const handleSelectLog = useCallback(
+    (selected: LogEntry) => {
+      if (isSessionMode) {
+        setSelectedSessionRequestId(selected.request_id);
+      }
+      onSelectLog?.(selected);
+    },
+    [isSessionMode, onSelectLog],
+  );
+
   // Keyboard navigation
   const { selectNextLog, selectPreviousLog } = useKeyboardNavigation({
     isOpen: open,
     currentLog,
     allLogs: isSessionMode ? sessionLogs : allLogs,
     onClose,
-    onSelectLog: (selected) => {
-      if (isSessionMode) {
-        setSelectedSessionRequestId(selected.request_id);
-      }
-      onSelectLog?.(selected);
-    },
+    onSelectLog: handleSelectLog,
     // goToPreviousPage / goToNextPage are useCallback'd and self-guard
     // against out-of-bounds, so pass them directly to keep the reference
     // stable across renders.

@@ -60,7 +60,7 @@ export function useKeyboardNavigation({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, currentLog, allLogs, onPreviousPage, onNextPage]);
+  }, [isOpen, currentLog, allLogs, onClose, onSelectLog, onPreviousPage, onNextPage]);
 
   const selectNextLog = () => {
     if (!currentLog || !allLogs.length || !onSelectLog) return;
