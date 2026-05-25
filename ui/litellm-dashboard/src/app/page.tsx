@@ -471,18 +471,12 @@ function CreateKeyPageContent() {
             ) : (
               <div className="flex flex-col min-h-screen">
                 <Navbar
-                  userID={userID}
-                  userRole={userRole}
-                  premiumUser={premiumUser}
-                  userEmail={userEmail}
                   setProxySettings={setProxySettings}
                   proxySettings={proxySettings}
                   accessToken={accessToken}
                   isPublicPage={false}
                   sidebarCollapsed={sidebarCollapsed}
                   onToggleSidebar={toggleSidebar}
-                  isDarkMode={isDarkMode}
-                  toggleDarkMode={toggleDarkMode}
                 />
                 <div className="flex flex-1">
                   <div className="mt-2">
