@@ -71,6 +71,11 @@ class BasePassthroughUtils:
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
 
+            custom_header_names = {header_name.lower() for header_name in headers}
+            for header_name in list(request_headers.keys()):
+                if header_name.lower() in custom_header_names:
+                    request_headers.pop(header_name, None)
+
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
