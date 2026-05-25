@@ -639,9 +639,7 @@ def _render_oauth_error_html(error: str, description: Optional[str]) -> HTMLResp
     """
     safe_error = _html.escape(error or "unknown_error")
     safe_description = _html.escape(description) if description else ""
-    description_html = (
-        f"<p>{safe_description}</p>" if safe_description else ""
-    )
+    description_html = f"<p>{safe_description}</p>" if safe_description else ""
     body = (
         "<html><body>"
         "<h2>Authentication failed</h2>"
@@ -686,9 +684,7 @@ async def callback(
             try:
                 state_data = decode_state_hash(state)
                 original_state = state_data.get("original_state")
-                redirect_uri = _get_validated_client_redirect_uri(
-                    request, state_data
-                )
+                redirect_uri = _get_validated_client_redirect_uri(request, state_data)
             except HTTPException:
                 # Untrusted/invalid client redirect_uri — surface inline rather
                 # than blindly forwarding the error to an attacker-controlled URL.
@@ -702,7 +698,7 @@ async def callback(
                 params["error_description"] = error_description
             if error_uri:
                 params["error_uri"] = error_uri
-            if original_state:
+            if original_state is not None:
                 params["state"] = original_state
             complete_returned_url = _append_query_params(redirect_uri, params)
             return RedirectResponse(url=complete_returned_url, status_code=302)
@@ -713,9 +709,12 @@ async def callback(
     # 2. Neither success nor error parameters present — most likely a stray
     #    GET / dropped SSO redirect chain. Surface a 400 instead of 422.
     if not code or not state:
+        missing = [
+            name for name, value in (("code", code), ("state", state)) if not value
+        ]
         return _render_oauth_error_html(
             "invalid_request",
-            "Missing authorization 'code' and 'state' parameters.",
+            f"Missing authorization {' and '.join(repr(m) for m in missing)} parameter(s).",
         )
 
     # 3. Successful authorization response.
