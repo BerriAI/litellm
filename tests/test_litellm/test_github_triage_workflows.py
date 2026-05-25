@@ -47,6 +47,12 @@ DESTRUCTIVE_GATE_ENV: dict[str, str] = {
     # only kill switch is `AGENT_SHIN_ENABLED`, which already serves as
     # both the destructive gate and the global enablement gate.
     "triage_reconsider.yml": "AGENT_SHIN_ENABLED",
+    # The review gate can add/remove labels, post comments, and close PRs.
+    # Its per-run knob is `CLOSE_FLAG` (from the workflow_dispatch input),
+    # gated by an outer `AGENT_SHIN_ENABLED = "true"` check. Listing it
+    # here ensures the same fail-safe `= "true"` and kill-switch invariants
+    # we enforce on every other destructive workflow are enforced here too.
+    "review_gate.yml": "CLOSE_FLAG",
 }
 
 

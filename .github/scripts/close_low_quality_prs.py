@@ -39,23 +39,31 @@ import argparse
 import datetime as dt
 import json
 import os
-import re
 import subprocess
 import sys
 from typing import Iterable
 
-# Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
-# and `greptile-apps` in `gh pr view --json` output. Accept either form.
-GREPTILE_BOT_LOGINS = frozenset({"greptile-apps", "greptile-apps[bot]"})
+# Add this script's directory to `sys.path` so the sibling
+# `agent_shin_shared` module is importable when the script is invoked
+# directly (e.g. `python3 .github/scripts/close_low_quality_prs.py ...`).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Matches lines like:
-#   <h3>Confidence Score: 3/5</h3>
-#   **Confidence Score: 4/5**
-#   Confidence Score: 5 / 5
-SCORE_PATTERN = re.compile(
-    r"confidence\s*score\s*[:\-]?\s*(\d+)\s*/\s*5",
-    re.IGNORECASE,
+from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
+    AGENT_SHIN_DEFAULT_BOT_LOGIN,
+    GRACE_COMMENT_MARKER,
+    GRACE_PERIOD_SECONDS,
+    GREPTILE_BOT_LOGINS,
+    IMMEDIATE_CLOSE_LOGINS,
+    SCORE_PATTERN,
+    extract_greptile_score,
+    parse_iso8601,
 )
+
+# `GREPTILE_BOT_LOGINS` and `SCORE_PATTERN` (Greptile's GitHub App login
+# variants and the "Confidence Score: X/5" regex) are imported from
+# `agent_shin_shared` so the LLM judge in `triage_with_llm.py` and this
+# daily Greptile sweep read the score through the same set of logins
+# and the same regex.
 
 # `author_association` values for internal BerriAI contributors who should be
 # exempt from auto-triage.
@@ -67,32 +75,20 @@ INTERNAL_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # `default=[...]` combination silently mutates the shared default list.
 DEFAULT_OPTOUT_LABELS = ("do not close", "keep open", "wip")
 
-# HTML marker appended to grace-period warning comments. Shared with the
-# Agent Shin LLM-judge script (`triage_with_llm.py`) so a warning posted
-# by either path is recognized by both: the LLM judge can see "Greptile
-# already warned this contributor 12 hours ago" and skip re-warning, and
-# the Greptile closer can see "Agent Shin already warned" and close on
-# the next run if Greptile still has a low score.
-GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
-
-# Length of the grace period between the warning comment and the actual
-# auto-close. Set to 24 hours so the contributor has at least one full
-# working day across any time zone to push fixes or comment
-# `@agent-shin reconsider`. Mirrors the constant of the same name in
-# `triage_with_llm.py` — keep them in sync if either changes.
-GRACE_PERIOD_SECONDS = 86400
-
-# Default login of the GitHub identity that performs Agent Shin's writes;
-# used for matching the author of a grace-warning comment so we don't
-# count somebody quoting the marker. The env override
-# `AGENT_SHIN_BOT_LOGIN` mirrors `triage_with_llm.py`.
-AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
-
-# Logins (case-insensitive) that bypass BOTH the 1-day grace period AND
-# the dry-run gating. Mirrors `IMMEDIATE_CLOSE_LOGINS` in
-# `triage_with_llm.py`. Used for dogfooding the bot from external test
-# accounts that have no push permissions to the repo.
-IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
+# `GRACE_COMMENT_MARKER` (HTML marker appended to grace-period warning
+# comments — used by either script to recognize that a warning was
+# already posted) and `GRACE_PERIOD_SECONDS` (length of the grace
+# period between the warning and the actual auto-close, 24 hours) are
+# imported from `agent_shin_shared` so the Agent Shin LLM judge and
+# this daily Greptile sweep agree on the same marker and duration.
+#
+# `AGENT_SHIN_DEFAULT_BOT_LOGIN` (the GitHub identity that performs
+# Agent Shin's writes; used for matching the author of a grace-warning
+# comment so we don't count somebody quoting the marker; the env
+# override `AGENT_SHIN_BOT_LOGIN` works the same here) and
+# `IMMEDIATE_CLOSE_LOGINS` (case-insensitive logins that bypass BOTH
+# the grace period AND the dry-run gating; useful for dogfooding the
+# bot from external test accounts) are imported too.
 
 
 def gh(*args: str) -> str:
@@ -184,39 +180,6 @@ def fetch_pr_comments(pr_number: int, repo: str | None) -> list[dict]:
         else:
             comments.append(parsed)
     return comments
-
-
-def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
-    """Return (score, comment) for the most recent Greptile-authored comment
-    that contains a "Confidence Score: X/5". Returns None if no such comment.
-
-    "Most recent" is determined by the comment's `updated_at` (falling back to
-    `created_at`), so re-reviews override earlier passes.
-    """
-    candidates: list[tuple[str, int, dict]] = []
-    for comment in comments:
-        user = (comment.get("user") or {}).get("login", "")
-        if user not in GREPTILE_BOT_LOGINS:
-            continue
-        body = comment.get("body") or ""
-        match = SCORE_PATTERN.search(body)
-        if not match:
-            continue
-        score = int(match.group(1))
-        timestamp = comment.get("updated_at") or comment.get("created_at") or ""
-        candidates.append((timestamp, score, comment))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda triple: triple[0])
-    _, score, comment = candidates[-1]
-    return score, comment
-
-
-def parse_iso8601(value: str) -> dt.datetime:
-    """Parse a GitHub ISO-8601 timestamp into a timezone-aware datetime."""
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def has_optout_label(pr: dict, optout_labels: set[str]) -> bool:

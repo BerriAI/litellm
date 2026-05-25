@@ -40,15 +40,33 @@ import textwrap
 import urllib.parse
 from typing import Any, Iterable
 
+# Add this script's directory to `sys.path` so the sibling
+# `agent_shin_shared` module is importable when the script is invoked
+# directly (e.g. `python3 .github/scripts/triage_with_llm.py ...`) and
+# also when the tests load this script via
+# `importlib.util.spec_from_file_location`.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
+    AGENT_SHIN_DEFAULT_BOT_LOGIN,
+    GRACE_COMMENT_MARKER,
+    GRACE_PERIOD_SECONDS,
+    GREPTILE_BOT_LOGINS,
+    IMMEDIATE_CLOSE_LOGINS,
+    SCORE_PATTERN,
+    extract_greptile_score,
+    parse_iso8601,
+)
+
 DEFAULT_MODEL = "gpt-5.4-mini"
 
 INTERNAL_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
-# Login of the account that performs Agent Shin's GitHub writes. When the
-# workflow uses `secrets.GITHUB_TOKEN` (our default), the closure / reopen
-# event's `actor.login` is `github-actions[bot]`. The env override exists
-# for local debugging and for repos that wire Agent Shin to a PAT.
-AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
+# `AGENT_SHIN_DEFAULT_BOT_LOGIN` is imported from `agent_shin_shared`.
+# When the workflow uses the default `secrets.GITHUB_TOKEN`, the
+# closure / reopen event's `actor.login` is `github-actions[bot]`. The
+# env override `AGENT_SHIN_BOT_LOGIN` exists for local debugging and for
+# repos that wire Agent Shin to a PAT.
 
 # HTML marker appended to every reconsider verdict comment. We grep for this
 # on subsequent reconsider triggers to enforce a short cooldown so that
@@ -63,26 +81,20 @@ RECONSIDER_COMMENT_MARKER = "<!-- agent-shin:reconsider-verdict -->"
 # the body" iteration loop isn't punished.
 RECONSIDER_RATE_LIMIT_SECONDS = 600
 
-# HTML marker appended to the grace-period warning comment posted on the
-# first low-quality detection. We grep for this on subsequent triage runs
-# to (a) detect that a warning was already posted (so we don't spam the
-# contributor with duplicate warnings) and (b) measure how long ago it
-# was posted so we know when the grace period has elapsed.
-GRACE_COMMENT_MARKER = "<!-- agent-shin:grace-warning -->"
-
-# Length of the grace period between the warning comment and the actual
-# auto-close. Set to 24 hours so the contributor has at least one full
-# working day across any time zone to push fixes or comment
-# `@agent-shin reconsider`.
-GRACE_PERIOD_SECONDS = 86400
-
-# Logins (case-insensitive) that bypass BOTH the 1-day grace period AND
-# the dry-run / `AGENT_SHIN_ENABLED` workflow gating — every Agent Shin
-# verdict against a PR/issue from one of these accounts is treated as a
-# real run with immediate close on fail. Useful for dogfooding the bot
-# from an external account that has no push permissions to the repo.
-# Listed lower-case so callers compare via `login.lower() in ...`.
-IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
+# `GRACE_COMMENT_MARKER` (HTML marker on the grace-period warning comment
+# posted on the first low-quality detection — used on subsequent triage
+# runs to detect that a warning was already posted and measure how long
+# ago it was posted) and `GRACE_PERIOD_SECONDS` (length of the grace
+# period between the warning and the actual auto-close, 24 hours) are
+# imported from `agent_shin_shared` so the daily Greptile sweep and the
+# LLM judge agree on the same marker and duration.
+#
+# `IMMEDIATE_CLOSE_LOGINS` (case-insensitive logins that bypass BOTH the
+# grace period AND the dry-run / `AGENT_SHIN_ENABLED` workflow gating —
+# every Agent Shin verdict against a PR/issue from one of these accounts
+# is treated as a real run with immediate close on fail) is shared too.
+# Useful for dogfooding the bot from an external account that has no
+# push permissions to the repo. Callers compare via `login.lower() in ...`.
 
 # --- Review-gate ("ready for review" label lifecycle) configuration ----------
 # The review gate keeps a single label in sync with whether a PR currently
@@ -101,21 +113,12 @@ READY_MARKER = "<!-- agent-shin:ready -->"
 REGRESSED_MARKER = "<!-- agent-shin:regressed -->"
 WITHIN_GRACE_MARKER = "<!-- agent-shin:within-grace -->"
 
-# Greptile's GitHub App appears as `greptile-apps[bot]` in REST API comments
-# and `greptile-apps` in `gh pr view --json` output. Accept either form.
-# Mirrors the constant of the same name in `close_low_quality_prs.py`; keep
-# them in sync so the daily sweep and the review gate read the score through
-# the same set of logins.
-GREPTILE_BOT_LOGINS = frozenset({"greptile-apps", "greptile-apps[bot]"})
-
-# Matches lines like:
-#   <h3>Confidence Score: 3/5</h3>
-#   **Confidence Score: 4/5**
-#   Confidence Score: 5 / 5
-SCORE_PATTERN = re.compile(
-    r"confidence\s*score\s*[:\-]?\s*(\d+)\s*/\s*5",
-    re.IGNORECASE,
-)
+# `GREPTILE_BOT_LOGINS` (Greptile's GitHub App login variants —
+# `greptile-apps[bot]` in REST API comments, `greptile-apps` in
+# `gh pr view --json` output) and `SCORE_PATTERN` (regex matching lines
+# like `Confidence Score: 3/5`) are imported from `agent_shin_shared`
+# so the daily sweep and the review gate read the score through the
+# same set of logins / patterns.
 
 # Marker phrase Agent Shin always includes in its auto-close comments
 # (see `format_pr_close_comment` / `format_issue_close_comment`). The
@@ -427,40 +430,11 @@ def is_internal_contributor(item: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Greptile score + age helpers (mirrored from close_low_quality_prs.py)
-
-
-def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
-    """Return (score, comment) for the most recent Greptile-authored comment
-    that contains a "Confidence Score: X/5". Returns None if no such comment.
-
-    "Most recent" is determined by the comment's `updated_at` (falling back to
-    `created_at`), so re-reviews override earlier passes.
-    """
-    candidates: list[tuple[str, int, dict]] = []
-    for comment in comments:
-        user = (comment.get("user") or {}).get("login", "")
-        if user not in GREPTILE_BOT_LOGINS:
-            continue
-        body = comment.get("body") or ""
-        match = SCORE_PATTERN.search(body)
-        if not match:
-            continue
-        score = int(match.group(1))
-        timestamp = comment.get("updated_at") or comment.get("created_at") or ""
-        candidates.append((timestamp, score, comment))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda triple: triple[0])
-    _, score, comment = candidates[-1]
-    return score, comment
-
-
-def parse_iso8601(value: str) -> dt.datetime:
-    """Parse a GitHub ISO-8601 timestamp into a timezone-aware datetime."""
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+# Greptile score + age helpers (`extract_greptile_score`, `parse_iso8601`)
+# live in `agent_shin_shared` — they're imported at the top of this module
+# so both `triage_with_llm.py` and `close_low_quality_prs.py` share a
+# single source of truth for the Confidence-Score regex and ISO-8601
+# parsing.
 
 
 # ---------------------------------------------------------------------------
