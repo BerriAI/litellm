@@ -115,6 +115,38 @@ class TestOrcaRouterExtraBody:
         assert request["route"] == "fallback"
         assert "extra_body" not in request
 
+    def test_extra_body_cannot_override_guarded_fields(self):
+        """Security boundary: a caller's `extra_body` must not be able to
+        clobber `model`, `messages`, or other guarded request fields. Only
+        the OrcaRouter routing allowlist (`models`, `route`) survives."""
+        request = OrcaRouterConfig().transform_request(
+            model="orcarouter/openai/gpt-5",
+            messages=[{"role": "user", "content": "original-user-input"}],
+            optional_params={
+                "extra_body": {
+                    "model": "anthropic/claude-opus-4.7",
+                    "messages": [{"role": "user", "content": "hijack-attempt"}],
+                    "tools": [{"type": "function", "function": {"name": "exfil"}}],
+                    "stream": True,
+                    "models": ["openai/gpt-5", "openai/gpt-4o"],
+                    "route": "fallback",
+                }
+            },
+            litellm_params={},
+            headers={},
+        )
+        # Allowlisted routing fields surface
+        assert request["models"] == ["openai/gpt-5", "openai/gpt-4o"]
+        assert request["route"] == "fallback"
+        # Guarded fields keep their original values, not the attacker's
+        assert request["model"] == "orcarouter/openai/gpt-5"
+        assert request["messages"] == [
+            {"role": "user", "content": "original-user-input"}
+        ]
+        # Non-allowlisted extras are dropped entirely
+        assert "tools" not in request
+        assert "stream" not in request
+
     def test_no_usage_cost_injection(self):
         """OrcaRouter doesn't return usage.cost; we must not inject usage:{include:true}."""
         request = OrcaRouterConfig().transform_request(

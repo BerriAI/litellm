@@ -90,6 +90,12 @@ _MODEL_FIELD_FORCE: Dict[str, Dict[str, Any]] = {
 # Models that auto-reason without accepting any reasoning control fields.
 _REASONING_AUTO_PREFIXES: Tuple[str, ...] = ("deepseek/deepseek-reasoner",)
 
+# Fields that OrcaRouter accepts via `extra_body`. Anything outside this set
+# is dropped at request-build time so a caller cannot use `extra_body` to
+# override guarded request fields like `model` / `messages` / `tools`.
+_ORCAROUTER_EXTRA_BODY_ALLOWLIST: Tuple[str, ...] = ("models", "route")
+
+
 # Map standard reasoning_effort strings to Anthropic thinking budget_tokens.
 # budget_tokens must be >= 1024 and < max_tokens per Anthropic API.
 _REASONING_EFFORT_TO_BUDGET: Dict[str, int] = {
@@ -310,11 +316,18 @@ class OrcaRouterConfig(OpenAIGPTConfig):
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 
-        extra_body = optional_params.pop("extra_body", {})
+        # Only OrcaRouter routing fields are allowed to surface from
+        # extra_body. Merging the full dict would let a caller override
+        # guarded request fields like `model` or `messages` and bypass
+        # model access controls / prompt guardrails. Drop everything
+        # outside the allowlist.
+        extra_body = optional_params.pop("extra_body", {}) or {}
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
+        for key in _ORCAROUTER_EXTRA_BODY_ALLOWLIST:
+            if key in extra_body:
+                response[key] = extra_body[key]
         return response
 
     def get_error_class(
