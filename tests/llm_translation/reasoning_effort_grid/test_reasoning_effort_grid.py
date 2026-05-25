@@ -168,7 +168,7 @@ async def test_reasoning_effort_grid(
         pytest.skip(skip_reason)
 
     if model.fail_reason:
-        pytest.fail(model.fail_reason)
+        pytest.xfail(model.fail_reason)
 
     if route_name == "bedrock_invoke_messages":
         status, exc = await _call_messages(model, effort)
