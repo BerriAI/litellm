@@ -1,3 +1,21 @@
+<!--
+PR title must follow Conventional Commits 1.0.0:
+
+    <type>(<optional scope>): <description>
+
+Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+Use `!` after the type/scope for breaking changes (e.g. feat(api)!: drop /v1/foo).
+
+Examples:
+    feat(mcp): add oauth2 authorization flow
+    fix(ui-teams): refresh table on member change
+    refactor(ui-playground): extract message renderer
+
+A GitHub Actions check enforces this format. See:
+    https://www.conventionalcommits.org/en/v1.0.0/
+    CONTRIBUTING.md → Commit and PR Conventions
+-->
+
 ## Relevant issues
 
 <!-- e.g. "Fixes #000" -->
@@ -45,14 +63,18 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Type
 
-<!-- Select the type of Pull Request -->
-<!-- Keep only the necessary ones -->
+<!-- Should match the type used in the PR title (Conventional Commits). Keep only the relevant one(s). -->
 
-🆕 New Feature
-🐛 Bug Fix
-🧹 Refactoring
-📖 Documentation
-🚄 Infrastructure
-✅ Test
+- `feat` — New feature
+- `fix` — Bug fix
+- `refactor` — Refactoring (no behavior change)
+- `docs` — Documentation
+- `perf` — Performance improvement
+- `test` — Tests only
+- `build` — Build system / dependencies
+- `ci` — CI / GitHub Actions
+- `chore` — Maintenance / release / tooling
+- `revert` — Revert a previous commit
+- `style` — Formatting / whitespace
 
 ## Changes

@@ -1,0 +1,69 @@
+name: Validate PR Title
+
+# Enforces Conventional Commits 1.0.0 on PR titles.
+# PRs to litellm_internal_staging are squash-merged, so the PR title becomes
+# the commit subject on the release-feeding branch. Mechanical parseability
+# matters for changelogs and cherry-picks.
+#
+# Skipped on PRs to main: those are rollups from staging that preserve the
+# underlying conventional commits, so the rollup title itself doesn't need
+# to match.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches-ignore:
+      - main
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'PR title to validate (for runtime testing)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Conventional Commits PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title || inputs.title }}
+        run: |
+          set -u
+          echo "Validating title: $PR_TITLE"
+
+          # Conventional Commits 1.0.0 — allowed types per the spec plus
+          # the common extras the project uses. `security` is intentionally
+          # omitted: OSS commits use reliability/maintenance language.
+          # See: https://www.conventionalcommits.org/en/v1.0.0/
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._-]+(/[a-z0-9._-]+)*\))?!?: .+'
+
+          if [[ "$PR_TITLE" =~ $PATTERN ]]; then
+            echo "PR title matches Conventional Commits format."
+            exit 0
+          fi
+
+          echo "::error::PR title does not match Conventional Commits 1.0.0."
+          cat <<'EOF'
+
+          PR title must follow Conventional Commits 1.0.0:
+
+              <type>(<optional scope>): <description>
+
+          Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+          Use `!` after the type/scope for breaking changes (e.g. feat(api)!: drop /v1/foo).
+
+          Examples:
+              feat(mcp): add oauth2 authorization flow
+              fix(ui-teams): refresh table on member change
+              refactor(ui-playground): extract message renderer
+              chore(release): merge internal staging into main
+
+          See: https://www.conventionalcommits.org/en/v1.0.0/
+          EOF
+          exit 1

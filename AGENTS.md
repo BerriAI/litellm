@@ -140,6 +140,16 @@ When opening issues or pull requests, follow these templates:
 - Clearly describe the feature
 - Explain motivation and use case with concrete examples
 
+### Pull Request Title Format
+
+**PR titles must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)**: `<type>(<optional scope>): <description>`.
+
+- Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+- Append `!` for breaking changes (e.g. `feat(api)!: drop /v1/foo`).
+- Examples: `feat(mcp): add oauth2 authorization flow`, `fix(ui-teams): refresh table on member change`, `chore(release): merge internal staging into main`.
+- The `validate-pr-title` GitHub Actions check enforces this on every PR (rollup PRs to `main` are exempt).
+- Local commits on the PR branch don't need to match — `litellm_internal_staging` is squash-merge only, so the squash flattens to the PR title at merge time.
+
 ### Pull Requests (`.github/pull_request_template.md`)
 - Add at least 1 test in `tests/litellm/`
 - Ensure `make test-unit` passes
