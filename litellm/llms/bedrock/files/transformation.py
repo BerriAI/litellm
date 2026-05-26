@@ -269,11 +269,27 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return False
         return "input" in body and "messages" not in body
 
-    # Substring match against the model id (case-insensitive, after stripping
-    # any "bedrock/" routing prefix and any cross-region "<region>." prefix
-    # like "us.amazon.titan-embed-text-v2:0"). Kept as a constant so future
-    # PRs can extend the set without touching the dispatch logic.
+    # Identifier for the Bedrock Titan v2 InvokeModel body schema as stored
+    # in `model_prices_and_context_window.json`. Centralized so future
+    # embedding-schema variants can add their own value
+    # (e.g. `cohere_v3`, `titan_g1`, `titan_multimodal`) without touching
+    # the detection logic.
+    _TITAN_V2_INVOCATION_SCHEMA = "titan_v2"
+
+    # Substring marker used as a fallback when the registry can't resolve
+    # the model id - notably cross-region inference profile prefixes
+    # (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms, which
+    # `get_model_info` doesn't normalize today.
     _TITAN_V2_EMBED_MODEL_MARKER = "titan-embed-text-v2"
+
+    # Nested field name under `provider_specific_entry` that identifies the
+    # Bedrock InvokeModel body schema for batch inference.
+    # `provider_specific_entry` is the registry's escape hatch for fields
+    # `get_model_info` doesn't promote to top-level - exactly what we need
+    # here. Documented in the `sample_spec` entry of
+    # `model_prices_and_context_window.json` and surfaced by
+    # `get_model_info` (see `ModelInfo.provider_specific_entry`).
+    _BEDROCK_INVOCATION_SCHEMA_FIELD = "bedrock_invocation_schema"
 
     @staticmethod
     def _is_titan_v2_embed_model(model: str) -> bool:
@@ -282,16 +298,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         Resolution order:
           1. `model_prices_and_context_window.json` via `get_model_info`.
-             When the registry resolves the id we trust `mode == "embedding"`
-             AND a matching `titan-embed-text-v2` marker in the id - the
-             marker is still needed because the registry's `mode` field
-             doesn't distinguish Titan v2's InvokeModel schema from Cohere,
-             Nova Multimodal, or Titan G1 (all also `mode == "embedding"`
-             but with incompatible bodies).
-          2. Substring fallback for ids the registry can't resolve - this
+             The Titan v2 registry entry carries an explicit
+             `provider_specific_entry.bedrock_invocation_schema` discriminator
+             (`"titan_v2"`). When the registry resolves the id we trust that
+             field as the source of truth - no hardcoded model-id comparison
+             needed.
+          2. Substring fallback (`titan-embed-text-v2` followed by `:`, `/`,
+             or end-of-string) for ids the registry can't normalize. This
              catches cross-region inference profile prefixes
-             (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms.
-             The marker boundary check rejects lookalikes like
+             (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms; the
+             marker boundary check rejects lookalikes like
              `titan-embed-text-v20` or `titan-embed-text-v2-experimental`.
 
         Tolerant of common id shapes:
@@ -300,6 +316,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
           - "us.amazon.titan-embed-text-v2:0" (cross-region inference profile)
           - ARN forms ending in ".../amazon.titan-embed-text-v2:0"
         """
+        # Registry-driven path: when get_model_info resolves the id we trust
+        # the registry's discriminator. A resolved id with a different (or
+        # absent) schema value here is intentionally not given a substring
+        # second-chance - the registry is authoritative for ids it knows.
+        registry_schema = BedrockFilesConfig._lookup_provider_specific_field(
+            model, BedrockFilesConfig._BEDROCK_INVOCATION_SCHEMA_FIELD
+        )
+        if registry_schema is not None:
+            return registry_schema == BedrockFilesConfig._TITAN_V2_INVOCATION_SCHEMA
+
+        # Registry silence -> substring fallback for unmapped ids only.
         normalized = model.lower()
         if normalized.startswith("bedrock/"):
             normalized = normalized[len("bedrock/") :]
@@ -308,29 +335,27 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if idx < 0:
             return False
         end = idx + len(marker)
-        if not (end == len(normalized) or normalized[end] in (":", "/")):
-            return False
-
-        # Marker matches with a clean boundary. If the registry can also
-        # resolve this id, additionally confirm `mode == "embedding"` so a
-        # malformed id whose path-component is right but whose registered
-        # mode is, say, "chat" doesn't slip through. Registry silence
-        # (cross-region profiles, ARNs) is fine - the marker alone is
-        # authoritative there.
-        registry_mode = BedrockFilesConfig._lookup_registry_mode(model)
-        if registry_mode is not None and registry_mode != "embedding":
-            return False
-        return True
+        return end == len(normalized) or normalized[end] in (":", "/")
 
     @staticmethod
-    def _lookup_registry_mode(model_id: str) -> Optional[str]:
+    def _lookup_provider_specific_field(model_id: str, field: str) -> Optional[str]:
         """
-        Read `mode` for `model_id` from `model_prices_and_context_window.json`.
+        Read a nested string field from the registry entry's
+        `provider_specific_entry` dict via `litellm.get_model_info`.
 
-        Returns the mode string when the registry resolves the id and the
-        entry has a non-empty string mode, else `None`. Isolating this
-        means the Titan v2 detector can layer a data-driven check on top
-        of the marker boundary without scattering try/except shapes.
+        Returns the field's string value when:
+          - the registry resolves `model_id`,
+          - the entry exposes `provider_specific_entry` as a dict, and
+          - that dict has `field` mapped to a non-empty string.
+        Otherwise returns `None`.
+
+        Isolating this means feature detectors (Titan v2 today, future
+        Cohere Embed / Nova Multimodal branches) share one defensive
+        try/except shape instead of duplicating it. The `None` return
+        covers every realistic failure mode: `get_model_info` raises
+        (cross-region profile prefixes, Bedrock ARN forms, unreleased
+        models), returns a non-dict, has no `provider_specific_entry`, or
+        the requested field is missing / non-string / empty.
         """
         try:
             from litellm import get_model_info
@@ -340,8 +365,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return None
         if not isinstance(info, dict):
             return None
-        mode = info.get("mode")
-        return mode if isinstance(mode, str) and mode else None
+        provider_specific = info.get("provider_specific_entry")
+        if not isinstance(provider_specific, dict):
+            return None
+        value = provider_specific.get(field)
+        return value if isinstance(value, str) and value else None
 
     @staticmethod
     def _coerce_embedding_input_to_string(raw_input: Any, model: str = "") -> str:

@@ -840,22 +840,65 @@ class TestBedrockFilesEmbeddingTransformation:
                 model
             ), f"{model} unexpectedly missed the Titan v2 marker"
 
-    def test_titan_v2_rejected_when_registry_mode_disagrees(self, mocker):
-        """If the registry resolves the id but says mode != embedding, reject."""
+    def test_titan_v2_accepted_when_registry_schema_field_matches(self, mocker):
+        """Registry-driven happy path: nested
+        `provider_specific_entry.bedrock_invocation_schema == "titan_v2"`
+        is the authoritative signal."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        # Marker matches but registry claims this is chat - trust the registry
-        # and refuse to route through the embedding path.
-        mocker.patch("litellm.get_model_info", return_value={"mode": "chat"})
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={
+                "provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}
+            },
+        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model(
+            "amazon.titan-embed-text-v2:0"
+        )
+
+    def test_titan_v2_rejected_when_registry_schema_field_differs(self, mocker):
+        """Registry resolves with a different schema value (e.g. a hypothetical
+        Cohere Embed entry) -> reject. Registry is authoritative; no substring
+        second-chance for ids the registry knows."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={
+                "provider_specific_entry": {"bedrock_invocation_schema": "cohere_v3"}
+            },
+        )
+        # Even though the model id looks like Titan v2, the registry says
+        # otherwise and we trust it.
         assert not BedrockFilesConfig._is_titan_v2_embed_model(
             "amazon.titan-embed-text-v2:0"
-        ), "registry mode=chat must override the marker match"
+        )
 
-    def test_titan_v2_accepted_when_registry_confirms_embedding(self, mocker):
-        """Happy path: marker matches and registry says mode=embedding."""
+    def test_titan_v2_falls_back_to_marker_when_registry_lacks_schema_field(
+        self, mocker
+    ):
+        """Registry resolves but the entry has no
+        `provider_specific_entry.bedrock_invocation_schema` field yet (e.g.
+        a stale local registry) -> fall through to substring."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
+        # No provider_specific_entry at all
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={"mode": "embedding"},
+        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model(
+            "amazon.titan-embed-text-v2:0"
+        )
+
+        # provider_specific_entry present but missing the schema key
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={
+                "mode": "embedding",
+                "provider_specific_entry": {"unrelated": "value"},
+            },
+        )
         assert BedrockFilesConfig._is_titan_v2_embed_model(
             "amazon.titan-embed-text-v2:0"
         )
@@ -873,29 +916,94 @@ class TestBedrockFilesEmbeddingTransformation:
             "arn:aws:bedrock:us-east-1:123:foundation-model/amazon.titan-embed-text-v2:0"
         )
 
-    def test_lookup_registry_mode_helper(self, mocker):
-        """Direct coverage of the extracted registry helper."""
+    def test_lookup_provider_specific_field_helper(self, mocker):
+        """Direct coverage of the nested registry field helper."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        # Happy path: returns the mode string
-        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
-        assert BedrockFilesConfig._lookup_registry_mode("anything") == "embedding"
+        # Happy path: returns the nested field's string value
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={
+                "provider_specific_entry": {"bedrock_invocation_schema": "titan_v2"}
+            },
+        )
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            == "titan_v2"
+        )
 
         # Registry raises -> None
         mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
-        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field("anything", "any")
+            is None
+        )
 
         # Registry returns non-dict -> None
         mocker.patch("litellm.get_model_info", return_value="not a dict")
-        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field("anything", "any")
+            is None
+        )
 
-        # Registry returns dict without mode -> None
-        mocker.patch("litellm.get_model_info", return_value={})
-        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+        # Registry returns dict without provider_specific_entry -> None
+        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            is None
+        )
 
-        # Registry returns dict with non-string mode -> None
-        mocker.patch("litellm.get_model_info", return_value={"mode": 42})
-        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+        # provider_specific_entry exists but isn't a dict -> None
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={"provider_specific_entry": "not a dict"},
+        )
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            is None
+        )
+
+        # provider_specific_entry dict missing the requested field -> None
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={"provider_specific_entry": {"unrelated": "x"}},
+        )
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            is None
+        )
+
+        # Non-string nested value -> None
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={"provider_specific_entry": {"bedrock_invocation_schema": 42}},
+        )
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            is None
+        )
+
+        # Empty-string nested value -> None
+        mocker.patch(
+            "litellm.get_model_info",
+            return_value={"provider_specific_entry": {"bedrock_invocation_schema": ""}},
+        )
+        assert (
+            BedrockFilesConfig._lookup_provider_specific_field(
+                "anything", "bedrock_invocation_schema"
+            )
+            is None
+        )
 
     def test_is_embedding_record_helper(self):
         """Helper detects embeddings via `url` first, then by body shape."""
