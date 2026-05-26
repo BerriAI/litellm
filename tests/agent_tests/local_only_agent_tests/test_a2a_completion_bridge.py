@@ -168,7 +168,7 @@ async def test_a2a_completion_bridge_bedrock_agentcore():
     litellm._turn_on_debug()
 
     # Bedrock AgentCore ARN (streaming-capable runtime)
-    agentcore_arn = "arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC"
+    agentcore_arn = "arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp"
 
     send_message_payload = {
         "message": {
