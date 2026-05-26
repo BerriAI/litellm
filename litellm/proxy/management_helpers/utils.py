@@ -471,10 +471,17 @@ async def _emit_management_endpoint_otel_span(
         route = func.__name__
         request_body = {}
 
+    response: Optional[dict] = None
+    if exception is None and result is not None:
+        try:
+            response = dict(result)
+        except Exception:
+            response = None
+
     logging_payload = ManagementEndpointLoggingPayload(
         route=route,
         request_data=request_body,
-        response=None,
+        response=response,
         start_time=start_time,
         end_time=end_time,
         exception=exception,
