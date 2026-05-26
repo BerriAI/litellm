@@ -115,7 +115,7 @@ def test_completion_bedrock_guardrails(streaming):
                 ],
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "4w3d1di3snt5",
+                    "guardrailIdentifier": "ff6ujrregl1q",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -144,7 +144,7 @@ def test_completion_bedrock_guardrails(streaming):
                 stream=True,
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "4w3d1di3snt5",
+                    "guardrailIdentifier": "ff6ujrregl1q",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -475,7 +475,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +498,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +537,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +602,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +630,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -737,7 +737,7 @@ def test_bedrock_ptu():
         from openai.types.chat import ChatCompletion
 
         model_id = (
-            "arn:aws:bedrock:us-west-2:941277531214:provisioned-model/8fxff74qyhs3"
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
         )
         try:
             response = litellm.completion(
@@ -752,7 +752,7 @@ def test_bedrock_ptu():
         assert "url" in mock_client_post.call_args.kwargs
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A941277531214%3Aprovisioned-model%2F8fxff74qyhs3/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
         )
         mock_client_post.assert_called_once()
 
@@ -2327,7 +2327,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
         messages=[
             {
                 "role": "user",

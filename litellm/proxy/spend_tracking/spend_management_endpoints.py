@@ -1817,10 +1817,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
-
-        is_v2 = "/spend/logs/v2" in get_request_route(request)
+        is_v2 = "/spend/logs/v2" in request.url.path
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:

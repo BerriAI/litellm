@@ -241,10 +241,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.sensitive_data_masker import (
-    SensitiveDataMasker,
-    mask_sensitive_keys,
-)
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
@@ -991,15 +988,6 @@ _OPENAPI_HTTP_METHODS = {
     "put",
     "trace",
 }
-
-
-# Credentials surfaced by `/get/config/callbacks` in the alerting block: the
-# full Slack incoming-webhook URL is itself a credential, and the SMTP
-# password is a service password. Masked on read so plaintext never reaches
-# the UI. Kept here at module scope to match the analogous
-# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
-# and cache endpoint files.
-_ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -14720,9 +14708,6 @@ async def get_config():  # noqa: PLR0915
                         value=env_variable, key=_var
                     )
                     _slack_env_vars[_var] = _decrypted_value
-            _slack_env_vars = mask_sensitive_keys(
-                _slack_env_vars, _ALERTING_SENSITIVE_VARS
-            )
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = (
@@ -14759,7 +14744,6 @@ async def get_config():  # noqa: PLR0915
                 # decode + decrypt the value
                 _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
-        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
             {

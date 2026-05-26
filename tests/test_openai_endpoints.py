@@ -446,7 +446,7 @@ async def test_chat_completion_anthropic_structured_output():
     client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
     res = await client.beta.chat.completions.parse(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
         messages=messages,
         response_format=EventsList,
         timeout=60,

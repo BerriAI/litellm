@@ -1546,11 +1546,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     if self.optional_params
                     else None
                 ),
-                "data_residency": (
-                    self.litellm_params.get("data_residency")
-                    if hasattr(self, "litellm_params") and self.litellm_params
-                    else None
-                ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(

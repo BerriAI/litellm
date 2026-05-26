@@ -9,7 +9,6 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
-    DataResidency,
     ImageResponse,
     ModelInfo,
     PassthroughCallTypes,
@@ -618,46 +617,11 @@ def _calculate_input_cost(
     return prompt_cost
 
 
-def _get_regional_uplift_multiplier(
-    model_info: ModelInfo, data_residency: Optional[str]
-) -> float:
-    """
-    Resolve the per-model regional-processing uplift multiplier for a given
-    data-residency region.
-
-    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
-    requests served from a regionalized hostname (eu./us.api.openai.com). The
-    multiplier is stored on the model entry as
-    ``regional_processing_uplift_multiplier_<region>`` (e.g. 1.10).
-
-    Returns 1.0 (no uplift) when ``data_residency`` is ``None`` or when the
-    model has no multiplier configured for the given region.
-    """
-    if data_residency is None:
-        return 1.0
-    residency = data_residency.lower()
-    if residency not in {r.value for r in DataResidency}:
-        return 1.0
-    multiplier = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
-    if multiplier is None:
-        return 1.0
-    try:
-        return float(cast(float, multiplier))
-    except (TypeError, ValueError):
-        verbose_logger.exception(
-            "Invalid regional_processing_uplift_multiplier_%s for model; "
-            "defaulting to 1.0",
-            residency,
-        )
-        return 1.0
-
-
 def generic_cost_per_token(  # noqa: PLR0915
     model: str,
     usage: Usage,
     custom_llm_provider: str,
     service_tier: Optional[str] = None,
-    data_residency: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -667,8 +631,6 @@ def generic_cost_per_token(  # noqa: PLR0915
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
-          used to apply the per-model regional-processing uplift multiplier.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -818,14 +780,6 @@ def generic_cost_per_token(  # noqa: PLR0915
             else completion_base_cost
         )
         completion_cost += float(image_tokens) * _output_cost_per_image_token
-
-    ## REGIONAL DATA-RESIDENCY UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift = _get_regional_uplift_multiplier(model_info, data_residency)
-    if uplift != 1.0:
-        prompt_cost *= uplift
-        completion_cost *= uplift
 
     return prompt_cost, completion_cost
 
