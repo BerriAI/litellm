@@ -1163,7 +1163,7 @@ def test_get_direct_access_models_sentinel_returns_all_non_team_models():
 
 
 def test_get_direct_access_models_empty_list_returns_all_non_team_models():
-    """models == [] returns all non-team model IDs (Pfizer's case — the bug PR #22875 missed)."""
+    """models == [] returns all non-team model IDs (empty-list shape — the bug PR #22875 missed)."""
     from litellm.proxy.proxy_server import get_direct_access_models
 
     mock_user = MagicMock()
