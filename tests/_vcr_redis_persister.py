@@ -159,6 +159,30 @@ def make_redis_persister(
         @staticmethod
         def load_cassette(cassette_path, serializer):
             key = redis_key_for(cassette_path)
+            # TEMP DIAGNOSTIC: trace load outcomes for the handful of cassettes
+            # that re-record every run despite being present in Redis. Remove
+            # before merge. Logs key, GET length-or-None, and EXISTS so CI shows
+            # exactly what the in-process client sees at load time.
+            _dbg = any(
+                m in key
+                for m in (
+                    "test_aaapass_through_endpoint_pass_through_keys_langfuse",
+                    "test_arize_phoenix/test_async_otel_callback",
+                    "test_add_custom_logger_callback_to_specific",
+                )
+            )
+            if _dbg:
+                try:
+                    _d = redis_client.get(key)
+                    _e = redis_client.exists(key)
+                    _log.warning(
+                        "[vcr-loaddbg] key=%s get=%s exists=%s",
+                        key,
+                        ("None" if _d is None else f"{len(_d)}B"),
+                        _e,
+                    )
+                except Exception as _exc:  # pragma: no cover - diagnostic only
+                    _log.warning("[vcr-loaddbg] key=%s probe-error=%r", key, _exc)
             try:
                 data = redis_client.get(key)
             except RedisError as exc:
