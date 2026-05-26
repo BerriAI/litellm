@@ -14,6 +14,7 @@ Auth: OAuth2 Bearer token (not an API key).
 import json
 from typing import List, Optional
 
+from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
 
@@ -26,6 +27,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     """
 
     def __init__(self, access_token: str, project: str, location: str) -> None:
+        super().__init__()
         self._access_token = access_token
         self._project = project
         self._location = location
@@ -138,6 +140,62 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     # Request translation
     # ------------------------------------------------------------------
 
+    def _vertex_model_path(self, model: str) -> str:
+        """Return the fully-qualified Vertex AI model resource path."""
+        return (
+            f"projects/{self._project}"
+            f"/locations/{self._location}"
+            f"/publishers/google/models/{model}"
+        )
+
+    def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
+        """Build Vertex AI setup configuration with proper model path and defaults."""
+        # Normalize GA-remapped fields (``output_modalities``, nested
+        # ``audio.input.transcription``, ``audio.input.turn_detection``) back to
+        # their flat beta keys so ``map_openai_params`` picks them up. Without
+        # this, GA clients' explicit modality / transcription / turn-detection
+        # settings would be silently dropped because ``map_openai_params`` only
+        # recognises the flat OpenAI-beta key names.
+        session_params = self._normalize_session_payload_for_mapping(session_params)
+        setup_config = self.map_openai_params(
+            optional_params={}, non_default_params=session_params
+        )
+
+        # Use full Vertex AI model path
+        setup_config["model"] = self._vertex_model_path(model)
+
+        # Add Vertex AI specific defaults if not provided
+        generation_config = setup_config.setdefault("generationConfig", {})
+        generation_config.setdefault("responseModalities", ["AUDIO"])
+
+        # Ensure Vertex defaults for realtimeInputConfig apply even when
+        # the client provided a partial ``turn_detection`` (e.g. only
+        # ``silence_duration_ms``). ``map_automatic_turn_detection`` sets
+        # ``disabled=True`` whenever ``create_response`` is absent or
+        # ``False``. Force ``disabled=False`` only when the client did
+        # not explicitly request ``create_response: False`` — that path
+        # is how transcription guardrails suppress automatic responses,
+        # and overriding it here would silently bypass the guardrail.
+        # Vertex Live has no "VAD on, no auto-response" mode, so callers
+        # that need that behaviour must accept that VAD is off.
+        client_turn_detection = session_params.get("turn_detection")
+        client_disabled_auto_response = (
+            isinstance(client_turn_detection, dict)
+            and client_turn_detection.get("create_response") is False
+        )
+        realtime_input_config = setup_config.setdefault("realtimeInputConfig", {})
+        automatic_detection = realtime_input_config.setdefault(
+            "automaticActivityDetection", {}
+        )
+        if not client_disabled_auto_response:
+            automatic_detection["disabled"] = False
+        automatic_detection.setdefault("silenceDurationMs", 800)
+
+        setup_config.setdefault("inputAudioTranscription", {})
+        setup_config.setdefault("outputAudioTranscription", {})
+
+        return setup_config
+
     def transform_realtime_request(
         self,
         message: str,
@@ -147,16 +205,50 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """
         Translate OpenAI realtime client messages to Vertex AI format.
 
-        ``session.update`` is intentionally ignored (returns []) because
-        Vertex AI only accepts a single ``setup`` message at the start of
-        the connection — sending a second one causes a 1007 close error.
-        The initial setup (sent automatically before bidirectional_forward)
-        already includes AUDIO modality and server VAD, so there is nothing
-        more to configure.
+        On the first ``session.update`` (when no setup has been sent yet) the
+        full ``BidiGenerateContentSetup`` is built with Vertex AI's model path
+        and forwarded. Any later ``session.update`` is dropped: Vertex AI
+        documents ``setup`` as the first-and-only client message, and a second
+        ``setup`` closes the connection with a 1007 policy error.
         """
         json_message = json.loads(message)
-        if json_message.get("type") == "session.update":
-            # Do not forward as a second setup — Vertex AI rejects it.
+        msg_type = json_message.get("type")
+
+        if msg_type == "session.update":
+            if session_configuration_request is None:
+                setup_config = self._build_vertex_ai_setup_config(
+                    model, json_message.get("session") or {}
+                )
+                gemini_setup_msg = json.dumps({"setup": setup_config})
+
+                verbose_logger.debug(
+                    "Vertex AI Realtime: Sending initial setup with tools to backend"
+                )
+                return [gemini_setup_msg]
+
+            # A follow-up session.update can't be forwarded as a second setup
+            # (Vertex Live closes the WebSocket with 1007). If this drop is
+            # silencing the audio-transcription guardrail's create_response
+            # disable, surface a warning so operators know the model will
+            # auto-respond before the guardrail can gate it on Vertex AI.
+            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
+                json_message.get("session") or {}
+            )
+            if (
+                isinstance(client_turn_detection, dict)
+                and client_turn_detection.get("create_response") is False
+            ):
+                verbose_logger.warning(
+                    "Vertex AI Realtime: Dropping subsequent session.update "
+                    "(turn_detection.create_response=False) — Vertex Live "
+                    "rejects a second setup message. Audio-transcription "
+                    "guardrails cannot suppress the model's auto-response on "
+                    "Vertex AI in non-deferred mode."
+                )
+            else:
+                verbose_logger.debug(
+                    "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+                )
             return []
 
         return super().transform_realtime_request(
