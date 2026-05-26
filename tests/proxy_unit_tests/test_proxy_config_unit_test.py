@@ -316,3 +316,46 @@ async def test_json_logs_calls_turn_on_json():
         # Cleanup
         os.unlink(temp_file_path)
         litellm.json_logs = False
+
+
+@pytest.mark.asyncio
+async def test_use_chat_completions_url_for_anthropic_messages_loaded_from_litellm_settings():
+    """
+    use_chat_completions_url_for_anthropic_messages: true in litellm_settings must be
+    applied to litellm.use_chat_completions_url_for_anthropic_messages during proxy startup.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28756.
+    """
+    import litellm
+    import tempfile
+    import yaml
+
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {
+            "use_chat_completions_url_for_anthropic_messages": True
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    original = litellm.use_chat_completions_url_for_anthropic_messages
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=None,
+            config_file_path=temp_file_path,
+        )
+        assert litellm.use_chat_completions_url_for_anthropic_messages is True
+    finally:
+        os.unlink(temp_file_path)
+        litellm.use_chat_completions_url_for_anthropic_messages = original

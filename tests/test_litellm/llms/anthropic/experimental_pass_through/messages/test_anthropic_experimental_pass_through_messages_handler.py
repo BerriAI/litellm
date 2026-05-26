@@ -673,3 +673,42 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     assert spy.call_count == 1
     assert captured["presanitized"] is True
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+def test__should_not_route_to_responses_api_when_use_chat_completions_url_set():
+    """
+    When litellm.use_chat_completions_url_for_anthropic_messages is True, openai-provider
+    requests must go through chat/completions, not the Responses API.
+    """
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    original = litellm.use_chat_completions_url_for_anthropic_messages
+    try:
+        litellm.use_chat_completions_url_for_anthropic_messages = True
+        assert _should_route_to_responses_api("openai") is False
+    finally:
+        litellm.use_chat_completions_url_for_anthropic_messages = original
+
+
+def test__should_route_to_responses_api_default_behavior():
+    """
+    Without the opt-out flag, openai provider must use the Responses API path and
+    non-openai providers must not.
+    """
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    original = litellm.use_chat_completions_url_for_anthropic_messages
+    try:
+        litellm.use_chat_completions_url_for_anthropic_messages = False
+        assert _should_route_to_responses_api("openai") is True
+        assert _should_route_to_responses_api("anthropic") is False
+        assert _should_route_to_responses_api("azure") is False
+        assert _should_route_to_responses_api(None) is False
+    finally:
+        litellm.use_chat_completions_url_for_anthropic_messages = original
