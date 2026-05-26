@@ -891,6 +891,19 @@ async def get_customer_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
     # Parse comma-separated ids
     end_user_ids_list = end_user_ids.split(",") if end_user_ids else None
     exclude_end_user_ids_list: Optional[List[str]] = None
