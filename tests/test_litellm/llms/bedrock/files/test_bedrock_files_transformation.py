@@ -840,6 +840,63 @@ class TestBedrockFilesEmbeddingTransformation:
                 model
             ), f"{model} unexpectedly missed the Titan v2 marker"
 
+    def test_titan_v2_rejected_when_registry_mode_disagrees(self, mocker):
+        """If the registry resolves the id but says mode != embedding, reject."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        # Marker matches but registry claims this is chat - trust the registry
+        # and refuse to route through the embedding path.
+        mocker.patch("litellm.get_model_info", return_value={"mode": "chat"})
+        assert not BedrockFilesConfig._is_titan_v2_embed_model(
+            "amazon.titan-embed-text-v2:0"
+        ), "registry mode=chat must override the marker match"
+
+    def test_titan_v2_accepted_when_registry_confirms_embedding(self, mocker):
+        """Happy path: marker matches and registry says mode=embedding."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
+        assert BedrockFilesConfig._is_titan_v2_embed_model(
+            "amazon.titan-embed-text-v2:0"
+        )
+
+    def test_titan_v2_accepted_when_registry_silent(self, mocker):
+        """Marker-only match is fine for ids the registry can't resolve
+        (cross-region profile prefixes, ARN forms)."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
+        assert BedrockFilesConfig._is_titan_v2_embed_model(
+            "us.amazon.titan-embed-text-v2:0"
+        )
+        assert BedrockFilesConfig._is_titan_v2_embed_model(
+            "arn:aws:bedrock:us-east-1:123:foundation-model/amazon.titan-embed-text-v2:0"
+        )
+
+    def test_lookup_registry_mode_helper(self, mocker):
+        """Direct coverage of the extracted registry helper."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        # Happy path: returns the mode string
+        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
+        assert BedrockFilesConfig._lookup_registry_mode("anything") == "embedding"
+
+        # Registry raises -> None
+        mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
+        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+
+        # Registry returns non-dict -> None
+        mocker.patch("litellm.get_model_info", return_value="not a dict")
+        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+
+        # Registry returns dict without mode -> None
+        mocker.patch("litellm.get_model_info", return_value={})
+        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+
+        # Registry returns dict with non-string mode -> None
+        mocker.patch("litellm.get_model_info", return_value={"mode": 42})
+        assert BedrockFilesConfig._lookup_registry_mode("anything") is None
+
     def test_is_embedding_record_helper(self):
         """Helper detects embeddings via `url` first, then by body shape."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
