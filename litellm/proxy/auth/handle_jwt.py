@@ -255,6 +255,11 @@ class JWTHandler:
                 return issuer_team_ids
             if isinstance(issuer_team_ids, str):
                 return [issuer_team_ids]
+            # Issuer-scoped claim exists but has an unexpected type
+            # (e.g. int/dict from an unusual upstream mapping). Don't silently
+            # fall through to the global ``team_ids_jwt_field`` path — that
+            # would read a semantically unrelated claim on the same token.
+            return []
 
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
             team_ids: Optional[List[str]] = get_nested_value(
@@ -971,7 +976,18 @@ class JWTHandler:
         self,
         audience: Optional[Union[str, List[str]]],
         issuer: Optional[str] = None,
+        disable_audience_validation: bool = False,
     ) -> Optional[dict]:
+        # Disabling audience verification must be an explicit choice — never
+        # an implicit consequence of ``audience`` being None. Otherwise a
+        # caller that accidentally constructs a config with ``audience=None``
+        # (bypassing the model validator) would silently lose audience
+        # validation. Require callers to opt in via
+        # ``disable_audience_validation=True``.
+        if audience is None and not disable_audience_validation:
+            raise ValueError(
+                "audience must be provided unless disable_audience_validation=True"
+            )
         options: dict = {}
         if audience is None:
             options["verify_aud"] = False
@@ -986,11 +1002,16 @@ class JWTHandler:
         audience: Optional[Union[str, List[str]]],
         issuer: Optional[str] = None,
         options: Optional[dict] = None,
+        disable_audience_validation: bool = False,
     ) -> dict:
         decode_options = (
             options
             if options is not None
-            else self._get_decode_options(audience=audience, issuer=issuer)
+            else self._get_decode_options(
+                audience=audience,
+                issuer=issuer,
+                disable_audience_validation=disable_audience_validation,
+            )
         )
 
         if isinstance(public_key, dict):
@@ -1035,6 +1056,7 @@ class JWTHandler:
                 public_key=public_key,
                 audience=issuer_config.audience,
                 issuer=issuer_config.issuer,
+                disable_audience_validation=issuer_config.disable_audience_validation,
             )
         except jwt.ExpiredSignatureError:
             raise Exception("Token Expired")

@@ -1456,6 +1456,13 @@ if MCP_AVAILABLE:
                         f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                     )
                     return filtered_tools
+                except MCPUpstreamAuthError:
+                    # Surface upstream 401/403 to the outer handler so the
+                    # client receives a proper WWW-Authenticate challenge
+                    # instead of a silently empty tool list. Without this
+                    # re-raise the broad ``except Exception`` below would
+                    # swallow the auth error.
+                    raise
                 except Exception as e:
                     verbose_logger.exception(
                         f"Error getting tools from server {server.name}: {str(e)}"
@@ -2960,7 +2967,7 @@ if MCP_AVAILABLE:
                     _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
                 else:
                     _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                authorization_uri = f"Bearer authorization_uri={_as_url}"
+                authorization_uri = f'Bearer authorization_uri="{_as_url}"'
 
                 raise HTTPException(
                     status_code=401,
