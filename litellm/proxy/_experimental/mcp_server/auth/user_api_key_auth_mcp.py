@@ -882,6 +882,9 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         try:
+            if user_api_key_auth is None:
+                return []
+
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
@@ -951,13 +954,34 @@ class MCPRequestHandler:
         Note: object_permission is automatically loaded by get_team_object() in main auth flow.
         """
         try:
+            if user_api_key_auth is None or user_api_key_auth.team_id is None:
+                return []
+
+            try:
+                team_access_group_ids = (
+                    await MCPRequestHandler._get_team_access_group_ids(
+                        user_api_key_auth
+                    )
+                )
+                team_access_group_servers = (
+                    await MCPRequestHandler._get_mcp_server_ids_from_team_access_groups(
+                        user_api_key_auth=user_api_key_auth,
+                        team_access_group_ids=team_access_group_ids,
+                    )
+                )
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to expand team access groups for MCP servers: {str(e)}"
+                )
+                team_access_group_servers = []
+
             # Get team object permission (already loaded in main auth flow)
             object_permissions = await MCPRequestHandler._get_team_object_permission(
                 user_api_key_auth
             )
 
             if object_permissions is None:
-                return []
+                return list(set(team_access_group_servers))
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -983,11 +1007,121 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + access_group_servers
+                + tool_perm_servers
+                + team_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_mcp_server_ids_from_team_access_groups(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        team_access_group_ids: List[str],
+    ) -> List[str]:
+        """
+        Collect MCP server IDs from unified team access groups.
+
+        A team only receives MCP servers from an access group if the access
+        group row also assigns itself back to the team. This keeps a mutable
+        team.access_group_ids value from granting another team's access group.
+        """
+        if (
+            user_api_key_auth is None
+            or not user_api_key_auth.team_id
+            or not team_access_group_ids
+        ):
+            return []
+
+        try:
+            from litellm.proxy.auth.auth_checks import get_access_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if prisma_client is None or user_api_key_cache is None:
+                return []
+
+            mcp_server_ids: List[str] = []
+            for access_group_id in team_access_group_ids:
+                try:
+                    access_group = await get_access_object(
+                        access_group_id=access_group_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except Exception as e:
+                    verbose_logger.debug(
+                        "Failed to load team access group %s for MCP servers: %s",
+                        access_group_id,
+                        str(e),
+                    )
+                    continue
+
+                if user_api_key_auth.team_id not in (
+                    access_group.assigned_team_ids or []
+                ):
+                    continue
+
+                mcp_server_ids.extend(access_group.access_mcp_server_ids or [])
+
+            return list(set(mcp_server_ids))
+        except Exception as e:
+            verbose_logger.debug(
+                f"Failed to get MCP servers from team access groups: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_team_access_group_ids(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get unified access-group IDs assigned to the user's team.
+
+        These are distinct from object_permission.mcp_access_groups: unified
+        access groups can grant MCP servers directly via access_mcp_server_ids,
+        and teams may have those groups even when no object_permission row was
+        created for the team.
+        """
+        try:
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if (
+                not user_api_key_auth
+                or not user_api_key_auth.team_id
+                or not prisma_client
+            ):
+                return []
+
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_obj is None:
+                return []
+
+            return list(team_obj.access_group_ids or [])
+        except Exception as e:
+            verbose_logger.debug(
+                f"Failed to get team access group IDs for MCP servers: {str(e)}"
             )
             return []
 
