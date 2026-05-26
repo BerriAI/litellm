@@ -855,3 +855,61 @@ class TestBedrockFilesEmbeddingTransformation:
         )
         # ambiguous body without `input` is treated as not-embedding
         assert not BedrockFilesConfig._is_embedding_record({"body": {}})
+
+    def test_explicit_chat_url_with_input_body_short_circuits_to_chat(self):
+        """Explicit url=/v1/chat/completions wins even if body looks like embedding.
+
+        Without this short-circuit, a chat record whose body happens to carry
+        `input` (and no `messages`) would be mis-routed to the embedding
+        transformer, corrupting the modelInput.
+        """
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        # Direct helper assertion
+        assert not BedrockFilesConfig._is_embedding_record(
+            {
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "input": "this would mis-route under the old precedence",
+                },
+            }
+        )
+
+        # End-to-end: a record like this routes through the chat path. We
+        # just need to make sure we DON'T silently produce an inputText
+        # body and call it a chat completion.
+        config = BedrockFilesConfig()
+        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "explicit-chat-with-input",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "input": "should not become inputText",
+                        "max_tokens": 5,
+                    },
+                }
+            ]
+        )
+
+        model_input = result[0]["modelInput"]
+        assert (
+            "inputText" not in model_input
+        ), "explicit chat URL must not produce an embedding-shaped modelInput"
+
+    def test_other_non_embedding_urls_route_to_chat(self):
+        """Any non-/v1/embeddings url short-circuits to chat path."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        # /v1/completions (legacy completions endpoint)
+        assert not BedrockFilesConfig._is_embedding_record(
+            {"url": "/v1/completions", "body": {"input": "x"}}
+        )
+        # Arbitrary unknown url - caller's explicit signal still wins
+        assert not BedrockFilesConfig._is_embedding_record(
+            {"url": "/v1/responses", "body": {"input": "x"}}
+        )
