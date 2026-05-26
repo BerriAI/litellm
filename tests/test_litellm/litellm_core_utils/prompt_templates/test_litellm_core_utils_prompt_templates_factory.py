@@ -2818,7 +2818,12 @@ def test_make_valid_bedrock_tool_use_id_empty_passthrough():
     )
 
     assert make_valid_bedrock_tool_use_id("") == ""
-    assert make_valid_bedrock_tool_use_id(None) is None
+    # The signature is ``str -> str`` to match downstream TypedDict callers
+    # (``BedrockToolUseBlock.toolUseId``); the helper still defensively returns
+    # the input unchanged when None slips in. Suppress the resulting mypy
+    # error here — annotating the helper as ``Optional[str]`` would force a
+    # cascade of ``cast(str, ...)`` calls at the use sites.
+    assert make_valid_bedrock_tool_use_id(None) is None  # type: ignore[arg-type]
 
 
 def test_bedrock_tool_call_invoke_sanitizes_drifted_name_and_id():
