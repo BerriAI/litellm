@@ -12,27 +12,20 @@ USER root
 
 COPY --from=uvbin /uv /uvx /usr/local/bin/
 
-# Install build deps. `nodejs`/`npm` are present so that `prisma generate`
-# below uses the Wolfi-built Node (PRISMA_USE_GLOBAL_NODE picks it up) rather
-# than letting prisma-client-py's nodeenv download "latest stable" Node from
-# nodejs.org. Without this, the build is a moving target — e.g. Node 26.2.0's
-# prebuilt linux binary added a runtime dep on `libatomic.so.1` that isn't in
-# the Wolfi builder, silently breaking `prisma generate` between releases.
-# Retry the install to ride out transient apk.cgr.dev mirror flakes on the
-# arm64 leg of multi-arch builds.
+# nodejs/npm so `prisma generate` uses Wolfi's Node via PRISMA_USE_GLOBAL_NODE
+# instead of nodeenv downloading one whose dynamic deps may not be in Wolfi
+# (e.g. Node 26.2.0 needs libatomic). Retry for transient apk.cgr.dev flakes.
 RUN for i in 1 2 3; do \
       apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break || sleep 5; \
     done
 
-# UV_COMPILE_BYTECODE=1     precompiles .pyc at install time → faster cold start.
-# UV_LINK_MODE=copy         avoids hardlink warnings when uv installs from a
-#                           BuildKit cache mount (different filesystem).
-# UV_PYTHON_DOWNLOADS=0     force uv to use the apk-installed CPython instead of
-#                           silently pulling a managed interpreter.
-# PRISMA_USE_GLOBAL_NODE=true  prisma-client-py defaults to this, but stating it
-#                           explicitly documents the intent and prevents a
-#                           future env override from silently re-enabling
-#                           nodeenv's runtime Node download.
+# UV_COMPILE_BYTECODE=1   precompiles .pyc at install time → faster cold start.
+# UV_LINK_MODE=copy       avoids hardlink warnings when uv installs from a
+#                         BuildKit cache mount (different filesystem).
+# UV_PYTHON_DOWNLOADS=0   force uv to use the apk-installed CPython instead of
+#                         silently pulling a managed interpreter.
+# PRISMA_USE_GLOBAL_NODE  explicit (matches default) so an env override can't
+#                         silently re-enable nodeenv's Node download.
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
