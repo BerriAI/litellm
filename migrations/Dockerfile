@@ -31,12 +31,25 @@ USER root
 
 COPY --from=uvbin /uv /uvx /usr/local/bin/
 
-RUN apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile
+# `nodejs`/`npm` are present so that `prisma generate` below uses the
+# Wolfi-built Node (PRISMA_USE_GLOBAL_NODE picks it up) rather than letting
+# prisma-client-py's nodeenv download "latest stable" Node from nodejs.org.
+# Without this, the build is a moving target — e.g. Node 26.2.0's prebuilt
+# linux binary added a runtime dep on `libatomic.so.1` that isn't in the
+# Wolfi builder, silently breaking `prisma generate` between releases. Retry
+# to ride out transient apk.cgr.dev mirror flakes on multi-arch builds.
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break || sleep 5; \
+    done
 
+# PRISMA_USE_GLOBAL_NODE=true is the prisma-client-py default; stating it
+# explicitly documents intent and prevents a future env override from
+# silently re-enabling nodeenv's runtime Node download.
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=0 \
+    PRISMA_USE_GLOBAL_NODE=true \
     PATH="/app/.venv/bin:${PATH}"
 
 # Stage 1 — install third-party deps only (cached by pyproject.toml/uv.lock).
@@ -78,7 +91,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-RUN apk add --no-cache bash openssl tzdata python3 libsndfile libatomic
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash openssl tzdata python3 libsndfile libatomic && break || sleep 5; \
+    done
 
 # wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532). The
 # Prisma engine binaries are dynamically linked against libssl/libcrypto, so
