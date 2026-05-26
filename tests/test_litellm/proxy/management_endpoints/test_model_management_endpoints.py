@@ -1684,6 +1684,117 @@ class TestUpdateDBModelClearPricing:
         assert "input_cost_per_token" not in params
         assert "input_cost_per_token" not in info
 
+    def test_clear_cache_read_cost_removes_from_both_blobs(self):
+        """cache_read_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-read overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_read_input_token_cost=0.0000005,
+            ),
+            model_info=ModelInfo(id="dep-cache-read-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+
+    def test_clear_cache_write_cost_removes_from_both_blobs(self):
+        """cache_creation_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-write overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-write-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_creation_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_creation_input_token_cost" not in params
+        assert "cache_creation_input_token_cost" not in info
+
+    def test_clear_cache_read_preserves_other_pricing(self):
+        """Clearing cache_read must not touch input/output cost overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+                output_cost_per_token=0.000002,
+                cache_read_input_token_cost=0.0000005,
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-mixed-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+        # Other pricing untouched in both blobs
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000002
+        assert params["cache_creation_input_token_cost"] == 0.000003
+        assert info["input_cost_per_token"] == 0.000001
+        assert info["output_cost_per_token"] == 0.000002
+        assert info["cache_creation_input_token_cost"] == 0.000003
+
 
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`

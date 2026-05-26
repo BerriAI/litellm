@@ -135,10 +135,11 @@ def update_db_model(
     # passes through (which today re-sends the OLD pricing on every save) cannot
     # silently undo a litellm_params clear via .update().
     #
-    # Restricted to SPECIAL_MODEL_INFO_PARAMS (the 4 pricing fields) so this path
-    # cannot be used to null out privileged model_info fields like team_id or access
-    # groups. SPECIAL_MODEL_INFO_PARAMS are mirrored between litellm_params and
-    # model_info by Deployment.__init__, so the clear propagates to both blobs.
+    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
+    # and cache read/write costs) so this path cannot be used to null out privileged
+    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
+    # mirrored between litellm_params and model_info by Deployment.__init__, so the
+    # clear propagates to both blobs.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
             if (

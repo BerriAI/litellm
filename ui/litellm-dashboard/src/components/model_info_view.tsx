@@ -272,8 +272,10 @@ export default function ModelInfoView({
         }
       }
 
-      // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).
-      // Guard the fallback against null — a cleared input cost must not silently wipe cache-read too.
+      // Cache Read Cost:
+      //   - explicit value provided → use it
+      //   - field touched but empty → explicit null (signals backend to remove override)
+      //   - only input_cost touched → fall back to input_cost (guarded against null)
       if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
         if (
           values.cache_read_cost !== undefined &&
@@ -281,6 +283,8 @@ export default function ModelInfoView({
           values.cache_read_cost !== ""
         ) {
           updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
+        } else if (form.isFieldTouched("cache_read_cost")) {
+          updatedLitellmParams.cache_read_input_token_cost = null;
         } else if (
           updatedLitellmParams.input_cost_per_token !== undefined &&
           updatedLitellmParams.input_cost_per_token !== null
@@ -289,9 +293,9 @@ export default function ModelInfoView({
         }
       }
 
-      // Cache Write Cost: explicit value if provided, else clear the override
-      // so the backend falls back to the model-level default. Sending 0 here
-      // would persist a zero rate even when the user intended to unset it.
+      // Cache Write Cost: explicit value if provided, else explicit null so the
+      // backend removes the override and falls back to the model-level default.
+      // Sending 0 here would persist a zero rate even when the user intended to unset it.
       if (form.isFieldTouched("cache_write_cost")) {
         if (
           values.cache_write_cost !== undefined &&
@@ -300,7 +304,7 @@ export default function ModelInfoView({
         ) {
           updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
         } else {
-          delete updatedLitellmParams.cache_creation_input_token_cost;
+          updatedLitellmParams.cache_creation_input_token_cost = null;
         }
       }
 

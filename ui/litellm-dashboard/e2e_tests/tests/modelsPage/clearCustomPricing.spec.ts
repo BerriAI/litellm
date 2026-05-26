@@ -3,14 +3,15 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Role, users } from "../../fixtures/users";
 
 /**
- * Regression: clearing the Input/Output Cost fields on a deployment with a
- * user-set pricing override must actually remove the override from both
- * `litellm_params` and `model_info`.
+ * Regression: clearing the Input / Output / Cache Read / Cache Write Cost
+ * fields on a deployment with a user-set pricing override must actually remove
+ * the override from both `litellm_params` and `model_info`.
  *
  * Pre-fix, the UI sent the old pricing back on every save (the spread of
  * `values.litellm_params` re-injected it), and the backend's `exclude_none=True`
  * stripped any null that did make it through. End-result: the dashboard
- * displayed "Saved" but the override remained in the DB.
+ * displayed "Saved" but the override remained in the DB. The cache fields had
+ * the same bug in a parallel code path and are covered here too.
  */
 test.describe("Clear custom pricing on a deployment", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -18,6 +19,8 @@ test.describe("Clear custom pricing on a deployment", () => {
   const masterKey = users[Role.ProxyAdmin].password;
   const SEED_INPUT_PER_TOKEN = 0.0000777;
   const SEED_OUTPUT_PER_TOKEN = 0.0000999;
+  const SEED_CACHE_READ_PER_TOKEN = 0.0000333;
+  const SEED_CACHE_WRITE_PER_TOKEN = 0.0000555;
 
   // Unique-per-run name so concurrent / repeated runs don't collide on the
   // shared dashboard DB. Captured here so afterEach can clean it up.
@@ -35,6 +38,8 @@ test.describe("Clear custom pricing on a deployment", () => {
           api_key: "sk-e2e-not-used",
           input_cost_per_token: SEED_INPUT_PER_TOKEN,
           output_cost_per_token: SEED_OUTPUT_PER_TOKEN,
+          cache_read_input_token_cost: SEED_CACHE_READ_PER_TOKEN,
+          cache_creation_input_token_cost: SEED_CACHE_WRITE_PER_TOKEN,
         },
         model_info: {},
       },
@@ -76,15 +81,19 @@ test.describe("Clear custom pricing on a deployment", () => {
     await expect(page.getByText("77.7000")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("99.9000")).toBeVisible({ timeout: 10_000 });
 
-    // Open the edit form and clear both pricing fields.
+    // Open the edit form and clear all four pricing fields.
     await page.getByRole("button", { name: "Edit Settings" }).click();
     const inputCost = page.getByPlaceholder("Enter input cost");
     const outputCost = page.getByPlaceholder("Enter output cost");
+    // Both cache fields share the same placeholder ("Defaults to Input Cost if blank"),
+    // so disambiguate via the Form.Item id (AntD assigns the `name` prop as input id).
+    const cacheReadCost = page.locator("#cache_read_cost");
+    const cacheWriteCost = page.locator("#cache_write_cost");
     await inputCost.waitFor({ timeout: 15_000 });
-    await inputCost.click({ clickCount: 3 });
-    await page.keyboard.press("Delete");
-    await outputCost.click({ clickCount: 3 });
-    await page.keyboard.press("Delete");
+    for (const field of [inputCost, outputCost, cacheReadCost, cacheWriteCost]) {
+      await field.click({ clickCount: 3 });
+      await page.keyboard.press("Delete");
+    }
 
     // Capture the outgoing PATCH so we can assert the UI sends explicit nulls.
     const patchPromise = page.waitForRequest(
@@ -102,6 +111,14 @@ test.describe("Clear custom pricing on a deployment", () => {
     expect(
       patchBody.litellm_params.output_cost_per_token,
       "UI sends explicit null for cleared output cost"
+    ).toBeNull();
+    expect(
+      patchBody.litellm_params.cache_read_input_token_cost,
+      "UI sends explicit null for cleared cache_read cost"
+    ).toBeNull();
+    expect(
+      patchBody.litellm_params.cache_creation_input_token_cost,
+      "UI sends explicit null for cleared cache_write cost"
     ).toBeNull();
 
     // Success toast confirms the save was accepted.
@@ -133,6 +150,14 @@ test.describe("Clear custom pricing on a deployment", () => {
       "litellm_params.output_cost_per_token key removed"
     ).toBe(false);
     expect(
+      "cache_read_input_token_cost" in row.litellm_params,
+      "litellm_params.cache_read_input_token_cost key removed"
+    ).toBe(false);
+    expect(
+      "cache_creation_input_token_cost" in row.litellm_params,
+      "litellm_params.cache_creation_input_token_cost key removed"
+    ).toBe(false);
+    expect(
       row.model_info.input_cost_per_token,
       "model_info.input_cost_per_token no longer the seeded override"
     ).not.toBe(SEED_INPUT_PER_TOKEN);
@@ -140,5 +165,13 @@ test.describe("Clear custom pricing on a deployment", () => {
       row.model_info.output_cost_per_token,
       "model_info.output_cost_per_token no longer the seeded override"
     ).not.toBe(SEED_OUTPUT_PER_TOKEN);
+    expect(
+      row.model_info.cache_read_input_token_cost,
+      "model_info.cache_read_input_token_cost no longer the seeded override"
+    ).not.toBe(SEED_CACHE_READ_PER_TOKEN);
+    expect(
+      row.model_info.cache_creation_input_token_cost,
+      "model_info.cache_creation_input_token_cost no longer the seeded override"
+    ).not.toBe(SEED_CACHE_WRITE_PER_TOKEN);
   });
 });
