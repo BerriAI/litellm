@@ -22,8 +22,18 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
 def _make_cache(configured_ttl):
-    """Build a UserApiKeyCache the way ``proxy_server.py`` does at startup."""
-    cache = UserApiKeyCache(default_in_memory_ttl=60)
+    """Build a UserApiKeyCache the way ``proxy_server.py`` does at startup.
+
+    Initialise with ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` (same
+    value the production initialiser uses) so the sentinel equality guard in
+    ``_coerce_management_object_ttl`` sees a matching ``default_in_memory_ttl``
+    when no user TTL has been configured. Hardcoding 60 here would drift if
+    the constant is customised via env var, producing misleading regression
+    results.
+    """
+    cache = UserApiKeyCache(
+        default_in_memory_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+    )
     if configured_ttl is not None:
         cache.update_cache_ttl(
             default_in_memory_ttl=configured_ttl,
@@ -56,7 +66,8 @@ async def test_configured_ttl_overrides_management_object_constant():
 
 @pytest.mark.asyncio
 async def test_default_ttl_unchanged_when_unconfigured():
-    """No ``user_api_key_cache_ttl`` set -> entries keep the historical 60s TTL.
+    """No ``user_api_key_cache_ttl`` set -> entries keep the historical default
+    TTL (``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``, normally 60s).
     Regression guard against accidentally widening the cache for everyone."""
     import time
 
@@ -69,8 +80,9 @@ async def test_default_ttl_unchanged_when_unconfigured():
         ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
     ttl_actual = cache.in_memory_cache.ttl_dict["lit-3338-default-key"] - before
-    assert 55 <= ttl_actual <= 65, (
-        f"default 60s TTL drifted to {ttl_actual:.1f}s (LIT-3338 regression)"
+    expected = DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+    assert expected - 5 <= ttl_actual <= expected + 5, (
+        f"default {expected}s TTL drifted to {ttl_actual:.1f}s (LIT-3338 regression)"
     )
 
 
@@ -82,15 +94,22 @@ async def test_explicit_non_management_ttl_is_not_coerced():
 
     cache = _make_cache(configured_ttl=300)
 
+    # Pick an arbitrary ttl that is provably not the management sentinel.
+    non_sentinel_ttl = DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL // 2 + 1
+    assert non_sentinel_ttl != DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+
     before = time.time()
     await cache.async_set_cache(
-        key="lit-3338-explicit-30",
+        key="lit-3338-explicit-non-sentinel",
         value={"ok": True},
-        ttl=30,
+        ttl=non_sentinel_ttl,
     )
-    ttl_actual = cache.in_memory_cache.ttl_dict["lit-3338-explicit-30"] - before
-    assert 25 <= ttl_actual <= 35, (
-        f"explicit ttl=30 was coerced to {ttl_actual:.1f}s -- caller intent broken"
+    ttl_actual = (
+        cache.in_memory_cache.ttl_dict["lit-3338-explicit-non-sentinel"] - before
+    )
+    assert non_sentinel_ttl - 5 <= ttl_actual <= non_sentinel_ttl + 5, (
+        f"explicit ttl={non_sentinel_ttl} was coerced to {ttl_actual:.1f}s "
+        f"-- caller intent broken"
     )
 
 
