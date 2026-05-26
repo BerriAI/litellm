@@ -244,19 +244,26 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Decide whether an OpenAI batch JSONL line is an embedding request.
 
-        Precedence:
-          1. Explicit `url == "/v1/embeddings"` wins - this is authoritative
-             per the OpenAI Batch API spec.
-          2. Otherwise we fall back to body shape and require both `input`
-             present AND `messages` absent. The `messages absent` half is
-             important: a malformed record with both fields routes to the
-             chat path (safer default - Anthropic transforms ignore unknown
-             top-level keys, whereas the embedding transformer would silently
-             drop the messages).
+        Precedence (strict - any explicit `url` short-circuits):
+          1. `url == "/v1/embeddings"` -> embedding. Authoritative per the
+             OpenAI Batch API spec.
+          2. Any other non-empty `url` (e.g. `/v1/chat/completions`) -> NOT
+             embedding. We trust the caller's explicit signal even if the
+             body would otherwise suggest embedding; misrouting a chat
+             record into the embedding transformer would corrupt the
+             modelInput, while a chat-shaped body sent to the chat path
+             either succeeds or fails cleanly inside that transformer.
+          3. `url` missing/empty -> fall back to body shape. Requires
+             `input` present AND `messages` absent so a malformed record
+             carrying both keys routes to the chat path (safer default:
+             Anthropic transforms ignore unknown top-level keys, whereas
+             the embedding transformer would silently drop the messages).
         """
         url = openai_jsonl_record.get("url")
         if url == BedrockFilesConfig.OPENAI_EMBEDDINGS_URL:
             return True
+        if url:
+            return False
         body = openai_jsonl_record.get("body", {})
         if not isinstance(body, dict):
             return False
