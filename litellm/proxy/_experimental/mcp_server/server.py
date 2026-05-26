@@ -18,6 +18,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -2935,15 +2936,32 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
         user_api_key_auth: Optional[UserAPIKeyAuth],
         client_ip: Optional[str],
+        allowed_server_ids: Optional[Set[str]] = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
         (points clients at the gateway AS metadata) and pass-through OAuth
-        (points clients at the upstream resource-metadata via our well-known)."""
+        (points clients at the upstream resource-metadata via our well-known).
+
+        ``allowed_server_ids`` may be passed by callers that have already
+        narrowed the authorized server set (e.g. toolset scoping); servers
+        not in that set are skipped so a client targeting a toolset that
+        excludes a passthrough server is not pushed into an OAuth flow for
+        a server it will be 403'd on immediately after authentication.
+        """
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(
                 server_name, client_ip=client_ip
             )
+            if (
+                server is not None
+                and allowed_server_ids is not None
+                and server.server_id not in allowed_server_ids
+            ):
+                # Caller's narrowed scope excludes this server — skip the
+                # preemptive challenge and let downstream authorization
+                # return 403.
+                continue
             if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
                 # For per-user OAuth servers, only skip the pre-emptive 401 when
                 # a stored token actually exists for this user+server pair.
@@ -3177,15 +3195,6 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-            await _raise_preemptive_401_for_unauthenticated_servers(
-                scope=scope,
-                mcp_servers=mcp_servers,
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_client_ip,
-            )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [
@@ -3197,10 +3206,28 @@ if MCP_AVAILABLE:
             # Apply toolset scope if set server-side via ContextVar (set by
             # /toolset/{name}/mcp and /{name}/mcp route handlers in proxy_server.py).
             active_toolset_id = _mcp_active_toolset_id.get()
+            toolset_allowed_server_ids: Optional[Set[str]] = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(
                     user_api_key_auth, active_toolset_id
                 )
+                op = user_api_key_auth.object_permission
+                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            # Must run after toolset scoping so the challenge set is derived
+            # from the fully-authorized server set: a passthrough server that
+            # the active toolset excludes should not trigger an OAuth flow
+            # for a server the caller will be 403'd on after authentication.
+            await _raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_client_ip,
+                allowed_server_ids=toolset_allowed_server_ids,
+            )
 
             # Pre-flight auth check for pass-through servers.  Must run after
             # toolset scoping so the probe list is derived from the fully-authorized
@@ -3305,15 +3332,6 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-            await _raise_preemptive_401_for_unauthenticated_servers(
-                scope=scope,
-                mcp_servers=mcp_servers,
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_sse_client_ip,
-            )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [
@@ -3326,10 +3344,28 @@ if MCP_AVAILABLE:
             # downstream probe list matches the fully-authorized server set
             # (mirrors the streamable HTTP handler).
             active_toolset_id = _mcp_active_toolset_id.get()
+            toolset_allowed_server_ids: Optional[Set[str]] = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(
                     user_api_key_auth, active_toolset_id
                 )
+                op = user_api_key_auth.object_permission
+                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            # Must run after toolset scoping so the challenge set is derived
+            # from the fully-authorized server set: a passthrough server that
+            # the active toolset excludes should not trigger an OAuth flow
+            # for a server the caller will be 403'd on after authentication.
+            await _raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_sse_client_ip,
+                allowed_server_ids=toolset_allowed_server_ids,
+            )
 
             # Pre-flight auth check for pass-through servers: surface upstream
             # 401/403 as a proper challenge before the SSE session commits 200
