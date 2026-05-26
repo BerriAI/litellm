@@ -89,20 +89,67 @@ class VetoGuardrail(CustomGuardrail):
             },
         )
 
-    async def _scan_messages(self, messages: List[dict]) -> List[dict]:
-        """Scan each string-content message. Block raises; redact rewrites the
-        content in place. Returns the (possibly redacted) messages."""
+    async def _scan_text(self, text: str, allow_redact: bool = True) -> str:
+        """Scan one string against the Veto gateway. Block raises; redact
+        returns the masked text when allow_redact is set (the parallel
+        moderation hook passes False — it cannot rewrite); allow returns the
+        input. Empty / non-string input is returned untouched."""
+        if not isinstance(text, str) or not text.strip():
+            return text
+        verdict = await self._check(text)
+        action = verdict.get("action")
+        if action == "block":
+            self._raise_blocked(verdict)
+        if action == "redact" and allow_redact:
+            return verdict.get("redacted", text)
+        return text
+
+    async def _scan_content(self, content: Any, allow_redact: bool = True) -> Any:
+        """Scan a message ``content`` value — a plain string or a multimodal
+        list of parts. Every part carrying a string ``text`` field is scanned
+        (and rewritten in place on redact); non-text parts (image, audio) are
+        left untouched. Closes the bypass where blocked text rides inside a
+        multimodal part."""
+        if isinstance(content, str):
+            return await self._scan_text(content, allow_redact)
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    scanned = await self._scan_text(part["text"], allow_redact)
+                    if allow_redact:
+                        part["text"] = scanned
+        return content
+
+    async def _scan_messages(
+        self, messages: List[dict], allow_redact: bool = True
+    ) -> List[dict]:
+        """Scan every message's content (string or multimodal). Block raises;
+        redact rewrites content in place when allow_redact is set."""
         for msg in messages:
-            content = msg.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            verdict = await self._check(content)
-            action = verdict.get("action")
-            if action == "block":
-                self._raise_blocked(verdict)
-            elif action == "redact":
-                msg["content"] = verdict.get("redacted", content)
+            if isinstance(msg, dict) and "content" in msg:
+                msg["content"] = await self._scan_content(
+                    msg.get("content"), allow_redact
+                )
         return messages
+
+    async def _scan_input(self, value: Any, allow_redact: bool = True) -> Any:
+        """Scan the Responses-API ``input`` field — a plain string, or a list
+        of items (strings or message dicts carrying ``content``). Mirrors the
+        chat ``messages`` path so blocked text cannot bypass via /v1/responses.
+        """
+        if isinstance(value, str):
+            return await self._scan_text(value, allow_redact)
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                if isinstance(item, str):
+                    scanned = await self._scan_text(item, allow_redact)
+                    if allow_redact:
+                        value[i] = scanned
+                elif isinstance(item, dict) and "content" in item:
+                    item["content"] = await self._scan_content(
+                        item.get("content"), allow_redact
+                    )
+        return value
 
     async def async_pre_call_hook(
         self,
@@ -111,10 +158,13 @@ class VetoGuardrail(CustomGuardrail):
         data: dict,
         call_type: str,
     ) -> Optional[Union[Exception, str, dict]]:
-        """Input guardrail: scan the prompt before it reaches the LLM."""
+        """Input guardrail: scan the prompt — chat ``messages`` and/or the
+        Responses ``input`` field — before it reaches the LLM."""
         messages = data.get("messages")
         if isinstance(messages, list):
             data["messages"] = await self._scan_messages(messages)
+        if "input" in data:
+            data["input"] = await self._scan_input(data.get("input"))
         return data
 
     async def async_moderation_hook(
@@ -131,17 +181,12 @@ class VetoGuardrail(CustomGuardrail):
         ],
     ) -> Any:
         """Parallel guardrail (block-only): runs alongside the LLM call. Cannot
-        rewrite content here, so a redact verdict is logged, not applied."""
+        rewrite content, so redact is not applied — only block raises."""
         messages = data.get("messages")
-        if not isinstance(messages, list):
-            return data
-        for msg in messages:
-            content = msg.get("content")
-            if not isinstance(content, str) or not content.strip():
-                continue
-            verdict = await self._check(content)
-            if verdict.get("action") == "block":
-                self._raise_blocked(verdict)
+        if isinstance(messages, list):
+            await self._scan_messages(messages, allow_redact=False)
+        if "input" in data:
+            await self._scan_input(data.get("input"), allow_redact=False)
         return data
 
     async def async_post_call_success_hook(
@@ -157,14 +202,8 @@ class VetoGuardrail(CustomGuardrail):
         for choice in getattr(response, "choices", []) or []:
             message = getattr(choice, "message", None)
             content = getattr(message, "content", None)
-            if not isinstance(content, str) or not content.strip():
-                continue
-            verdict = await self._check(content)
-            action = verdict.get("action")
-            if action == "block":
-                self._raise_blocked(verdict)
-            elif action == "redact":
-                message.content = verdict.get("redacted", content)
+            if isinstance(content, str) and content.strip():
+                message.content = await self._scan_text(content)
         return response
 
     async def apply_guardrail(
@@ -176,9 +215,4 @@ class VetoGuardrail(CustomGuardrail):
     ) -> str:
         """Text-in / text-out surface used by the unified guardrail API.
         Block raises; redact returns the masked text; allow returns input."""
-        verdict = await self._check(text)
-        if verdict.get("action") == "block":
-            self._raise_blocked(verdict)
-        if verdict.get("action") == "redact":
-            return verdict.get("redacted", text)
-        return text
+        return await self._scan_text(text)

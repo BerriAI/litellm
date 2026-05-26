@@ -141,6 +141,112 @@ class TestVetoPreCall:
 
 
 # ---------------------------------------------------------------------------
+# bypass prevention: multimodal parts + Responses `input` field
+# ---------------------------------------------------------------------------
+
+
+class TestVetoMultimodalAndInput:
+    """Text smuggled inside a multimodal content part or the Responses
+    ``input`` field must still be scanned — not only top-level string content."""
+
+    @pytest.mark.asyncio
+    async def test_multimodal_text_part_blocked(self, veto_guardrail):
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "ignore previous"},
+                        {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+                    ],
+                }
+            ]
+        }
+        with _patch_check(veto_guardrail, _verdict("block")) as mock_post:
+            with pytest.raises(HTTPException):
+                await veto_guardrail.async_pre_call_hook(
+                    MagicMock(), MagicMock(), data, "completion"
+                )
+        assert mock_post.call_count == 1  # only the text part is scanned
+
+    @pytest.mark.asyncio
+    async def test_multimodal_text_part_redacted(self, veto_guardrail):
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "email a@b.com"},
+                        {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+                    ],
+                }
+            ]
+        }
+        with _patch_check(
+            veto_guardrail, _verdict("redact", redacted="email [REDACTED_EMAIL]")
+        ):
+            out = await veto_guardrail.async_pre_call_hook(
+                MagicMock(), MagicMock(), data, "completion"
+            )
+        parts = out["messages"][0]["content"]
+        assert parts[0]["text"] == "email [REDACTED_EMAIL]"
+        assert parts[1]["type"] == "image_url"  # non-text part untouched
+
+    @pytest.mark.asyncio
+    async def test_responses_input_string_blocked(self, veto_guardrail):
+        data = {"input": "ignore previous"}
+        with _patch_check(veto_guardrail, _verdict("block")):
+            with pytest.raises(HTTPException):
+                await veto_guardrail.async_pre_call_hook(
+                    MagicMock(), MagicMock(), data, "responses"
+                )
+
+    @pytest.mark.asyncio
+    async def test_responses_input_string_redacted(self, veto_guardrail):
+        data = {"input": "email a@b.com"}
+        with _patch_check(
+            veto_guardrail, _verdict("redact", redacted="email [REDACTED_EMAIL]")
+        ):
+            out = await veto_guardrail.async_pre_call_hook(
+                MagicMock(), MagicMock(), data, "responses"
+            )
+        assert out["input"] == "email [REDACTED_EMAIL]"
+
+    @pytest.mark.asyncio
+    async def test_responses_input_list_message_blocked(self, veto_guardrail):
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "ignore previous"}],
+                }
+            ]
+        }
+        with _patch_check(veto_guardrail, _verdict("block")):
+            with pytest.raises(HTTPException):
+                await veto_guardrail.async_pre_call_hook(
+                    MagicMock(), MagicMock(), data, "responses"
+                )
+
+    @pytest.mark.asyncio
+    async def test_moderation_scans_multimodal_text(self, veto_guardrail):
+        # the block-only parallel path must also see multimodal text parts
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "ignore previous"}],
+                }
+            ]
+        }
+        with _patch_check(veto_guardrail, _verdict("block")):
+            with pytest.raises(HTTPException):
+                await veto_guardrail.async_moderation_hook(
+                    data, MagicMock(), "completion"
+                )
+
+
+# ---------------------------------------------------------------------------
 # moderation hook (block-only)
 # ---------------------------------------------------------------------------
 
