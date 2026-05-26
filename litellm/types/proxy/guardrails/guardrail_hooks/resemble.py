@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import Field
 
@@ -26,13 +26,6 @@ class ResembleGuardrailConfigModel(GuardrailConfigModel):
         description=(
             "Aggregated score above which media is treated as fake (0.0–1.0). "
             "Default 0.5."
-        ),
-    )
-    resemble_media_type: Optional[Literal["audio", "video", "image"]] = Field(
-        default=None,
-        description=(
-            "Optionally force audio / video / image. If omitted, Resemble "
-            "auto-detects from the file extension or content type."
         ),
     )
     resemble_audio_source_tracing: Optional[bool] = Field(

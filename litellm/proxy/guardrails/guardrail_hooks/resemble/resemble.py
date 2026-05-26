@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 # strings and fragments are allowed. Kept intentionally simple — multimodal
 # content parts and metadata lookups handle the non-URL-in-text cases.
 MEDIA_URL_REGEX = re.compile(
-    r"https?://[^\s<>\"')\]}]+?\.(?:mp3|wav|m4a|flac|ogg|opus|aac|webm|mp4|mov|avi|mkv|jpg|jpeg|png|webp|gif)(?:\?[^\s<>\"')\]}]*)?",
+    r"https?://[^\s<>\"'),\]}]+?\.(?:mp3|wav|m4a|flac|ogg|opus|aac|amr|3gpp|3gp|webm|mp4|mov|avi|mkv|jpg|jpeg|png|webp|gif)(?:[?#][^\s<>\"'),\]}]*)?",
     re.IGNORECASE,
 )
 
@@ -87,7 +87,6 @@ class ResembleGuardrail(CustomGuardrail):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         threshold: Optional[float] = None,
-        media_type: Optional[Literal["audio", "video", "image"]] = None,
         audio_source_tracing: Optional[bool] = None,
         use_reverse_search: Optional[bool] = None,
         zero_retention_mode: Optional[bool] = None,
@@ -114,7 +113,6 @@ class ResembleGuardrail(CustomGuardrail):
         ).rstrip("/")
 
         self.threshold: float = threshold if threshold is not None else 0.5
-        self.media_type: Optional[str] = media_type
         self.audio_source_tracing: bool = bool(audio_source_tracing)
         self.use_reverse_search: bool = bool(use_reverse_search)
         self.zero_retention_mode: bool = bool(zero_retention_mode)
@@ -128,12 +126,11 @@ class ResembleGuardrail(CustomGuardrail):
         self.fail_closed: bool = bool(fail_closed)
 
         verbose_proxy_logger.debug(
-            "Resemble guardrail initialized: name=%s threshold=%s media_type=%s "
-            "audio_source_tracing=%s use_reverse_search=%s zero_retention_mode=%s "
-            "fail_closed=%s",
+            "Resemble guardrail initialized: name=%s threshold=%s "
+            "audio_source_tracing=%s use_reverse_search=%s "
+            "zero_retention_mode=%s fail_closed=%s",
             kwargs.get("guardrail_name", "unknown"),
             self.threshold,
-            self.media_type,
             self.audio_source_tracing,
             self.use_reverse_search,
             self.zero_retention_mode,
@@ -444,8 +441,6 @@ class ResembleGuardrail(CustomGuardrail):
 
     async def _create_and_poll_detection(self, media_url: str) -> Dict[str, Any]:
         create_payload: Dict[str, Any] = {"url": media_url}
-        if self.media_type:
-            create_payload["media_type"] = self.media_type
         if self.audio_source_tracing:
             create_payload["audio_source_tracing"] = True
         if self.use_reverse_search:
@@ -499,7 +494,6 @@ class ResembleGuardrail(CustomGuardrail):
             response = await self.async_handler.get(
                 url=poll_url,
                 headers=headers,
-                timeout=10.0,
             )
             response.raise_for_status()
             body = response.json()
@@ -545,21 +539,23 @@ class ResembleGuardrail(CustomGuardrail):
 
     def _extract_label_and_score(self, item: Dict[str, Any]) -> Tuple[str, float]:
         metrics = item.get("metrics")
-        if isinstance(metrics, dict):
+        if isinstance(metrics, dict) and metrics:
             return (
                 str(metrics.get("label") or "unknown").lower(),
-                self._coerce_score(metrics.get("aggregated_score")),
+                self._coerce_score(
+                    metrics.get("aggregated_score", metrics.get("score"))
+                ),
             )
 
         image_metrics = item.get("image_metrics")
-        if isinstance(image_metrics, dict):
+        if isinstance(image_metrics, dict) and image_metrics:
             return (
                 str(image_metrics.get("label") or "unknown").lower(),
                 self._coerce_score(image_metrics.get("score")),
             )
 
         video_metrics = item.get("video_metrics")
-        if isinstance(video_metrics, dict):
+        if isinstance(video_metrics, dict) and video_metrics:
             return (
                 str(video_metrics.get("label") or "unknown").lower(),
                 self._coerce_score(video_metrics.get("score")),
@@ -569,7 +565,10 @@ class ResembleGuardrail(CustomGuardrail):
 
     @staticmethod
     def _coerce_score(score: Any) -> float:
-        return float(score if score is not None else 0)
+        try:
+            return float(score if score is not None else 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

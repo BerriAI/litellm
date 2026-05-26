@@ -18,7 +18,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         threshold=getattr(litellm_params, "resemble_threshold", None),
-        media_type=getattr(litellm_params, "resemble_media_type", None),
         audio_source_tracing=getattr(
             litellm_params, "resemble_audio_source_tracing", None
         ),

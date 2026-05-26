@@ -453,13 +453,6 @@ class ResembleGuardrailParamsConfigModel(BaseModel):
             "Default 0.5."
         ),
     )
-    resemble_media_type: Optional[Literal["audio", "video", "image"]] = Field(
-        default=None,
-        description=(
-            "Optionally force audio / video / image. If omitted, Resemble "
-            "auto-detects from the file extension or content type."
-        ),
-    )
     resemble_audio_source_tracing: Optional[bool] = Field(
         default=False,
         description=(

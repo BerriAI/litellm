@@ -39,8 +39,6 @@ guardrails:
       # api_base: https://app.resemble.ai/api/v2
       # Block media with aggregated_score >= threshold (default 0.5)
       resemble_threshold: 0.5
-      # Optional: force a modality (audio | video | image)
-      # resemble_media_type: audio
       # Identify the TTS vendor that produced flagged audio
       resemble_audio_source_tracing: true
       # Do not persist media on Resemble after the scan
@@ -66,7 +64,7 @@ The guardrail looks for media URLs in (in order):
 
 1. OpenAI-style multimodal content parts (`image_url`, `input_audio`)
 2. Anthropic-style `source.url` parts (image, document)
-3. Any `https://…` URL in message text that ends in a known audio/video/image extension
+3. Any `https://...` URL in message text that ends in a Resemble-supported audio/video/image extension
 4. `metadata.mediaUrl` (key configurable via `resemble_metadata_key`)
 
 <Tabs>
@@ -158,7 +156,6 @@ curl -i http://0.0.0.0:4000/v1/chat/completions \
 | `api_key`                        | string     | `RESEMBLE_API_KEY` env var          | Resemble AI API token.                                                                                         |
 | `api_base`                       | string     | `https://app.resemble.ai/api/v2`    | Override the Resemble API base URL (useful for sovereign deployments).                                         |
 | `resemble_threshold`             | number     | `0.5`                               | Aggregated score above which media is treated as fake (0.0–1.0).                                               |
-| `resemble_media_type`            | enum       | auto                                | Force `audio`, `video`, or `image`. Omit for auto-detect from extension / content type.                        |
 | `resemble_audio_source_tracing`  | bool       | `false`                             | Return which TTS vendor generated flagged audio (ElevenLabs, Resemble AI, OpenAI, etc.).                        |
 | `resemble_use_reverse_search`    | bool       | `false`                             | (Image only) search the web for matching images to improve accuracy.                                            |
 | `resemble_zero_retention_mode`   | bool       | `false`                             | Automatically delete submitted media after detection. URLs are redacted and filenames are tokenized.            |

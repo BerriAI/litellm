@@ -110,6 +110,25 @@ class TestExtractMediaUrls:
         }
         assert self.guard._extract_media_urls(data) == ["https://cdn.example.com/c.mp3"]
 
+    def test_plain_text_supported_resemble_extensions(self):
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Scan https://cdn.example.com/a.amr, "
+                        "https://cdn.example.com/b.3gp#clip, and "
+                        "https://cdn.example.com/c.3gpp?download=1"
+                    ),
+                }
+            ]
+        }
+        assert self.guard._extract_media_urls(data) == [
+            "https://cdn.example.com/a.amr",
+            "https://cdn.example.com/b.3gp#clip",
+            "https://cdn.example.com/c.3gpp?download=1",
+        ]
+
     def test_openai_image_url_part(self):
         data = {
             "messages": [
@@ -330,6 +349,16 @@ class TestEvaluateDetection:
         assert result["verdict"] is False
         assert result["score"] == 0.9
 
+    def test_empty_metrics_falls_through_to_image_metrics(self):
+        item = {
+            "metrics": {},
+            "image_metrics": {"label": "Fake", "score": 1.0},
+        }
+        result = self.guard._evaluate_detection(item)
+        assert result["verdict"] is False
+        assert result["label"] == "fake"
+        assert result["score"] == 1.0
+
     def test_video_metrics_shape(self):
         item = {"video_metrics": {"label": "real", "score": 0.2}}
         result = self.guard._evaluate_detection(item)
@@ -339,6 +368,18 @@ class TestEvaluateDetection:
         item = {"metrics": {"label": "real", "aggregated_score": 0.0}}
         result = self.guard._evaluate_detection(item)
         assert result["score"] == 0.0
+
+    def test_non_numeric_score_falls_back_to_zero(self):
+        item = {"metrics": {"label": "real", "aggregated_score": "N/A"}}
+        result = self.guard._evaluate_detection(item)
+        assert result["score"] == 0.0
+        assert result["verdict"] is True
+
+    def test_metrics_score_is_used_when_aggregated_score_is_absent(self):
+        item = {"metrics": {"label": "fake", "score": 0.9}}
+        result = self.guard._evaluate_detection(item)
+        assert result["score"] == 0.9
+        assert result["verdict"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +434,7 @@ async def test_apply_guardrail_scans_generic_image_inputs():
 
     assert result == inputs
     assert (
-        post_mock.call_args.kwargs["json"]["url"]
-        == "https://cdn.example.com/image.jpg"
+        post_mock.call_args.kwargs["json"]["url"] == "https://cdn.example.com/image.jpg"
     )
 
 
@@ -651,7 +691,6 @@ async def test_pre_call_times_out_and_fails_open():
 @pytest.mark.asyncio
 async def test_create_payload_includes_flags():
     guard = _make_guardrail(
-        media_type="audio",
         audio_source_tracing=True,
         use_reverse_search=True,
         zero_retention_mode=True,
@@ -693,7 +732,7 @@ async def test_create_payload_includes_flags():
     assert call_kwargs["headers"]["Authorization"] == "Bearer test-key"
     body = call_kwargs["json"]
     assert body["url"] == "https://cdn.example.com/clip.mp3"
-    assert body["media_type"] == "audio"
+    assert "media_type" not in body
     assert body["audio_source_tracing"] is True
     assert body["use_reverse_search"] is True
     assert body["zero_retention_mode"] is True
