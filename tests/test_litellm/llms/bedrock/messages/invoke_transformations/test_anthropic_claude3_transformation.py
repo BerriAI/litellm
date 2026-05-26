@@ -767,6 +767,80 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
     assert "output_format" not in result
 
 
+def test_bedrock_messages_converts_output_config_format_to_inline_schema():
+    """``output_config.format`` is consumed so Bedrock does not see an unknown nested key."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "xhigh",
+            "format": {"type": "json_schema", "schema": schema},
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    assert "output_format" not in result
+    last_content = result["messages"][0]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "model,expected_effort",
+    [
+        ("anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("anthropic.claude-opus-4-6-v1", "max"),
+        ("anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_bedrock_messages_normalizes_output_config_effort_for_opus(
+    model, expected_effort
+):
+    """Bedrock /v1/messages accepts ``xhigh`` and forwards the provider-safe effort."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "output_config": {"effort": "xhigh"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
 def test_bedrock_messages_strips_output_config_with_output_format():
     """
     When both output_config and output_format are present, output_format

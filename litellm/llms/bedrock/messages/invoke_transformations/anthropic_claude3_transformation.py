@@ -35,6 +35,7 @@ from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -504,6 +505,28 @@ class AmazonAnthropicClaudeMessagesConfig(
         schema_text = {"type": "text", "text": json.dumps(schema)}
         content.append(schema_text)
 
+    @staticmethod
+    def _pop_output_config_format(
+        anthropic_messages_request: Dict,
+    ) -> Optional[Dict]:
+        """
+        Remove and return Anthropic's newer ``output_config.format`` field.
+
+        Bedrock Invoke only gets the converted inline schema. Any remaining
+        ``output_config`` keys, such as ``effort``, are left in place.
+        """
+        output_config = anthropic_messages_request.get("output_config")
+        if not isinstance(output_config, dict):
+            return None
+
+        output_format = output_config.pop("format", None)
+        if not output_config:
+            anthropic_messages_request.pop("output_config", None)
+
+        if isinstance(output_format, dict):
+            return output_format
+        return None
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -550,13 +573,29 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request, model=model
         )
 
-        # 5. Convert `output_format` to inline schema (Bedrock invoke doesn't support output_format)
+        # 5. Convert structured-output params to inline schema.
+        # Bedrock Invoke doesn't support top-level `output_format`; its
+        # accepted `output_config` subset is also narrower than Anthropic's, so
+        # consume the newer `output_config.format` shape here instead of
+        # forwarding it as an unknown nested key.
         output_format = anthropic_messages_request.pop("output_format", None)
+        output_config_format = self._pop_output_config_format(
+            anthropic_messages_request
+        )
         if output_format:
             self._convert_output_format_to_inline_schema(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
+        elif output_config_format:
+            self._convert_output_format_to_inline_schema(
+                output_format=output_config_format,
+                anthropic_messages_request=anthropic_messages_request,
+            )
+        normalize_bedrock_opus_output_config_effort(
+            model=model,
+            output_config=anthropic_messages_request.get("output_config"),
+        )
 
         # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
         # but older models do not — strip it to avoid request rejection.

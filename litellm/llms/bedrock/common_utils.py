@@ -603,6 +603,36 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
+def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
+    """
+    Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
+
+    Bedrock's Claude Opus 4.5/4.6 request validator accepts a narrower effort
+    vocabulary than Anthropic's compatibility surface:
+    - Opus 4.5: low, medium, high
+    - Opus 4.6: low, medium, high, max
+    - Opus 4.7: low, medium, high, xhigh, max
+
+    Mutates ``output_config`` in place so callers can accept Claude Code's
+    ``xhigh`` input without forwarding a provider-invalid value.
+    """
+    if not isinstance(output_config, dict):
+        return
+
+    effort = output_config.get("effort")
+    if effort not in ("xhigh", "max"):
+        return
+
+    model_lower = model.lower()
+    if any(v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")):
+        return
+    if any(v in model_lower for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")):
+        output_config["effort"] = "max"
+        return
+    if any(v in model_lower for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")):
+        output_config["effort"] = "high"
+
+
 # Import after standalone functions to avoid circular imports
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 

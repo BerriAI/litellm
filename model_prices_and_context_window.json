@@ -982,7 +982,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1013,6 +1015,7 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "global.anthropic.claude-opus-4-6-v1": {
@@ -1044,6 +1047,7 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "us.anthropic.claude-opus-4-6-v1": {
@@ -1075,6 +1079,7 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "eu.anthropic.claude-opus-4-6-v1": {
@@ -1105,6 +1110,7 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "au.anthropic.claude-opus-4-6-v1": {
@@ -1135,6 +1141,7 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "anthropic.claude-opus-4-7": {
@@ -1166,7 +1173,8 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "anthropic.claude-mythos-preview": {
         "input_cost_per_token": 0,
@@ -1212,7 +1220,8 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "us.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1243,7 +1252,8 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "eu.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1273,7 +1283,8 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "au.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1303,7 +1314,8 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -9804,7 +9816,9 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9832,7 +9846,9 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9867,6 +9883,7 @@
         },
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-6-20260205": {
@@ -9902,7 +9919,8 @@
         },
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31661,7 +31679,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31690,7 +31710,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31718,7 +31740,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_output_config": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
