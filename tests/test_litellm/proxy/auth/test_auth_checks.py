@@ -3370,3 +3370,102 @@ async def test_resolve_end_user_reraises_budget_exceeded(
             prisma_client=MagicMock(),
             user_api_key_cache=cache,
         )
+
+
+@pytest.mark.asyncio
+async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
+    """
+    Regression pin for LIT-3244 patch/1.86.0 follow-up.
+
+    `_cache_team_object` is the canonical "refresh this team" primitive.
+    Two cache keys are in play:
+      - "team_id:<id>"    — used by `get_team_object(team_id=...)`,
+                            i.e. API-key auth and JWT-with-team_id_jwt_field
+      - "team_alias:<alias>" — used by `get_team_object_by_alias(team_alias=...)`,
+                               i.e. JWT-with-team_alias_jwt_field
+
+    Invariants this test pins:
+      1. Writes the team_id-keyed entry with the refreshed object (team_id
+         is the table PK — guaranteed unique, safe to write).
+      2. DELETES (does NOT write) the team_alias-keyed entry. `team_alias`
+         has no UNIQUE constraint in schema.prisma, so writing it from
+         this generic refresh path would let a team admin who renames
+         their team to collide with another team's alias silently
+         overwrite the cached team for JWT-by-alias auth (veria-ai
+         review on #28739). Deleting forces the next JWT-by-alias
+         reader through `get_team_object_by_alias`, which enforces
+         len(teams)==1 before populating the cache.
+      3. When team_alias is None, NO alias-key operation happens (no
+         delete of an empty-keyed entry, no spurious write).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    base_team_row = {
+        "team_id": "team-1234",
+        "team_alias": "H-Capacity",
+        "models": ["openai/*", "bedrock-claude-sonnet-4"],
+    }
+
+    # ===== team_alias is set =====
+    team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock()
+    cache.delete_cache = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    await _cache_team_object(
+        team_id="team-1234",
+        team_table=team_table,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+
+    # (1) team_id-keyed write fires with the refreshed object
+    written_keys = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in cache.async_set_cache.await_args_list
+    ]
+    assert written_keys == ["team_id:team-1234"], (
+        "Only the team_id-keyed write should fire; the alias key must be "
+        "deleted, NOT written. "
+        f"Got writes: {written_keys}"
+    )
+    written_value = (
+        cache.async_set_cache.await_args.kwargs.get("value")
+        or cache.async_set_cache.await_args.args[1]
+    )
+    assert written_value is team_table
+
+    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
+    # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
+    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key="team_alias:H-Capacity"
+    )
+
+    # ===== team_alias is None: no alias-key operation =====
+    aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
+    cache2 = MagicMock()
+    cache2.async_set_cache = AsyncMock()
+    cache2.delete_cache = MagicMock()
+    logging_obj2 = MagicMock()
+    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    await _cache_team_object(
+        team_id="team-no-alias",
+        team_table=aliasless,
+        user_api_key_cache=cache2,
+        proxy_logging_obj=logging_obj2,
+    )
+
+    cache2.delete_cache.assert_not_called()
+    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_not_awaited()
+    written_keys_aliasless = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in cache2.async_set_cache.await_args_list
+    ]
+    assert written_keys_aliasless == ["team_id:team-no-alias"]

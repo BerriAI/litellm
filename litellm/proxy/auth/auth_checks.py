@@ -1765,18 +1765,38 @@ async def _cache_team_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    key = "team_id:{}".format(team_id)
-
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key=key,
+        key="team_id:{}".format(team_id),
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=LiteLLM_TeamTableCachedObj,
     )
+
+    # Invalidate the alias-keyed cache so the JWT auth path with
+    # `team_alias_jwt_field` (which reads via `get_team_object_by_alias`)
+    # doesn't keep serving the pre-mutation team after every team-write
+    # endpoint (team_model_add, team_model_delete, update_team, etc.).
+    #
+    # Why DELETE and not WRITE: `team_alias` has no UNIQUE constraint in
+    # schema.prisma. Writing this cache from the generic refresh path
+    # would let a team admin who renamed their team to collide with
+    # another team's alias silently overwrite the cached team for
+    # JWT-by-alias auth (veria-ai review on #28739). Deleting forces the
+    # next reader through `get_team_object_by_alias`, which DOES enforce
+    # uniqueness (len(teams) > 1 raises HTTPException) before populating
+    # the cache from a verified single row.
+    if team_table.team_alias:
+        alias_key = "team_alias:{}".format(team_table.team_alias)
+        user_api_key_cache.delete_cache(key=alias_key)
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+                key=alias_key
+            )
 
 
 async def _cache_key_object(
