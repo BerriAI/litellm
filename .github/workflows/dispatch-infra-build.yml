@@ -11,21 +11,65 @@ permissions:
 
 jobs:
   dispatch:
+    name: Dispatch Private Infra Build
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    env:
+      TARGET_REPO: rayward-internal/llm-gateway-infra
+      EVENT_TYPE: litellm-main-merged
+      SOURCE_REF: refs/heads/litellm_internal_staging
+      SOURCE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+      SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Dispatch infra build
-        uses: peter-evans/repository-dispatch@v3
+      - name: Harden the runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
         with:
-          token: ${{ secrets.INFRA_REPOSITORY_DISPATCH_TOKEN }}
-          repository: rayward-internal/llm-gateway-infra
-          event-type: litellm-main-merged
-          client-payload: >-
-            {
-              "source_repo": "${{ github.repository }}",
-              "source_ref": "refs/heads/litellm_internal_staging",
-              "source_sha": "${{ github.event.pull_request.merge_commit_sha || github.sha }}",
-              "source_actor": "${{ github.actor }}",
-              "source_run_id": "${{ github.run_id }}",
-              "source_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+
+      - name: Build repository_dispatch payload
+        run: |
+          jq -n \
+            --arg event_type "$EVENT_TYPE" \
+            --arg source_repo "${{ github.repository }}" \
+            --arg source_ref "$SOURCE_REF" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg source_short_sha "${SOURCE_SHA::7}" \
+            --arg source_actor "${{ github.actor }}" \
+            --arg source_run_id "${{ github.run_id }}" \
+            --arg source_run_url "$SOURCE_RUN_URL" \
+            '{
+              event_type: $event_type,
+              client_payload: {
+                source_repo: $source_repo,
+                source_ref: $source_ref,
+                source_sha: $source_sha,
+                source_short_sha: $source_short_sha,
+                source_actor: $source_actor,
+                source_run_id: $source_run_id,
+                source_run_url: $source_run_url
+              }
+            }' > dispatch.json
+
+      - name: Send repository_dispatch to private infra repo
+        env:
+          GH_TOKEN: ${{ secrets.RAYWARD_INFRA_DISPATCH_TOKEN }}
+        run: |
+          gh api \
+            "repos/$TARGET_REPO/dispatches" \
+            --method POST \
+            --input dispatch.json
+
+      - name: Write workflow summary
+        if: always()
+        run: |
+          {
+            echo "## LiteLLM Infra Dispatch"
+            echo
+            echo "- Target repo: \`$TARGET_REPO\`"
+            echo "- Event type: \`$EVENT_TYPE\`"
+            echo "- Source SHA: \`$SOURCE_SHA\`"
+            echo "- Source run URL: $SOURCE_RUN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
