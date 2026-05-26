@@ -721,10 +721,12 @@ router_settings:
 | FOCUS_S3_SECRET_KEY | AWS secret access key used by the Focus export S3 client.
 | FOCUS_S3_SESSION_TOKEN | AWS session token used by the Focus export S3 client (optional).
 | FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
-| GALILEO_BASE_URL | Base URL for Galileo platform
-| GALILEO_PASSWORD | Password for Galileo authentication
+| GALILEO_API_KEY | API key for Galileo Cloud (hosted). Used with the v2 spans API when `success_callback` includes `galileo`.
+| GALILEO_BASE_URL | Base URL for Galileo platform. For Galileo Cloud, use `https://api.galileo.ai`. For enterprise/self-hosted, replace `console` with `api` in your console URL.
+| GALILEO_LOG_STREAM_ID | Log stream ID for Galileo Cloud v2 spans logging (optional).
+| GALILEO_PASSWORD | Password for Galileo enterprise Observe authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
-| GALILEO_USERNAME | Username for Galileo authentication
+| GALILEO_USERNAME | Username for Galileo enterprise Observe authentication
 | GOOGLE_SECRET_MANAGER_PROJECT_ID | Project ID for Google Secret Manager
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_MOCK | Enable mock mode for GCS integration testing. When set to true, intercepts GCS API calls and returns mock responses without making actual network calls. Default is false
@@ -760,10 +762,12 @@ router_settings:
 | GENERIC_ROLE_MAPPINGS_ROLES | Python dict string mapping LiteLLM roles to SSO group names. Example: `{"proxy_admin": ["admin-group"], "internal_user": ["users"]}`
 | GENERIC_USER_ROLE_MAPPINGS | Alternative to GENERIC_ROLE_MAPPINGS_ROLES for configuring user role mappings from SSO
 | GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
-| GALILEO_BASE_URL | Base URL for Galileo platform
-| GALILEO_PASSWORD | Password for Galileo authentication
+| GALILEO_API_KEY | API key for Galileo Cloud (hosted). Used with the v2 spans API when `success_callback` includes `galileo`.
+| GALILEO_BASE_URL | Base URL for Galileo platform. For Galileo Cloud, use `https://api.galileo.ai`. For enterprise/self-hosted, replace `console` with `api` in your console URL.
+| GALILEO_LOG_STREAM_ID | Log stream ID for Galileo Cloud v2 spans logging (optional).
+| GALILEO_PASSWORD | Password for Galileo enterprise Observe authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
-| GALILEO_USERNAME | Username for Galileo authentication
+| GALILEO_USERNAME | Username for Galileo enterprise Observe authentication
 | GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
 | GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
 | GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
