@@ -1,40 +1,28 @@
 """Typed configuration for the LiteLLM OpenTelemetry instrumentation.
 
-This is the only module that reads OTel-related environment variables. It has no
-``opentelemetry`` import so it is safe to load without the SDK installed.
+Uses ``pydantic-settings`` so environment variables are read declaratively via
+field aliases — there is no hand-rolled ``os.getenv`` parsing. Field defaults are
+used when the corresponding env var is absent. This module has no
+``opentelemetry`` import.
 """
 
-import os
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm.integrations.otel.semconv import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
 )
 
-#: Master feature flag. The new engine is inert until this is truthy, so the
-#: package can ship fully built without touching the existing OTel code path.
+#: Master feature-flag env var. The new engine is inert until this is truthy, so
+#: the package can ship fully built without touching the existing OTel code path.
 OTEL_V2_ENV = "LITELLM_OTEL_V2"
-
-_TRUE = {"1", "true", "yes", "on", "y", "t"}
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in _TRUE
-
-
-def is_otel_v2_enabled() -> bool:
-    """Whether the new instrumentation should be active. Off unless opted in."""
-    return _env_bool(OTEL_V2_ENV, default=False)
 
 
 class CaptureMessageContent(str):
-    """Sentinel namespace for ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``."""
+    """Values for ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``."""
 
     NO_CONTENT = "no_content"
     SPAN_ONLY = "span_only"
@@ -42,22 +30,66 @@ class CaptureMessageContent(str):
     SPAN_AND_EVENT = "span_and_event"
 
 
-class OpenTelemetryV2Config(BaseModel):
-    """Fully typed OTel config. Construct via :meth:`from_env` or explicitly."""
+class _OTelV2Flag(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
 
-    exporter: str = "console"
-    endpoint: Optional[str] = None
-    headers: Optional[str] = None
-    service_name: str = "litellm"
-    deployment_environment: Optional[str] = None
+    enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
-    enable_metrics: bool = False
-    capture_message_content: str = CaptureMessageContent.NO_CONTENT
-    ignore_context_propagation: bool = False
+
+def is_otel_v2_enabled() -> bool:
+    """Whether the new instrumentation should be active. Off unless opted in."""
+    return _OTelV2Flag().enabled
+
+
+class OpenTelemetryV2Config(BaseSettings):
+    """Fully typed OTel config, populated from env via field aliases.
+
+    Construct with no arguments to read from the environment, or pass explicit
+    values (field names work thanks to ``populate_by_name``) for tests / dynamic
+    configuration.
+    """
+
+    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+    exporter: str = Field(
+        default="console",
+        validation_alias=AliasChoices("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL"),
+    )
+    endpoint: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
+    headers: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
+    )
+    service_name: str = Field(
+        default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME")
+    )
+    deployment_environment: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME")
+    )
+
+    enable_metrics: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"),
+    )
+    capture_message_content: str = Field(
+        default=CaptureMessageContent.NO_CONTENT,
+        validation_alias=AliasChoices(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        ),
+    )
+    ignore_context_propagation: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("OTEL_IGNORE_CONTEXT_PROPAGATION"),
+    )
 
     #: Emit legacy attribute keys / span names alongside canonical ones during the
     #: deprecation window. Defaults on so existing dashboards keep working.
-    legacy_compat: bool = True
+    legacy_compat: bool = Field(
+        default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT")
+    )
 
     #: Bounded allowlists for Baggage-based promotion of request-scoped identity
     #: onto every span (see ``providers.LiteLLMBaggageSpanProcessor``).
@@ -68,36 +100,15 @@ class OpenTelemetryV2Config(BaseModel):
         default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS)
     )
 
-    @classmethod
-    def from_env(cls) -> "OpenTelemetryV2Config":
-        exporter = (
-            os.getenv("OTEL_EXPORTER")
-            or os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
-            or "console"
-        )
-        endpoint = os.getenv("OTEL_ENDPOINT") or os.getenv(
-            "OTEL_EXPORTER_OTLP_ENDPOINT"
-        )
+    @model_validator(mode="after")
+    def _endpoint_implies_otlp_http(self) -> "OpenTelemetryV2Config":
         # An endpoint with no explicit exporter implies OTLP/HTTP, matching the
         # behavior of the legacy integration.
-        if endpoint and exporter == "console":
-            exporter = "otlp_http"
-        return cls(
-            exporter=exporter,
-            endpoint=endpoint,
-            headers=os.getenv("OTEL_HEADERS")
-            or os.getenv("OTEL_EXPORTER_OTLP_HEADERS"),
-            service_name=os.getenv("OTEL_SERVICE_NAME") or "litellm",
-            deployment_environment=os.getenv("OTEL_ENVIRONMENT_NAME"),
-            enable_metrics=_env_bool(
-                "LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", default=False
-            ),
-            capture_message_content=os.getenv(
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-            )
-            or CaptureMessageContent.NO_CONTENT,
-            ignore_context_propagation=_env_bool(
-                "OTEL_IGNORE_CONTEXT_PROPAGATION", default=False
-            ),
-            legacy_compat=_env_bool("LITELLM_OTEL_LEGACY_COMPAT", default=True),
-        )
+        if self.endpoint and self.exporter == "console":
+            self.exporter = "otlp_http"
+        return self
+
+    @classmethod
+    def from_env(cls) -> "OpenTelemetryV2Config":
+        """Read the configuration from the environment (alias for ``cls()``)."""
+        return cls()

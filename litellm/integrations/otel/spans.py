@@ -113,17 +113,22 @@ def child_roles(parent: SpanRole) -> List[SpanRole]:
     return [role for role, spec in SPAN_REGISTRY.items() if spec.parent == parent]
 
 
-def validate_registry() -> None:
+def validate_registry(
+    registry: Optional[Dict[SpanRole, SpanSpec]] = None,
+) -> None:
     """Fail loudly if the registry is internally inconsistent.
 
-    Guarantees: every role has a spec keyed by itself, and every declared
-    ``parent`` references a real role (no orphans / dangling parents).
+    Guarantees: every role has a spec keyed by itself, every declared ``parent``
+    references a real role (no orphans / dangling parents), and every
+    :class:`SpanRole` is present. ``registry`` defaults to :data:`SPAN_REGISTRY`
+    and is parameterized so the invariants can be exercised directly.
     """
-    for role, spec in SPAN_REGISTRY.items():
+    reg = registry if registry is not None else SPAN_REGISTRY
+    for role, spec in reg.items():
         if spec.role is not role:
             raise ValueError(f"SPAN_REGISTRY[{role}] has mismatched role {spec.role}")
-        if spec.parent is not None and spec.parent not in SPAN_REGISTRY:
+        if spec.parent is not None and spec.parent not in reg:
             raise ValueError(f"span role {role} declares unknown parent {spec.parent}")
-    missing = [role for role in SpanRole if role not in SPAN_REGISTRY]
+    missing = [role for role in SpanRole if role not in reg]
     if missing:
         raise ValueError(f"SPAN_REGISTRY is missing roles: {missing}")

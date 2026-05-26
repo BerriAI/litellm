@@ -5,7 +5,7 @@ that importing this module never pulls in ``grpc`` (a contract enforced by
 ``tests/.../test_opentelemetry_dynamic_imports.py``).
 """
 
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from opentelemetry import baggage
 from opentelemetry.context import Context
@@ -161,10 +161,3 @@ def in_memory_provider(
     exporter = InMemorySpanExporter()
     provider = build_tracer_provider(cfg, exporter=exporter)
     return provider, exporter
-
-
-def promoted_baggage_processor_keys(
-    config: OpenTelemetryV2Config,
-) -> List[str]:
-    """Exact baggage keys the processor promotes (excludes metadata-prefix keys)."""
-    return list(config.baggage_promoted_keys) + [LiteLLM.END_USER]
