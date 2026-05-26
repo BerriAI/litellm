@@ -604,6 +604,60 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_is_ui_pre_restructured_marker_file(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / ".litellm_ui_ready").write_text("")
+
+    assert proxy_server._is_ui_pre_restructured(str(ui_root)) is True
+
+
+def test_is_ui_pre_restructured_clean_pattern(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("root")
+    (ui_root / "login").mkdir()
+    (ui_root / "login" / "index.html").write_text("login")
+    (ui_root / "_next").mkdir()
+    (ui_root / "_next" / "skip.html").write_text("asset")
+
+    assert proxy_server._is_ui_pre_restructured(str(ui_root)) is True
+
+
+def test_is_ui_pre_restructured_unrestructured(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("root")
+    (ui_root / "login.html").write_text("login")
+
+    assert proxy_server._is_ui_pre_restructured(str(ui_root)) is False
+
+
+def test_is_ui_pre_restructured_mixed_state_returns_false(tmp_path):
+    """
+    Regression: a fresh `<route>.html` checked out next to a stale
+    `<route>/index.html` from a previous restructure run must return False,
+    otherwise the stale subdirectory is served and points at chunk hashes
+    that no longer exist in the new build.
+    """
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("root")
+    (ui_root / "login.html").write_text("fresh login")
+    (ui_root / "login").mkdir()
+    (ui_root / "login" / "index.html").write_text("stale login")
+
+    assert proxy_server._is_ui_pre_restructured(str(ui_root)) is False
+
+
 def test_restructure_always_happens(monkeypatch):
     """
     Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.

@@ -1369,6 +1369,12 @@ try:
         Returns True if:
         1. Marker file .litellm_ui_ready exists (created by Dockerfile), OR
         2. Restructuring pattern detected (subdirectories with index.html inside)
+           AND no unrestructured source *.html files remain alongside them.
+
+        Mixed state — a fresh source `<route>.html` next to a stale
+        `<route>/index.html` from a previous run — must NOT return True. The
+        stale directory's HTML may reference asset chunks that no longer exist
+        in a newer build, producing 404s on `/_next/static/chunks/...`.
 
         This allows skipping copy/restructure operations on read-only filesystems.
         """
@@ -1388,26 +1394,44 @@ try:
         if not os.path.exists(os.path.join(ui_dir, "index.html")):
             return False
 
-        # Look for ANY subdirectory with index.html (proves restructuring happened)
-        # Ignore directories starting with _ (Next.js internals like _next)
+        # Walk the tree to confirm both:
+        #   (a) at least one restructured subdirectory exists, and
+        #   (b) no unrestructured *.html source files remain anywhere.
+        # If we find any non-index *.html (outside Next.js asset dirs) we
+        # treat the tree as needing restructure — even if some routes look
+        # already converted, those converted directories may be stale.
+        has_restructured_dir = False
         try:
-            for entry in os.scandir(ui_dir):
-                if entry.is_dir() and not entry.name.startswith("_"):
-                    index_path = os.path.join(entry.path, "index.html")
-                    if os.path.exists(index_path):
-                        # Found at least one restructured route - this proves the pattern
+            for current_root, dirs, files in os.walk(ui_dir):
+                if current_root == ui_dir:
+                    # Prune Next.js asset directories from the walk; their
+                    # internal *.html files (if any) are not route sources.
+                    dirs[:] = [
+                        d for d in dirs if d not in {"_next", "litellm-asset-prefix"}
+                    ]
+
+                if current_root != ui_dir and "index.html" in files:
+                    has_restructured_dir = True
+
+                for filename in files:
+                    if filename.endswith(".html") and filename != "index.html":
                         verbose_proxy_logger.debug(
-                            f"Detected restructured UI via pattern: found {entry.name}/index.html"
+                            f"Found unrestructured HTML file at "
+                            f"{os.path.join(current_root, filename)} — "
+                            f"UI is not pre-restructured"
                         )
-                        return True
+                        return False
         except (PermissionError, OSError) as e:
             verbose_proxy_logger.debug(
                 f"Could not scan {ui_dir} for restructuring detection: {e}"
             )
             return False
 
-        # No restructured routes found
-        return False
+        if has_restructured_dir:
+            verbose_proxy_logger.debug(
+                f"Detected restructured UI via pattern in {ui_dir}"
+            )
+        return has_restructured_dir
 
     def _try_populate_ui_directory(
         source_path: str, target_path: str
