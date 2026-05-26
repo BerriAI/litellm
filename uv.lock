@@ -1388,15 +1388,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3356,9 +3347,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-caching = [
-    { name = "diskcache" },
-]
 extra-proxy = [
     { name = "a2a-sdk" },
     { name = "azure-identity" },
@@ -3544,7 +3532,6 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'proxy'", specifier = "==46.0.7" },
     { name = "ddtrace", marker = "extra == 'proxy-runtime'", specifier = "==2.19.0" },
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = "==1.5.0" },
-    { name = "diskcache", marker = "extra == 'caching'", specifier = "==5.6.3" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = "==0.124.4" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = "==0.19.0" },
     { name = "fastuuid", specifier = ">=0.14.0,<1.0" },
@@ -3593,7 +3580,7 @@ requires-dist = [
     { name = "restrictedpython", marker = "extra == 'proxy'", specifier = "==8.1" },
     { name = "rich", marker = "extra == 'proxy'", specifier = "==13.9.4" },
     { name = "rq", marker = "extra == 'proxy'", specifier = "==2.7.0" },
-    { name = "semantic-router", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = "==0.1.12" },
+    { name = "semantic-router", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = "==0.1.15" },
     { name = "sentry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==2.21.0" },
     { name = "soundfile", marker = "extra == 'proxy'", specifier = "==0.12.1" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
@@ -7190,7 +7177,7 @@ wheels = [
 
 [[package]]
 name = "semantic-router"
-version = "0.1.12"
+version = "0.1.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -7208,9 +7195,9 @@ dependencies = [
     { name = "tornado" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/d7/88a1330f53a26eaea25249b21a5b776cbabfa333a6107ed88ce8b881d14f/semantic_router-0.1.12.tar.gz", hash = "sha256:b63fbb8b9127dcb1763efea17dfa74ab409e626e87c8695b589131af12ef3a65", size = 93372, upload-time = "2025-11-18T13:22:44.848Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/a9/1a689e916e8b280f1fd8fb335cc059be626a22fe4533baa045d32fcd6de5/semantic_router-0.1.15.tar.gz", hash = "sha256:328256ddc3c2b713101ec69561d6585aecbf1198ea3461e1486289d8c3a35288", size = 95605, upload-time = "2026-05-23T12:58:15.444Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/ad/4816aabd264b6b677002bde0cd4784f7f7f553f98e2ec01b96fda4ce5215/semantic_router-0.1.12-py3-none-any.whl", hash = "sha256:94658545f89cc63d2eb7dff6f74bc713b61bbcfe91146b0e4353a383f6790804", size = 126216, upload-time = "2025-11-18T13:22:43.655Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/c7/f4a20292aef9badd277efbb24d697c5b934693fb21e8e490d3ecb0fc83f0/semantic_router-0.1.15-py3-none-any.whl", hash = "sha256:c08978584c73c5ff8e75005202007ac8ee6593d77deaf8c7ec53f71e01e7f757", size = 128102, upload-time = "2026-05-23T12:58:14.295Z" },
 ]
 
 [[package]]
