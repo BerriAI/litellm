@@ -175,12 +175,15 @@ Configure which search provider to use. LiteLLM supports multiple search provide
 | **Perplexity AI** | `perplexity` | `PERPLEXITYAI_API_KEY` |
 | **Tavily** | `tavily` | `TAVILY_API_KEY` |
 | **Exa AI** | `exa_ai` | `EXA_API_KEY` |
+| **Brave Search** | `brave` | `BRAVE_API_KEY` |
 | **Parallel AI** | `parallel_ai` | `PARALLEL_AI_API_KEY` |
 | **Google PSE** | `google_pse` | `GOOGLE_PSE_API_KEY`, `GOOGLE_PSE_ENGINE_ID` |
 | **DataForSEO** | `dataforseo` | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
 | **Firecrawl** | `firecrawl` | `FIRECRAWL_API_KEY` |
 | **SearXNG** | `searxng` | `SEARXNG_API_BASE` (required) |
 | **Linkup** | `linkup` | `LINKUP_API_KEY` |
+| **Serper** | `serper` | `SERPER_API_KEY` |
+| **SearchAPI.io** | `searchapi` | `SEARCHAPI_API_KEY` |
 
 See [Search Providers Documentation](../search/index.md) for detailed setup instructions.
 
