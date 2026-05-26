@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-05-23T02:21:09.310366Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3189,7 +3189,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.86.0"
+version = "1.86.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
