@@ -245,10 +245,17 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # Prefer the endpoint the caller explicitly set; fall back to the
         # model-id heuristic so embedding batches don't get mislabelled as
-        # chat completions when `original_batch_request` is missing.
-        resolved_endpoint = original_request.get(
-            "endpoint"
-        ) or self._infer_openai_endpoint_from_model_id(model)
+        # chat completions when `original_batch_request` is missing. We
+        # check `is not None` rather than truthiness so a caller passing
+        # an empty string keeps that explicit signal instead of being
+        # silently overridden by the heuristic - the heuristic only runs
+        # when the field is genuinely absent.
+        explicit_endpoint = original_request.get("endpoint")
+        resolved_endpoint = (
+            explicit_endpoint
+            if explicit_endpoint is not None
+            else self._infer_openai_endpoint_from_model_id(model)
+        )
 
         # Create LiteLLM batch object
         return LiteLLMBatch(

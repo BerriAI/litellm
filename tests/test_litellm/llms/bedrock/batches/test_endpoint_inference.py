@@ -190,6 +190,29 @@ class TestTransformCreateBatchResponseEndpoint:
         )
         assert batch.endpoint == "/v1/chat/completions"
 
+    def test_create_response_preserves_explicit_empty_endpoint(self):
+        """Explicit empty-string endpoint is preserved, not replaced by heuristic.
+
+        Pins the `is not None` semantics: only a missing `endpoint` key
+        falls through to the model-id heuristic. An explicitly-provided
+        empty string keeps that explicit signal so an upstream caller
+        that means 'no endpoint' isn't silently overridden.
+        """
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+            }
+        )
+        batch = config.transform_create_batch_response(
+            model="amazon.titan-embed-text-v2:0",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={"original_batch_request": {"endpoint": ""}},
+        )
+        assert batch.endpoint == ""
+
 
 class TestTransformRetrieveBatchResponseEndpoint:
     """The retrieve path has no original request to read from, so it must
