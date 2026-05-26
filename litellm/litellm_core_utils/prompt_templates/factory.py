@@ -5323,7 +5323,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
-    """Normalize tool names to Bedrock pattern [a-zA-Z0-9_-]+."""
+    """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
     def replace_invalid(char):
         if char.isalnum() or char in ("_", "-"):
@@ -5486,7 +5486,7 @@ def _bedrock_tools_pt(
             raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
-        # Bedrock tool names must satisfy pattern: [a-zA-Z0-9_-]+
+        # Bedrock tool names must satisfy pattern: [a-zA-Z][a-zA-Z0-9_-]*
         name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
