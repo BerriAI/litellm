@@ -40,6 +40,37 @@ def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
     assert prompt_usd + completion_usd > 0
 
 
+def test_cost_per_token_non_string_model_does_not_hang():
+    """
+    The provider-prefix dedup loop must not spin forever when `model` is a
+    non-string object (e.g. a MagicMock from a mocked transport). It should
+    return or raise promptly instead of looping on a truthy `.startswith()`.
+    """
+    import threading
+    from unittest.mock import MagicMock
+
+    result: dict = {}
+
+    def _run():
+        try:
+            cost_per_token(
+                model=MagicMock(),
+                prompt_tokens=10,
+                completion_tokens=5,
+                custom_llm_provider="anthropic",
+            )
+            result["status"] = "returned"
+        except Exception:
+            result["status"] = "raised"
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "cost_per_token hung on a non-string model"
+    assert result.get("status") in ("returned", "raised")
+
+
 def test_completion_cost_uses_response_model_for_dynamic_routing():
     """
     Test that completion_cost uses the model from the response object

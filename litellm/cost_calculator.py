@@ -423,9 +423,15 @@ def cost_per_token(  # noqa: PLR0915
     # (provider is detected below for downstream use only).
     caller_supplied_provider = custom_llm_provider is not None
 
+    # `model` is normally a string, but callers that mock the transport can pass
+    # non-string objects. Only run the string-based dedup/prefix-join when it is
+    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
+    # its slices return new mocks, which would spin the dedup loop forever.
+    model_is_str = isinstance(model, str)
+
     # Router/proxy deployments may repeat the provider segment (e.g. model_name
     # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
-    if caller_supplied_provider:
+    if caller_supplied_provider and model_is_str:
         _dup_prefix = f"{custom_llm_provider}/"
         while model.startswith(_dup_prefix):
             _remainder = model[len(_dup_prefix) :]
@@ -437,11 +443,10 @@ def cost_per_token(  # noqa: PLR0915
     model_with_provider = model
     if caller_supplied_provider:
         _prov_prefix = f"{custom_llm_provider}/"
-        model_with_provider = (
-            model
-            if model.startswith(_prov_prefix)
-            else f"{custom_llm_provider}/{model}"
-        )
+        if model_is_str and model.startswith(_prov_prefix):
+            model_with_provider = model
+        else:
+            model_with_provider = f"{custom_llm_provider}/{model}"
         if region_name is not None:
             model_with_provider_and_region = (
                 f"{custom_llm_provider}/{region_name}/{model}"
