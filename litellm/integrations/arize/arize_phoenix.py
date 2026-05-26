@@ -414,7 +414,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        if self.config.enable_events:
+        if success and self.config.enable_events:
             self._emit_semantic_logs(kwargs, response_obj, span)
 
     @staticmethod
