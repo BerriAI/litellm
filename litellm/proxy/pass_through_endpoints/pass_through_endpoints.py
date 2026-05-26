@@ -908,7 +908,7 @@ async def pass_through_request(  # noqa: PLR0915
                     else {"json": _parsed_body}
                 )
                 req = async_client.build_request(
-                    "POST",
+                    request.method,
                     url,
                     params=requested_query_params,
                     headers=headers,
