@@ -67,6 +67,10 @@ const MemberModal = <T extends BaseMember>({
           rpm_limit: (initialData as any).rpm_limit || null,
           // Keep array values for multi-select fields
           allowed_models: (initialData as any).allowed_models || [],
+          // LIT-2651: pre-fill the Reset Budget dropdown ("" === "No reset")
+          // so editing a member who already has a periodic budget shows their
+          // current period instead of defaulting back to lifetime.
+          budget_duration: (initialData as any).budget_duration ?? "",
         };
         console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
