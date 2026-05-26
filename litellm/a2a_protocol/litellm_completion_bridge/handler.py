@@ -100,6 +100,11 @@ class A2ACompletionBridgeHandler:
             "api_base": api_base,
             "stream": False,
         }
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params=params,
+        )
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
             k: v
@@ -207,6 +212,11 @@ class A2ACompletionBridgeHandler:
             "api_base": api_base,
             "stream": True,
         }
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params=params,
+        )
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add = {
             k: v

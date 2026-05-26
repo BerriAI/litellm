@@ -60,6 +60,10 @@ class A2ARequestUtils:
         if not isinstance(result, dict):
             return ""
 
+        # Direct message format (A2A spec)
+        if result.get("kind") == "message" or "parts" in result:
+            return A2ARequestUtils.extract_text_from_message(result)
+
         message = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
 

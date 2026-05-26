@@ -326,7 +326,8 @@ class PydanticAITransformation:
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
-                "message": a2a_message,
+                "kind": "message",
+                **a2a_message,
             },
         }
 

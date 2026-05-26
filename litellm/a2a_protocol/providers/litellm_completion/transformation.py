@@ -110,6 +110,7 @@ class A2ACompletionBridgeTransformation:
 
         # Build A2A message
         a2a_message = {
+            "kind": "message",
             "role": "agent",
             "parts": [{"kind": "text", "text": content}],
             "messageId": uuid4().hex,
@@ -119,9 +120,7 @@ class A2ACompletionBridgeTransformation:
         a2a_response = {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {
-                "message": a2a_message,
-            },
+            "result": a2a_message,
         }
 
         verbose_logger.debug(f"OpenAI -> A2A transform: content_length={len(content)}")
@@ -272,11 +271,10 @@ class A2ACompletionBridgeTransformation:
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
-                "message": {
-                    "role": "agent",
-                    "parts": [{"kind": "text", "text": content}],
-                    "messageId": uuid4().hex,
-                },
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": content}],
+                "messageId": uuid4().hex,
                 "final": is_final,
             },
         }

@@ -95,6 +95,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/a2a", "/v1/a2a"),
     ),
     LazyFeature(
+        name="a2a_registration",
+        module_path="litellm.proxy.a2a.endpoints",
+        path_prefixes=("/v1/a2a/discover",),
+    ),
+    LazyFeature(
         name="vector_stores",
         module_path="litellm.proxy.vector_store_endpoints.endpoints",
         path_prefixes=("/v1/vector_stores", "/vector_stores", "/v1/indexes"),
