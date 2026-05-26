@@ -291,3 +291,32 @@ Ruff is the primary fast linter. For the full lint suite (including mypy, black,
 - SVGs used as provider logos (loaded via `<img>` tags) must NOT use `fill="currentColor"` — replace with an explicit color like `#000000` or use the `-color` variant from lobehub icons, since CSS color inheritance does not work inside `<img>` elements.
 - Provider logos live in `ui/litellm-dashboard/public/assets/logos/` (source) and `litellm/proxy/_experimental/out/assets/logos/` (pre-built). Both locations must have the file for it to work in dev and proxy-served modes.
 - UI Vitest tests: `cd ui/litellm-dashboard && npx vitest run`
+
+### Real proxy + dashboard proof workflow
+
+Use this when a change needs screenshots or video of the LiteLLM dashboard backed by proxy behavior. Do **not** use a custom HTML page or mock backend as proof for dashboard behavior; it does not exercise auth, React Query hooks, route wiring, or the proxy API contracts.
+
+1. **Run the real proxy**
+   - The proxy Prisma schema is PostgreSQL-only. SQLite URLs fail schema validation.
+   - If the injected database connection is unavailable, start a local PostgreSQL service and create a throwaway database.
+   - Generate Prisma clients before startup if the proxy reports missing Prisma binaries:
+     `uv run prisma generate --schema=litellm/proxy/schema.prisma`
+   - Start the proxy with a minimal temp config and point it at the PostgreSQL database via process environment. Keep the config small (fake model + master key is enough for UI proof).
+   - Wait for an authenticated `/health` request to succeed before opening the dashboard. An unauthenticated `/health` can return 401 when a master key is configured.
+
+2. **Seed demo data through real APIs**
+   - Create prerequisite resources with the proxy management endpoints, not database writes or fixture objects.
+   - For pass-through demos, create `/config/pass_through_endpoint` first so the dashboard selector can fetch real routes.
+   - For vector-store demos, create `/vector_store/new` first so the dashboard selector can fetch real vector stores.
+   - Then create or update `/v1/access_group` with the resource IDs/routes under test.
+
+3. **Run the dashboard against the proxy**
+   - The dashboard requires Node >=20.9. If system Node is older or missing, install/use a pinned Node 22 binary for local testing.
+   - Run the dashboard dev server from `ui/litellm-dashboard/` on port 3000.
+   - For UI auth, set the browser `token` cookie to a JWT whose payload contains a valid proxy key in the `key` claim. If the cookie decodes to a non-`sk-` value, the dashboard may partially render but background calls will fail with "Virtual Key expected".
+   - Check the browser/server logs for background 401s before taking screenshots; stale cookies are a common cause.
+
+4. **Capture proof**
+   - Capture the actual dashboard pages/modals: list/table state, create/edit modal fields, and detail tabs.
+   - For access groups, useful screenshots are: the table row with resource counts, the create/edit modal tab for each new resource type, and the detail tab showing persisted resources.
+   - If the proxy-served static UI is part of the change, run `npm run build` and copy `ui/litellm-dashboard/out/*` into `litellm/proxy/_experimental/out/`. Expect many generated files; do not stage binary screenshot/video artifacts.
