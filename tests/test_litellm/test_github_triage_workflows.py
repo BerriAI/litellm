@@ -35,25 +35,29 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
-# Map of workflow file -> the env var name that drives the destructive
-# gate inside that workflow's `run:` block. Keeping this table explicit
-# (rather than scraping every workflow file) means a new workflow file
-# that bypasses the dry-run gating doesn't silently slip past this test.
-DESTRUCTIVE_GATE_ENV: dict[str, str] = {
+# Workflows that consult a per-run user-input env var (e.g. CLOSE_FLAG,
+# DISPATCH_CLOSE) before adding `--close`. Those gates must stay positive
+# `= "true"` so typos like "True"/"yes"/"1" fail-closed to dry-run.
+PER_RUN_GATE_ENV: dict[str, str] = {
     "triage_pr_with_llm.yml": "DISPATCH_CLOSE",
     "triage_issue_with_llm.yml": "DISPATCH_CLOSE",
     "close_low_quality_prs.yml": "CLOSE_FLAG",
-    # The reconsider workflow has no per-run "really do it?" knob — its
-    # only kill switch is `AGENT_SHIN_ENABLED`, which already serves as
-    # both the destructive gate and the global enablement gate.
-    "triage_reconsider.yml": "AGENT_SHIN_ENABLED",
-    # The review gate can add/remove labels, post comments, and close PRs.
-    # Its per-run knob is `CLOSE_FLAG` (from the workflow_dispatch input),
-    # gated by an outer `AGENT_SHIN_ENABLED = "true"` check. Listing it
-    # here ensures the same fail-safe `= "true"` and kill-switch invariants
-    # we enforce on every other destructive workflow are enforced here too.
     "review_gate.yml": "CLOSE_FLAG",
 }
+
+# Every workflow that can post comments or close PRs/issues must consult
+# the `AGENT_SHIN_ENABLED` kill switch. Post-enactment the gate is
+# inverted: bot is live by default, only forced into dry-run when the
+# variable is literally "false". The reconsider workflow has no per-run
+# knob — AGENT_SHIN_ENABLED IS its only gate — so it appears here but
+# NOT in PER_RUN_GATE_ENV.
+KILL_SWITCH_WORKFLOWS: tuple[str, ...] = (
+    "triage_pr_with_llm.yml",
+    "triage_issue_with_llm.yml",
+    "close_low_quality_prs.yml",
+    "review_gate.yml",
+    "triage_reconsider.yml",
+)
 
 
 def _load_workflow(name: str) -> dict:
@@ -74,7 +78,7 @@ def _all_run_blocks(workflow: dict) -> list[str]:
     return commands
 
 
-@pytest.mark.parametrize("workflow_file,env_var", sorted(DESTRUCTIVE_GATE_ENV.items()))
+@pytest.mark.parametrize("workflow_file,env_var", sorted(PER_RUN_GATE_ENV.items()))
 def test_should_use_failsafe_equals_true_comparison(
     workflow_file: str, env_var: str
 ) -> None:
@@ -116,30 +120,34 @@ def test_should_use_failsafe_equals_true_comparison(
         )
 
 
-@pytest.mark.parametrize("workflow_file", sorted(DESTRUCTIVE_GATE_ENV))
+@pytest.mark.parametrize("workflow_file", sorted(KILL_SWITCH_WORKFLOWS))
 def test_should_require_agent_shin_enabled_for_close(workflow_file: str) -> None:
-    """Every destructive gate must also gate on the global enablement
-    variable, so flipping `AGENT_SHIN_ENABLED` off is a kill switch
-    regardless of any per-run input.
+    """Every destructive gate must consult ``AGENT_SHIN_ENABLED`` so the
+    variable is a usable kill switch regardless of any per-run input.
 
-    Two patterns are equally fine:
-      - Positive: `[ "${AGENT_SHIN_ENABLED:-false}" = "true" ]` to enter
-        the close branch (Agent Shin workflows).
-      - Negative: `[ "${AGENT_SHIN_ENABLED:-false}" != "true" ]` then
-        bail out / force dry-run (Greptile closer).
+    Post-enactment the variable is INVERTED — Agent Shin is live by default
+    and the variable forces dry-run when explicitly set to ``"false"``. Two
+    patterns are equally fine:
 
-    What matters is that the comparison value is the literal "true";
-    `!= "false"` or `= "1"` etc. would not be a true kill switch.
+      - Positive enter-kill-switch branch:
+        ``[ "${AGENT_SHIN_ENABLED:-true}" = "false" ]``
+      - Negative bypass-kill-switch branch:
+        ``[ "${AGENT_SHIN_ENABLED:-true}" != "false" ]``
+
+    What matters is that the comparison value is the literal ``"false"``
+    AND the default-when-unset is ``"true"`` (i.e. live). ``= "true"``
+    against ``${AGENT_SHIN_ENABLED:-false}`` would re-introduce the
+    pre-rollout dry-run-by-default semantics.
     """
     workflow = _load_workflow(workflow_file)
     text = "\n".join(_all_run_blocks(workflow))
     accepted_patterns = (
-        '"${AGENT_SHIN_ENABLED:-false}" = "true"',
-        '"${AGENT_SHIN_ENABLED:-false}" != "true"',
+        '"${AGENT_SHIN_ENABLED:-true}" = "false"',
+        '"${AGENT_SHIN_ENABLED:-true}" != "false"',
     )
     assert any(p in text for p in accepted_patterns), (
-        f"{workflow_file} must gate destructive actions on "
-        '`AGENT_SHIN_ENABLED = "true"` (or the inverted `!= "true"` '
-        "guard that forces dry-run). Without this, an unset repo "
-        "variable would not be treated as a kill switch."
+        f"{workflow_file} must gate destructive actions on the inverted "
+        '`AGENT_SHIN_ENABLED` kill switch (`= "false"` or `!= "false"` '
+        'against the `${AGENT_SHIN_ENABLED:-true}` default). Without this, '
+        "an unset repo variable could be confused for an opt-in/opt-out."
     )

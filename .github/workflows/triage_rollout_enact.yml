@@ -1,0 +1,84 @@
+name: Agent Shin — rollout enactment (one-shot)
+
+# Fires the day-7 enactment sweep: closes any open external PR/issue that's
+# still failing the rubric 7 days after the heads-up (because the contributor
+# didn't update the description), and applies steady-state actions
+# (ready-for-review tag, in-grace warnings) to everything else. From the
+# merge of this workflow onward, the existing daily/cron triage workflows
+# go live for real (the AGENT_SHIN_ENABLED gates are removed by the same PR).
+#
+# Thin shell over `.github/scripts/triage_rollout_enact.py`. The dry-run
+# preview path is the SAME code with --close stripped, so a local preview
+# (with --simulate-future-hours 24 to peek at tomorrow's cron run) is a
+# high-fidelity preview of what the workflow will actually do.
+
+on:
+  push:
+    branches:
+      - litellm_internal_staging
+    paths:
+      - ".github/scripts/triage_rollout_enact.py"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (true = preview only, false = actually close/comment)."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      simulate_future_hours:
+        description: "Dry-run only: pretend N hours have passed (default 24 = next cron preview)."
+        required: false
+        default: "24"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  enact:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triage scripts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install LLM client
+        run: pip install --no-cache-dir "openai>=1.40.0"
+
+      - name: Run enactment sweep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
+          SIM_HOURS: ${{ github.event.inputs.simulate_future_hours }}
+        run: |
+          set -euo pipefail
+          ARGS=(--repo "${{ github.repository }}")
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            if [ "${DRY_RUN_INPUT:-true}" = "false" ]; then
+              ARGS+=(--close)
+              echo "::notice::Manual dispatch with dry_run=false -> closures and comments WILL be applied."
+            else
+              ARGS+=(--simulate-future-hours "${SIM_HOURS:-24}")
+              echo "::notice::Manual dispatch in dry-run, simulating +${SIM_HOURS:-24}h."
+            fi
+          else
+            # push to litellm_internal_staging = the enactment merge -> real run
+            ARGS+=(--close)
+            echo "::notice::Enactment-merge trigger -> closures and comments WILL be applied."
+          fi
+          python3 .github/scripts/triage_rollout_enact.py "${ARGS[@]}"

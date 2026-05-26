@@ -2,9 +2,9 @@ name: Agent Shin — Issue triage
 
 # LLM-as-judge triage for external GitHub issues.
 #
-# DRY-RUN BY DEFAULT. See .github/workflows/triage_pr_with_llm.yml for the
-# enablement procedure — same repo variable (`AGENT_SHIN_ENABLED=true`)
-# unlocks the PR and issue triage flows together.
+# LIVE BY DEFAULT. See .github/workflows/triage_pr_with_llm.yml for the
+# kill-switch procedure — same repo variable (`AGENT_SHIN_ENABLED="false"`)
+# forces the PR and issue triage flows back into dry-run together.
 
 on:
   issues:
@@ -15,7 +15,7 @@ on:
         description: "Issue number to triage manually."
         required: true
       close:
-        description: "If true and AGENT_SHIN_ENABLED=true, actually close on fail."
+        description: "If true (and AGENT_SHIN_ENABLED != 'false'), actually close on fail."
         required: false
         default: "false"
         type: choice
@@ -55,7 +55,9 @@ jobs:
           # The Python script calls the LLM whenever this var is set
           # (regardless of `--close`); stripping `--close` doesn't suppress
           # the API call, only the destructive side effects.
-          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
+          # Kill-switch semantics: only suppress the LLM key when the variable
+          # is literally "false". Unset / any other value -> bot is live.
+          OPENAI_API_KEY: ${{ (vars.AGENT_SHIN_ENABLED != 'false' || github.event_name == 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}
@@ -71,13 +73,16 @@ jobs:
           # string, and a `!= "false"` check would treat "True", "yes",
           # "1", "TRUE", typos, and accidental whitespace as enabling
           # closure. Mirror the Greptile closer's `= "true"` pattern.
-          if [ "${AGENT_SHIN_ENABLED:-false}" = "true" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
+          # Kill switch: AGENT_SHIN_ENABLED="false" forces dry-run even when
+          # the dispatch input asks for close. Default (unset / any other
+          # value) is "live", matching the post-enactment rollout state.
+          if [ "${AGENT_SHIN_ENABLED:-true}" != "false" ] && [ "${DISPATCH_CLOSE:-false}" = "true" ]; then
             ARGS+=(--close)
-            echo "::notice::Agent Shin is ENABLED and running in close-on-fail mode."
-          elif [ "${AGENT_SHIN_ENABLED:-false}" = "true" ]; then
-            echo "::notice::Agent Shin is ENABLED but this trigger is dry-run (workflow_dispatch close != 'true')."
+            echo "::notice::Agent Shin is LIVE — running in close-on-fail mode."
+          elif [ "${AGENT_SHIN_ENABLED:-true}" != "false" ]; then
+            echo "::notice::Agent Shin is LIVE but this trigger is dry-run (workflow_dispatch close != 'true')."
           else
-            echo "::notice::Agent Shin is in DRY-RUN mode (AGENT_SHIN_ENABLED is not 'true'). No comments will be posted; no issues will be closed."
+            echo "::notice::Agent Shin kill switch is ON (AGENT_SHIN_ENABLED='false'). Forcing dry-run."
           fi
           # Automatic `issues` events stay dry-run regardless until the team
           # explicitly invokes workflow_dispatch with close=true.
