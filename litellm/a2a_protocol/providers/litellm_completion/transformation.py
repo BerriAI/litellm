@@ -266,15 +266,19 @@ class A2ACompletionBridgeTransformation:
         if not content and not is_final:
             return None
 
-        # Build A2A streaming chunk (legacy format)
+        # Build A2A streaming chunk (legacy format). ``final`` is an
+        # envelope-level streaming property per the A2A spec and must live
+        # alongside ``message`` in ``result``, not inside the message object.
         a2a_chunk = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
-                "kind": "message",
-                "role": "agent",
-                "parts": [{"kind": "text", "text": content}],
-                "messageId": uuid4().hex,
+                "message": {
+                    "kind": "message",
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": content}],
+                    "messageId": uuid4().hex,
+                },
                 "final": is_final,
             },
         }

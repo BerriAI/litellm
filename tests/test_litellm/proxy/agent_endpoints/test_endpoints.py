@@ -414,8 +414,10 @@ class TestAgentRBACProxyAdmin:
             stored_card = call_kwargs["agent"]["agent_card_params"]
             new_agent_id = call_kwargs["agent_id"]
 
-            # Top-level url is dropped; supportedInterfaces points at the proxy.
-            assert "url" not in stored_card
+            # Top-level url is retained for runtime A2A invocation (the public
+            # well-known endpoint rewrites it before exposing to clients);
+            # supportedInterfaces points at the proxy.
+            assert stored_card["url"] == "http://localhost"
             assert stored_card["supportedInterfaces"][0]["protocolBinding"] == "JSONRPC"
             assert stored_card["supportedInterfaces"][0]["url"].endswith(
                 f"/a2a/{new_agent_id}"

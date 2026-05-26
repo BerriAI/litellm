@@ -100,7 +100,15 @@ class A2ACompletionBridgeTransformation:
         extra_body = completion_params.get("extra_body")
         if not isinstance(extra_body, dict):
             extra_body = {}
-        extra_body = {**extra_body, "metadata": forward_metadata}
+        # Merge into any existing ``extra_body.metadata`` so an
+        # agent-configured ``extra_body: {metadata: {...}}`` is preserved;
+        # forwarded A2A metadata takes precedence on key conflicts.
+        existing_metadata = extra_body.get("metadata")
+        merged_metadata: Dict[str, Any] = (
+            {**existing_metadata} if isinstance(existing_metadata, dict) else {}
+        )
+        merged_metadata.update(forward_metadata)
+        extra_body = {**extra_body, "metadata": merged_metadata}
         completion_params["extra_body"] = extra_body
 
         verbose_logger.debug(
