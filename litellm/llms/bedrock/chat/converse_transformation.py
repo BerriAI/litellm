@@ -458,6 +458,7 @@ class AmazonConverseConfig(BaseConfig):
                         model=model, effort=mapped_effort
                     )
                     optional_params["output_config"] = output_config
+                    optional_params["_output_config_normalized"] = True
 
     @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
@@ -1226,6 +1227,9 @@ class AmazonConverseConfig(BaseConfig):
         # structured-output ``format`` subfield is consumed into Bedrock's
         # native ``outputConfig`` (camelCase), which is handled separately.
         anthropic_output_config = inference_params.pop("output_config", None)
+        anthropic_output_config_already_normalized = bool(
+            inference_params.pop("_output_config_normalized", False)
+        )
         output_config_format = None
         if isinstance(anthropic_output_config, dict):
             anthropic_output_config = dict(anthropic_output_config)
@@ -1322,10 +1326,11 @@ class AmazonConverseConfig(BaseConfig):
                         model,
                     )
                 else:
-                    normalize_bedrock_opus_output_config_effort(
-                        model=model,
-                        output_config=anthropic_output_config,
-                    )
+                    if not anthropic_output_config_already_normalized:
+                        normalize_bedrock_opus_output_config_effort(
+                            model=model,
+                            output_config=anthropic_output_config,
+                        )
                     effort = anthropic_output_config.get("effort")
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(
