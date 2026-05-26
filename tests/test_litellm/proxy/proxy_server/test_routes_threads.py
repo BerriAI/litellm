@@ -127,7 +127,8 @@ def test_create_thread_error(client, auth_as, no_router, path):
     """Pins ``POST /v1/threads`` / ``POST /threads`` (error: no llm_router)."""
     with auth_as():
         response = client.post(path, json={})
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +155,8 @@ def test_get_thread_error(client, auth_as, no_router, path):
     """Pins ``GET /v1/threads/{thread_id}`` / ``GET /threads/{thread_id}`` (error)."""
     with auth_as():
         response = client.get(path)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +191,8 @@ def test_add_message_error(client, auth_as, no_router, path):
     """Pins ``POST /v1/threads/{thread_id}/messages`` / ``POST /threads/{thread_id}/messages`` (error)."""
     with auth_as():
         response = client.post(path, json={"role": "user", "content": "hi"})
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +234,8 @@ def test_get_messages_error(client, auth_as, no_router, path):
     """Pins ``GET /v1/threads/{thread_id}/messages`` / ``GET /threads/{thread_id}/messages`` (error)."""
     with auth_as():
         response = client.get(path)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -266,4 +270,5 @@ def test_run_thread_error(client, auth_as, no_router, path):
     """Pins ``POST /v1/threads/{thread_id}/runs`` / ``POST /threads/{thread_id}/runs`` (error)."""
     with auth_as():
         response = client.post(path, json={"assistant_id": "asst_1"})
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0

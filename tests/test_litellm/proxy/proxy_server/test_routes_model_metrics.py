@@ -170,7 +170,8 @@ def test_model_settings_method_not_allowed(client, auth_as):
     """Pins ``GET /model/settings`` (error: wrong method)."""
     with auth_as():
         response = client.post("/model/settings", json={})
-    assert response.status_code in (404, 405)
+    assert response.status_code == 405
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------

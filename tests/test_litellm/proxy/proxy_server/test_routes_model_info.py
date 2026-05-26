@@ -145,4 +145,5 @@ def test_model_group_info_invalid_method(client, auth_as, null_router):
     """Pins ``GET /model_group/info`` (error: method not allowed)."""
     with auth_as():
         response = client.post("/model_group/info", json={})
-    assert response.status_code in (404, 405)
+    assert response.status_code == 405
+    assert len(response.content) > 0

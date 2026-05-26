@@ -122,4 +122,5 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
     payload = {"model": "gpt-3.5-turbo-instruct", "prompt": "boom"}
     with auth_as():
         response = client.post(path, json=payload)
-    assert response.status_code in (400, 500)
+    assert response.status_code == 500
+    assert response.headers.get("content-type", "").startswith("application/json")

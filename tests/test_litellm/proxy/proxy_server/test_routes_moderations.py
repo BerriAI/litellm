@@ -107,4 +107,5 @@ def test_moderation_error(client, auth_as, moderation_pipeline_raises, path):
     payload = {"model": "text-moderation-stable", "input": "Sample text"}
     with auth_as():
         response = client.post(path, json=payload)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0

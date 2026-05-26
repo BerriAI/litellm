@@ -119,7 +119,8 @@ def test_get_assistants_no_router_error(client, auth_as, no_router, path):
     """Pins ``GET /v1/assistants`` and ``GET /assistants`` (error: no llm_router)."""
     with auth_as():
         response = client.get(path)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +149,8 @@ def test_create_assistant_no_router_error(client, auth_as, no_router, path):
     """Pins ``POST /v1/assistants`` and ``POST /assistants`` (error: no llm_router)."""
     with auth_as():
         response = client.post(path, json={"model": "gpt-4"})
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -174,4 +176,5 @@ def test_delete_assistant_no_router_error(client, auth_as, no_router, path):
     """Pins ``DELETE /v1/assistants/{assistant_id:path}`` / ``DELETE /assistants/{assistant_id:path}`` (error)."""
     with auth_as():
         response = client.delete(path)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0

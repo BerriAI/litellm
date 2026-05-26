@@ -156,7 +156,8 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
     with auth_as():
         response = client.post(path, json=payload)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
@@ -188,4 +189,5 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
     data = {"model": "whisper-1"}
     with auth_as():
         response = client.post(path, files=files, data=data)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0

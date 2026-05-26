@@ -87,4 +87,5 @@ def test_queue_chat_completions_no_router_error(client, auth_as, queue_no_router
     payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
     with auth_as():
         response = client.post("/queue/chat/completions", json=payload)
-    assert response.status_code >= 400
+    assert response.status_code == 500
+    assert len(response.content) > 0
