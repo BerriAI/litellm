@@ -8,8 +8,7 @@ with guardrail transformations, including tool calls.
 import json
 import os
 import sys
-from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Literal, Optional
 
 import pytest
 
@@ -82,6 +81,68 @@ class MockGuardrail(CustomGuardrail):
         if "images" in inputs:
             result["images"] = inputs["images"]  # type: ignore
         return result
+
+
+class TestOpenAIChatCompletionsHandlerMediaInput:
+    """Test input processing for media-only chat messages."""
+
+    @pytest.mark.asyncio
+    async def test_image_only_message_calls_guardrail(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://cdn.example.com/synthetic.jpg"
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result == data
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs["texts"] == []
+        assert guardrail.last_inputs["images"] == [
+            "https://cdn.example.com/synthetic.jpg"
+        ]
+        assert guardrail.last_inputs["structured_messages"] == data["messages"]
+
+    @pytest.mark.asyncio
+    async def test_audio_only_message_calls_guardrail(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "url": "https://cdn.example.com/synthetic.wav"
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result == data
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs["texts"] == []
+        assert "images" not in guardrail.last_inputs
+        assert guardrail.last_inputs["structured_messages"] == data["messages"]
 
 
 class TestOpenAIChatCompletionsHandlerToolsInput:
@@ -765,7 +826,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         This test verifies the fix for the bug where accessing chunk.choices[0]
         would raise IndexError when a streaming chunk has an empty choices list.
         """
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import ModelResponseStream
 
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockPassThroughGuardrail(guardrail_name="test")

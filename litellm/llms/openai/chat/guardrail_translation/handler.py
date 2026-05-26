@@ -93,14 +93,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 skip_system_message=skip_system,
             )
 
-        # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        structured_messages = self.get_structured_messages(data)
+        guardrail_input_has_media = bool(images_to_check) or self._has_media_content(
+            messages=structured_messages or messages,
+            skip_system_message=skip_system,
+        )
+
+        # Step 2: Apply guardrail to all text, media, and tool calls in batch
+        if texts_to_check or tool_calls_to_check or guardrail_input_has_media:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
-            structured_messages = self.get_structured_messages(data)
             if structured_messages:
                 inputs["structured_messages"] = (
                     openai_messages_without_system(structured_messages)
@@ -219,6 +224,43 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # Add the full tool call object to the list
                     tool_calls_to_check.append(cast(ChatCompletionToolParam, tool_call))
                     tool_call_task_mappings.append((msg_idx, int(tool_call_idx)))
+
+    def _has_media_content(
+        self,
+        messages: Optional[List[Any]],
+        skip_system_message: bool = False,
+    ) -> bool:
+        if not messages:
+            return False
+
+        for message in messages:
+            if (
+                skip_system_message
+                and str(message.get("role") or "").lower() == "system"
+            ):
+                continue
+
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+
+            for content_item in content:
+                if not isinstance(content_item, dict):
+                    continue
+
+                if content_item.get("type") == "image_url":
+                    image_url = content_item.get("image_url")
+                    if isinstance(image_url, str):
+                        return True
+                    if isinstance(image_url, dict) and image_url.get("url"):
+                        return True
+
+                if content_item.get("type") == "input_audio":
+                    audio = content_item.get("input_audio")
+                    if isinstance(audio, dict) and audio.get("url"):
+                        return True
+
+        return False
 
     async def _apply_guardrail_responses_to_input_texts(
         self,

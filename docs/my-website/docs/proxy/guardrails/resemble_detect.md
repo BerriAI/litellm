@@ -43,6 +43,8 @@ guardrails:
       resemble_audio_source_tracing: true
       # Do not persist media on Resemble after the scan
       resemble_zero_retention_mode: true
+      # Maximum distinct media URLs to scan per request
+      resemble_max_media_urls: 10
       # Block the request if Resemble is unreachable (default: fail open)
       resemble_fail_closed: false
 ```
@@ -160,6 +162,7 @@ curl -i http://0.0.0.0:4000/v1/chat/completions \
 | `resemble_use_reverse_search`    | bool       | `false`                             | (Image only) search the web for matching images to improve accuracy.                                            |
 | `resemble_zero_retention_mode`   | bool       | `false`                             | Automatically delete submitted media after detection. URLs are redacted and filenames are tokenized.            |
 | `resemble_metadata_key`          | string     | `"mediaUrl"`                        | Key under request `metadata` to read the media URL from when it is not present in the message content.         |
+| `resemble_max_media_urls`        | integer    | `10`                                | Maximum number of distinct media URLs to scan per request. Requests above this limit are rejected first.       |
 | `resemble_poll_interval_seconds` | number     | `2.0`                               | How often to poll Resemble for the detection result.                                                            |
 | `resemble_poll_timeout_seconds`  | number     | `60.0`                              | Maximum total time to wait for a detection result before failing.                                               |
 | `resemble_fail_closed`           | bool       | `false`                             | If `true`, Resemble API errors **block** the request. If `false` (default), errors are logged and ignored.      |

@@ -26,6 +26,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             litellm_params, "resemble_zero_retention_mode", None
         ),
         metadata_key=getattr(litellm_params, "resemble_metadata_key", None),
+        max_media_urls=getattr(litellm_params, "resemble_max_media_urls", None),
         poll_interval_seconds=getattr(
             litellm_params, "resemble_poll_interval_seconds", None
         ),

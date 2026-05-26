@@ -479,6 +479,15 @@ class ResembleGuardrailParamsConfigModel(BaseModel):
             "present in message content. Default: mediaUrl."
         ),
     )
+    resemble_max_media_urls: Optional[int] = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Maximum number of distinct media URLs Resemble will scan per request. "
+            "Requests above this limit are rejected before any Resemble API call. "
+            "Default 10."
+        ),
+    )
     resemble_poll_interval_seconds: Optional[float] = Field(
         default=2.0,
         description="How often to poll Resemble for the detection result. Default 2s.",

@@ -468,6 +468,59 @@ async def test_apply_guardrail_blocks_generic_text_media_url():
 
 
 @pytest.mark.asyncio
+async def test_scan_request_rejects_too_many_media_urls_before_scanning():
+    guard = _make_guardrail(max_media_urls=1)
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "check https://cdn.example.com/one.wav and "
+                    "https://cdn.example.com/two.wav"
+                ),
+            }
+        ]
+    }
+
+    scan_mock = AsyncMock()
+    with patch.object(guard, "_scan_single_url", new=scan_mock):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard._scan_request(data)
+
+    scan_mock.assert_not_called()
+    assert exc_info.value.status_code == 400
+    detail = exc_info.value.detail
+    assert detail["resemble"]["media_url_count"] == 2
+    assert detail["resemble"]["max_media_urls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rejects_too_many_media_urls_before_scanning():
+    guard = _make_guardrail(max_media_urls=1)
+    inputs = {
+        "images": [
+            "https://cdn.example.com/one.jpg",
+            "https://cdn.example.com/two.jpg",
+        ]
+    }
+
+    scan_mock = AsyncMock()
+    with patch.object(guard, "_scan_single_url", new=scan_mock):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    scan_mock.assert_not_called()
+    assert exc_info.value.status_code == 400
+    detail = exc_info.value.detail
+    assert detail["resemble"]["media_url_count"] == 2
+    assert detail["resemble"]["max_media_urls"] == 1
+
+
+@pytest.mark.asyncio
 async def test_pre_call_passes_when_audio_is_real():
     guard = _make_guardrail()
     data = {

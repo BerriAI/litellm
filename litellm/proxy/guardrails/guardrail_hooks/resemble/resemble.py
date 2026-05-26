@@ -91,6 +91,7 @@ class ResembleGuardrail(CustomGuardrail):
         use_reverse_search: Optional[bool] = None,
         zero_retention_mode: Optional[bool] = None,
         metadata_key: Optional[str] = None,
+        max_media_urls: Optional[int] = None,
         poll_interval_seconds: Optional[float] = None,
         poll_timeout_seconds: Optional[float] = None,
         fail_closed: Optional[bool] = None,
@@ -117,6 +118,7 @@ class ResembleGuardrail(CustomGuardrail):
         self.use_reverse_search: bool = bool(use_reverse_search)
         self.zero_retention_mode: bool = bool(zero_retention_mode)
         self.metadata_key: str = metadata_key or "mediaUrl"
+        self.max_media_urls: int = max_media_urls if max_media_urls is not None else 10
         self.poll_interval_seconds: float = (
             poll_interval_seconds if poll_interval_seconds is not None else 2.0
         )
@@ -128,12 +130,13 @@ class ResembleGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "Resemble guardrail initialized: name=%s threshold=%s "
             "audio_source_tracing=%s use_reverse_search=%s "
-            "zero_retention_mode=%s fail_closed=%s",
+            "zero_retention_mode=%s max_media_urls=%s fail_closed=%s",
             kwargs.get("guardrail_name", "unknown"),
             self.threshold,
             self.audio_source_tracing,
             self.use_reverse_search,
             self.zero_retention_mode,
+            self.max_media_urls,
             self.fail_closed,
         )
 
@@ -218,6 +221,7 @@ class ResembleGuardrail(CustomGuardrail):
             )
             return inputs
 
+        self._enforce_media_url_limit(media_urls)
         for media_url in media_urls:
             await self._scan_single_url(media_url)
         return inputs
@@ -234,8 +238,28 @@ class ResembleGuardrail(CustomGuardrail):
             )
             return
 
+        self._enforce_media_url_limit(media_urls)
         for media_url in media_urls:
             await self._scan_single_url(media_url)
+
+    def _enforce_media_url_limit(self, media_urls: List[str]) -> None:
+        if len(media_urls) <= self.max_media_urls:
+            return
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Too many media URLs for Resemble Detect guardrail",
+                "resemble": {
+                    "media_url_count": len(media_urls),
+                    "max_media_urls": self.max_media_urls,
+                    "reason": (
+                        "Request includes more media URLs than this Resemble "
+                        "guardrail is configured to scan."
+                    ),
+                },
+            },
+        )
 
     async def _scan_single_url(self, media_url: str) -> None:
         try:
