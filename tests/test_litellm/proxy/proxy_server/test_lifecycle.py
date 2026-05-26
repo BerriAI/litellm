@@ -221,6 +221,8 @@ def test_save_worker_config_invalid_no_kwargs_yields_empty(monkeypatch):
 
 def test_initialize_signature_is_async_with_expected_params():
     sig = inspect.signature(initialize)
+    # Hard-coded so a signature change (param added/removed) trips the gate.
+    expected_param_count = 17
     observed = {
         "is_async": inspect.iscoroutinefunction(initialize),
         "param_count": len(sig.parameters),
@@ -229,7 +231,7 @@ def test_initialize_signature_is_async_with_expected_params():
     }
     assert normalize(observed) == {
         "is_async": True,
-        "param_count": len(sig.parameters),
+        "param_count": expected_param_count,
         "has_model": True,
         "has_config": True,
     }
@@ -354,17 +356,27 @@ async def test_check_request_disconnection_cancels_task_and_raises_499(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_check_request_disconnection_invalid_when_connected_times_out():
+async def test_check_request_disconnection_invalid_when_connected_times_out(monkeypatch):
     """With a connected request the function loops for up to 10 minutes —
-    wrap in wait_for and assert it times out (using real asyncio.sleep)."""
+    wrap in wait_for and assert it times out. Patch ``asyncio.sleep`` so the
+    loop spins without real wall-clock waits."""
+    import litellm.proxy.proxy_server as ps
+
     request = MagicMock()
     request.is_disconnected = AsyncMock(return_value=False)
     task = MagicMock()
 
+    _real_sleep = asyncio.sleep
+
+    async def _instant_sleep(_seconds):
+        await _real_sleep(0)
+
+    monkeypatch.setattr(ps.asyncio, "sleep", _instant_sleep)
+
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(
             check_request_disconnection(request=request, llm_api_call_task=task),
-            timeout=1.2,
+            timeout=0.05,
         )
 
 
