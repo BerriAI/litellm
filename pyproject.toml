@@ -83,9 +83,9 @@ utils = [
     # Not in Docker or PyPI proxy extra.
     "numpydoc==1.8.0",
 ]
-caching = ["diskcache==5.6.3"]
+caching = []
 semantic-router = [
-    "semantic-router==0.1.12; python_version < '3.14'",
+    "semantic-router==0.1.15; python_version < '3.14'",
     "aurelio-sdk==0.0.19; python_version < '3.14'",
 ]
 mlflow = ["mlflow==3.11.1"]
@@ -320,4 +320,3 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
-
