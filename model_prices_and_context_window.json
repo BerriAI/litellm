@@ -12950,15 +12950,15 @@
         "supports_native_structured_output": true
     },
     "deepseek/deepseek-v4-pro": {
-        "input_cost_per_token": 1.74e-06,
-        "cache_read_input_token_cost": 1.45e-07,
+        "input_cost_per_token": 4.35e-07,
+        "cache_read_input_token_cost": 3.625e-08,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1.0e+0,
         "max_output_tokens": 3.84e+5,
         "max_tokens": 3.84e+5,
         "mode": "chat",
         "source":"https://api-docs.deepseek.com/quick_start/pricing",
-        "output_cost_per_token": 3.48e-06,
+        "output_cost_per_token": 8.7e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
