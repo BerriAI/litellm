@@ -91,7 +91,14 @@ jobs:
         if: steps.auth.outputs.authorized == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Only expose the LLM key when the bot is enabled, so a PR/issue
+          # author can't force paid LLM calls by spamming `@agent-shin
+          # reconsider` while the bot is still in dry-run. The Python script
+          # calls the LLM whenever this var is set (regardless of `--close`);
+          # stripping `--close` doesn't suppress the API call, only the
+          # destructive side effects. Mirror the gating used by every other
+          # Agent Shin workflow (triage_pr_with_llm.yml, review_gate.yml, ...).
+          OPENAI_API_KEY: ${{ vars.AGENT_SHIN_ENABLED == 'true' && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
           AGENT_SHIN_ENABLED: ${{ vars.AGENT_SHIN_ENABLED }}

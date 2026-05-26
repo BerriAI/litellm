@@ -1,9 +1,8 @@
 """Thin dry-run wrappers around every Agent Shin GitHub mutation.
 
-Every destructive operation the rollout scripts perform (post a comment, close
-a PR/issue, reopen, add/remove a label) is funneled through a `maybe_*` helper
-here. The helpers take a single ``dry_run: bool`` keyword argument and the
-body is intentionally trivial:
+Every destructive operation the rollout scripts perform is funneled through a
+``maybe_*`` helper here. The helpers take a single ``dry_run: bool`` keyword
+argument and the body is intentionally trivial:
 
     if dry_run:
         print(...)        # log what we would do, return
@@ -47,59 +46,3 @@ def maybe_post_comment(repo: str, number: int, body: str, *, dry_run: bool) -> N
         _log(textwrap.indent(body, "    "))
         return
     triage_with_llm.post_comment(repo, number, body)
-
-
-def maybe_close_pr(repo: str, number: int, *, dry_run: bool) -> None:
-    """Close ``repo#number`` (PR) — or log it."""
-    if dry_run:
-        _log(f"[DRY RUN] close PR {repo}#{number}")
-        return
-    triage_with_llm.close_pr(repo, number)
-
-
-def maybe_close_issue(
-    repo: str, number: int, *, dry_run: bool, not_planned: bool = True
-) -> None:
-    """Close ``repo#number`` (issue) — or log it. ``not_planned=True`` sets the
-    standard ``state_reason`` for triage closures so they don't look like
-    'completed'."""
-    if dry_run:
-        _log(
-            f"[DRY RUN] close issue {repo}#{number}"
-            f" (state_reason={'not_planned' if not_planned else 'completed'})"
-        )
-        return
-    triage_with_llm.close_issue(repo, number, not_planned=not_planned)
-
-
-def maybe_reopen_pr(repo: str, number: int, *, dry_run: bool) -> None:
-    """Reopen a previously-closed PR — or log it."""
-    if dry_run:
-        _log(f"[DRY RUN] reopen PR {repo}#{number}")
-        return
-    triage_with_llm.reopen_pr(repo, number)
-
-
-def maybe_reopen_issue(repo: str, number: int, *, dry_run: bool) -> None:
-    """Reopen a previously-closed issue — or log it."""
-    if dry_run:
-        _log(f"[DRY RUN] reopen issue {repo}#{number}")
-        return
-    triage_with_llm.reopen_issue(repo, number)
-
-
-def maybe_add_label(repo: str, number: int, label: str, *, dry_run: bool) -> None:
-    """Add a label to ``repo#number`` — or log it."""
-    if dry_run:
-        _log(f"[DRY RUN] add label {label!r} to {repo}#{number}")
-        return
-    triage_with_llm.add_label(repo, number, label)
-
-
-def maybe_remove_label(repo: str, number: int, label: str, *, dry_run: bool) -> None:
-    """Remove a label from ``repo#number`` — or log it. A missing label is not
-    an error in the real path either."""
-    if dry_run:
-        _log(f"[DRY RUN] remove label {label!r} from {repo}#{number}")
-        return
-    triage_with_llm.remove_label(repo, number, label)

@@ -101,57 +101,6 @@ class TestActionsDryRun:
         actions_module.maybe_post_comment("o/r", 7, "hello", dry_run=False)
         assert called == [("o/r", 7, "hello")]
 
-    @pytest.mark.parametrize(
-        "fn,target_name,extra_args",
-        [
-            ("maybe_close_pr", "close_pr", ()),
-            ("maybe_reopen_pr", "reopen_pr", ()),
-            ("maybe_reopen_issue", "reopen_issue", ()),
-        ],
-    )
-    def test_simple_mutators_gate_on_dry_run(
-        self, actions_module, triage_module, monkeypatch, fn, target_name, extra_args
-    ):
-        called = []
-        monkeypatch.setattr(
-            triage_module, target_name, lambda *a, **k: called.append((a, k))
-        )
-        getattr(actions_module, fn)("o/r", 7, *extra_args, dry_run=True)
-        assert called == []
-        getattr(actions_module, fn)("o/r", 7, *extra_args, dry_run=False)
-        assert len(called) == 1
-
-    def test_maybe_close_issue_passes_not_planned(
-        self, actions_module, triage_module, monkeypatch
-    ):
-        called = []
-        monkeypatch.setattr(
-            triage_module,
-            "close_issue",
-            lambda repo, n, *, not_planned=True: called.append(not_planned),
-        )
-        actions_module.maybe_close_issue("o/r", 7, dry_run=False)
-        actions_module.maybe_close_issue("o/r", 7, dry_run=False, not_planned=False)
-        assert called == [True, False]
-
-    @pytest.mark.parametrize(
-        "fn,target",
-        [
-            ("maybe_add_label", "add_label"),
-            ("maybe_remove_label", "remove_label"),
-        ],
-    )
-    def test_label_mutators_gate_on_dry_run(
-        self, actions_module, triage_module, monkeypatch, fn, target, capsys
-    ):
-        called = []
-        monkeypatch.setattr(triage_module, target, lambda *a, **k: called.append(a))
-        getattr(actions_module, fn)("o/r", 7, "ready for review", dry_run=True)
-        assert called == []
-        assert "ready for review" in capsys.readouterr().out
-        getattr(actions_module, fn)("o/r", 7, "ready for review", dry_run=False)
-        assert called == [("o/r", 7, "ready for review")]
-
 
 # ---------------------------------------------------------------------------
 # _would_be_closed predicate
