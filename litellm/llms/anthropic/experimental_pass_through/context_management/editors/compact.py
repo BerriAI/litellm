@@ -465,6 +465,14 @@ async def apply_compact_20260112(
 
     if current_tokens <= trigger_tokens:
         # Slice-only path. If Phase A fired we still slice + system-prefix.
+        # Guard against an empty downstream message list: this happens when the
+        # sliced result was a single assistant turn whose only block was the
+        # compaction block, which ``_strip_compaction_blocks`` then drops. The
+        # downstream API rejects an empty messages array, so fall back to
+        # picking a real user question (or a synthetic continuation prompt) —
+        # mirroring the full-summary path's behavior below.
+        if not downstream_messages:
+            downstream_messages = _select_last_user_question(effective_messages)
         return PolyfillResult(
             messages=downstream_messages,
             system=augmented_system,
