@@ -286,8 +286,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     @staticmethod
     def _infer_openai_endpoint_from_model_id(model_id: Optional[str]) -> str:
         """
-        Best-effort mapping of a Bedrock model id to the OpenAI endpoint
-        the batch job represents.
+        Map a Bedrock model id to the OpenAI endpoint the batch job represents.
 
         Used when we cannot read the original `endpoint` field off
         `litellm_params` (the retrieve path is the main case: by the time
@@ -295,15 +294,39 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         request body, and the AWS GetModelInvocationJob response only
         exposes the model id).
 
-        Returns `/v1/embeddings` iff the lowercased model id contains
-        "embed" (covers `amazon.titan-embed-text-v2:0`,
-        `amazon.titan-embed-image-v1`, `amazon.nova-2-multimodal-embeddings-v1:0`,
-        `cohere.embed-english-v3`, ARN forms thereof). Otherwise defaults
-        to `/v1/chat/completions` so the existing chat batches continue to
-        report the same endpoint they always have.
+        Resolution order:
+          1. `model_prices_and_context_window.json` via `litellm.get_model_info`.
+             This is the project-wide source of truth: every current Bedrock
+             embedding model is registered with `"mode": "embedding"`, so
+             future additions get classified automatically once their entry
+             lands - no code change here is required.
+          2. Substring fallback (`"embed" in model_id.lower()`) for ids the
+             registry can't resolve. This catches cross-region inference
+             profile prefixes (e.g. `us.amazon.titan-embed-text-v2:0`) and
+             Bedrock ARN forms, neither of which `get_model_info` handles
+             today.
+          3. Default to `/v1/chat/completions` for everything else, so the
+             existing chat batches keep the endpoint they always reported.
         """
         if not model_id:
             return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
+
+        try:
+            from litellm import get_model_info
+
+            info = get_model_info(model_id)
+            mode = (info or {}).get("mode")
+            if mode == "embedding":
+                return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
+            if mode:
+                # Registry knows the mode and it's not embedding - trust it.
+                return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
+        except Exception:
+            # `get_model_info` raises for ids it can't normalize (ARN forms,
+            # cross-region profile prefixes, unreleased models). Fall through
+            # to the substring fallback rather than misclassifying.
+            pass
+
         if "embed" in model_id.lower():
             return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
         return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
