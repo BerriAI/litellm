@@ -22,6 +22,7 @@ class ModelEntry:
     required_env: FrozenSet[str] = field(default_factory=frozenset)
     caps: FrozenSet[str] = field(default_factory=frozenset)
     fail_reason: Optional[str] = None
+    bedrock_effort_ceiling: Optional[str] = None
 
     def params(self) -> Dict[str, str]:
         return dict(self.extra_params)
@@ -59,6 +60,14 @@ _ADAPTIVE_EFFORT_LABEL: Dict[str, str] = {
     "max": "max",
 }
 
+_EFFORT_RANK: Dict[str, int] = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "max": 3,
+    "xhigh": 4,
+}
+
 _BAD_REQUEST_EFFORTS: FrozenSet[str] = frozenset({"disabled", "invalid", ""})
 
 
@@ -77,10 +86,16 @@ def expected(model: ModelEntry, effort: str) -> CellExpectation:
             return CellExpectation(status=400, thinking_type=OMIT)
 
     if model.mode == "adaptive":
+        wire_effort = _ADAPTIVE_EFFORT_LABEL[effort]
+        if model.bedrock_effort_ceiling is not None:
+            wire_rank = _EFFORT_RANK[wire_effort]
+            ceiling_rank = _EFFORT_RANK[model.bedrock_effort_ceiling]
+            if wire_rank > ceiling_rank:
+                wire_effort = model.bedrock_effort_ceiling
         return CellExpectation(
             status=200,
             thinking_type="adaptive",
-            output_config_effort=_ADAPTIVE_EFFORT_LABEL[effort],
+            output_config_effort=wire_effort,
         )
 
     return CellExpectation(
@@ -218,7 +233,8 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_4_6,
+        caps=_CAPS_OPUS_4_7,
+        bedrock_effort_ceiling="max",
     ),
     ModelEntry(
         alias="bedrock-claude-sonnet-4-6",
@@ -246,7 +262,8 @@ BEDROCK_INVOKE_CHAT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_4_6,
+        caps=_CAPS_OPUS_4_7,
+        bedrock_effort_ceiling="max",
     ),
     ModelEntry(
         alias="bedrock-invoke-claude-sonnet-4-6",
