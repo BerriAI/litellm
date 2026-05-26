@@ -278,3 +278,65 @@ class TestTransformRetrieveBatchResponseEndpoint:
             litellm_params={},
         )
         assert batch.endpoint == "/v1/chat/completions"
+
+
+class TestRegistryDrivenClassification:
+    """The model registry (`model_prices_and_context_window.json`) is the
+    source of truth - these tests pin that we use it, not just substring
+    matching, for canonical Bedrock model ids."""
+
+    def test_registry_classifies_known_embed_id(self, mocker):
+        """get_model_info short-circuits the substring fallback for known ids."""
+        mocked = mocker.patch(
+            "litellm.get_model_info", return_value={"mode": "embedding"}
+        )
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "amazon.titan-embed-text-v2:0"
+            )
+            == "/v1/embeddings"
+        )
+        mocked.assert_called_once_with("amazon.titan-embed-text-v2:0")
+
+    def test_registry_chat_mode_wins_even_if_name_contains_embed_word(self, mocker):
+        """Hypothetical model whose name has 'embed' but registry says chat
+        must NOT route to embeddings - registry wins over substring."""
+        mocker.patch("litellm.get_model_info", return_value={"mode": "chat"})
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "some.embed-themed-chat-v1:0"
+            )
+            == "/v1/chat/completions"
+        )
+
+    def test_substring_fallback_used_when_registry_raises(self, mocker):
+        """For unmapped ids (ARN forms, cross-region profiles) we keep the
+        old substring heuristic so embedding batches still get routed."""
+        mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "us.amazon.titan-embed-text-v2:0"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_substring_fallback_chat_default_when_registry_raises(self, mocker):
+        """Unmapped id without 'embed' marker -> chat (preserves prior behavior)."""
+        mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "arn:aws:bedrock:us-east-1:123:custom-model/some-llm"
+            )
+            == "/v1/chat/completions"
+        )
+
+    def test_registry_no_mode_field_falls_back_to_substring(self, mocker):
+        """Registry returns info dict without a `mode` key -> substring path."""
+        mocker.patch("litellm.get_model_info", return_value={})
+        # No 'embed' in name -> chat
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "anthropic.claude-3-5-sonnet-20240620-v1:0"
+            )
+            == "/v1/chat/completions"
+        )
