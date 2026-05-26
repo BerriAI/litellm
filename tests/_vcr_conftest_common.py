@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import ast
 import atexit
+import base64
+import binascii
 import hashlib
 import json
 import os
 import re
 import socket
 import sys
+import urllib.parse
 from collections import defaultdict
-from typing import Iterable
+from typing import Iterable, Optional
 
 import pytest
 
@@ -158,6 +161,17 @@ VCR_IMAGE_B64_PLACEHOLDER = "dGVzdA=="
 # httpx generates a fresh random boundary per request via os.urandom,
 # which otherwise turns every multipart cassette into a permanent miss.
 VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
+
+# Google service-account auth posts a freshly minted JWT assertion to
+# ``oauth2.googleapis.com/token`` on every call. The JWT's ``iat``/``exp``
+# claims (and the resulting RSA signature) change every run, so without
+# normalization the ``safe_body`` matcher misses and the cassette grows
+# unboundedly until ``MAX_EPISODES_PER_CASSETTE`` refuses the save.
+GOOGLE_OAUTH_TOKEN_HOSTS = frozenset({"oauth2.googleapis.com", "accounts.google.com"})
+GOOGLE_OAUTH_TOKEN_PATH_SUFFIX = "/token"
+GOOGLE_OAUTH_JWT_ASSERTION_FIELD = "assertion"
+JWT_VOLATILE_CLAIMS = frozenset({"iat", "exp", "jti", "nbf"})
+JWT_NORMALIZED_SIGNATURE = "vcr-normalized-signature"
 
 
 def pin_httpx_multipart_boundary(monkeypatch) -> None:
@@ -542,6 +556,113 @@ def _normalize_multipart_boundary(request) -> None:
         pass
 
 
+def _b64url_decode(segment: str) -> bytes:
+    padding = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment + padding)
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _normalize_jwt(token: str) -> Optional[str]:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    header_seg, payload_seg, _signature = parts
+    try:
+        header = json.loads(_b64url_decode(header_seg))
+        payload = json.loads(_b64url_decode(payload_seg))
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+    if not isinstance(header, dict) or not isinstance(payload, dict):
+        return None
+    stable_payload = {k: v for k, v in payload.items() if k not in JWT_VOLATILE_CLAIMS}
+    new_header = _b64url_encode(
+        json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    new_payload = _b64url_encode(
+        json.dumps(stable_payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    return f"{new_header}.{new_payload}.{JWT_NORMALIZED_SIGNATURE}"
+
+
+def _is_google_oauth_token_request(request) -> bool:
+    method = (getattr(request, "method", "") or "").upper()
+    if method != "POST":
+        return False
+    uri = getattr(request, "uri", None) or getattr(request, "url", None) or ""
+    parsed = urllib.parse.urlsplit(uri)
+    if (parsed.hostname or "").lower() not in GOOGLE_OAUTH_TOKEN_HOSTS:
+        return False
+    return parsed.path.endswith(GOOGLE_OAUTH_TOKEN_PATH_SUFFIX)
+
+
+def _normalize_google_oauth_jwt(request) -> None:
+    if not _is_google_oauth_token_request(request):
+        return
+    body = getattr(request, "body", None)
+    if body is None:
+        return
+    if isinstance(body, (bytes, bytearray)):
+        try:
+            text = bytes(body).decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        was_bytes = True
+    elif isinstance(body, str):
+        text = body
+        was_bytes = False
+    else:
+        return
+
+    try:
+        fields = urllib.parse.parse_qsl(text, keep_blank_values=True)
+    except ValueError:
+        return
+    if not any(name == GOOGLE_OAUTH_JWT_ASSERTION_FIELD for name, _ in fields):
+        return
+
+    new_fields = []
+    changed = False
+    for name, value in fields:
+        if name == GOOGLE_OAUTH_JWT_ASSERTION_FIELD:
+            normalized = _normalize_jwt(value)
+            if normalized is not None and normalized != value:
+                new_fields.append((name, normalized))
+                changed = True
+                continue
+        new_fields.append((name, value))
+
+    if not changed:
+        return
+
+    new_text = urllib.parse.urlencode(new_fields)
+    try:
+        request.body = new_text.encode("utf-8") if was_bytes else new_text
+    except (AttributeError, TypeError):
+        return
+
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        new_len_value = str(len(new_text.encode("utf-8")))
+        try:
+            keys = list(headers.keys())
+        except AttributeError:
+            return
+        for key in keys:
+            if str(key).lower() == "content-length":
+                value = headers[key]
+                try:
+                    headers[key] = (
+                        [new_len_value] if isinstance(value, list) else new_len_value
+                    )
+                except (TypeError, AttributeError):
+                    return
+
+
 def _before_record_request(request):
     """Fingerprint API keys, scrub them, and normalize multipart boundaries.
 
@@ -572,6 +693,7 @@ def _before_record_request(request):
             pass
     _strip_headers(headers, FILTERED_REQUEST_HEADERS)
     _normalize_multipart_boundary(request)
+    _normalize_google_oauth_jwt(request)
     return request
 
 
