@@ -1,0 +1,85 @@
+name: Agent Shin — rollout heads-up (one-shot)
+
+# Fires the 7-day heads-up comment on every open external PR/issue that the
+# new triage bot would auto-close. Designed to run **once**, on the merge
+# commit of the rollout PR — but the script is idempotent (skips items that
+# already carry the `<!-- agent-shin:rollout-heads-up -->` marker), so an
+# accidental re-run is harmless.
+#
+# The workflow is a thin shell over `.github/scripts/triage_rollout_heads_up.py`.
+# Dry-run vs. real run differ in EXACTLY one CLI flag (`--close`) — the
+# auto-trigger uses `--close`, the manual `workflow_dispatch` trigger defaults
+# to dry-run so you can preview before the real fire.
+
+on:
+  push:
+    branches:
+      - litellm_internal_staging
+    paths:
+      # The presence of this script on staging IS the rollout merge marker.
+      # Editing the file later would re-fire the workflow; that's safe because
+      # the script skips PRs/issues that already have the heads-up marker.
+      - ".github/scripts/triage_rollout_heads_up.py"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (true = preview only, false = actually post comments)."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  heads-up:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout triage scripts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install LLM client
+        run: pip install --no-cache-dir "openai>=1.40.0"
+
+      - name: Run heads-up sweep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL }}
+          # Auto-trigger from push -> always real (`--close`). For
+          # workflow_dispatch we honor the dry_run input. Use the EXACT
+          # string "true"/"false" comparison so unexpected input values
+          # fail-closed to dry-run (mirrors the AGENT_SHIN_ENABLED pattern
+          # in the sibling workflows).
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          ARGS=(--repo "${{ github.repository }}")
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            if [ "${DRY_RUN_INPUT:-true}" = "false" ]; then
+              ARGS+=(--close)
+              echo "::notice::Manual dispatch with dry_run=false -> comments WILL be posted."
+            else
+              echo "::notice::Manual dispatch in dry-run mode -> no comments will be posted."
+            fi
+          else
+            # push to litellm_internal_staging = the rollout merge -> real run
+            ARGS+=(--close)
+            echo "::notice::Rollout-merge trigger -> heads-up comments WILL be posted."
+          fi
+          python3 .github/scripts/triage_rollout_heads_up.py "${ARGS[@]}"
