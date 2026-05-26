@@ -125,6 +125,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.experimental_use_latest_role_message_only = bool(
             kwargs.get("experimental_use_latest_role_message_only")
         )
+        # LIT-2834: by default, do not pass `role="tool"` results or
+        # `assistant` messages that carry `tool_calls` into the Bedrock
+        # guardrail. They are not user-authored content and scanning them
+        # caused spurious pre-guard hits (e.g. an `age` field returned by a
+        # RAG tool tripping a PII policy). Set to False to restore legacy
+        # behavior of scanning the entire conversation including tool I/O.
+        self.mask_tool_call_messages = bool(
+            kwargs.get("mask_tool_call_messages", True)
+        )
 
         # store kwargs as optional_params
         self.optional_params = kwargs
@@ -225,29 +234,86 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return bedrock_request
 
+    @staticmethod
+    def _is_tool_related_message(message: AllMessageValues) -> bool:
+        """Return True if the message is a tool-call announcement or tool result.
+
+        Tool sections are not user-authored content and should not be sent to
+        a pre/during-call Bedrock guardrail (LIT-2834). This covers:
+
+        * ``role="tool"`` messages (tool execution results)
+        * ``role="assistant"`` messages that carry ``tool_calls`` (the model's
+          decision to call a tool, including any preamble text the model
+          emitted in the same turn)
+        """
+        role = message.get("role")
+        if role == "tool":
+            return True
+        if role == "assistant" and message.get("tool_calls"):
+            return True
+        return False
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: Optional[List[AllMessageValues]],
     ) -> GuardrailMessageFilterResult:
-        """Return payload + merge metadata for the latest user message."""
+        """Return payload + merge metadata for the messages to send to Bedrock.
+
+        Two independent filters may apply:
+
+        * ``mask_tool_call_messages`` (default True, LIT-2834): drop tool-call
+          announcements and tool results so tool I/O isn't scanned as user
+          input.
+        * ``experimental_use_latest_role_message_only`` (default False): scan
+          only the most recent user-role message.
+        """
         # NOTE: This logic probably belongs in CustomGuardrail once other guardrails adopt the feature.
 
         if messages is None:
             return GuardrailMessageFilterResult(None, None, None)
 
-        if self.experimental_use_latest_role_message_only is not True:
-            return GuardrailMessageFilterResult(messages, None, None)
+        # Track each surviving message's index in the ORIGINAL list so that
+        # _merge_filtered_messages can splice any masked replacements back to
+        # the right positions, even when we dropped entries from the middle.
+        indexed: List[Tuple[int, AllMessageValues]] = list(enumerate(messages))
 
-        latest_index = self._find_latest_message_index(messages, target_role="user")
-        if latest_index is None:
+        if self.mask_tool_call_messages:
+            indexed = [
+                entry
+                for entry in indexed
+                if not self._is_tool_related_message(entry[1])
+            ]
+
+        if self.experimental_use_latest_role_message_only is True:
+            latest_entry: Optional[Tuple[int, AllMessageValues]] = None
+            for entry in reversed(indexed):
+                if entry[1].get("role") == "user":
+                    latest_entry = entry
+                    break
+            if latest_entry is None:
+                return GuardrailMessageFilterResult(None, None, None)
+            return GuardrailMessageFilterResult(
+                payload_messages=[latest_entry[1]],
+                original_messages=list(messages),
+                target_indices=[latest_entry[0]],
+            )
+
+        if not indexed:
             return GuardrailMessageFilterResult(None, None, None)
 
-        original_messages = list(messages)
-        payload_messages = [messages[latest_index]]
+        payload_messages = [m for _, m in indexed]
+
+        # Preserve legacy return shape when nothing was actually filtered out,
+        # so downstream code keeps the existing "scan the full list" path
+        # (target_indices=None means _merge_filtered_messages replaces the
+        # whole list rather than splicing by index).
+        if len(indexed) == len(messages):
+            return GuardrailMessageFilterResult(payload_messages, None, None)
+
         return GuardrailMessageFilterResult(
             payload_messages=payload_messages,
-            original_messages=original_messages,
-            target_indices=[latest_index],
+            original_messages=list(messages),
+            target_indices=[idx for idx, _ in indexed],
         )
 
     def _find_latest_message_index(
