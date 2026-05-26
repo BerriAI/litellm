@@ -883,14 +883,6 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
@@ -902,6 +894,14 @@ async def get_customer_daily_activity(
                     user_api_key_dict.user_role
                 )
             },
+        )
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
     # Parse comma-separated ids
