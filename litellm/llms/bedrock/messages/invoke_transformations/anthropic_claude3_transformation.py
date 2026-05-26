@@ -527,6 +527,92 @@ class AmazonAnthropicClaudeMessagesConfig(
             return output_format
         return None
 
+    def _get_bedrock_invoke_anthropic_beta_headers(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
+        headers: dict,
+        anthropic_messages_request: Dict,
+        injected_thinking_for_clear_thinking: bool,
+    ) -> List[str]:
+        anthropic_model_info = AnthropicModelInfo()
+        tools = anthropic_messages_optional_request_params.get("tools")
+        messages_typed = cast(List[AllMessageValues], messages)
+        tool_search_used = anthropic_model_info.is_tool_search_used(tools)
+        programmatic_tool_calling_used = (
+            anthropic_model_info.is_programmatic_tool_calling_used(tools)
+        )
+        input_examples_used = anthropic_model_info.is_input_examples_used(tools)
+
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
+        auto_betas = anthropic_model_info.get_anthropic_beta_list(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
+            prompt_caching_set=False,
+            file_id_used=anthropic_model_info.is_file_id_used(messages_typed),
+            mcp_server_used=anthropic_model_info.is_mcp_server_used(
+                anthropic_messages_optional_request_params.get("mcp_servers")
+            ),
+        )
+        beta_set.update(auto_betas)
+
+        if injected_thinking_for_clear_thinking:
+            beta_set.add("interleaved-thinking-2025-05-14")
+
+        self._filter_context_management_for_bedrock_invoke(
+            anthropic_messages_request=anthropic_messages_request,
+            beta_set=beta_set,
+        )
+
+        self._get_tool_search_beta_header_for_bedrock(
+            model=model,
+            tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
+            input_examples_used=input_examples_used,
+            beta_set=beta_set,
+        )
+
+        if "tool-search-tool-2025-10-19" in beta_set:
+            beta_set.add("tool-examples-2025-10-29")
+
+        filtered_betas = sorted(
+            filter_and_transform_beta_headers(
+                beta_headers=list(beta_set),
+                provider="bedrock",
+            )
+        )
+
+        dropped_user_betas = sorted(
+            b
+            for b in user_beta_set
+            if not filter_and_transform_beta_headers([b], provider="bedrock")
+        )
+        if dropped_user_betas:
+            verbose_logger.warning(
+                "Bedrock Invoke: dropping unsupported anthropic-beta values "
+                "from client headers: %s. Bedrock has no mapping entry for "
+                "these; forwarding them would cause a 400.",
+                dropped_user_betas,
+            )
+
+        return filtered_betas
+
+    def _strip_unsupported_bedrock_invoke_fields(
+        self,
+        anthropic_messages_request: Dict,
+    ) -> Dict:
+        allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
+        stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
+        if stripped:
+            verbose_logger.debug(
+                "Bedrock Invoke: stripping unsupported top-level request fields: %s",
+                stripped,
+            )
+        return {k: v for k, v in anthropic_messages_request.items() if k in allowed}
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -628,67 +714,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
-        anthropic_model_info = AnthropicModelInfo()
-        tools = anthropic_messages_optional_request_params.get("tools")
-        messages_typed = cast(List[AllMessageValues], messages)
-        tool_search_used = anthropic_model_info.is_tool_search_used(tools)
-        programmatic_tool_calling_used = (
-            anthropic_model_info.is_programmatic_tool_calling_used(tools)
-        )
-        input_examples_used = anthropic_model_info.is_input_examples_used(tools)
-
-        user_beta_set = set(get_anthropic_beta_from_headers(headers))
-        beta_set = set(user_beta_set)
-        auto_betas = anthropic_model_info.get_anthropic_beta_list(
+        filtered_betas = self._get_bedrock_invoke_anthropic_beta_headers(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
-            computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
-            prompt_caching_set=False,
-            file_id_used=anthropic_model_info.is_file_id_used(messages_typed),
-            mcp_server_used=anthropic_model_info.is_mcp_server_used(
-                anthropic_messages_optional_request_params.get("mcp_servers")
-            ),
-        )
-        beta_set.update(auto_betas)
-
-        if injected_thinking_for_clear_thinking:
-            beta_set.add("interleaved-thinking-2025-05-14")
-
-        self._filter_context_management_for_bedrock_invoke(
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            headers=headers,
             anthropic_messages_request=anthropic_messages_request,
-            beta_set=beta_set,
+            injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
         )
-
-        self._get_tool_search_beta_header_for_bedrock(
-            model=model,
-            tool_search_used=tool_search_used,
-            programmatic_tool_calling_used=programmatic_tool_calling_used,
-            input_examples_used=input_examples_used,
-            beta_set=beta_set,
-        )
-
-        if "tool-search-tool-2025-10-19" in beta_set:
-            beta_set.add("tool-examples-2025-10-29")
-
-        filtered_betas = sorted(
-            filter_and_transform_beta_headers(
-                beta_headers=list(beta_set),
-                provider="bedrock",
-            )
-        )
-
-        dropped_user_betas = sorted(
-            b
-            for b in user_beta_set
-            if not filter_and_transform_beta_headers([b], provider="bedrock")
-        )
-        if dropped_user_betas:
-            verbose_logger.warning(
-                "Bedrock Invoke: dropping unsupported anthropic-beta values "
-                "from client headers: %s. Bedrock has no mapping entry for "
-                "these; forwarding them would cause a 400.",
-                dropped_user_betas,
-            )
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
@@ -708,16 +741,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Catches Anthropic-only extensions (output_config, speed, mcp_servers, ...)
         # and any future additions Claude Code may start sending. ``context_management``
         # has already been pre-filtered to its Bedrock-supported subset above.
-        allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
-        stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
-        if stripped:
-            verbose_logger.debug(
-                "Bedrock Invoke: stripping unsupported top-level request fields: %s",
-                stripped,
-            )
-        anthropic_messages_request = {
-            k: v for k, v in anthropic_messages_request.items() if k in allowed
-        }
+        anthropic_messages_request = self._strip_unsupported_bedrock_invoke_fields(
+            anthropic_messages_request
+        )
 
         return anthropic_messages_request
 
