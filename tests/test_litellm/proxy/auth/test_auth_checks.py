@@ -3016,3 +3016,98 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+
+# ---------------------------------------------------------------------------
+# LIT-3338: general_settings.user_api_key_cache_ttl must be honoured for the
+# management-object caches (key, team, user, budget, vector store, permission).
+# Before the fix, _cache_management_object (and several call sites) hard-coded
+# ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL=60, so a
+# `user_api_key_cache_ttl: 300` config was silently capped at 60s.
+# ---------------------------------------------------------------------------
+class TestUserApiKeyCacheTTLHonoured:
+    """Regression coverage for LIT-3338."""
+
+    def _make_cache(self, configured_ttl):
+        """Build a UserApiKeyCache the way proxy_server.py does at startup."""
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+        cache = UserApiKeyCache(default_in_memory_ttl=60)
+        if configured_ttl is not None:
+            cache.update_cache_ttl(
+                default_in_memory_ttl=configured_ttl,
+                default_redis_ttl=configured_ttl,
+            )
+        return cache
+
+    @pytest.mark.asyncio
+    async def test_configured_ttl_is_used_for_key_object(self):
+        """user_api_key_cache_ttl=300 -> cached key entry expires in ~300s, not 60s."""
+        import time
+
+        from litellm.proxy.auth.auth_checks import _cache_key_object
+
+        cache = self._make_cache(configured_ttl=300)
+        hashed = "hashed-token-lit-3338"
+        auth = UserAPIKeyAuth(token=hashed, api_key=hashed)
+
+        before = time.time()
+        await _cache_key_object(
+            hashed_token=hashed,
+            user_api_key_obj=auth,
+            user_api_key_cache=cache,
+            proxy_logging_obj=None,
+        )
+        expiry = cache.in_memory_cache.ttl_dict.get(hashed)
+        assert expiry is not None, "key object was not cached"
+        ttl_actual = expiry - before
+        # Allow a few seconds of slack for slow CI runners.
+        assert (
+            295 <= ttl_actual <= 305
+        ), f"expected ~300s TTL, got {ttl_actual:.1f}s (LIT-3338 regression)"
+
+    @pytest.mark.asyncio
+    async def test_default_ttl_unchanged_when_unconfigured(self):
+        """When user_api_key_cache_ttl is NOT set, the historical 60s TTL still wins."""
+        import time
+
+        from litellm.proxy.auth.auth_checks import _cache_key_object
+
+        cache = self._make_cache(configured_ttl=None)
+        hashed = "hashed-token-default"
+        auth = UserAPIKeyAuth(token=hashed, api_key=hashed)
+
+        before = time.time()
+        await _cache_key_object(
+            hashed_token=hashed,
+            user_api_key_obj=auth,
+            user_api_key_cache=cache,
+            proxy_logging_obj=None,
+        )
+        ttl_actual = cache.in_memory_cache.ttl_dict[hashed] - before
+        assert 55 <= ttl_actual <= 65, (
+            f"default TTL drifted: got {ttl_actual:.1f}s, expected ~60s"
+        )
+
+    def test_helper_prefers_cache_default(self):
+        """`_management_object_cache_ttl` reads cache.default_in_memory_ttl when set."""
+        from litellm.proxy.auth.auth_checks import _management_object_cache_ttl
+
+        cache = self._make_cache(configured_ttl=300)
+        assert _management_object_cache_ttl(cache) == 300.0
+
+    def test_helper_falls_back_when_cache_has_no_default(self):
+        """When the cache exposes no default (bare DualCache in a test), fall back."""
+        from litellm.caching.dual_cache import DualCache
+        from litellm.constants import (
+            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+        from litellm.proxy.auth.auth_checks import _management_object_cache_ttl
+
+        bare = DualCache()
+        bare.default_in_memory_ttl = None  # simulate a cache with no configured TTL
+        assert (
+            _management_object_cache_ttl(bare)
+            == float(DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)
+        )

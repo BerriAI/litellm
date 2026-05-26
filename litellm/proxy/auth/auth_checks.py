@@ -945,7 +945,7 @@ async def get_default_end_user_budget(
             key=cache_key,
             value=_budget_obj,
             model_type=LiteLLM_BudgetTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=_management_object_cache_ttl(user_api_key_cache),
         )
 
         return _budget_obj
@@ -1001,7 +1001,7 @@ async def get_team_member_default_budget(
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value=budget_record.dict(),
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=_management_object_cache_ttl(user_api_key_cache),
         )
 
         return LiteLLM_BudgetTable(**budget_record.dict())
@@ -1599,7 +1599,7 @@ async def get_user_object(
             key=user_id,
             value=_response,
             model_type=LiteLLM_UserTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=_management_object_cache_ttl(user_api_key_cache),
         )
 
         # save to db access time
@@ -1617,6 +1617,31 @@ async def get_user_object(
         )
 
 
+def _management_object_cache_ttl(user_api_key_cache: UserApiKeyCache) -> float:
+    """
+    TTL (in seconds) for management-object cache writes.
+
+    ``user_api_key_cache.default_in_memory_ttl`` is the source of truth: it is
+    initialised to ``UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value`` (60s)
+    at proxy startup and then overridden by
+    ``general_settings.user_api_key_cache_ttl`` when the user configures one
+    (see ``proxy_server.py``'s ``user_api_key_cache.update_cache_ttl(...)``
+    call).
+
+    Reading it here keeps every management-object cache write
+    (``_cache_management_object`` and friends) in sync with the user's
+    configured TTL, instead of hard-coding
+    ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` and silently capping the
+    cache at 60s. Falls back to ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
+    only when the cache exposes no default (e.g. a bare cache constructed in a
+    test).
+    """
+    configured = getattr(user_api_key_cache, "default_in_memory_ttl", None)
+    if configured is not None:
+        return float(configured)
+    return float(DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)
+
+
 async def _cache_management_object(
     key: str,
     value: Union[BaseModel, Dict[str, Any]],
@@ -1628,13 +1653,15 @@ async def _cache_management_object(
     """
     Persist management objects via ``UserApiKeyCache`` (in-memory + optional Redis).
 
-    ``UserApiKeyCache`` serializes with ``model_type`` so Redis and in-memory stay aligned.
+    ``UserApiKeyCache`` serializes with ``model_type`` so Redis and in-memory
+    stay aligned. The TTL honours ``general_settings.user_api_key_cache_ttl``
+    when configured; see :func:`_management_object_cache_ttl`.
     """
     await user_api_key_cache.async_set_cache(
         key=key,
         value=value,
         model_type=model_type,
-        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        ttl=_management_object_cache_ttl(user_api_key_cache),
     )
 
 
@@ -2508,7 +2535,7 @@ async def get_object_permission(
             key=key,
             value=_perm_obj,
             model_type=LiteLLM_ObjectPermissionTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=_management_object_cache_ttl(user_api_key_cache),
         )
 
         return _perm_obj
@@ -2573,7 +2600,7 @@ async def get_managed_vector_store_rows_by_uuids(
             key=key,
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=_management_object_cache_ttl(user_api_key_cache),
         )
         result.append(cached_obj)
 
