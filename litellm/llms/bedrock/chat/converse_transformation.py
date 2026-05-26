@@ -979,11 +979,15 @@ class AmazonConverseConfig(BaseConfig):
     def _map_context_management_param(
         self, value: Union[dict, list], optional_params: dict
     ) -> None:
-        optional_params["context_management"] = (
-            AnthropicConfig.map_openai_context_management_to_anthropic(
-                cast(Union[dict, list], value)
-            )
+        mapped = AnthropicConfig.map_openai_context_management_to_anthropic(
+            cast(Union[dict, list], value)
         )
+        # Skip when the mapper returned None for malformed input — leaving the
+        # key out is safer than passing `context_management: null` downstream,
+        # which Bedrock would reject and which can confuse intermediate checks
+        # before the final _filter_context_management_for_bedrock_converse step.
+        if mapped is not None:
+            optional_params["context_management"] = mapped
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
