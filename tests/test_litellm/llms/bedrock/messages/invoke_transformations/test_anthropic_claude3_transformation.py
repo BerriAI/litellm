@@ -841,6 +841,50 @@ def test_bedrock_messages_normalizes_output_config_effort_for_opus(
     assert result.get("output_config") == {"effort": expected_effort}
 
 
+def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema():
+    """Inline-schema embedding must not mutate the caller's ``messages`` list,
+    message dicts, or content list."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    caller_content = [{"type": "text", "text": "Hello"}]
+    caller_message = {"role": "user", "content": caller_content}
+    caller_messages = [caller_message]
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "xhigh",
+            "format": {"type": "json_schema", "schema": schema},
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=caller_messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert caller_messages == [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+    ]
+    assert caller_message == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Hello"}],
+    }
+    assert caller_content == [{"type": "text", "text": "Hello"}]
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
 def test_bedrock_messages_does_not_mutate_callers_output_config():
     """`pop_bedrock_invoke_output_config_format` / effort normalization must not
     leak into the caller's ``optional_params`` dict."""

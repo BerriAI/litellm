@@ -441,6 +441,31 @@ def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog
     )
 
 
+def test_output_config_normalized_marker_does_not_leak_into_optional_params():
+    """The internal ``_output_config_normalized`` marker set by
+    ``_handle_reasoning_effort_parameter`` must be consumed during request
+    preparation so it does not linger on the caller's ``optional_params``."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        drop_params=False,
+    )
+    assert optional_params.get("_output_config_normalized") is True
+
+    config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "_output_config_normalized" not in optional_params
+
+
 @pytest.mark.parametrize(
     "model,expected_effort",
     [

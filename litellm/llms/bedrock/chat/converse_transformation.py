@@ -1206,6 +1206,12 @@ class AmazonConverseConfig(BaseConfig):
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
         """Prepare and separate request parameters."""
+        # Consume the internal ``_output_config_normalized`` marker set by
+        # ``_handle_reasoning_effort_parameter`` so it does not linger on the
+        # caller's ``optional_params`` after the transformation returns.
+        anthropic_output_config_already_normalized = bool(
+            optional_params.pop("_output_config_normalized", False)
+        )
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
         cleaned_params = filter_exceptions_from_params(optional_params)
@@ -1227,9 +1233,6 @@ class AmazonConverseConfig(BaseConfig):
         # structured-output ``format`` subfield is consumed into Bedrock's
         # native ``outputConfig`` (camelCase), which is handled separately.
         anthropic_output_config = inference_params.pop("output_config", None)
-        anthropic_output_config_already_normalized = bool(
-            inference_params.pop("_output_config_normalized", False)
-        )
         output_config_format = None
         if isinstance(anthropic_output_config, dict):
             anthropic_output_config = dict(anthropic_output_config)
