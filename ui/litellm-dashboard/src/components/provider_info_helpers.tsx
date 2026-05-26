@@ -389,7 +389,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
         const litellmProvider = (value as any)["litellm_provider"];
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          (typeof litellmProvider === "string" &&
+            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+              litellmProvider.startsWith(`${custom_llm_provider}-`)))
         ) {
           providerModels.push(key);
         }

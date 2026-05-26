@@ -21,6 +21,7 @@ class ModelEntry:
     extra_params: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
     required_env: FrozenSet[str] = field(default_factory=frozenset)
     caps: FrozenSet[str] = field(default_factory=frozenset)
+    fail_reason: Optional[str] = None
 
     def params(self) -> Dict[str, str]:
         return dict(self.extra_params)
@@ -204,6 +205,12 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
         caps=_CAPS_OPUS_4_7,
+        fail_reason=(
+            "claude-opus-4-7 is not entitled on the Bedrock CI account "
+            "941277531214 (model access requires an AWS Sales request, not "
+            "self-serve); this cell fails on purpose so it stays loud in CI — "
+            "remove this fail_reason once access is granted"
+        ),
     ),
     ModelEntry(
         alias="bedrock-claude-opus-4-6",
