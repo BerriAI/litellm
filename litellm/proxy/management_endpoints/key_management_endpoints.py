@@ -5361,6 +5361,18 @@ def _build_key_filter_conditions(
 
     # Add condition for created_by keys, scoped to user's current teams
     if include_created_by_keys and user_id:
+        # When the team-service-account visibility gate is off, also exclude
+        # service-account-shaped keys (user_id is NULL) from the created_by
+        # branch. Without this, a member who happened to create a team
+        # service-account key could call `/key/list?include_created_by_keys=true`
+        # and read it back even though the gate hides it from the
+        # member-team branch below. The exclusion matches the spirit of the
+        # gate: service-account keys are not visible to regular members.
+        service_account_exclusion: List[Dict[str, Any]] = (
+            [{"user_id": {"not": None}}]
+            if not expose_team_service_accounts_to_members
+            else []
+        )
         if member_team_ids is not None:
             if member_team_ids:
                 # Scope created_by keys to teams user is still a member of,
@@ -5375,18 +5387,35 @@ def _build_key_filter_conditions(
                                     {"team_id": None},
                                 ]
                             },
+                            *service_account_exclusion,
                         ]
                     }
                 )
             else:
                 # User is not a member of any team, only show non-team created_by keys
                 or_conditions.append(
-                    {"AND": [{"created_by": user_id}, {"team_id": None}]}
+                    {
+                        "AND": [
+                            {"created_by": user_id},
+                            {"team_id": None},
+                            *service_account_exclusion,
+                        ]
+                    }
                 )
         else:
             # No team membership info provided (backward compatibility for
             # direct _list_key_helper callers like Prometheus)
-            or_conditions.append({"created_by": user_id})
+            if service_account_exclusion:
+                or_conditions.append(
+                    {
+                        "AND": [
+                            {"created_by": user_id},
+                            *service_account_exclusion,
+                        ]
+                    }
+                )
+            else:
+                or_conditions.append({"created_by": user_id})
 
     # Add condition for admin team keys (admins see ALL team keys)
     if admin_team_ids:
