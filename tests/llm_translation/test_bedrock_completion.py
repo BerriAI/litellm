@@ -1062,7 +1062,7 @@ def test_bedrock_tools_pt_invalid_names():
     print("bedrock tools after prompt formatting=", result)
 
     assert len(result) == 2
-    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[0]["toolSpec"]["name"] == "a123-invalid_name"
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
@@ -1171,7 +1171,7 @@ def test_bedrock_tools_transformation_valid_params():
     assert isinstance(result, list)
     assert len(result) == 1
     assert "toolSpec" in result[0]
-    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[0]["toolSpec"]["name"] == "a123-invalid_name"
     assert result[0]["toolSpec"]["description"] == "Invalid name test"
     assert "inputSchema" in result[0]["toolSpec"]
     assert "json" in result[0]["toolSpec"]["inputSchema"]

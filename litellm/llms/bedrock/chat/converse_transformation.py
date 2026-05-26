@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
+    make_valid_bedrock_tool_name,
 )
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -595,7 +596,9 @@ class AmazonConverseConfig(BaseConfig):
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool = SpecificToolChoiceBlock(
-                name=tool_choice.get("function", {}).get("name", "")
+                name=make_valid_bedrock_tool_name(
+                    tool_choice.get("function", {}).get("name", "")
+                )
             )
             return ToolChoiceValuesBlock(tool=specific_tool)
         else:
