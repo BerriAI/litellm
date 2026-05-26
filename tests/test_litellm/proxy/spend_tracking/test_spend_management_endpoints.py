@@ -3185,3 +3185,329 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         assert where["api_key"] == "hashed::sk-raw-admin-token"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _SpendScopeMockPrismaClient:
+
+    def __init__(self, get_data_returns=None, find_many_returns=None):
+        self._get_data_returns = (
+            get_data_returns if get_data_returns is not None else []
+        )
+        self._find_many_returns = (
+            find_many_returns if find_many_returns is not None else []
+        )
+        self.get_data_calls = []
+        self.find_many_calls = []
+
+        client = self
+
+        class _VerificationTokenTable:
+            async def find_many(self, where=None, order=None, include=None):
+                client.find_many_calls.append(
+                    {"where": where, "order": order, "include": include}
+                )
+                return client._find_many_returns
+
+        class _DB:
+            def __init__(self):
+                self.litellm_verificationtoken = _VerificationTokenTable()
+
+        self.db = _DB()
+
+    async def get_data(self, table_name=None, query_type=None, **kwargs):
+        self.get_data_calls.append(
+            {"table_name": table_name, "query_type": query_type, **kwargs}
+        )
+        if query_type == "find_unique":
+            return self._get_data_returns[0] if self._get_data_returns else None
+        return self._get_data_returns
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_returns_all_keys(client, monkeypatch):
+    """Admins keep their existing full-table view of /spend/keys."""
+    mock_keys = [
+        {"token": "hashed-a", "user_id": "alice", "spend": 10.0},
+        {"token": "hashed-b", "user_id": "bob", "spend": 5.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Admin path: goes through get_data (full table), never the scoped find_many
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "key"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert mock_prisma.find_many_calls == []
+        assert response.json() == mock_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_view_only_returns_all_keys(client, monkeypatch):
+    """View-only admins are still admins for this endpoint."""
+    mock_keys = [{"token": "hashed-a", "user_id": "alice"}]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="admin_viewer"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_key_fn_internal_user_scoped_to_own_keys(client, monkeypatch, role):
+    """Both internal-user roles must only see keys they own."""
+    caller_owned_keys = [
+        {"token": "hashed-mine-1", "user_id": "alice", "spend": 2.0},
+        {"token": "hashed-mine-2", "user_id": "alice", "spend": 1.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(find_many_returns=caller_owned_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Non-admin path: scoped find_many, no full-table get_data
+        assert mock_prisma.get_data_calls == []
+        assert len(mock_prisma.find_many_calls) == 1
+        call = mock_prisma.find_many_calls[0]
+        assert call["where"] == {"user_id": "alice"}
+        assert call["order"] == {"spend": "desc"}
+        assert call["include"] == {"litellm_budget_table": True}
+        assert response.json() == caller_owned_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope. Returning the full
+    table would re-introduce the leak; return an empty list instead.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"token": "do-not-leak"}],
+        find_many_returns=[{"token": "do-not-leak"}],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+        assert mock_prisma.find_many_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_returns_all_users_without_user_id(
+    client, monkeypatch
+):
+    """Admins keep their existing full-table view of /spend/users."""
+    mock_users = [
+        {"user_id": "alice", "user_email": "alice@example.com", "spend": 1.0},
+        {"user_id": "bob", "user_email": "bob@example.com", "spend": 2.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_users)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "user"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert response.json() == mock_users
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_can_query_specific_user_id(
+    client, monkeypatch
+):
+    """Admins can still target a specific user_id."""
+    mock_user = {
+        "user_id": "carol",
+        "user_email": "carol@example.com",
+        "spend": 7.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[mock_user])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "carol"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "carol"
+        assert response.json() == [mock_user]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_user_fn_internal_user_scoped_without_user_id(
+    client, monkeypatch, role
+):
+    """No user_id supplied -> must query the caller's own row, not the table."""
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_ignores_supplied_user_id(
+    client, monkeypatch
+):
+    """
+    An internal user passing user_id=victim must NOT receive the victim's
+    row. The caller's authenticated user_id always wins.
+    """
+    leaked_victim_row = {
+        "user_id": "victim",
+        "user_email": "victim@example.com",
+        "spend": 999.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[leaked_victim_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "victim"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope -> return empty,
+    never the full table. Same defensive contract as /spend/keys.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"user_id": "do-not-leak"}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_strips_password_field(client, monkeypatch):
+    """
+    Existing password-redaction behavior must be preserved on the scoped
+    path so we don't regress a separate disclosure when adding the fix.
+    """
+    own_row = {
+        "user_id": "alice",
+        "user_email": "alice@example.com",
+        "password": "hashed-password-must-not-leak",
+        "spend": 1.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 1
+        assert "password" not in body[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
