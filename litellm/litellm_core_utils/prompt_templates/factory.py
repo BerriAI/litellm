@@ -5361,7 +5361,9 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
-def make_valid_bedrock_tool_use_id(input_tool_use_id: str) -> str:
+def make_valid_bedrock_tool_use_id(
+    input_tool_use_id: Optional[str],
+) -> Optional[str]:
     """
     Replaces any invalid characters in the input tool_use_id with underscores
     so it matches Bedrock Converse's required pattern ``^[a-zA-Z0-9_.:-]+$``.

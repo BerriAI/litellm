@@ -2818,7 +2818,7 @@ def test_make_valid_bedrock_tool_use_id_empty_passthrough():
     )
 
     assert make_valid_bedrock_tool_use_id("") == ""
-    assert make_valid_bedrock_tool_use_id(None) is None  # type: ignore[arg-type]
+    assert make_valid_bedrock_tool_use_id(None) is None
 
 
 def test_bedrock_tool_call_invoke_sanitizes_drifted_name_and_id():
