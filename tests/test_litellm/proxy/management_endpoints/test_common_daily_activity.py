@@ -231,6 +231,77 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
 
 
 @pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_handles_null_token_rollups():
+    """Test that aggregated activity treats NULL token sums as zero."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    base = {
+        "api_key": None,
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "cache_read_input_tokens": None,
+        "cache_creation_input_tokens": None,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "spend": 0.0,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+    }
+    mock_rows = [
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "group_level": 62,
+        },
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": None,
+            "group_level": 63,
+        },
+        {
+            **base,
+            "date": None,
+            "endpoint": None,
+            "group_level": 127,
+        },
+    ]
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+    )
+
+    assert result.metadata.total_prompt_tokens == 0
+    assert result.metadata.total_completion_tokens == 0
+    assert result.metadata.total_tokens == 0
+
+    daily_data = result.results[0]
+    assert daily_data.metrics.prompt_tokens == 0
+    assert daily_data.metrics.completion_tokens == 0
+    assert daily_data.metrics.total_tokens == 0
+
+    endpoint = daily_data.breakdown.endpoints["/v1/chat/completions"]
+    assert endpoint.metrics.prompt_tokens == 0
+    assert endpoint.metrics.completion_tokens == 0
+    assert endpoint.metrics.total_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_get_api_key_metadata_returns_active_key_metadata():
     """Test that get_api_key_metadata should return metadata for active keys."""
     mock_prisma = MagicMock()
