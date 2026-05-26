@@ -4178,8 +4178,11 @@ class ProxyConfig:
                         f"{blue_color_code} Enabled JSON logging via config{reset_color_code}"
                     )
                 elif key == "use_chat_completions_url_for_anthropic_messages":
-                    litellm.use_chat_completions_url_for_anthropic_messages = bool(
-                        value
+                    litellm.use_chat_completions_url_for_anthropic_messages = (
+                        value is True
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.use_chat_completions_url_for_anthropic_messages={value is True}{reset_color_code}"
                     )
                 else:
                     verbose_proxy_logger.debug(
