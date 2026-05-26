@@ -4953,7 +4953,7 @@ async def list_keys(
     Note: When expand=user is specified, full key objects are returned regardless of the return_full_object parameter.
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import general_settings, prisma_client
 
         verbose_proxy_logger.debug("Entering list_keys function")
 
@@ -4969,6 +4969,15 @@ async def list_keys(
                     "error": "Invalid status value. Currently only 'deleted' is supported."
                 },
             )
+
+        # Operator-controlled toggle: when False, regular team members no longer
+        # see service-account keys (user_id=NULL) of their teams via /key/list.
+        # Default True preserves upstream behavior.
+        expose_team_service_accounts_to_members = _resolve_general_settings_bool(
+            general_settings,
+            key="expose_team_service_accounts_to_members",
+            default=True,
+        )
 
         complete_user_info = await validate_key_list_check(
             user_api_key_dict=user_api_key_dict,
@@ -5042,6 +5051,7 @@ async def list_keys(
             project_id=project_id,
             access_group_id=access_group_id,
             use_substring_matching=use_substring_matching,
+            expose_team_service_accounts_to_members=expose_team_service_accounts_to_members,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5267,6 +5277,25 @@ def _validate_sort_params(
     return order_by
 
 
+def _resolve_general_settings_bool(
+    general_settings: Dict[str, Any], key: str, default: bool
+) -> bool:
+    """
+    Read a boolean flag from `general_settings` safely.
+
+    YAML loaders may produce a non-bool (e.g. quoted ``"False"`` becomes a
+    truthy string, or an explicit ``null`` becomes ``None``). Using
+    ``bool(...)`` directly would silently flip the flag in those cases. To
+    avoid that footgun, accept only real Python booleans; anything else falls
+    back to ``default`` so an operator misconfiguring YAML never weakens a
+    security default.
+    """
+    raw = general_settings.get(key, default)
+    if isinstance(raw, bool):
+        return raw
+    return default
+
+
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5280,6 +5309,7 @@ def _build_key_filter_conditions(
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expose_team_service_accounts_to_members: bool = True,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5290,6 +5320,9 @@ def _build_key_filter_conditions(
       teams (via member_team_ids). This prevents leaking other members' spend data.
     - created_by visibility is scoped to teams the user currently belongs to,
       so former members cannot see service accounts they created after leaving.
+    - When expose_team_service_accounts_to_members is False, the regular-member
+      service-account branch is dropped entirely — members see only their own
+      keys (admins still see full team keys via admin_team_ids).
     """
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
@@ -5360,7 +5393,7 @@ def _build_key_filter_conditions(
         or_conditions.append({"team_id": {"in": admin_team_ids}})
 
     # Add condition for member team service accounts (members only see keys with user_id=NULL)
-    if member_team_ids:
+    if member_team_ids and expose_team_service_accounts_to_members:
         # Exclude teams where user is already admin (those are covered above with full visibility)
         member_only_team_ids = [
             tid for tid in member_team_ids if tid not in (admin_team_ids or [])
@@ -5419,6 +5452,7 @@ async def _list_key_helper(
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expose_team_service_accounts_to_members: bool = True,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5432,6 +5466,7 @@ async def _list_key_helper(
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
         admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
         member_team_ids: Optional[List[str]] # list of team IDs where user is a member (for service account visibility)
+        expose_team_service_accounts_to_members: bool # when False, regular members do NOT see team service-account keys
 
     Returns:
         KeyListResponseObject
@@ -5455,6 +5490,7 @@ async def _list_key_helper(
         project_id=project_id,
         access_group_id=access_group_id,
         use_substring_matching=use_substring_matching,
+        expose_team_service_accounts_to_members=expose_team_service_accounts_to_members,
     )
 
     # Calculate skip for pagination
