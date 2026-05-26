@@ -3,8 +3,8 @@ name: internal-deploy
 # Rayward internal LLM gateway — build, sign, attest, and deploy to Azure.
 #
 # Triggered on:
-#   - push to litellm_internal_staging (auto-deploy)
-#   - workflow_dispatch (manual rebuild; supports no_cache toggle)
+#   - workflow_dispatch (manual only; Azure v1 path is no longer part of
+#     default staging deploys)
 #
 # Pipeline:
 #   build-and-sign   → build linux/amd64, push to ACR, Trivy scan by digest,
@@ -80,13 +80,6 @@ name: internal-deploy
 # -----------------------------------------------------------------------------
 
 on:
-  push:
-    branches: [litellm_internal_staging]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "cookbook/**"
-      - "tests/**"
   workflow_dispatch:
     inputs:
       no_cache:
