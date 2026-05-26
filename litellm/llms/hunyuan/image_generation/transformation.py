@@ -49,11 +49,7 @@ class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base = (
-            api_base
-            or get_secret_str("HUNYUAN_API_BASE")
-            or HUNYUAN_BASE_URL
-        )
+        base = api_base or get_secret_str("HUNYUAN_API_BASE") or HUNYUAN_BASE_URL
         base = base.rstrip("/")
         return f"{base}/{HUNYUAN_SUBMIT_ENDPOINT}"
 
@@ -67,10 +63,7 @@ class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("HUNYUAN_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("HUNYUAN_API_KEY")
         if not final_api_key:
             raise ValueError("HUNYUAN_API_KEY is not set")
 
@@ -123,8 +116,7 @@ class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
             "model": model or "gpt-image-2",
         }
         for k, v in optional_params.items():
-            if k not in ("response_format",):
-                request_body[k] = v
+            request_body[k] = v
         return request_body
 
     @staticmethod
