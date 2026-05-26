@@ -410,10 +410,18 @@ def interpolate_headers(
     return {k: interpolate_variables(v, variables) for k, v in headers.items()}
 
 
-def build_variable_setup_url(server_id: str) -> str:
-    """The frontend URL where a user can fill in their per-user variables."""
+def build_variable_setup_url(server_id: Optional[str] = None) -> str:
+    """The frontend URL where a user can fill in their per-user variables.
+
+    With no ``server_id`` this points at the global Variables tab (per-user
+    variables are shared across servers); with one it deep-links so the UI can
+    highlight the server that triggered the prompt.
+    """
     base = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
-    path = f"/ui/?page=mcp-servers&fill_variables={server_id}"
+    if server_id:
+        path = f"/ui/?page=mcp-servers&tab=variables&fill_variables={server_id}"
+    else:
+        path = "/ui/?page=mcp-servers&tab=variables"
     return f"{base}{path}" if base else path
 
 

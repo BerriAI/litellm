@@ -401,12 +401,26 @@ async def test_store_user_variables_does_not_persist_plaintext(variables_salt_ke
 
     prisma = _mock_variables_prisma()
     await store_user_variables(
-        prisma, "alice", "srv-1", {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
+        prisma, "alice", {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
     )
     stored = _captured_values_blob(prisma)
     # Stored blob must not contain plaintext values
     assert "s3cret" not in stored
     assert "alice" not in stored or stored.count("alice") == 0  # encrypted form
+
+
+@pytest.mark.asyncio
+async def test_store_user_variables_upserts_by_user_id_only(variables_salt_key):
+    """The upsert where-clause is keyed by a plain ``user_id`` (global per-user),
+    not the old composite ``user_id_server_id`` key."""
+    from litellm.proxy._experimental.mcp_server.db import store_user_variables
+
+    prisma = _mock_variables_prisma()
+    await store_user_variables(prisma, "alice", {"A": "1"})
+    prisma.db.litellm_mcpuservariables.upsert.assert_awaited_once()
+    call = prisma.db.litellm_mcpuservariables.upsert.call_args
+    assert call.kwargs["where"] == {"user_id": "alice"}
+    assert call.kwargs["data"]["create"]["user_id"] == "alice"
 
 
 @pytest.mark.asyncio
@@ -420,7 +434,7 @@ async def test_get_user_variables_round_trip(variables_salt_key):
 
     prisma = _mock_variables_prisma()
     payload = {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
-    await store_user_variables(prisma, "alice", "srv-1", payload)
+    await store_user_variables(prisma, "alice", payload)
     stored = _captured_values_blob(prisma)
 
     # Now simulate the read returning that blob.
@@ -428,68 +442,31 @@ async def test_get_user_variables_round_trip(variables_salt_key):
     row.values_b64 = stored
     prisma.db.litellm_mcpuservariables.find_unique = AsyncMock(return_value=row)
 
-    result = await get_user_variables(prisma, "alice", "srv-1")
+    result = await get_user_variables(prisma, "alice")
     assert result == payload
 
 
 @pytest.mark.asyncio
-async def test_get_user_variables_returns_empty_for_missing_row():
+async def test_get_user_variables_finds_by_user_id_only():
+    """The read short-circuits on a missing row and is keyed only by user_id."""
     from litellm.proxy._experimental.mcp_server.db import get_user_variables
 
     prisma = _mock_variables_prisma(row=None)
-    assert await get_user_variables(prisma, "alice", "srv-1") == {}
+    assert await get_user_variables(prisma, "alice") == {}
+    prisma.db.litellm_mcpuservariables.find_unique.assert_awaited_once()
+    call = prisma.db.litellm_mcpuservariables.find_unique.call_args
+    assert call.kwargs["where"] == {"user_id": "alice"}
 
 
 @pytest.mark.asyncio
-async def test_get_user_variables_bulk_distributes_results(variables_salt_key):
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.proxy._experimental.mcp_server.db import (
-        get_user_variables_bulk,
-        store_user_variables,
-    )
-
-    # Use store_user_variables to get correctly-encrypted blobs.
-    prisma1 = _mock_variables_prisma()
-    await store_user_variables(prisma1, "alice", "srv-1", {"A": "1"})
-    blob1 = _captured_values_blob(prisma1)
-    await store_user_variables(prisma1, "alice", "srv-2", {"B": "2"})
-    blob2 = _captured_values_blob(prisma1)
-
-    row1 = MagicMock()
-    row1.server_id = "srv-1"
-    row1.values_b64 = blob1
-    row2 = MagicMock()
-    row2.server_id = "srv-2"
-    row2.values_b64 = blob2
-
-    prisma = _mock_variables_prisma()
-    prisma.db.litellm_mcpuservariables.find_many = AsyncMock(return_value=[row1, row2])
-    result = await get_user_variables_bulk(prisma, "alice", ["srv-1", "srv-2", "srv-3"])
-    assert result == {"srv-1": {"A": "1"}, "srv-2": {"B": "2"}}
-
-
-@pytest.mark.asyncio
-async def test_get_user_variables_bulk_empty_ids_short_circuits():
-    from litellm.proxy._experimental.mcp_server.db import get_user_variables_bulk
-
-    prisma = _mock_variables_prisma()
-    assert await get_user_variables_bulk(prisma, "alice", []) == {}
-    # find_many should never have been called
-    assert prisma.db.litellm_mcpuservariables.find_many.await_count == 0
-
-
-@pytest.mark.asyncio
-async def test_delete_user_variables_calls_unique_key():
+async def test_delete_user_variables_calls_user_id_key():
     from litellm.proxy._experimental.mcp_server.db import delete_user_variables
 
     prisma = _mock_variables_prisma()
-    await delete_user_variables(prisma, "alice", "srv-1")
+    await delete_user_variables(prisma, "alice")
     prisma.db.litellm_mcpuservariables.delete.assert_awaited_once()
     call = prisma.db.litellm_mcpuservariables.delete.call_args
-    assert call.kwargs["where"] == {
-        "user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}
-    }
+    assert call.kwargs["where"] == {"user_id": "alice"}
 
 
 # ── REST exception handling ───────────────────────────────────────────────

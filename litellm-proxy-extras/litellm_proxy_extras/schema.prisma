@@ -316,6 +316,11 @@ model LiteLLM_MCPServerTable {
   // {name, value, scope, description}. scope is "global" (value used as-is)
   // or "user" (value supplied per-user via LiteLLM_MCPUserVariables).
   variables    Json?          @default("[]")
+  // Template/instance discriminator. "instance" servers are live and loaded by
+  // the manager; "template" servers are config blueprints only (not loaded).
+  kind         String         @default("instance")
+  // For instances created from a template, the source template's server_id.
+  template_id  String?
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -368,18 +373,15 @@ model LiteLLM_MCPUserCredentials {
   @@unique([user_id, server_id])
 }
 
-// Per-user variable values for MCP servers.
-// values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
+// Per-user variable values, shared globally across all MCP servers/instances.
+// values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}, one row per
+// user. When a credential store (e.g. HashiCorp Vault) is configured, values are
+// stored there instead and this table is unused.
 model LiteLLM_MCPUserVariables {
-  id         String   @id @default(uuid())
-  user_id    String
-  server_id  String
+  user_id    String   @id
   values_b64 String
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
-
-  @@unique([user_id, server_id])
-  @@index([user_id])
 }
 
 // Generate Tokens for Proxy

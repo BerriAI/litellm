@@ -953,22 +953,19 @@ async def get_mcp_submissions(
 async def store_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
-    server_id: str,
     values: Dict[str, str],
 ) -> None:
-    """Persist (or overwrite) the calling user's variable values for ``server_id``.
+    """Persist (or overwrite) the calling user's global variable values.
 
-    Values are JSON-serialised and stored encrypted in ``values_b64``.
+    Values are JSON-serialised and stored encrypted in ``values_b64``. These
+    variables are shared by name across every MCP server/instance the user
+    accesses (one row per user).
     """
     encoded = encrypt_value_helper(json.dumps(values))
     await prisma_client.db.litellm_mcpuservariables.upsert(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+        where={"user_id": user_id},
         data={
-            "create": {
-                "user_id": user_id,
-                "server_id": server_id,
-                "values_b64": encoded,
-            },
+            "create": {"user_id": user_id, "values_b64": encoded},
             "update": {"values_b64": encoded},
         },
     )
@@ -996,41 +993,19 @@ def _decode_user_variables(stored: str) -> Dict[str, str]:
 async def get_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
-    server_id: str,
 ) -> Dict[str, str]:
-    """Return the calling user's variable dict for ``server_id`` (empty if none)."""
+    """Return the calling user's global variable dict (empty if none)."""
     row = await prisma_client.db.litellm_mcpuservariables.find_unique(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+        where={"user_id": user_id}
     )
     if row is None:
         return {}
     return _decode_user_variables(row.values_b64)
 
 
-async def get_user_variables_bulk(
-    prisma_client: PrismaClient,
-    user_id: str,
-    server_ids: Iterable[str],
-) -> Dict[str, Dict[str, str]]:
-    """Return ``{server_id: {var_name: value}}`` for one user across many servers.
-
-    Servers with no stored row are simply absent from the result.
-    """
-    ids = list(server_ids)
-    if not ids:
-        return {}
-    rows = await prisma_client.db.litellm_mcpuservariables.find_many(
-        where={"user_id": user_id, "server_id": {"in": ids}}
-    )
-    return {row.server_id: _decode_user_variables(row.values_b64) for row in rows}
-
-
 async def delete_user_variables(
     prisma_client: PrismaClient,
     user_id: str,
-    server_id: str,
 ) -> None:
-    """Remove the calling user's variable values for ``server_id``."""
-    await prisma_client.db.litellm_mcpuservariables.delete(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
-    )
+    """Remove all of the calling user's global variable values."""
+    await prisma_client.db.litellm_mcpuservariables.delete(where={"user_id": user_id})

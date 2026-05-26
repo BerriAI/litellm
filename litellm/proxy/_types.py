@@ -1305,6 +1305,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Template/instance discriminator + link to the source template (if any).
+    kind: Literal["template", "instance"] = "instance"
+    template_id: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1396,6 +1399,10 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    # Template/instance discriminator + link to the source template (if any).
+    # ``None`` on update means "leave unchanged".
+    kind: Optional[Literal["template", "instance"]] = None
+    template_id: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1448,6 +1455,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
     variables: Optional[List[MCPVariable]] = None
+    kind: str = "instance"
+    template_id: Optional[str] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
@@ -1547,6 +1556,20 @@ class MCPUserVariablesStatus(LiteLLMPydanticObjectBase):
     server_id: str
     server_name: Optional[str] = None
     alias: Optional[str] = None
+    required: List[MCPUserVariableSpec] = Field(default_factory=list)
+    missing_count: int = 0
+    setup_url: Optional[str] = None  # frontend URL where the user can fill these in
+
+
+class MCPUserVariablesGlobalStatus(LiteLLMPydanticObjectBase):
+    """Global per-user variable status, aggregated across every instance the
+    caller can access. Per-user variables are shared by name, so this is the
+    single source of truth for the Variables dashboard tab.
+
+    Per the write-only contract, ``required[*].value`` is never populated —
+    only ``is_set`` indicates whether the user has supplied a value.
+    """
+
     required: List[MCPUserVariableSpec] = Field(default_factory=list)
     missing_count: int = 0
     setup_url: Optional[str] = None  # frontend URL where the user can fill these in

@@ -1395,11 +1395,12 @@ class MCPServerManager:
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> Dict[str, str]:
-        """Best-effort lookup of the calling user's variable values for ``server``.
+        """Best-effort lookup of the calling user's global variable values.
 
-        Returns an empty dict when no user is available or the DB lookup
-        fails — callers detect missing values via name lookup, not by an
-        exception here.
+        Per-user variables are shared by name across all servers, so the lookup
+        is keyed only by user. Returns an empty dict when no user is available
+        or the lookup fails — callers detect missing values via name lookup,
+        not by an exception here.
         """
         if user_api_key_auth is None:
             return {}
@@ -1415,7 +1416,7 @@ class MCPServerManager:
         )
 
         try:
-            return await get_user_variables(prisma_client, user_id, server.server_id)
+            return await get_user_variables(prisma_client, user_id)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPServerManager: failed to load user variables for "
@@ -3285,14 +3286,16 @@ class MCPServerManager:
         )
         # Load only "active", legacy "approved", and NULL (no approval workflow) rows.
         # Pending/rejected servers are excluded at the DB level so we never load them.
+        # Templates are config blueprints, not live servers — exclude them too.
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
 
         raw_rows = await prisma_client.db.litellm_mcpservertable.find_many(
             where={
+                "kind": {"not": "template"},
                 "OR": [
                     {"approval_status": None},
                     {"approval_status": {"in": ["active", "approved"]}},
-                ]
+                ],
             }
         )
         db_mcp_servers = [LiteLLM_MCPServerTable(**r.model_dump()) for r in raw_rows]

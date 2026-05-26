@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
 
 from fastapi import (
     APIRouter,
@@ -121,7 +121,6 @@ if MCP_AVAILABLE:
         get_mcp_submissions,
         get_user_oauth_credential,
         get_user_variables,
-        get_user_variables_bulk,
         list_user_oauth_credentials,
         reject_mcp_server,
         store_user_credential,
@@ -154,6 +153,7 @@ if MCP_AVAILABLE:
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
         MCPUserVariableSpec,
+        MCPUserVariablesGlobalStatus,
         MCPUserVariablesRequest,
         MCPUserVariablesStatus,
         NewMCPServerRequest,
@@ -2114,48 +2114,59 @@ if MCP_AVAILABLE:
 
     # ── Per-user MCP variable endpoints ────────────────────────────────────────
 
-    def _compute_user_variable_status(
+    def _required_user_variable_specs(
         *,
         server: LiteLLM_MCPServerTable,
         stored_values: Dict[str, str],
-    ) -> MCPUserVariablesStatus:
-        """Build a status object for one server given the user's stored values."""
+    ) -> Tuple[List[MCPUserVariableSpec], int]:
+        """Return ``(specs, missing_count)`` for the user-scoped variables that
+        ``server`` actually references in its static_headers.
+
+        Per the write-only contract the stored value is never returned — only
+        ``is_set`` indicates whether the user has supplied a value.
+        """
         _, user_specs = parse_admin_variables(getattr(server, "variables", None))
 
-        # Limit "required" to variables that are actually referenced by
-        # static_headers. If an admin defined a per-user variable but never
-        # used it, it's not blocking.
+        # Limit to variables that are actually referenced by static_headers. If
+        # an admin declared a per-user variable but never used it, it's not
+        # blocking.
         static_headers = getattr(server, "static_headers", None) or {}
         if isinstance(static_headers, str):
             try:
-                import json as _json
-
-                static_headers = _json.loads(static_headers) or {}
+                static_headers = json.loads(static_headers) or {}
             except (ValueError, TypeError):
                 static_headers = {}
         referenced = collect_variable_references(strings=static_headers.values())
         user_var_names = {spec["name"] for spec in user_specs}
         blocking = referenced & user_var_names
 
-        required: List[MCPUserVariableSpec] = []
+        specs: List[MCPUserVariableSpec] = []
         missing_count = 0
         for spec in user_specs:
             name = spec["name"]
             if name not in blocking:
                 continue
-            value = stored_values.get(name)
-            is_set = bool(value)
+            is_set = bool(stored_values.get(name))
             if not is_set:
                 missing_count += 1
-            required.append(
+            specs.append(
                 MCPUserVariableSpec(
                     name=name,
                     description=spec.get("description"),
-                    value=value,
                     is_set=is_set,
                 )
             )
+        return specs, missing_count
 
+    def _compute_user_variable_status(
+        *,
+        server: LiteLLM_MCPServerTable,
+        stored_values: Dict[str, str],
+    ) -> MCPUserVariablesStatus:
+        """Build a per-instance status object given the user's stored values."""
+        required, missing_count = _required_user_variable_specs(
+            server=server, stored_values=stored_values
+        )
         return MCPUserVariablesStatus(
             server_id=server.server_id,
             server_name=getattr(server, "server_name", None),
@@ -2165,17 +2176,60 @@ if MCP_AVAILABLE:
             setup_url=build_variable_setup_url(server.server_id) if required else None,
         )
 
+    def _instances_only(
+        servers: List[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        """Drop template rows — only instances reference live per-user variables."""
+        return [s for s in servers if getattr(s, "kind", "instance") != "template"]
+
+    def _allowed_user_variable_names(
+        servers: List[LiteLLM_MCPServerTable],
+    ) -> Set[str]:
+        """Union of every user-scoped variable name declared by these instances."""
+        names: Set[str] = set()
+        for server in _instances_only(servers):
+            _, user_specs = parse_admin_variables(getattr(server, "variables", None))
+            names.update(spec["name"] for spec in user_specs)
+        return names
+
+    def _compute_global_variable_status(
+        *,
+        servers: List[LiteLLM_MCPServerTable],
+        stored_values: Dict[str, str],
+    ) -> MCPUserVariablesGlobalStatus:
+        """Aggregate required user-scoped variables across every accessible
+        instance into one global status. Variables are shared by name, so a name
+        required by any instance appears once."""
+        by_name: Dict[str, MCPUserVariableSpec] = {}
+        for server in _instances_only(servers):
+            specs, _ = _required_user_variable_specs(
+                server=server, stored_values=stored_values
+            )
+            for spec in specs:
+                existing = by_name.get(spec.name)
+                if existing is None or (
+                    existing.description is None and spec.description is not None
+                ):
+                    by_name[spec.name] = spec
+        required = sorted(by_name.values(), key=lambda s: s.name)
+        missing_count = sum(1 for s in required if not s.is_set)
+        return MCPUserVariablesGlobalStatus(
+            required=required,
+            missing_count=missing_count,
+            setup_url=build_variable_setup_url() if required else None,
+        )
+
     @router.get(
-        "/server/{server_id}/user-variables",
-        description="Return the calling user's per-user MCP variable status for this server.",
+        "/user/variables",
+        description="Return the calling user's global per-user MCP variable status, "
+        "aggregated across every instance the user can access.",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=MCPUserVariablesStatus,
+        response_model=MCPUserVariablesGlobalStatus,
     )
     @management_endpoint_wrapper
     async def get_mcp_user_variables(
-        server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> MCPUserVariablesStatus:
+    ) -> MCPUserVariablesGlobalStatus:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -2185,27 +2239,24 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
-        stored = await get_user_variables(prisma_client, user_id, server_id)
-        return _compute_user_variable_status(server=server, stored_values=stored)
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        stored = await get_user_variables(prisma_client, user_id)
+        return _compute_global_variable_status(servers=accessible, stored_values=stored)
 
     @router.post(
-        "/server/{server_id}/user-variables",
-        description="Store the calling user's per-user MCP variable values for this server.",
+        "/user/variables",
+        description="Store (merge) the calling user's global per-user MCP variable values. "
+        "An empty string clears that variable.",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=MCPUserVariablesStatus,
+        response_model=MCPUserVariablesGlobalStatus,
     )
     @management_endpoint_wrapper
     async def store_mcp_user_variables(
-        server_id: str,
         payload: MCPUserVariablesRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> MCPUserVariablesStatus:
+    ) -> MCPUserVariablesGlobalStatus:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -2215,33 +2266,33 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
-        # Filter to only known per-user variable names declared by the admin —
-        # never persist arbitrary keys the user invents.
-        _, user_specs = parse_admin_variables(getattr(server, "variables", None))
-        allowed_names = {spec["name"] for spec in user_specs}
-        filtered = {
-            k: v for k, v in payload.values.items() if k in allowed_names and v != ""
-        }
-        await store_user_variables(prisma_client, user_id, server_id, filtered)
-        return _compute_user_variable_status(server=server, stored_values=filtered)
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        # Only persist values for names actually declared as per-user by some
+        # accessible instance — never store arbitrary keys the caller invents.
+        allowed_names = _allowed_user_variable_names(accessible)
+        merged = {**(await get_user_variables(prisma_client, user_id))}
+        for name, value in payload.values.items():
+            if name not in allowed_names:
+                continue
+            if value == "":
+                merged.pop(name, None)  # empty clears the variable
+            else:
+                merged[name] = value
+        await store_user_variables(prisma_client, user_id, merged)
+        return _compute_global_variable_status(servers=accessible, stored_values=merged)
 
     @router.delete(
-        "/server/{server_id}/user-variables",
-        description="Clear the calling user's per-user MCP variable values for this server.",
+        "/user/variables",
+        description="Clear all of the calling user's global per-user MCP variable values.",
         dependencies=[Depends(user_api_key_auth)],
-        response_model=MCPUserVariablesStatus,
+        response_model=MCPUserVariablesGlobalStatus,
     )
     @management_endpoint_wrapper
     async def clear_mcp_user_variables(
-        server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> MCPUserVariablesStatus:
+    ) -> MCPUserVariablesGlobalStatus:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
@@ -2251,22 +2302,20 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
         try:
-            await delete_user_variables(prisma_client, user_id, server_id)
+            await delete_user_variables(prisma_client, user_id)
         except Exception:
             pass  # Already deleted / didn't exist
-        return _compute_user_variable_status(server=server, stored_values={})
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        return _compute_global_variable_status(servers=accessible, stored_values={})
 
     @router.get(
         "/user-variables/status",
-        description="Per-user MCP variable status across every server the user can access. "
-        "Used by the dashboard to highlight servers with missing per-user variables.",
+        description="Per-instance per-user MCP variable status across every server the "
+        "user can access. Used by the dashboard to highlight instances with "
+        "missing per-user variables.",
         dependencies=[Depends(user_api_key_auth)],
         response_model=List[MCPUserVariablesStatus],
     )
@@ -2285,11 +2334,9 @@ if MCP_AVAILABLE:
         )
         if not accessible:
             return []
-        server_ids = [s.server_id for s in accessible]
-        stored_bulk = await get_user_variables_bulk(prisma_client, user_id, server_ids)
+        stored = await get_user_variables(prisma_client, user_id)
         statuses: List[MCPUserVariablesStatus] = []
-        for server in accessible:
-            stored = stored_bulk.get(server.server_id, {})
+        for server in _instances_only(accessible):
             status_obj = _compute_user_variable_status(
                 server=server, stored_values=stored
             )

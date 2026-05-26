@@ -3295,12 +3295,13 @@ def _make_variable_server(
     alias: str = "db_server",
     variables=None,
     static_headers=None,
+    kind: str = "instance",
 ):
     """Lightweight server stand-in for the per-user variable endpoints.
 
     The handlers only read ``server_id``/``server_name``/``alias``/``variables``/
-    ``static_headers`` via ``getattr``, so a SimpleNamespace is enough and keeps
-    the test decoupled from the full Prisma model.
+    ``static_headers``/``kind`` via ``getattr``, so a SimpleNamespace is enough
+    and keeps the test decoupled from the full Prisma model.
     """
     return SimpleNamespace(
         server_id=server_id,
@@ -3308,6 +3309,7 @@ def _make_variable_server(
         alias=alias,
         variables=variables,
         static_headers=static_headers,
+        kind=kind,
     )
 
 
@@ -3344,7 +3346,8 @@ class TestComputeUserVariableStatus:
         assert names == {"CORP_USERNAME", "CORP_PASSWORD"}
         by_name = {spec.name: spec for spec in status.required}
         assert by_name["CORP_USERNAME"].is_set is True
-        assert by_name["CORP_USERNAME"].value == "alice"
+        # WRITE-ONLY contract: the stored value is never echoed back.
+        assert by_name["CORP_USERNAME"].value is None
         assert by_name["CORP_USERNAME"].description == "Your username"
         assert by_name["CORP_PASSWORD"].is_set is False
         assert status.missing_count == 1
@@ -3401,18 +3404,95 @@ class TestComputeUserVariableStatus:
         assert status.setup_url is None
 
 
+class TestComputeGlobalVariableStatus:
+    """Unit tests for the _compute_global_variable_status aggregation helper."""
+
+    def test_dedupes_shared_variable_across_instances(self):
+        # Two instances both reference the SAME user-scoped variable names.
+        server_a = _make_variable_server(
+            server_id="srv-a",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        server_b = _make_variable_server(
+            server_id="srv-b",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        status = mgmt_endpoints._compute_global_variable_status(
+            servers=[server_a, server_b],
+            stored_values={"CORP_USERNAME": "alice"},
+        )
+        # Shared names collapse to a single entry each.
+        names = [spec.name for spec in status.required]
+        assert names == ["CORP_PASSWORD", "CORP_USERNAME"]
+        by_name = {spec.name: spec for spec in status.required}
+        assert by_name["CORP_USERNAME"].is_set is True
+        # WRITE-ONLY: aggregated specs never carry a value.
+        assert by_name["CORP_USERNAME"].value is None
+        assert by_name["CORP_PASSWORD"].is_set is False
+        # Only CORP_PASSWORD is unset across the deduped set.
+        assert status.missing_count == 1
+        # Global setup URL has no server_id deep-link.
+        assert status.setup_url and "fill_variables=" not in status.setup_url
+
+    def test_templates_are_excluded_from_aggregation(self):
+        instance = _make_variable_server(
+            server_id="srv-instance",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        template = _make_variable_server(
+            server_id="srv-template",
+            kind="template",
+            variables=[
+                {"name": "TEMPLATE_ONLY", "value": "", "scope": "user"},
+            ],
+            static_headers={"Authorization": "${TEMPLATE_ONLY}"},
+        )
+        status = mgmt_endpoints._compute_global_variable_status(
+            servers=[instance, template], stored_values={}
+        )
+        names = {spec.name for spec in status.required}
+        # The template-only variable must NOT appear.
+        assert "TEMPLATE_ONLY" not in names
+        assert names == {"CORP_USERNAME", "CORP_PASSWORD"}
+        assert status.missing_count == 2
+
+    def test_no_required_yields_no_setup_url(self):
+        server = _make_variable_server(
+            variables=[{"name": "DB_PROTOCOL", "value": "p", "scope": "global"}],
+            static_headers={"Authorization": "${DB_PROTOCOL}"},
+        )
+        status = mgmt_endpoints._compute_global_variable_status(
+            servers=[server], stored_values={}
+        )
+        assert status.required == []
+        assert status.missing_count == 0
+        assert status.setup_url is None
+
+
 class TestGetMCPUserVariables:
     @pytest.mark.asyncio
-    async def test_returns_status_for_server(self):
-        server = _make_variable_server(
-            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
+    async def test_returns_global_aggregated_status(self):
+        server_a = _make_variable_server(
+            server_id="srv-a",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        server_b = _make_variable_server(
+            server_id="srv-b",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
         )
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
             ),
             patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server_a, server_b]),
             ),
             patch.object(
                 mgmt_endpoints,
@@ -3421,12 +3501,39 @@ class TestGetMCPUserVariables:
             ),
         ):
             result = await mgmt_endpoints.get_mcp_user_variables(
-                server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
-        assert result.server_id == "srv-1"
-        assert result.missing_count == 1
+        # Shared names across two instances -> one entry each.
         assert {s.name for s in result.required} == {"CORP_USERNAME", "CORP_PASSWORD"}
+        assert result.missing_count == 1
+        # WRITE-ONLY contract holds.
+        assert all(s.value is None for s in result.required)
+
+    @pytest.mark.asyncio
+    async def test_global_get_uses_user_id_only(self):
+        """The global GET reads the user's single stored dict keyed by user_id."""
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        )
+        get_vars = AsyncMock(return_value={})
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(mgmt_endpoints, "get_user_variables", get_vars),
+        ):
+            await mgmt_endpoints.get_mcp_user_variables(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
+            )
+        # No server_id passed — only (prisma_client, user_id).
+        get_vars.assert_awaited_once()
+        _, user_id = get_vars.await_args.args
+        assert user_id == "alice"
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):
@@ -3435,27 +3542,9 @@ class TestGetMCPUserVariables:
         ):
             with pytest.raises(HTTPException) as exc:
                 await mgmt_endpoints.get_mcp_user_variables(
-                    server_id="srv-1",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
         assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_unknown_server_raises_404(self):
-        with (
-            patch.object(
-                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
-            ),
-            patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.get_mcp_user_variables(
-                    server_id="missing",
-                    user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
-                )
-        assert exc.value.status_code == 404
 
 
 class TestStoreMCPUserVariables:
@@ -3470,27 +3559,70 @@ class TestStoreMCPUserVariables:
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
             ),
             patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(
+                mgmt_endpoints, "get_user_variables", AsyncMock(return_value={})
             ),
             patch.object(mgmt_endpoints, "store_user_variables", store_mock),
         ):
             result = await mgmt_endpoints.store_mcp_user_variables(
-                server_id="srv-1",
                 payload=mgmt_endpoints.MCPUserVariablesRequest(
                     values={
                         "CORP_USERNAME": "alice",
-                        "CORP_PASSWORD": "",  # empty -> dropped
+                        "CORP_PASSWORD": "",  # empty -> dropped (cleared)
                         "NOT_A_DECLARED_VAR": "x",  # unknown -> dropped
                     }
                 ),
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
-        # Only the declared, non-empty value is persisted.
+        # Global store: (prisma_client, user_id, values) — no server_id.
         store_mock.assert_awaited_once()
-        _, _, _, persisted = store_mock.await_args.args
+        _, user_id, persisted = store_mock.await_args.args
+        assert user_id == "alice"
         assert persisted == {"CORP_USERNAME": "alice"}
         # CORP_PASSWORD remains unset in the returned status.
         assert result.missing_count == 1
+
+    @pytest.mark.asyncio
+    async def test_merges_into_existing_and_empty_clears(self):
+        """POST merges into the existing stored dict; "" clears that name."""
+        server = _make_variable_server(
+            variables=_VARIABLES_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        )
+        store_mock = AsyncMock()
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_variables",
+                AsyncMock(
+                    return_value={"CORP_USERNAME": "alice", "CORP_PASSWORD": "old"}
+                ),
+            ),
+            patch.object(mgmt_endpoints, "store_user_variables", store_mock),
+        ):
+            await mgmt_endpoints.store_mcp_user_variables(
+                payload=mgmt_endpoints.MCPUserVariablesRequest(
+                    values={
+                        "CORP_USERNAME": "bob",  # overwrites existing
+                        "CORP_PASSWORD": "",  # empty -> clears existing
+                    }
+                ),
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
+            )
+        _, _, persisted = store_mock.await_args.args
+        # USERNAME updated; PASSWORD cleared out of the merged dict.
+        assert persisted == {"CORP_USERNAME": "bob"}
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):
@@ -3499,29 +3631,10 @@ class TestStoreMCPUserVariables:
         ):
             with pytest.raises(HTTPException) as exc:
                 await mgmt_endpoints.store_mcp_user_variables(
-                    server_id="srv-1",
                     payload=mgmt_endpoints.MCPUserVariablesRequest(values={}),
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
         assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_unknown_server_raises_404(self):
-        with (
-            patch.object(
-                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
-            ),
-            patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.store_mcp_user_variables(
-                    server_id="missing",
-                    payload=mgmt_endpoints.MCPUserVariablesRequest(values={}),
-                    user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
-                )
-        assert exc.value.status_code == 404
 
 
 class TestClearMCPUserVariables:
@@ -3536,15 +3649,19 @@ class TestClearMCPUserVariables:
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
             ),
             patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
             ),
             patch.object(mgmt_endpoints, "delete_user_variables", delete_mock),
         ):
             result = await mgmt_endpoints.clear_mcp_user_variables(
-                server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
+        # Global delete: (prisma_client, user_id) — no server_id.
         delete_mock.assert_awaited_once()
+        _, user_id = delete_mock.await_args.args
+        assert user_id == "alice"
         # Everything is now unset.
         assert result.missing_count == 2
         assert all(not spec.is_set for spec in result.required)
@@ -3559,7 +3676,9 @@ class TestClearMCPUserVariables:
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
             ),
             patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
             ),
             patch.object(
                 mgmt_endpoints,
@@ -3569,7 +3688,6 @@ class TestClearMCPUserVariables:
         ):
             # Should not raise even though delete blows up.
             result = await mgmt_endpoints.clear_mcp_user_variables(
-                server_id="srv-1",
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
         assert result.missing_count == 2
@@ -3581,27 +3699,9 @@ class TestClearMCPUserVariables:
         ):
             with pytest.raises(HTTPException) as exc:
                 await mgmt_endpoints.clear_mcp_user_variables(
-                    server_id="srv-1",
                     user_api_key_dict=generate_mock_user_api_key_auth(user_id=""),
                 )
         assert exc.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_unknown_server_raises_404(self):
-        with (
-            patch.object(
-                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
-            ),
-            patch.object(
-                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc:
-                await mgmt_endpoints.clear_mcp_user_variables(
-                    server_id="missing",
-                    user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
-                )
-        assert exc.value.status_code == 404
 
 
 class TestListMCPUserVariableStatus:
@@ -3656,8 +3756,8 @@ class TestListMCPUserVariableStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_user_variables_bulk",
-                AsyncMock(return_value={"srv-with": {"CORP_USERNAME": "alice"}}),
+                "get_user_variables",
+                AsyncMock(return_value={"CORP_USERNAME": "alice"}),
             ),
         ):
             result = await mgmt_endpoints.list_mcp_user_variable_status(
@@ -3665,3 +3765,37 @@ class TestListMCPUserVariableStatus:
             )
         assert [s.server_id for s in result] == ["srv-with"]
         assert result[0].missing_count == 1
+
+    @pytest.mark.asyncio
+    async def test_template_rows_are_skipped(self):
+        """Rows whose kind=='template' must never appear in /user-variables/status."""
+        instance = _make_variable_server(
+            server_id="srv-instance",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        template = _make_variable_server(
+            server_id="srv-template",
+            kind="template",
+            variables=_VARIABLES_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[instance, template]),
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_variables",
+                AsyncMock(return_value={}),
+            ),
+        ):
+            result = await mgmt_endpoints.list_mcp_user_variable_status(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice")
+            )
+        assert [s.server_id for s in result] == ["srv-instance"]
