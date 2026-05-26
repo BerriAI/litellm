@@ -505,7 +505,10 @@ if MCP_AVAILABLE:
         except MCPUpstreamAuthError as e:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise e.to_http_exception(base_url=get_request_base_url(request))
+            raise e.to_http_exception(
+                base_url=get_request_base_url(request),
+                request_path=request.scope.get("_original_path") or request.url.path,
+            )
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {

@@ -3251,7 +3251,8 @@ if MCP_AVAILABLE:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
-                base_url=get_request_base_url(StarletteRequest(scope))
+                base_url=get_request_base_url(StarletteRequest(scope)),
+                request_path=scope.get("_original_path") or scope.get("path"),
             )
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
@@ -3356,7 +3357,8 @@ if MCP_AVAILABLE:
             # Pass-through server returned 401 — surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
-                base_url=get_request_base_url(StarletteRequest(scope))
+                base_url=get_request_base_url(StarletteRequest(scope)),
+                request_path=scope.get("_original_path") or scope.get("path"),
             )
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
