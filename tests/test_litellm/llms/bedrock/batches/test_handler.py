@@ -300,7 +300,11 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
 
     post_kwargs = logging_obj.post_call.call_args.kwargs
     assert post_kwargs["input"] == JOB_ARN
-    assert post_kwargs["original_response"]["jobArn"] == JOB_ARN
+    # original_response is JSON-serialized (str) because boto3 returns
+    # datetime objects that json.dumps() cannot handle natively.
+    import json
+    parsed = json.loads(post_kwargs["original_response"])
+    assert parsed["jobArn"] == JOB_ARN
 
 
 def test_missing_boto3_raises_helpful_import_error():
