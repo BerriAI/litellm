@@ -56,10 +56,6 @@ class DiscoverAgentRequest(BaseModel):
             "``{'assistant_id': <id>}``. ``well_known_fallback`` ignores this."
         ),
     )
-    headers: Optional[Dict[str, str]] = Field(
-        default=None,
-        description="Optional headers to send with the discovery request (e.g. auth).",
-    )
 
 
 class DiscoverAgentResponse(BaseModel):
@@ -106,7 +102,6 @@ async def discover_agent_card(
             request.url,
             discovery_mode=request.discovery_mode,
             params=request.params,
-            headers=request.headers,
         )
     except AgentCardDiscoveryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
