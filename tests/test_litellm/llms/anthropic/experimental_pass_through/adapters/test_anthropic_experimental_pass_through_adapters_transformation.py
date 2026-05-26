@@ -10,6 +10,9 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -510,6 +513,176 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     assert anthropic_content[1]["id"] == "call_tool_combo"
     assert anthropic_content[1]["input"] == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
+
+
+def test_translate_openai_response_to_anthropic_uses_litellm_call_id():
+    """Anthropic adapter responses should be queryable by spend log request_id."""
+    openai_response = ModelResponse(
+        id="chatcmpl_backend_id",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content="hello"),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response,
+        litellm_call_id="litellm-call-123",
+    )
+
+    assert anthropic_response.get("id") == "litellm-call-123"
+
+
+def test_translate_openai_response_to_anthropic_preserves_backend_id_without_call_id():
+    """Direct adapter callers without a LiteLLM call ID keep the previous fallback."""
+    openai_response = ModelResponse(
+        id="chatcmpl_backend_id",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content="hello"),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    assert anthropic_response.get("id") == "chatcmpl_backend_id"
+
+
+def test_anthropic_messages_handler_uses_litellm_call_id(monkeypatch):
+    """The public non-Anthropic adapter handler should return the spend log request ID."""
+    import litellm
+
+    backend_response = ModelResponse(
+        id="chatcmpl_backend_id",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content="hello"),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    def mock_completion(**kwargs):
+        assert kwargs["litellm_call_id"] == "litellm-handler-123"
+        return backend_response
+
+    monkeypatch.setattr(litellm, "completion", mock_completion)
+
+    anthropic_response = (
+        LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+            model="gpt-4o-mini",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "hello"}],
+            litellm_call_id="litellm-handler-123",
+        )
+    )
+
+    assert anthropic_response.get("id") == "litellm-handler-123"
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_uses_litellm_call_id(monkeypatch):
+    """Async Anthropic adapter responses should also match spend log request_id."""
+    import litellm
+
+    backend_response = ModelResponse(
+        id="chatcmpl_async_backend_id",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content="hello"),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    async def mock_acompletion(**kwargs):
+        assert kwargs["litellm_call_id"] == "litellm-async-handler-123"
+        return backend_response
+
+    monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
+
+    anthropic_response = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+        model="gpt-4o-mini",
+        max_tokens=10,
+        messages=[{"role": "user", "content": "hello"}],
+        litellm_call_id="litellm-async-handler-123",
+    )
+
+    assert anthropic_response.get("id") == "litellm-async-handler-123"
+
+
+def test_anthropic_stream_wrapper_uses_litellm_call_id_for_message_start():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+        AnthropicStreamWrapper,
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4o-mini",
+        litellm_call_id="litellm-stream-123",
+    )
+
+    event = next(wrapper)
+
+    assert event["type"] == "message_start"
+    assert event["message"]["id"] == "litellm-stream-123"
+
+
+def test_anthropic_stream_wrapper_generates_message_id_without_call_id():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+        AnthropicStreamWrapper,
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4o-mini",
+    )
+
+    event = next(wrapper)
+
+    assert event["type"] == "message_start"
+    assert event["message"]["id"].startswith("msg_")
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_stream_wrapper_uses_litellm_call_id_for_message_start():
+    from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+        AnthropicStreamWrapper,
+    )
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=EmptyAsyncIterator(),
+        model="gpt-4o-mini",
+        litellm_call_id="litellm-async-stream-123",
+    )
+
+    event = await wrapper.__anext__()
+
+    assert event["type"] == "message_start"
+    assert event["message"]["id"] == "litellm-async-stream-123"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():

@@ -309,6 +309,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
+        litellm_call_id = cast(Optional[str], kwargs.get("litellm_call_id"))
         (
             completion_kwargs,
             tool_name_mapping,
@@ -338,6 +339,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    litellm_call_id=litellm_call_id,
                 )
             )
             if transformed_stream is not None:
@@ -347,6 +349,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                litellm_call_id=litellm_call_id,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -395,6 +398,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
+        litellm_call_id = cast(Optional[str], kwargs.get("litellm_call_id"))
         (
             completion_kwargs,
             tool_name_mapping,
@@ -424,6 +428,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    litellm_call_id=litellm_call_id,
                 )
             )
             if transformed_stream is not None:
@@ -433,6 +438,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                litellm_call_id=litellm_call_id,
             )
             if anthropic_response is not None:
                 return anthropic_response
