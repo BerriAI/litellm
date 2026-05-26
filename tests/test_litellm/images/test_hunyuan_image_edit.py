@@ -124,35 +124,39 @@ class TestHunyuanImageEditConfig:
         assert "images" not in data
         assert data["prompt"] == "generate something"
 
-    def test_transform_image_edit_request_with_bytes_raises(self):
-        """Hunyuan only accepts HTTP/HTTPS URLs; bytes are not supported."""
+    def test_transform_image_edit_request_with_bytes(self):
+        """Bytes are converted to a base64 data URL."""
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            self.cfg.transform_image_edit_request(
-                model="gpt-image-2",
-                prompt="edit",
-                image=png_bytes,
-                image_edit_optional_request_params={},
-                litellm_params={},
-                headers={},
-            )
+        data, files = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image=png_bytes,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert len(data["images"]) == 1
+        assert data["images"][0].startswith("data:image/png;base64,")
+        assert files == []
 
-    def test_transform_image_edit_request_with_file_object_raises(self):
-        """File objects are not supported; user must provide an HTTP/HTTPS URL."""
+    def test_transform_image_edit_request_with_file_object(self):
+        """File-like objects are read and converted to a base64 data URL."""
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
         file_obj = io.BytesIO(png_bytes)
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            self.cfg.transform_image_edit_request(
-                model="gpt-image-2",
-                prompt="edit",
-                image=file_obj,
-                image_edit_optional_request_params={},
-                litellm_params={},
-                headers={},
-            )
+        data, files = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image=file_obj,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert len(data["images"]) == 1
+        assert data["images"][0].startswith("data:image/png;base64,")
+        assert files == []
 
     def test_transform_image_edit_request_rejects_local_path(self):
-        with pytest.raises(BaseLLMException, match="HTTP/HTTPS URL"):
+        with pytest.raises(ValueError, match="HTTP/HTTPS URL or data URL"):
             self.cfg.transform_image_edit_request(
                 model="gpt-image-2",
                 prompt="edit",
@@ -213,35 +217,35 @@ class TestImageToUrl:
         )
 
     def test_http_url_passthrough_http_scheme(self):
-        assert _image_to_url("http://example.com/img.png") == "http://example.com/img.png"
+        assert (
+            _image_to_url("http://example.com/img.png") == "http://example.com/img.png"
+        )
 
-    def test_data_url_raises(self):
-        """data: URIs are rejected with a helpful error message."""
+    def test_data_url_passthrough(self):
         data_url = "data:image/png;base64,abc123"
-        with pytest.raises(BaseLLMException, match="data URI"):
-            _image_to_url(data_url)
+        assert _image_to_url(data_url) == data_url
 
-    def test_bytes_raises(self):
+    def test_bytes_converted_to_data_url(self):
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            _image_to_url(png)
+        result = _image_to_url(png)
+        assert result.startswith("data:image/png;base64,")
 
-    def test_file_like_object_raises(self):
+    def test_file_like_object_converted_to_data_url(self):
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            _image_to_url(io.BytesIO(png))
+        result = _image_to_url(io.BytesIO(png))
+        assert result.startswith("data:image/png;base64,")
 
-    def test_tuple_raises(self):
+    def test_tuple_converted_to_data_url(self):
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            _image_to_url(("image.png", png))
+        result = _image_to_url(("image.png", png))
+        assert result.startswith("data:image/png;base64,")
 
     def test_local_path_raises(self):
-        with pytest.raises(BaseLLMException, match="HTTP/HTTPS URL"):
+        with pytest.raises(ValueError, match="HTTP/HTTPS URL or data URL"):
             _image_to_url("/local/path.png")
 
     def test_unsupported_type_raises(self):
-        with pytest.raises(BaseLLMException, match="unsupported image type"):
+        with pytest.raises(TypeError, match="unsupported image type"):
             _image_to_url(12345)  # type: ignore
 
 
@@ -309,7 +313,10 @@ class TestHunyuanImageEditHandler:
         r.headers = {}
         r.json.return_value = {
             "job_id": "",
-            "error": {"message": "URL格式不合法。", "code": "InvalidParameterValue.UrlIllegal"},
+            "error": {
+                "message": "URL格式不合法。",
+                "code": "InvalidParameterValue.UrlIllegal",
+            },
         }
         with pytest.raises(BaseLLMException, match="URL格式不合法"):
             self.handler._extract_poll_context(r, "sk-test", {})
@@ -371,13 +378,21 @@ class TestHunyuanImageEditHandler:
         assert isinstance(result, ImageResponse)
         assert result.data[0].url == "https://example.com/edited.png"
 
-    def test_image_edit_sync_with_bytes_raises(self):
-        """Bytes are no longer supported — user must provide an HTTP/HTTPS URL."""
+    def test_image_edit_sync_with_bytes(self):
+        """Bytes are converted to base64 data URL and passed to the API."""
+        submit_resp = self._make_submit_response()
+        poll_resp = self._make_poll_response("DONE")
+        mock_client = MagicMock()
+        mock_client.post.side_effect = [submit_resp, poll_resp]
         mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
 
         os.environ["HUNYUAN_API_KEY"] = "sk-test"
-        with pytest.raises(BaseLLMException, match="only supports HTTP/HTTPS URLs"):
-            self.handler.image_edit(
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            result = self.handler.image_edit(
                 model="gpt-image-2",
                 image=b"\x89PNG\r\n\x1a\n" + b"\x00" * 16,
                 prompt="油画风格",
@@ -386,6 +401,10 @@ class TestHunyuanImageEditHandler:
                 logging_obj=mock_logging,
                 timeout=30.0,
             )
+
+        assert isinstance(result, ImageResponse)
+        call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert call_body["images"][0].startswith("data:image/png;base64,")
 
 
 # ---------------------------------------------------------------------------
