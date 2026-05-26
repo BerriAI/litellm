@@ -521,12 +521,32 @@ class AppliedEdit(TypedDict, total=False):
     cleared_input_tokens: int
     cleared_tool_uses: int
     cleared_thinking_turns: int
+    # compact_20260112 fields
+    summary_input_tokens: int
+    summary_output_tokens: int
+    error: str
+    warnings: List[str]
 
 
 class ContextManagementResponse(TypedDict, total=False):
     """Response ``context_management`` with ``applied_edits``."""
 
     applied_edits: List[AppliedEdit]
+
+
+class CompactionBlock(TypedDict, total=False):
+    """Synthesized ``compaction`` content block (compact_20260112)."""
+
+    type: Literal["compaction"]
+    content: Optional[str]
+
+
+class UsageIteration(TypedDict, total=False):
+    """One sampling iteration's token usage (compact_20260112)."""
+
+    type: Literal["compaction", "message"]
+    input_tokens: int
+    output_tokens: int
 
 
 class MessageBlockDelta(TypedDict):

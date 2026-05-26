@@ -459,40 +459,12 @@ def anthropic_messages_handler(
                 **_shared_kwargs
             )
 
-        # In-gateway context_management polyfill on the chat-completions adapter
-        # (native on Anthropic/Responses paths). Skipped when drop_params is on.
-        context_management_spec = _shared_kwargs.pop("context_management", None)
-        _request_drop_params = _shared_kwargs.get("drop_params")
-        _drop_params = (
-            _request_drop_params
-            if _request_drop_params is not None
-            else litellm.drop_params
-        )
-        polyfill_applied_edits: Optional[List[AppliedEdit]] = None
-        if context_management_spec and not _drop_params:
-            from litellm.llms.anthropic.experimental_pass_through.context_management import (
-                apply_context_management,
-            )
-
-            try:
-                edited_messages, polyfill_applied_edits = apply_context_management(
-                    model=model,
-                    messages=_shared_kwargs["messages"],
-                    tools=_shared_kwargs.get("tools"),
-                    system=_shared_kwargs.get("system"),
-                    context_management_spec=context_management_spec,
-                )
-                _shared_kwargs["messages"] = edited_messages
-            except Exception as e:
-                verbose_logger.exception(
-                    "context_management polyfill: skipping edits due to error: %s",
-                    e,
-                )
-                polyfill_applied_edits = None
-
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                _polyfill_applied_edits=polyfill_applied_edits,
                 **_shared_kwargs,
             )
         )

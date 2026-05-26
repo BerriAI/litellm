@@ -12,13 +12,18 @@ from typing import (
 )
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
+)
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    AnthropicContextManagementError,
+    PolyfillResult,
+    apply_context_management,
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
-from litellm.types.llms.anthropic import AppliedEdit
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -31,8 +36,57 @@ if TYPE_CHECKING:
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset(
-    {"output_config", "context_management", "_polyfill_applied_edits"}
+    {"output_config", "context_management", "_polyfill_result"}
 )
+
+
+async def _run_polyfill_if_enabled(
+    *,
+    model: str,
+    messages: List[Dict],
+    tools: Optional[List[Dict]],
+    system: Optional[Any],
+    context_management_spec: Any,
+    metadata: Optional[Dict],
+    drop_params: Optional[bool],
+    llm_router: Any,
+) -> Optional[PolyfillResult]:
+    """Run the async context_management polyfill if a spec is present.
+
+    Returns ``None`` when the spec is empty or drop_params is on. Raises
+    ``AnthropicContextManagementError`` so the /v1/messages endpoint can
+    emit an Anthropic-format 400. All other exceptions are best-effort
+    swallowed (matches v0 behavior).
+    """
+    if not context_management_spec:
+        return None
+
+    effective_drop_params = (
+        drop_params if drop_params is not None else litellm.drop_params
+    )
+    if effective_drop_params:
+        return None
+
+    try:
+        return await apply_context_management(
+            model=model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management_spec=context_management_spec,
+            metadata=metadata,
+            llm_router=llm_router,
+        )
+    except AnthropicContextManagementError:
+        # Surface validation errors so the endpoint can emit an Anthropic-format
+        # 400. Other exception types fall into the best-effort branch below.
+        raise
+    except Exception as e:
+        verbose_logger.exception(
+            "context_management polyfill: skipping edits due to error: %s", e
+        )
+        return None
+
 
 ########################################################
 # init adapter
@@ -303,21 +357,49 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
-        _polyfill_applied_edits: Optional[List[AppliedEdit]] = None,
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
+        context_management = kwargs.pop("context_management", None)
+        drop_params: Optional[bool] = kwargs.get("drop_params", None)
+        litellm_router = kwargs.pop("litellm_router", None)
+        if litellm_router is None:
+            try:
+                from litellm.proxy.proxy_server import llm_router as _proxy_router
+
+                litellm_router = _proxy_router
+            except Exception:
+                pass
+
+        polyfill_result = await _run_polyfill_if_enabled(
+            model=model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management_spec=context_management,
+            metadata=metadata,
+            drop_params=drop_params,
+            llm_router=litellm_router,
+        )
+
+        effective_messages = (
+            polyfill_result.messages if polyfill_result is not None else messages
+        )
+        effective_system = (
+            polyfill_result.system if polyfill_result is not None else system
+        )
+
         (
             completion_kwargs,
             tool_name_mapping,
         ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=effective_messages,
             model=model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
-            system=system,
+            system=effective_system,
             temperature=temperature,
             thinking=thinking,
             tool_choice=tool_choice,
@@ -336,7 +418,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
-                    applied_edits=_polyfill_applied_edits,
+                    polyfill_result=polyfill_result,
                 )
             )
             if transformed_stream is not None:
@@ -346,7 +428,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
-                applied_edits=_polyfill_applied_edits,
+                polyfill_result=polyfill_result,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -369,7 +451,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
         _is_async: bool = False,
-        _polyfill_applied_edits: Optional[List[AppliedEdit]] = None,
         **kwargs,
     ) -> Union[
         AnthropicMessagesResponse,
@@ -393,7 +474,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
-                _polyfill_applied_edits=_polyfill_applied_edits,
                 **kwargs,
             )
 
@@ -426,7 +506,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
-                    applied_edits=_polyfill_applied_edits,
                 )
             )
             if transformed_stream is not None:
@@ -436,7 +515,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
-                applied_edits=_polyfill_applied_edits,
             )
             if anthropic_response is not None:
                 return anthropic_response

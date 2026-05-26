@@ -6,3 +6,28 @@ DEFAULT_INPUT_TOKENS_TRIGGER = 100_000
 DEFAULT_KEEP_TOOL_USES = 3
 
 CLEARED_TOOL_RESULT_PLACEHOLDER = "[Cleared by context management]"
+
+# compact_20260112
+COMPACT_EDIT_TYPE = "compact_20260112"
+COMPACT_DEFAULT_TRIGGER_TOKENS = 150_000
+COMPACT_MIN_TRIGGER_TOKENS = 50_000
+COMPACT_SUMMARY_MODEL_SETTING_KEY = "context_management_summary_model"
+COMPACT_SUMMARY_SYSTEM_PREFIX = "Previous conversation summary: "
+
+# Default summarization prompt from the Anthropic spec.
+COMPACT_DEFAULT_INSTRUCTIONS = (
+    "You have written a partial transcript for the initial task above. Please "
+    "write a summary of the transcript. The purpose of this summary is to "
+    "provide continuity so you can continue to make progress towards solving "
+    "the task in a future context, where the raw history above may not be "
+    "accessible and will be replaced with this summary. Write down anything "
+    "that would be helpful, including the state, next steps, learnings etc. "
+    "You must wrap your summary in a <summary></summary> block."
+)
+
+# Appended to the default prompt when ``tools`` are present and the caller
+# did not supply custom ``instructions``. Matches the guidance in the
+# Anthropic docs under "Compaction might fail when tools are defined".
+COMPACT_NO_TOOL_CALLS_SUFFIX = (
+    " Do not call any tools while writing this summary; respond with text only."
+)

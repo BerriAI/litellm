@@ -43,9 +43,9 @@ def _history_with_two_tool_pairs():
     ]
 
 
-def test_unknown_edit_type_is_noop():
+async def test_unknown_edit_type_is_noop():
     messages = _history_with_two_tool_pairs()
-    new_messages, applied = apply_context_management(
+    result = await apply_context_management(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -54,13 +54,13 @@ def test_unknown_edit_type_is_noop():
             "edits": [{"type": "totally_not_a_real_edit_20999999"}]
         },
     )
-    assert applied == []
-    assert new_messages == messages
+    assert result.applied_edits == []
+    assert result.messages == messages
 
 
-def test_known_edit_is_applied():
+async def test_known_edit_is_applied():
     messages = _history_with_two_tool_pairs()
-    _, applied = apply_context_management(
+    result = await apply_context_management(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -75,14 +75,14 @@ def test_known_edit_is_applied():
             ]
         },
     )
-    assert len(applied) == 1
-    assert applied[0]["type"] == "clear_tool_uses_20250919"
-    assert applied[0]["cleared_tool_uses"] == 1
+    assert len(result.applied_edits) == 1
+    assert result.applied_edits[0]["type"] == "clear_tool_uses_20250919"
+    assert result.applied_edits[0]["cleared_tool_uses"] == 1
 
 
-def test_mixed_known_unknown_only_known_applied():
+async def test_mixed_known_unknown_only_known_applied():
     messages = _history_with_two_tool_pairs()
-    _, applied = apply_context_management(
+    result = await apply_context_management(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -99,33 +99,33 @@ def test_mixed_known_unknown_only_known_applied():
             ]
         },
     )
-    assert len(applied) == 1
-    assert applied[0]["type"] == "clear_tool_uses_20250919"
+    assert len(result.applied_edits) == 1
+    assert result.applied_edits[0]["type"] == "clear_tool_uses_20250919"
 
 
-def test_empty_or_missing_edits_list():
+async def test_empty_or_missing_edits_list():
     messages = _history_with_two_tool_pairs()
     for spec in [{}, {"edits": None}, {"edits": []}, None]:
-        new_messages, applied = apply_context_management(
+        result = await apply_context_management(
             model=MODEL,
             messages=messages,
             tools=None,
             system=None,
             context_management_spec=spec,  # type: ignore[arg-type]
         )
-        assert applied == []
-        assert new_messages == messages
+        assert result.applied_edits == []
+        assert result.messages == messages
 
 
-def test_malformed_edit_entries_are_skipped():
+async def test_malformed_edit_entries_are_skipped():
     """Non-dict entries in `edits` list should be silently skipped."""
     messages = _history_with_two_tool_pairs()
-    new_messages, applied = apply_context_management(
+    result = await apply_context_management(
         model=MODEL,
         messages=messages,
         tools=None,
         system=None,
         context_management_spec={"edits": ["not a dict", 42, None, {"type": None}]},
     )
-    assert applied == []
-    assert new_messages == messages
+    assert result.applied_edits == []
+    assert result.messages == messages

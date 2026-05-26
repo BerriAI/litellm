@@ -1,0 +1,862 @@
+"""
+Unit tests for the compact_20260112 polyfill editor.
+
+Coverage:
+- trigger.value < 50k  → AnthropicContextManagementError(400)
+- opt-in gate (no summary model)  → summary_model_not_configured
+- slice-only path (existing compaction block, under threshold)
+- full summary path (over threshold, summary fires)
+- summary call raises  → summary_call_failed
+- summary response missing <summary> tags  → summary_extraction_failed
+- pause_after_compaction: true  → pause_after_compaction_ignored warning, proceeds
+- custom instructions  → default prompt is not used even when tools present
+"""
+
+from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    AnthropicContextManagementError,
+    apply_context_management,
+)
+from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+    _augment_system_with_summary,
+    _extract_summary_text,
+    _slice_around_compaction_block,
+    _strip_compaction_blocks,
+    apply_compact_20260112,
+)
+
+MODEL = "openai/gpt-4o"
+
+_EDIT_SPEC_DEFAULT: Dict[str, Any] = {"type": "compact_20260112"}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _simple_messages() -> List[Dict[str, Any]]:
+    return [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi there"}]},
+        {"role": "user", "content": "What is 2+2?"},
+    ]
+
+
+def _messages_with_compaction(summary: str = "prev summary") -> List[Dict[str, Any]]:
+    """History that already has a compaction block in an assistant turn."""
+    return [
+        {"role": "user", "content": "older question"},
+        {
+            "role": "assistant",
+            "content": [{"type": "compaction", "content": summary}],
+        },
+        {"role": "user", "content": "newer question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "newer reply"}]},
+        {"role": "user", "content": "latest question"},
+    ]
+
+
+def _make_mock_response(
+    content: str,
+    prompt_tokens: int = 50,
+    completion_tokens: int = 100,
+) -> MagicMock:
+    response = MagicMock()
+    choice = MagicMock()
+    message = MagicMock()
+    message.content = content
+    choice.message = message
+    response.choices = [choice]
+    usage = MagicMock()
+    usage.prompt_tokens = prompt_tokens
+    usage.completion_tokens = completion_tokens
+    response.usage = usage
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Unit: helper functions
+# ---------------------------------------------------------------------------
+
+
+def test_slice_around_compaction_block_found():
+    messages = _messages_with_compaction("my summary")
+    sliced, block = _slice_around_compaction_block(messages)
+    assert block is not None
+    assert block["type"] == "compaction"
+    assert block["content"] == "my summary"
+    # Sliced list starts at the assistant turn containing the compaction block
+    assert sliced[0]["role"] == "assistant"
+    assert len(sliced) == 4  # assistant(compaction), user, assistant, user
+
+
+def test_slice_around_compaction_block_not_found():
+    messages = _simple_messages()
+    sliced, block = _slice_around_compaction_block(messages)
+    assert block is None
+    assert sliced is messages  # same object, no copy
+
+
+def test_strip_compaction_blocks_removes_block():
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "compaction", "content": "summary"},
+                {"type": "text", "text": "hello"},
+            ],
+        }
+    ]
+    stripped = _strip_compaction_blocks(messages)
+    assert len(stripped) == 1
+    content = stripped[0]["content"]
+    assert all(b["type"] != "compaction" for b in content)
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+
+
+def test_strip_compaction_blocks_drops_compaction_only_turn():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "compaction", "content": "summary"}],
+        },
+        {"role": "user", "content": "bye"},
+    ]
+    stripped = _strip_compaction_blocks(messages)
+    assert len(stripped) == 2
+    assert stripped[0]["role"] == "user"
+    assert stripped[1]["role"] == "user"
+
+
+def test_augment_system_with_summary_none_system():
+    result = _augment_system_with_summary(None, "my summary")
+    assert isinstance(result, str)
+    assert "my summary" in result
+
+
+def test_augment_system_with_summary_string_system():
+    result = _augment_system_with_summary("You are helpful.", "my summary")
+    assert isinstance(result, str)
+    assert result.startswith("Previous conversation summary:")
+    assert "my summary" in result
+    assert "You are helpful." in result
+
+
+def test_augment_system_with_summary_list_system():
+    system = [{"type": "text", "text": "existing system"}]
+    result = _augment_system_with_summary(system, "my summary")
+    assert isinstance(result, list)
+    assert result[0]["type"] == "text"
+    text = result[0]["text"]
+    assert "my summary" in text
+    assert "existing system" in text
+
+
+def test_extract_summary_text_found():
+    raw = "Here is the summary:\n<summary>Key points from chat</summary>\nDone."
+    assert _extract_summary_text(raw) == "Key points from chat"
+
+
+def test_extract_summary_text_missing_tags():
+    assert _extract_summary_text("No tags here") is None
+
+
+def test_extract_summary_text_none():
+    assert _extract_summary_text(None) is None
+
+
+def test_extract_summary_text_case_insensitive():
+    raw = "<SUMMARY>uppercase tags</SUMMARY>"
+    assert _extract_summary_text(raw) == "uppercase tags"
+
+
+# ---------------------------------------------------------------------------
+# Editor: validation
+# ---------------------------------------------------------------------------
+
+
+async def test_trigger_below_minimum_raises():
+    with pytest.raises(AnthropicContextManagementError) as exc_info:
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            edit_spec={
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 10_000},
+            },
+        )
+    assert exc_info.value.status_code == 400
+    assert "50000" in exc_info.value.message
+
+
+async def test_trigger_at_minimum_does_not_raise():
+    """Exactly 50 000 is allowed — only strictly less than 50k is rejected."""
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            edit_spec={
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 50_000},
+            },
+        )
+    # Reached opt-in gate (no summary model); no error raised from trigger check
+    assert result.applied_edits[0]["error"] == "summary_model_not_configured"
+
+
+# ---------------------------------------------------------------------------
+# Editor: opt-in gate
+# ---------------------------------------------------------------------------
+
+
+async def test_opt_in_gating_no_summary_model_configured():
+    messages = _simple_messages()
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system="system prompt",
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+    assert result.applied_edits[0]["error"] == "summary_model_not_configured"
+    assert result.messages == messages
+    assert result.system == "system prompt"
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+
+
+# ---------------------------------------------------------------------------
+# Editor: slice-only path
+# ---------------------------------------------------------------------------
+
+
+async def test_slice_only_path_with_existing_compaction_block():
+    """Phase A slices; Phase B token count is below threshold; no summary call."""
+    messages = _messages_with_compaction("prior summary text")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=500),  # well under threshold
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    # System should have the prior summary prefixed
+    assert result.system is not None
+    assert "prior summary text" in str(result.system)
+
+    # No new compaction block; no iterations_usage
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+
+    # No compaction block in downstream messages
+    for msg in result.messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert block.get("type") != "compaction"
+
+
+async def test_slice_only_no_compaction_block_under_threshold():
+    """No prior compaction block, and token count is below threshold — pure pass-through."""
+    messages = _simple_messages()
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=500),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    assert result.messages == messages
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+    assert not result.applied_edits[0].get("error")
+
+
+# ---------------------------------------------------------------------------
+# Editor: full summary path
+# ---------------------------------------------------------------------------
+
+
+async def test_full_summary_path():
+    """Over threshold: summary call fires, compaction_block and iterations_usage returned."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response(
+        "<summary>Condensed history</summary>", prompt_tokens=200, completion_tokens=50
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),  # over 150k threshold
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    assert result.compaction_block is not None
+    assert result.compaction_block["type"] == "compaction"
+    assert result.compaction_block["content"] == "Condensed history"
+
+    assert result.iterations_usage is not None
+    assert len(result.iterations_usage) == 1
+    assert result.iterations_usage[0]["type"] == "compaction"
+    assert result.iterations_usage[0]["input_tokens"] == 200
+    assert result.iterations_usage[0]["output_tokens"] == 50
+
+    # System must have summary prefixed
+    assert "Condensed history" in str(result.system)
+
+    # applied_edits should have usage fields
+    edit = result.applied_edits[0]
+    assert edit["type"] == "compact_20260112"
+    assert edit.get("summary_input_tokens") == 200
+    assert edit.get("summary_output_tokens") == 50
+
+    # Downstream messages must not contain a compaction block
+    for msg in result.messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert block.get("type") != "compaction"
+
+
+async def test_full_summary_path_uses_router_when_available():
+    """When llm_router is provided, its acompletion method is called instead of litellm."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>Router summary</summary>")
+    mock_router = MagicMock()
+    mock_router.acompletion = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="my-summary-model",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            llm_router=mock_router,
+        )
+
+    mock_router.acompletion.assert_called_once()
+    call_kwargs = mock_router.acompletion.call_args.kwargs
+    assert call_kwargs["model"] == "my-summary-model"
+
+    assert result.compaction_block is not None
+    assert result.compaction_block["content"] == "Router summary"
+
+
+async def test_metadata_propagated_to_summary_call():
+    """Auth metadata from the parent request is forwarded to the summary call."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>Summary</summary>")
+    parent_metadata = {
+        "user_api_key": "sk-test",
+        "user_api_key_team_id": "team-123",
+        "user_api_key_user_id": "user-456",
+        "litellm_call_id": "call-789",
+        "should_not_propagate": "secret",
+    }
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_call,
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            metadata=parent_metadata,
+        )
+
+    call_kwargs = mock_call.call_args.kwargs
+    propagated = call_kwargs["metadata"]
+    assert propagated["user_api_key"] == "sk-test"
+    assert propagated["user_api_key_team_id"] == "team-123"
+    assert "should_not_propagate" not in propagated
+
+
+# ---------------------------------------------------------------------------
+# Editor: error paths
+# ---------------------------------------------------------------------------
+
+
+async def test_summary_call_failed():
+    """When the summary model raises, applied_edits[0].error == 'summary_call_failed'."""
+    messages = _simple_messages()
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("network error"),
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    assert result.applied_edits[0]["error"] == "summary_call_failed"
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+    # Messages passed through (at minimum sliced, no compaction blocks)
+    for msg in result.messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert block.get("type") != "compaction"
+
+
+async def test_summary_extraction_failed_no_tags():
+    """When summary response has no <summary> tags, applied_edits[0].error == 'summary_extraction_failed'."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("I cannot summarize that.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    assert result.applied_edits[0]["error"] == "summary_extraction_failed"
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+
+
+# ---------------------------------------------------------------------------
+# Editor: warnings
+# ---------------------------------------------------------------------------
+
+
+async def test_pause_after_compaction_ignored_warning():
+    """pause_after_compaction: true → warning recorded, request proceeds normally."""
+    messages = _simple_messages()
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec={
+                "type": "compact_20260112",
+                "pause_after_compaction": True,
+            },
+        )
+
+    edit = result.applied_edits[0]
+    assert "pause_after_compaction_ignored" in (edit.get("warnings") or [])
+    # Request still proceeds (here it hits opt-in gate because no model configured)
+    assert edit.get("error") == "summary_model_not_configured"
+
+
+async def test_unsupported_trigger_type_falls_back_to_default():
+    messages = _simple_messages()
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec={
+                "type": "compact_20260112",
+                "trigger": {"type": "output_tokens", "value": 200_000},
+            },
+        )
+
+    edit = result.applied_edits[0]
+    warnings = edit.get("warnings") or []
+    assert any("unsupported_trigger_type" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Editor: custom instructions
+# ---------------------------------------------------------------------------
+
+
+async def test_custom_instructions_used_verbatim():
+    """Custom instructions are used as-is; the default prompt is NOT appended."""
+    messages = _simple_messages()
+    tools = [{"name": "search", "description": "Search tool"}]
+    mock_response = _make_mock_response("<summary>Custom summary</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=tools,
+            system=None,
+            edit_spec={
+                "type": "compact_20260112",
+                "instructions": "Summarize everything briefly.",
+            },
+        )
+
+    assert len(captured_calls) == 1
+    summary_messages = captured_calls[0]["summary_messages"]
+    # The last message should be the custom instruction prompt
+    last_msg = summary_messages[-1]
+    assert last_msg["role"] == "user"
+    assert last_msg["content"] == "Summarize everything briefly."
+    # The "do not call tools" suffix should NOT be in the prompt since custom was set
+    assert "tool" not in last_msg["content"].lower()
+
+
+async def test_default_instructions_appended_with_no_tool_suffix_when_no_tools():
+    """Without tools, default prompt is used but the no-tool-calls suffix is absent."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>Default summary</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    prompt = captured_calls[0]["summary_messages"][-1]["content"]
+    # Should not contain the no-tool-calls guidance
+    assert "do not call" not in prompt.lower()
+
+
+async def test_default_instructions_with_tools_appends_no_tool_suffix():
+    """With tools and no custom instructions, the no-tool-calls suffix is appended."""
+    messages = _simple_messages()
+    tools = [{"name": "search"}]
+    mock_response = _make_mock_response("<summary>Tool-aware summary</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=tools,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    prompt = captured_calls[0]["summary_messages"][-1]["content"]
+    assert "tool" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher integration: compact_20260112 via apply_context_management
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatcher_routes_compact_edit():
+    """compact_20260112 in the dispatcher resolves to opt-in gate when no model set."""
+    messages = _simple_messages()
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_context_management(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [{"type": "compact_20260112"}]},
+        )
+
+    assert len(result.applied_edits) == 1
+    assert result.applied_edits[0]["type"] == "compact_20260112"
+    assert result.applied_edits[0].get("error") == "summary_model_not_configured"
+
+
+async def test_dispatcher_trigger_below_minimum_raises_through():
+    """AnthropicContextManagementError from the editor bubbles up through the dispatcher."""
+    with pytest.raises(AnthropicContextManagementError):
+        await apply_context_management(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            context_management_spec={
+                "edits": [
+                    {
+                        "type": "compact_20260112",
+                        "trigger": {"type": "input_tokens", "value": 1_000},
+                    }
+                ]
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# _run_polyfill_if_enabled: drop_params gate
+# ---------------------------------------------------------------------------
+
+
+async def test_run_polyfill_skipped_when_drop_params_true():
+    """When drop_params=True the polyfill must be skipped (returns None)."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        _run_polyfill_if_enabled,
+    )
+
+    result = await _run_polyfill_if_enabled(
+        model=MODEL,
+        messages=_simple_messages(),
+        tools=None,
+        system=None,
+        context_management_spec={"edits": [{"type": "compact_20260112"}]},
+        metadata={},
+        drop_params=True,
+        llm_router=None,
+    )
+    assert result is None
+
+
+async def test_run_polyfill_skipped_when_spec_empty():
+    """Empty context_management_spec must also return None (no polyfill work)."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        _run_polyfill_if_enabled,
+    )
+
+    result = await _run_polyfill_if_enabled(
+        model=MODEL,
+        messages=_simple_messages(),
+        tools=None,
+        system=None,
+        context_management_spec=None,
+        metadata={},
+        drop_params=False,
+        llm_router=None,
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Endpoint error format: AnthropicContextManagementError → Anthropic 400 body
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_context_management_error_format():
+    """AnthropicContextManagementError must produce an Anthropic-format body via
+    AnthropicExceptionMapping.transform_to_anthropic_error — the same path the
+    /v1/messages endpoint takes when it catches this exception."""
+    from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
+
+    body = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=400,
+        raw_message="trigger.value must be at least 50000 tokens",
+        request_id=None,
+    )
+
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "50000" in body["error"]["message"]
+
+
+def test_anthropic_context_management_error_attrs():
+    """AnthropicContextManagementError carries status_code and message correctly."""
+    err = AnthropicContextManagementError(
+        status_code=400,
+        message="trigger.value must be at least 50000 tokens",
+    )
+
+    assert err.status_code == 400
+    assert "50000" in err.message
+
+
+# ---------------------------------------------------------------------------
+# Endpoint integration: /v1/messages → Anthropic 400 on context management error
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_returns_anthropic_400_on_context_management_error():
+    """The /v1/messages endpoint must catch AnthropicContextManagementError and
+    return an Anthropic-format 400 JSONResponse — not a 500 ProxyException."""
+    import sys
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    # Stub proxy_server to avoid apscheduler/heavy proxy deps imported lazily
+    # inside the route handler at request time.
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.general_settings = {}
+    mock_proxy_server.llm_router = None
+    mock_proxy_server.proxy_config = MagicMock()
+    mock_proxy_server.proxy_logging_obj = MagicMock()
+    mock_proxy_server.user_api_base = None
+    mock_proxy_server.user_max_tokens = None
+    mock_proxy_server.user_model = None
+    mock_proxy_server.user_request_timeout = None
+    mock_proxy_server.user_temperature = None
+    mock_proxy_server.version = "test"
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        with patch(
+            "litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
+        ) as mock_cls:
+            mock_instance = MagicMock()
+            mock_instance.base_process_llm_request = AsyncMock(
+                side_effect=AnthropicContextManagementError(
+                    status_code=400,
+                    message="trigger.value must be at least 50000 tokens",
+                )
+            )
+            mock_cls.return_value = mock_instance
+
+            app = FastAPI()
+            app.include_router(router)
+            app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.post(
+                "/v1/messages",
+                json={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "50000" in body["error"]["message"]

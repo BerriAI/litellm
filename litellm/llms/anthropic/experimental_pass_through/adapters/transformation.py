@@ -75,6 +75,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    PolyfillResult,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -88,6 +91,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
     AppliedEdit,
+    CompactionBlock,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
@@ -97,6 +101,7 @@ from litellm.types.llms.anthropic import (
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
+    UsageIteration,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -197,7 +202,7 @@ class AnthropicAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
-        applied_edits: Optional[List[AppliedEdit]] = None,
+        polyfill_result: Optional[PolyfillResult] = None,
     ) -> Optional[AnthropicMessagesResponse]:
         """
         Translate OpenAI response to Anthropic format.
@@ -207,12 +212,12 @@ class AnthropicAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
-            applied_edits: Polyfill AppliedEdit list for response context_management.
+            polyfill_result: PolyfillResult from context_management polyfill.
         """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
-            applied_edits=applied_edits,
+            polyfill_result=polyfill_result,
         )
 
     def translate_completion_output_params_streaming(
@@ -220,7 +225,7 @@ class AnthropicAdapter:
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
-        applied_edits: Optional[List[AppliedEdit]] = None,
+        polyfill_result: Optional[PolyfillResult] = None,
     ) -> Union[AsyncIterator[bytes], None]:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -229,8 +234,9 @@ class AnthropicAdapter:
             completion_stream: The OpenAI streaming response
             model: The model name
             tool_name_mapping: Optional mapping of truncated tool names to original names.
-            applied_edits: Polyfill AppliedEdit list on final message_delta.
+            polyfill_result: PolyfillResult from context_management polyfill.
         """
+        applied_edits = polyfill_result.applied_edits if polyfill_result else None
         anthropic_wrapper = AnthropicStreamWrapper(
             completion_stream=completion_stream,
             model=model,
@@ -1350,7 +1356,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
-        applied_edits: Optional[List[AppliedEdit]] = None,
+        polyfill_result: Optional[PolyfillResult] = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate OpenAI response to Anthropic format.
@@ -1360,13 +1366,17 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
-            applied_edits: Polyfill AppliedEdit list for response context_management.
+            polyfill_result: PolyfillResult from context_management polyfill.
         """
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(
             choices=response.choices,  # type: ignore
             tool_name_mapping=tool_name_mapping,
         )
+
+        if polyfill_result is not None and polyfill_result.compaction_block is not None:
+            anthropic_content.insert(0, polyfill_result.compaction_block)  # type: ignore[arg-type]
+
         ## extract finish reason
         anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
@@ -1395,6 +1405,14 @@ class LiteLLMAnthropicMessagesAdapter:
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
+        if polyfill_result is not None and polyfill_result.iterations_usage is not None:
+            message_iteration: UsageIteration = {
+                "type": "message",
+                "input_tokens": uncached_input_tokens,
+                "output_tokens": usage.completion_tokens or 0,
+            }
+            anthropic_usage["iterations"] = list(polyfill_result.iterations_usage) + [message_iteration]  # type: ignore[typeddict-unknown-key]
+
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
@@ -1406,6 +1424,7 @@ class LiteLLMAnthropicMessagesAdapter:
             stop_reason=anthropic_finish_reason,
         )
 
+        applied_edits = polyfill_result.applied_edits if polyfill_result else None
         if applied_edits:
             translated_obj["context_management"] = ContextManagementResponse(
                 applied_edits=list(applied_edits)

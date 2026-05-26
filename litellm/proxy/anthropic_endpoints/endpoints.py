@@ -3,10 +3,14 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.anthropic.experimental_pass_through.context_management import (
+    AnthropicContextManagementError,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -114,6 +118,13 @@ async def anthropic_response(  # noqa: PLR0915
             )
 
         return _anthropic_response
+    except AnthropicContextManagementError as e:
+        body = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=e.status_code,
+            raw_message=e.message,
+            request_id=request.headers.get("x-request-id"),
+        )
+        return JSONResponse(status_code=e.status_code, content=body)
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
