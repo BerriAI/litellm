@@ -516,6 +516,59 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_request():
+    """Regression: the body snapshot used to include the proxy_server_request
+    key itself, producing the path
+    ``proxy_server_request.body.proxy_server_request.body == body``. Custom
+    loggers and audit consumers must not see the self-referencing structure
+    (independent of redaction — fires on every successful call).
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="test-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert "proxy_server_request" not in snapshot_body, (
+        "proxy_server_request must be excluded from its own body snapshot "
+        "to prevent the body from self-referencing"
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
     extra_body) must not bypass the admin-injection strip. The parse happens
