@@ -69,3 +69,56 @@ def test_internal_jobs_user_has_proxy_admin_role():
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"
     assert system_user.team_alias == "system"
+
+
+def test_proxy_exception_str_returns_message():
+    """
+    Regression for LIT-3094: ProxyException did not call super().__init__(message),
+    so str(exc) returned "" and the proxy's logging path (which calls
+    str(original_exception)) recorded an empty error_message in
+    StandardLoggingPayload.error_information.
+    """
+    from litellm.proxy._types import ProxyException, ProxyErrorTypes
+    from litellm.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup,
+    )
+
+    msg = (
+        "Key not allowed to access model. "
+        "This Key can only access models=['gpt-3.5-turbo']. Tried to access gpt-4"
+    )
+    exc = ProxyException(
+        message=msg,
+        type=ProxyErrorTypes.bad_request_error.value,
+        param="model",
+        code=401,
+    )
+
+    assert str(exc) == msg
+    assert exc.args == (msg,)
+    assert exc.message == msg
+    assert exc.to_dict() == {
+        "message": msg,
+        "type": ProxyErrorTypes.bad_request_error.value,
+        "param": "model",
+        "code": "401",
+    }
+
+    info = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=exc,
+        traceback_str="",
+    )
+    assert info["error_message"] == msg
+    assert info["error_class"] == "ProxyException"
+    assert info["error_code"] == "401"
+
+
+def test_proxy_exception_str_non_string_message():
+    """ProxyException historically coerces non-string messages via str(message);
+    ensure str(exc) still returns the coerced value after wiring up super()."""
+    from litellm.proxy._types import ProxyException
+
+    exc = ProxyException(message=42, type="bad_request_error", param=None, code=400)
+    assert exc.message == "42"
+    assert str(exc) == "42"
+    assert exc.args == ("42",)
