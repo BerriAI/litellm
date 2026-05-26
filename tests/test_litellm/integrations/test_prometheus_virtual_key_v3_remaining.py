@@ -255,6 +255,64 @@ def test_string_values_in_additional_headers_are_coerced(prometheus_logger):
     assert _sample("litellm_remaining_api_key_tokens_for_model").value == 777
 
 
+def test_non_numeric_v3_value_does_not_crash_gauge(prometheus_logger):
+    """
+    A non-numeric ``additional_headers`` value (e.g. an error string from a
+    misconfigured upstream) must NOT propagate into ``Gauge.set()`` which only
+    accepts numbers. We fall through to ``sys.maxsize`` instead so the
+    callback never raises mid-request. Pins the fix for Greptile's review.
+    """
+    metadata = {"model_group": MODEL_GROUP}
+    kwargs = {
+        "litellm_params": {"metadata": metadata},
+        "standard_logging_object": _slp_with_additional_headers(
+            {
+                "x-ratelimit-model_per_key-remaining-requests": "not-a-number",
+                "x-ratelimit-model_per_key-remaining-tokens": "also-bad",
+            }
+        ),
+    }
+
+    # Must not raise.
+    prometheus_logger._set_virtual_key_rate_limit_metrics(
+        user_api_key="test-hash",
+        user_api_key_alias="test-alias",
+        kwargs=kwargs,
+        metadata=metadata,
+        model_id="model-123",
+    )
+
+    assert _sample("litellm_remaining_api_key_requests_for_model").value == pytest.approx(
+        float(sys.maxsize)
+    )
+    assert _sample("litellm_remaining_api_key_tokens_for_model").value == pytest.approx(
+        float(sys.maxsize)
+    )
+
+
+def test_float_v3_value_is_preserved(prometheus_logger):
+    """Float headers (rare but legal in JSON) pass through without truncation."""
+    metadata = {"model_group": MODEL_GROUP}
+    kwargs = {
+        "litellm_params": {"metadata": metadata},
+        "standard_logging_object": _slp_with_additional_headers(
+            {
+                "x-ratelimit-model_per_key-remaining-requests": 12.0,
+                "x-ratelimit-model_per_key-remaining-tokens": 3.14,
+            }
+        ),
+    }
+    prometheus_logger._set_virtual_key_rate_limit_metrics(
+        user_api_key="test-hash",
+        user_api_key_alias="test-alias",
+        kwargs=kwargs,
+        metadata=metadata,
+        model_id="model-123",
+    )
+    assert _sample("litellm_remaining_api_key_requests_for_model").value == 12.0
+    assert _sample("litellm_remaining_api_key_tokens_for_model").value == 3.14
+
+
 # ----- helper unit tests -------------------------------------------------
 
 
@@ -298,3 +356,27 @@ def test_get_remaining_from_v3_headers_prefers_model_per_key_over_key():
         "x-ratelimit-model_per_key-remaining-requests": 5,
     }
     assert _get_remaining_from_v3_headers(headers, "requests") == 5
+
+
+def test_get_remaining_from_v3_headers_returns_none_on_garbage():
+    """Non-numeric values must return None, not the raw value (would crash Gauge.set)."""
+    headers = {"x-ratelimit-model_per_key-remaining-requests": "definitely-not-a-number"}
+    assert _get_remaining_from_v3_headers(headers, "requests") is None
+
+
+def test_get_remaining_from_v3_headers_rejects_booleans():
+    """``bool`` is a subclass of ``int`` -- reject to avoid treating True/False as 1/0."""
+    headers = {"x-ratelimit-model_per_key-remaining-requests": True}
+    assert _get_remaining_from_v3_headers(headers, "requests") is None
+
+
+def test_get_remaining_from_v3_headers_falls_back_when_first_descriptor_garbage():
+    """
+    If ``model_per_key`` is garbage but ``key`` is valid, return the ``key``
+    value -- don't get stuck on the bad first descriptor.
+    """
+    headers = {
+        "x-ratelimit-model_per_key-remaining-requests": "garbage",
+        "x-ratelimit-key-remaining-requests": 42,
+    }
+    assert _get_remaining_from_v3_headers(headers, "requests") == 42
