@@ -41,7 +41,7 @@ class _PROXY_LiteLLMManagedVectorStores(
 ):
     """
     Managed vector stores with target_model_names support.
-    
+
     This class provides functionality to:
     - Create vector stores across multiple models
     - Retrieve vector stores by unified ID
@@ -77,14 +77,14 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> str:
         """
         Generate the format string for the unified vector store ID.
-        
+
         Format:
         litellm_proxy:vector_store;unified_id,<uuid>;target_model_names,<models>;resource_id,<vs_id>;model_id,<model_id>
         """
         # VectorStoreCreateResponse is a TypedDict, so resource_object is a dictionary
         # Extract provider resource ID from the response
         provider_resource_id = resource_object.get("id", "")
-        
+
         # Model ID is stored in hidden params if the response object supports it
         # For TypedDict responses, we need to check if _hidden_params was added
         hidden_params: Dict[str, Any] = {}
@@ -109,20 +109,18 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> VectorStoreCreateResponse:
         """
         Create a vector store for a specific model.
-        
+
         Args:
             llm_router: LiteLLM router instance
             model: Model name to create vector store for
             request_data: Request data for vector store creation
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             VectorStoreCreateResponse from the provider
         """
         # Use the router to create the vector store
-        response = await llm_router.avector_store_create(
-            model=model, **request_data
-        )
+        response = await llm_router.avector_store_create(model=model, **request_data)
         return response
 
     # ============================================================================
@@ -139,14 +137,14 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> VectorStoreCreateResponse:
         """
         Create a vector store across multiple models.
-        
+
         Args:
             create_request: Vector store creation request parameters
             llm_router: LiteLLM router instance
             target_model_names_list: List of target model names
             litellm_parent_otel_span: OpenTelemetry span for tracing
             user_api_key_dict: User API key authentication details
-            
+
         Returns:
             VectorStoreCreateResponse with unified ID
         """
@@ -196,7 +194,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         # VectorStoreCreateResponse is a TypedDict, so we need to create a new dict with the unified ID
         response = responses[0].copy()
         response["id"] = unified_id
-        
+
         verbose_logger.info(
             f"Successfully created managed vector store with unified ID: {unified_id}"
         )
@@ -212,13 +210,13 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> Dict[str, Any]:
         """
         List vector stores created by a user.
-        
+
         Args:
             user_api_key_dict: User API key authentication details
             limit: Maximum number of vector stores to return
             after: Cursor for pagination
             order: Sort order ('asc' or 'desc')
-            
+
         Returns:
             Dictionary with list of vector stores and pagination info
         """
@@ -238,23 +236,23 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> bool:
         """
         Check if user has access to a vector store.
-        
+
         Args:
             vector_store_id: The unified vector store ID
             user_api_key_dict: User API key authentication details
-            
+
         Returns:
             True if user has access, False otherwise
         """
         is_unified_id = is_base64_encoded_unified_id(vector_store_id)
-        
+
         if is_unified_id:
             # Check access for managed vector store
             return await self.can_user_access_unified_resource_id(
                 vector_store_id,
                 user_api_key_dict,
             )
-        
+
         # Not a managed vector store, allow access
         return True
 
@@ -263,24 +261,22 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> bool:
         """
         Check if user has access to a managed vector store in request data.
-        
+
         Args:
             data: Request data containing vector_store_id
             user_api_key_dict: User API key authentication details
-            
+
         Returns:
             True if this is a managed vector store and user has access
-            
+
         Raises:
             HTTPException: If user doesn't have access
         """
         vector_store_id = cast(Optional[str], data.get("vector_store_id"))
         is_unified_id = (
-            is_base64_encoded_unified_id(vector_store_id)
-            if vector_store_id
-            else False
+            is_base64_encoded_unified_id(vector_store_id) if vector_store_id else False
         )
-        
+
         if is_unified_id and vector_store_id:
             if await self.can_user_access_unified_resource_id(
                 vector_store_id, user_api_key_dict
@@ -291,7 +287,7 @@ class _PROXY_LiteLLMManagedVectorStores(
                     status_code=403,
                     detail=f"User {user_api_key_dict.user_id} does not have access to vector store {vector_store_id}",
                 )
-        
+
         return False
 
     # ============================================================================
@@ -307,18 +303,18 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> Union[Exception, str, Dict, None]:
         """
         Pre-call hook to handle vector store operations.
-        
+
         This hook intercepts vector store requests and:
         - Validates access for managed vector stores
         - Transforms unified IDs to provider-specific IDs
         - Adds model routing information
-        
+
         Args:
             user_api_key_dict: User API key authentication details
             cache: Cache instance
             data: Request data
             call_type: Type of call being made
-            
+
         Returns:
             Modified request data or None
         """
@@ -330,40 +326,40 @@ class _PROXY_LiteLLMManagedVectorStores(
         # Handle vector store search operations
         if call_type == "avector_store_search":
             vector_store_id = data.get("vector_store_id")
-            
+
             if vector_store_id:
                 # Check if it's a managed vector store ID
                 decoded_id = is_base64_encoded_unified_id(vector_store_id)
-                
+
                 if decoded_id:
                     verbose_logger.debug(
                         f"Processing managed vector store search: {vector_store_id}"
                     )
-                    
+
                     # Check access
                     has_access = await self.can_user_access_unified_resource_id(
                         vector_store_id, user_api_key_dict
                     )
-                    
+
                     if not has_access:
                         raise HTTPException(
                             status_code=403,
                             detail=f"User {user_api_key_dict.user_id} does not have access to vector store {vector_store_id}",
                         )
-                    
+
                     # Parse the unified ID to extract components
                     parsed_id = parse_unified_id(vector_store_id)
-                    
+
                     if parsed_id:
                         # Extract the model ID and provider resource ID
                         model_id = parsed_id.get("model_id")
                         provider_resource_id = parsed_id.get("provider_resource_id")
                         target_model_names = parsed_id.get("target_model_names", [])
-                        
+
                         verbose_logger.debug(
                             f"Decoded vector store - model_id: {model_id}, provider_resource_id: {provider_resource_id}, target_model_names: {target_model_names}"
                         )
-                        
+
                         # Determine which model to use for routing
                         # Priority: model_id (deployment ID) > first target_model_name
                         routing_model = None
@@ -371,28 +367,28 @@ class _PROXY_LiteLLMManagedVectorStores(
                             routing_model = model_id
                         elif target_model_names and len(target_model_names) > 0:
                             routing_model = target_model_names[0]
-                        
+
                         # Set the model for routing
                         if routing_model:
                             data["model"] = routing_model
                             verbose_logger.info(
                                 f"Routing vector store search to model: {routing_model}"
                             )
-                        
+
                         # Replace the unified ID with the provider-specific ID
                         if provider_resource_id:
                             data["vector_store_id"] = provider_resource_id
                             verbose_logger.debug(
                                 f"Replaced unified ID with provider resource ID: {provider_resource_id}"
                             )
-        
+
         # Handle vector store retrieve/delete operations
         elif call_type in ("avector_store_retrieve", "avector_store_delete"):
             await self.check_managed_vector_store_access(data, user_api_key_dict)
-            
+
             # If it's a managed vector store, we'll handle it in the endpoint
             # No need to transform here as the endpoint will route to the hook
-            
+
         return data
 
     # ============================================================================
@@ -407,15 +403,15 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> Any:
         """
         Post-call hook to transform responses.
-        
+
         This hook can be used to transform responses if needed.
         For now, it just passes through the response.
-        
+
         Args:
             data: Request data
             user_api_key_dict: User API key authentication details
             response: Response from the provider
-            
+
         Returns:
             Potentially modified response
         """
@@ -436,21 +432,21 @@ class _PROXY_LiteLLMManagedVectorStores(
     ) -> List[Dict]:
         """
         Filter deployments based on vector store availability.
-        
+
         This is used by the router to select only deployments that have
         the vector store available.
-        
+
         Note: This method signature is a compromise between CustomLogger and BaseManagedResource
         parent classes which have incompatible signatures. The type: ignore[override] is necessary
         due to this multiple inheritance conflict.
-        
+
         Args:
             model: Model name
             healthy_deployments: List of healthy deployments
             messages: Messages (unused for vector stores, required by CustomLogger interface)
             request_kwargs: Request kwargs containing vector_store_id and mappings
             parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             Filtered list of deployments
         """

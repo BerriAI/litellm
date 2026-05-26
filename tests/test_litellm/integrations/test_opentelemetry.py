@@ -66,7 +66,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
         mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
         mock_span.set_attribute.assert_any_call(
-            "guardrail_response", "filtered_content"
+            "guardrail_response", safe_dumps("filtered_content")
         )
         mock_span.set_attribute.assert_any_call(
             "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
@@ -86,6 +86,65 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
 
         # Verify that start_span was never called
         otel.tracer.start_span.assert_not_called()
+
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_guardrail_response_dict_is_json_serialized(self, mock_datetime):
+        """Dict guardrail_response (e.g. OpenAI moderation result) must reach
+        the span as a JSON string so downstream pipelines can parse it for
+        metric extraction — this is the bug the PR fixes."""
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        moderation_payload = {
+            "id": "modr-7740",
+            "model": "omni-moderation-latest",
+            "results": [{"categories": {"harassment": False}}],
+        }
+        guardrail_info = {
+            "guardrail_name": "test_guardrail",
+            "guardrail_mode": "input",
+            "guardrail_response": moderation_payload,
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        mock_span.set_attribute.assert_any_call(
+            "guardrail_response", safe_dumps(moderation_payload)
+        )
+
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_guardrail_response_none_is_skipped(self, mock_datetime):
+        """When guardrail_response is None, the attribute must not be set —
+        guards against round-tripping ``"null"`` into traces."""
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span.return_value = mock_span
+
+        guardrail_info = {
+            "guardrail_name": "test_guardrail",
+            "guardrail_mode": "input",
+            "guardrail_response": None,
+            "start_time": 1609459200.0,
+            "end_time": 1609459201.0,
+        }
+        kwargs = {
+            "standard_logging_object": {"guardrail_information": [guardrail_info]}
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        attribute_keys = [
+            call.args[0] for call in mock_span.set_attribute.call_args_list
+        ]
+        self.assertNotIn("guardrail_response", attribute_keys)
 
 
 class TestOpenTelemetryTeamAttributesOnChildSpans(unittest.TestCase):
@@ -1169,7 +1228,7 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
         mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
         mock_span.set_attribute.assert_any_call(
-            "guardrail_response", "filtered_content"
+            "guardrail_response", safe_dumps("filtered_content")
         )
         mock_span.set_attribute.assert_any_call(
             "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})

@@ -23,8 +23,6 @@ def event_loop():
     loop.close()
 
 
-
-
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():
     """
