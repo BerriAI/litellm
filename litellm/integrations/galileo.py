@@ -179,11 +179,15 @@ class GalileoObserve(CustomLogger):
         if not self.base_url or not self.project_id:
             return None
 
+        # Snapshot the records to be sent into a new list so concurrent appends
+        # during the network round-trip (across the await points in
+        # flush_in_memory_records) aren't silently dropped when we later clear
+        # the in-memory buffer.
+        records = list(self.in_memory_records)
+
         if self.use_v2_api:
             payload: Dict[str, Any] = {
-                "spans": [
-                    self._record_to_v2_span(record) for record in self.in_memory_records
-                ],
+                "spans": [self._record_to_v2_span(record) for record in records],
                 "reliable": False,
             }
             if self.log_stream_id:
@@ -195,7 +199,7 @@ class GalileoObserve(CustomLogger):
 
         return (
             f"{self.base_url}/projects/{self.project_id}/observe/ingest",
-            {"records": self.in_memory_records},
+            {"records": records},
         )
 
     def get_output_str_from_response(
@@ -284,6 +288,11 @@ class GalileoObserve(CustomLogger):
         if not self.in_memory_records:
             return
 
+        # Capture the number of records that will be sent BEFORE any await so
+        # that concurrent appends made by other asyncio tasks during the
+        # network round-trip aren't silently dropped on the success-clear.
+        records_in_payload = len(self.in_memory_records)
+
         ingest_request = self._get_ingest_request()
         if ingest_request is None:
             verbose_logger.debug(
@@ -314,7 +323,7 @@ class GalileoObserve(CustomLogger):
             verbose_logger.debug(
                 "Galileo Logger: successfully flushed in memory records"
             )
-            self.in_memory_records = []
+            del self.in_memory_records[:records_in_payload]
         else:
             verbose_logger.debug("Galileo Logger: failed to flush in memory records")
             verbose_logger.debug(
@@ -322,6 +331,13 @@ class GalileoObserve(CustomLogger):
                 response.text,
                 response.status_code,
             )
+            # Legacy enterprise auth caches a bearer token obtained from
+            # /login. If the request was rejected for auth reasons, drop the
+            # cached headers so the next flush re-authenticates instead of
+            # silently failing forever on a stale token. The v2 API key path
+            # uses a long-lived static key, so leave its headers in place.
+            if not self.use_v2_api and response.status_code in (401, 403):
+                self.headers = None
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug("On Async Failure")
