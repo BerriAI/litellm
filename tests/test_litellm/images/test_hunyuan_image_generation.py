@@ -119,7 +119,16 @@ class TestHunyuanImageGenerationConfig:
         assert body["model"] == "gpt-image-2"
         assert body["quality"] == "high"
         assert body["size"] == "1024x1024"
-        assert "response_format" not in body
+
+    def test_transform_image_generation_request_with_b64_response_format(self):
+        body = self.cfg.transform_image_generation_request(
+            model="gpt-image-2",
+            prompt="A dancing dog",
+            optional_params={"response_format": "b64_json"},
+            litellm_params={},
+            headers={},
+        )
+        assert body["response_format"] == "b64_json"
 
     def test_transform_image_generation_response_pure_conversion(self):
         """transform_image_generation_response is now a pure format conversion."""
