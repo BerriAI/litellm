@@ -400,7 +400,10 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         if not success:
             self._record_exception_on_span(span=span, kwargs=kwargs)
 
-        self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
+        if success:
+            self._maybe_log_raw_request(
+                kwargs, response_obj, start_time, end_time, span
+            )
         span.end(end_time=self._to_ns(end_time))
 
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -412,10 +415,11 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
                 self._record_exception_on_span(span=parent_span, kwargs=kwargs)
             parent_span.end(end_time=self._to_ns(end_time))
 
-        self._record_metrics(kwargs, response_obj, start_time, end_time)
+        if success:
+            self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        if success and self.config.enable_events:
-            self._emit_semantic_logs(kwargs, response_obj, span)
+            if self.config.enable_events:
+                self._emit_semantic_logs(kwargs, response_obj, span)
 
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
