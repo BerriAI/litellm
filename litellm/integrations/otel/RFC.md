@@ -377,8 +377,8 @@ litellm/integrations/otel/
   semconv.py         # SOURCE OF TRUTH #1: attribute keys + enums + metric names
   spans.py           # SOURCE OF TRUTH #2: span registry + hierarchy
   payloads.py        # SOURCE OF TRUTH #3: typed span-data models + from_* adapters
-  providers.py       # tracer/meter/logger provider + exporter factory (typed)
-  context.py         # traceparent extract/inject; parent resolution
+  providers.py       # tracer/meter/logger provider + exporter factory + baggage span processor
+  context.py         # traceparent extract/inject; parent resolution; baggage set/get
   emitter.py         # the engine: SpanData + SpanSpec -> emitted span (start/attrs/end)
   metrics.py         # gen_ai.client.* histograms
   mappers/
@@ -437,6 +437,65 @@ SpanContextRef`. Outgoing propagation (`litellm_pre_call_utils.py:2781
 _add_otel_traceparent_to_data`, gated by
 `litellm.forward_traceparent_to_llm_provider`) is preserved and moved behind a
 typed `inject_traceparent(headers) -> headers`.
+
+### 5.5 Cross-cutting request-scoped attributes via Baggage
+
+Some consumers want request-scoped *identity* — `litellm.team.id`,
+`litellm.team.alias`, `gen_ai.request.model`, and selected `metadata` — present on
+**every** span (LLM_CALL, GUARDRAIL, SERVICE), not just the root. This is already a
+behavioral contract today: `test_otel_team_attributes_matrix.py` asserts
+`team_id`/`team_alias` land on every span. The rewrite formalizes *how*.
+
+**Why this is legitimate (not just denormalization).** Most backends cannot cheaply
+join a child span back to its root, so slicing a slow GUARDRAIL or SERVICE sub-span
+by team or model requires the attribute *on that span*. Tail-based sampling,
+retention, per-team cost attribution, and access control all operate per-span, and
+the root may be sampled out while a child is kept.
+
+**Mechanism — one span processor, not per-call-site copy-paste.** At request entry
+(proxy auth / first SDK call) `context.py` writes the allowlisted identity values
+into **W3C Baggage**. A `LiteLLMBaggageSpanProcessor` (registered in `providers.py`)
+implements `on_start(span, parent_context)` and stamps those baggage entries onto
+every span as it is created. This keeps the behavior in **one place**, makes the
+key set a single source of truth (`semconv.py`), and propagates correctly across
+async tasks and the sync+async streaming dual-fire (baggage rides the context).
+
+```python
+# semconv.py — the SINGLE allowlist of keys promoted onto every span
+BAGGAGE_PROMOTED_KEYS: Final[tuple[str, ...]] = (
+    LiteLLM.TEAM_ID, LiteLLM.TEAM_ALIAS, LiteLLM.KEY_HASH, GenAI.REQUEST_MODEL,
+)
+# metadata is promoted only for an explicit, config-driven allowlist of sub-keys
+DEFAULT_BAGGAGE_METADATA_KEYS: Final[tuple[str, ...]] = (...)  # reuse the existing
+                                          # ~15-key metrics allowlist, not the blob
+
+# providers.py
+class LiteLLMBaggageSpanProcessor(SpanProcessor):
+    def on_start(self, span: Span, parent_context: Optional[Context]) -> None:
+        for k, v in baggage.get_all(parent_context).items():
+            if k in self._promoted_keys and v is not None:
+                span.set_attribute(k, v)
+```
+
+**Two explicit pushbacks (the antipattern boundary):**
+1. **HTTP attributes stay on the SERVER span only.** `http.request.method`,
+   `http.route`, `http.response.status_code` semantically describe the HTTP entry
+   point; stamping them on a `gen_ai` CLIENT span or a redis INTERNAL span is
+   semconv-nonconformant and misleading (a redis call is not an HTTP operation). If
+   a child needs a correlation key, that need is already served by the promoted
+   identity keys above — **`http.*` is deliberately excluded from
+   `BAGGAGE_PROMOTED_KEYS`.** A customer asking for "HTTP attributes on all spans"
+   should be steered to the identity keys, not to copying `http.route` everywhere.
+2. **Never promote the full `metadata` dict.** `metadata` is arbitrary,
+   high-cardinality, and a PII vector; replicated across every span it multiplies
+   storage and can blow up attribute indexes. Only an explicit, config-bounded
+   allowlist of metadata sub-keys is promoted (`DEFAULT_BAGGAGE_METADATA_KEYS`);
+   the full blob remains a `litellm.metadata.*` set on the root LLM_CALL span only.
+
+**Config knobs (in `config.py`):** `baggage_promoted_keys: list[str]` (defaults to
+`BAGGAGE_PROMOTED_KEYS`) and `baggage_metadata_keys: list[str]` let operators widen
+or narrow the promoted set without code changes — but the *default* is the bounded,
+semconv-safe set above.
 
 ---
 
@@ -539,7 +598,8 @@ phase is "done".
 ### Phase 1 — Engine + providers + config behind a hard-off flag
 - Implement `config.py` (Pydantic, single `from_env`), `providers.py` (exporter
   factory ported from `_get_span_processor`/`_get_log_exporter`/`_get_metric_reader`,
-  `opentelemetry.py:2656-2911`), `context.py`, `emitter.py`, `metrics.py`,
+  `opentelemetry.py:2656-2911`) **plus the `LiteLLMBaggageSpanProcessor`**),
+  `context.py` (incl. baggage set/get), `emitter.py`, `metrics.py`,
   `mappers/genai.py`, `mappers/legacy.py`.
 - New flag `LITELLM_OTEL_V2` (default **off**). When off, nothing changes.
 - **Exit:** with `LITELLM_OTEL_V2=on` in a test harness, the engine emits the
@@ -622,6 +682,10 @@ Arize-Phoenix → Langfuse-OTEL → Weave-OTEL.
 - **Golden parity tests** (new): for a fixed `StandardLoggingPayload`, snapshot
   the emitted span tree (names/kind/parent/attrs) in both `legacy_compat` on/off
   modes.
+- **Baggage promotion test** (new + reuse `test_otel_team_attributes_matrix.py`):
+  assert the promoted identity keys appear on **every** span role, that `http.*`
+  appears **only** on the SERVER span, and that the full `metadata` blob is **not**
+  promoted (only the allowlisted sub-keys).
 - **Reuse all existing suites** (listed in Phase 2) as the behavioral contract;
   they must pass with V2 on before any deletion.
 - Run `make lint` (Ruff + **MyPy** + Black) — the rewrite must be mypy-clean,
@@ -640,6 +704,7 @@ Arize-Phoenix → Langfuse-OTEL → Weave-OTEL.
 | Streaming sync+async double spans | Engine idempotency set keyed by payload `id` (replaces `_emit_once`). |
 | Removing `raw_gen_ai_request`/`Failed Proxy` child spans | Reproducible under `legacy_compat` until those tests migrate. |
 | Hidden env-var consumers | All env reads centralized in `config.from_env`; grep audit in Phase 6. |
+| Attribute bloat / high cardinality from "put X on all spans" | Baggage promotion is a bounded, explicit allowlist (§5.5); `http.*` excluded; full `metadata` blob never promoted. |
 
 ---
 
@@ -650,6 +715,7 @@ Arize-Phoenix → Langfuse-OTEL → Weave-OTEL.
 | `opentelemetry.py` config dataclass + `from_env` | `otel/config.py` |
 | `_get_span_processor`/`_get_log_exporter`/`_get_metric_reader`/`_get_or_create_provider` | `otel/providers.py` |
 | `_get_span_context`/`_resolve_guardrail_context`/`get_traceparent_from_header` | `otel/context.py` |
+| per-call-site team/metadata stamping (`test_otel_team_attributes_matrix.py` contract) | `otel/context.py` baggage + `otel/providers.py` `LiteLLMBaggageSpanProcessor` |
 | `_get_span_name`/span constants/10 creation sites | `otel/spans.py` + `otel/emitter.py` |
 | `set_attributes`/`set_tools_attributes`/`set_raw_request_attributes`/inline literals | `otel/semconv.py` + `otel/mappers/genai.py` |
 | `opentelemetry_utils/gen_ai_semconv.py` | `otel/semconv.py` + `otel/mappers/genai.py` |
