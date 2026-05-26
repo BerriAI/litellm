@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { columns } from "./columns";
 import { UserDataTable } from "./table";
+import { UserInfo } from "./types";
 
 const defaultFilters = {
   email: "",
@@ -100,6 +102,7 @@ describe("UserDataTable", () => {
     [
       "User ID",
       "Email",
+      "Status",
       "Global Proxy Role",
       "User Alias",
       "Spend (USD)",
@@ -112,5 +115,93 @@ describe("UserDataTable", () => {
     ].forEach((header) => {
       expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
     });
+  });
+
+  it("should render the user-row Status cell as Active when scim_active is not set to false", () => {
+    const possibleUIRoles = { admin: { ui_label: "Admin" } };
+    const handlers = { edit: vi.fn(), del: vi.fn(), reset: vi.fn(), click: vi.fn() };
+    const cols = columns(
+      possibleUIRoles,
+      handlers.edit,
+      handlers.del,
+      handlers.reset,
+      handlers.click,
+    );
+    const statusCol = cols.find((c) => (c as { id?: string }).id === "status");
+    expect(statusCol).toBeDefined();
+
+    const baseUser: UserInfo = {
+      user_id: "u-active",
+      user_email: "active@example.com",
+      user_alias: null,
+      user_role: "admin",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      key_count: 0,
+      created_at: "",
+      updated_at: "",
+      sso_user_id: null,
+      budget_duration: null,
+    };
+
+    const cellNoMetadata = (statusCol as any).cell({ row: { original: baseUser } });
+    render(<>{cellNoMetadata}</>);
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.queryByText("Inactive")).not.toBeInTheDocument();
+  });
+
+  it("should render the user-row Status cell as Inactive when scim_active is false", () => {
+    const possibleUIRoles = { admin: { ui_label: "Admin" } };
+    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const statusCol = cols.find((c) => (c as { id?: string }).id === "status")!;
+
+    const inactiveUser: UserInfo = {
+      user_id: "u-inactive",
+      user_email: "alex@acme.io",
+      user_alias: null,
+      user_role: "internal_user",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      key_count: 1,
+      created_at: "",
+      updated_at: "",
+      sso_user_id: null,
+      budget_duration: null,
+      metadata: { scim_active: false },
+    };
+
+    const cell = (statusCol as any).cell({ row: { original: inactiveUser } });
+    render(<>{cell}</>);
+    expect(screen.getByText("Inactive")).toBeInTheDocument();
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
+  });
+
+  it("should treat scim_active=true as Active (not Inactive)", () => {
+    const possibleUIRoles = { admin: { ui_label: "Admin" } };
+    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const statusCol = cols.find((c) => (c as { id?: string }).id === "status")!;
+
+    const reactivated: UserInfo = {
+      user_id: "u-rehired",
+      user_email: "alex@acme.io",
+      user_alias: null,
+      user_role: "internal_user",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      key_count: 1,
+      created_at: "",
+      updated_at: "",
+      sso_user_id: null,
+      budget_duration: null,
+      metadata: { scim_active: true },
+    };
+
+    const cell = (statusCol as any).cell({ row: { original: reactivated } });
+    render(<>{cell}</>);
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.queryByText("Inactive")).not.toBeInTheDocument();
   });
 });

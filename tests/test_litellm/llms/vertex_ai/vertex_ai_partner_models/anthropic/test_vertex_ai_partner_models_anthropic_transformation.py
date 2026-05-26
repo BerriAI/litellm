@@ -498,12 +498,8 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     ), "Header should be removed if no supported values remain"
 
 
-def test_vertex_ai_anthropic_output_config_effort_only_dropped():
-    """
-    ``output_config`` containing only ``effort`` (an Anthropic-only key Vertex
-    rejects with "Extra inputs are not permitted") is dropped entirely so the
-    request body has no empty dict.
-    """
+def test_vertex_ai_anthropic_output_config_effort_only_forwarded():
+    """Vertex AI Claude 4.6/4.7 accept ``output_config.effort`` on rawPredict."""
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "What is 2+2?"}]
@@ -515,16 +511,14 @@ def test_vertex_ai_anthropic_output_config_effort_only_dropped():
     }
 
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-opus-4-6",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers=headers,
     )
 
-    assert (
-        "output_config" not in result
-    ), "output_config containing only effort must be dropped"
+    assert result["output_config"] == {"effort": "high"}
     assert result["max_tokens"] == 1024
     assert "messages" in result
 
@@ -566,14 +560,8 @@ def test_vertex_ai_anthropic_output_config_format_passes_through():
     assert result["output_config"] == output_config
 
 
-def test_vertex_ai_anthropic_output_config_format_plus_effort_strips_only_effort():
-    """
-    Greptile P1 on PR #23396: when ``output_config`` contains BOTH ``format``
-    and ``effort``, the prior conditional-passthrough logic forwarded the
-    full dict including the unsupported ``effort`` key, reproducing the
-    400 error the fix was meant to resolve. Only ``effort`` (and any future
-    Vertex-unsupported keys) should be filtered; ``format`` must survive.
-    """
+def test_vertex_ai_anthropic_output_config_format_plus_effort_preserved():
+    """Both ``format`` and ``effort`` ride along on Vertex Claude 4.6/4.7."""
     config = VertexAIAnthropicConfig()
     messages = [{"role": "user", "content": "Return a person object."}]
 
@@ -591,7 +579,7 @@ def test_vertex_ai_anthropic_output_config_format_plus_effort_strips_only_effort
     optional_params = {"max_tokens": 1024, "output_config": output_config}
 
     result = config.transform_request(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-opus-4-6",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
@@ -599,9 +587,7 @@ def test_vertex_ai_anthropic_output_config_format_plus_effort_strips_only_effort
     )
 
     assert "output_config" in result
-    assert (
-        "effort" not in result["output_config"]
-    ), "effort must be stripped — Vertex returns 400 on unknown keys"
+    assert result["output_config"]["effort"] == "high"
     assert result["output_config"]["format"] == output_config["format"]
 
 
@@ -623,15 +609,8 @@ def test_vertex_ai_anthropic_output_config_non_dict_dropped():
     assert "output_config" not in result
 
 
-def test_vertex_ai_anthropic_output_format_preserved_output_config_effort_dropped():
-    """
-    When the request carries both ``output_format`` (top-level structured
-    outputs) AND an ``output_config`` whose only useful key for Vertex is
-    ``effort``: ``output_format`` must be forwarded (Vertex accepts it),
-    while ``output_config`` is dropped because Vertex returns 400 on
-    ``effort``. This replaces the old "drop both" behavior, which was the
-    silent strip the bug report flagged.
-    """
+def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
+    """Both ``output_format`` and ``output_config.effort`` are forwarded on Vertex 4.6/4.7."""
     config = VertexAIAnthropicConfig()
     messages = [{"role": "user", "content": "Extract structured data"}]
 
@@ -653,7 +632,7 @@ def test_vertex_ai_anthropic_output_format_preserved_output_config_effort_droppe
     }
 
     test_data = {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-opus-4-6",
         "messages": messages,
         "max_tokens": 2048,
         "output_format": output_format,
@@ -671,7 +650,7 @@ def test_vertex_ai_anthropic_output_format_preserved_output_config_effort_droppe
 
     try:
         result = config.transform_request(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-opus-4-6",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
@@ -680,9 +659,8 @@ def test_vertex_ai_anthropic_output_format_preserved_output_config_effort_droppe
 
         # output_format flows through unchanged — Vertex AI Claude accepts it.
         assert result["output_format"] == output_format
-        # output_config containing only ``effort`` is dropped to avoid the
-        # 400 "Extra inputs are not permitted" the silent strip used to mask.
-        assert "output_config" not in result
+        # output_config.effort now flows through (Vertex accepts it on 4.6/4.7).
+        assert result["output_config"] == {"effort": "high"}
         assert result["max_tokens"] == 2048
         assert "model" not in result, "model is still stripped (Vertex routes by URL)"
     finally:
@@ -702,10 +680,10 @@ def test_sanitize_vertex_anthropic_output_params_unit():
     sanitize_vertex_anthropic_output_params(data)
     assert data == {"max_tokens": 8}
 
-    # Effort-only → dropped entirely.
+    # Effort-only → preserved (Vertex 4.6/4.7 accept it on rawPredict).
     data = {"output_config": {"effort": "high"}}
     sanitize_vertex_anthropic_output_params(data)
-    assert "output_config" not in data
+    assert data["output_config"] == {"effort": "high"}
 
     # Format-only → preserved unchanged.
     fmt = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
@@ -713,10 +691,10 @@ def test_sanitize_vertex_anthropic_output_params_unit():
     sanitize_vertex_anthropic_output_params(data)
     assert data["output_config"] == fmt
 
-    # Mixed → effort filtered, format kept.
+    # Mixed → both effort and format kept (no current Vertex-unsupported keys).
     data = {"output_config": {"format": fmt["format"], "effort": "high"}}
     sanitize_vertex_anthropic_output_params(data)
-    assert data["output_config"] == fmt
+    assert data["output_config"] == {"format": fmt["format"], "effort": "high"}
 
     # Non-dict → dropped defensively.
     data = {"output_config": "garbage"}

@@ -45,6 +45,10 @@ class ScimTransformations:
         if user.user_email and "@" in user.user_email:
             emails.append(SCIMUserEmail(value=user.user_email, primary=True))
 
+        metadata = user.metadata or {}
+        scim_active = metadata.get("scim_active")
+        active = True if scim_active is None else bool(scim_active)
+
         return SCIMUser(
             schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
             id=user.user_id,
@@ -56,7 +60,7 @@ class ScimTransformations:
             ),
             emails=emails,
             groups=groups,
-            active=True,
+            active=active,
             meta={
                 "resourceType": "User",
                 "created": user_created_at,

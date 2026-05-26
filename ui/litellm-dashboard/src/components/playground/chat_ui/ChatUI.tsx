@@ -49,6 +49,7 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import { makeInteractionsRequest } from "../llm_calls/interactions_api";
 import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
@@ -649,6 +650,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       EndpointType.ANTHROPIC_MESSAGES,
       EndpointType.EMBEDDINGS,
       EndpointType.TRANSCRIPTION,
+      EndpointType.INTERACTIONS,
     ];
 
     if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
@@ -914,6 +916,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
               customProxyBaseUrl || undefined,
             );
           }
+        } else if (endpointType === EndpointType.INTERACTIONS) {
+          await makeInteractionsRequest(
+            inputMessage,
+            (text, model) => updateTextUI("assistant", text, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
+            signal,
+            customProxyBaseUrl || undefined,
+          );
         }
       }
 
@@ -1241,10 +1253,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                 return true;
                               }
                               const optionEndpoint = getEndpointType(option.mode);
-                              // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                              // Show chat models for responses/anthropic_messages/interactions endpoints as they are compatible
                               if (
                                 endpointType === EndpointType.RESPONSES ||
-                                endpointType === EndpointType.ANTHROPIC_MESSAGES
+                                endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+                                endpointType === EndpointType.INTERACTIONS
                               ) {
                                 return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
                               }
@@ -2089,7 +2102,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         endpointType === EndpointType.CHAT ||
                         endpointType === EndpointType.EMBEDDINGS ||
                         endpointType === EndpointType.RESPONSES ||
-                        endpointType === EndpointType.ANTHROPIC_MESSAGES
+                        endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+                        endpointType === EndpointType.INTERACTIONS
                           ? "Type your message... (Shift+Enter for new line)"
                           : endpointType === EndpointType.A2A_AGENTS
                             ? "Send a message to the A2A agent..."

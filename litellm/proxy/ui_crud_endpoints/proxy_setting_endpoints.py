@@ -9,6 +9,7 @@ from pydantic.fields import FieldInfo
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -18,6 +19,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router = APIRouter()
+
+# SSO secret fields returned by /get/sso_settings. These are masked on read so
+# the UI can show "(set)" without ever transporting the plaintext OAuth secret
+# off the server, matching the write-once + masked-on-read contract used for
+# the HashiCorp Vault config override.
+_SSO_SENSITIVE_FIELDS: Set[str] = {
+    "google_client_secret",
+    "microsoft_client_secret",
+    "generic_client_secret",
+}
 
 
 class IPAddress(BaseModel):
@@ -99,6 +110,11 @@ class UISettings(BaseModel):
         description="If true, requires authentication for accessing the public AI Hub.",
     )
 
+    allow_public_health_readiness_details: bool = Field(
+        default=False,
+        description="If true, returns the legacy detailed payload from the unauthenticated /health/readiness endpoint.",
+    )
+
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
         description=(
@@ -169,6 +185,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
@@ -183,6 +200,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
+    "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
@@ -721,8 +739,9 @@ async def get_sso_settings():
 
     schema = TypeAdapter(SSOConfig).json_schema(by_alias=True)
 
-    # Convert to dict for response
-    sso_dict = sso_config.model_dump()
+    # Convert to dict for response, masking OAuth client secrets so plaintext
+    # is never sent to the UI.
+    sso_dict = mask_sensitive_keys(sso_config.model_dump(), _SSO_SENSITIVE_FIELDS)
 
     # Add descriptions to the response
     result = {

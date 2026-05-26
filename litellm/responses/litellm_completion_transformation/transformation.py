@@ -1238,6 +1238,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
+        if "cache_control" in item:
+            new_item["cache_control"] = item["cache_control"]
         return new_item
 
     @staticmethod
@@ -1282,26 +1284,28 @@ class LiteLLMCompletionResponsesConfig:
                             )
                         )
                     elif item.get("type") == "input_image":
-                        content_list.append(
-                            dict(
-                                LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                                    item
-                                )
+                        image_block = dict(
+                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                                item
                             )
                         )
+                        if "cache_control" in item:
+                            image_block["cache_control"] = item["cache_control"]
+                        content_list.append(image_block)
                     else:
                         # Skip text blocks with None text to avoid downstream errors
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_list.append(
-                            {
-                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                    item.get("type") or "text"
-                                ),
-                                "text": text_value,
-                            }
-                        )
+                        content_block: Dict[str, Any] = {
+                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                item.get("type") or "text"
+                            ),
+                            "text": text_value,
+                        }
+                        if "cache_control" in item:
+                            content_block["cache_control"] = item["cache_control"]
+                        content_list.append(content_block)
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")

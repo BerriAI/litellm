@@ -11,10 +11,14 @@ sys.path.insert(
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     get_callback_identifier,
@@ -463,6 +467,236 @@ async def test_test_model_connection_loads_config_from_router():
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicate_model_names():
+    """
+    When two deployments share the same `model_name` (e.g. wildcard
+    `openai/*`) but have different `api_base` values, clicking "Test
+    Connection" on a specific row in the UI must probe THAT row's
+    `api_base` — not whichever happens to be `deployments[0]`.
+
+    The UI passes `model_info.id` to identify the deployment the user
+    actually clicked on. The backend must use that id to look up the
+    specific deployment rather than always grabbing the first match.
+
+    Regression test for: silent fallback to deployments[0] when
+    multiple deployments share a wildcard model_name.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+
+    mock_prisma_client = MagicMock()
+
+    deployment_a = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "api_base": "https://deployment-A-base.invalid/v1",
+            "api_key": "fake-key-A",
+        },
+        "model_info": {"id": "deployment-A-id"},
+    }
+    deployment_b = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "api_base": "https://deployment-B-base.invalid/v1",
+            "api_key": "fake-key-B",
+        },
+        "model_info": {"id": "deployment-B-id"},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+
+    # Backend uses get_deployment(model_id=...) for O(1) lookup by id.
+    def _get_deployment_by_id(model_id):
+        if model_id == "deployment-A-id":
+            return Deployment(
+                model_name="openai/*",
+                litellm_params=LiteLLM_Params(**deployment_a["litellm_params"]),
+                model_info=deployment_a["model_info"],
+            )
+        if model_id == "deployment-B-id":
+            return Deployment(
+                model_name="openai/*",
+                litellm_params=LiteLLM_Params(**deployment_b["litellm_params"]),
+                model_info=deployment_b["model_info"],
+            )
+        return None
+
+    mock_router.get_deployment.side_effect = _get_deployment_by_id
+
+    mock_can_user_make_model_call = AsyncMock()
+
+    mock_health_check_result = {"status": "healthy", "response_time_ms": 50}
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+
+    def mock_update_params(model_info, litellm_params):
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    def mock_reject_os_environ(params):
+        return None
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.premium_user",
+            False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        # Click "Test Connection" on deployment B (NOT the first one).
+        # The UI sends only `model` + `model_info.id` — it does NOT
+        # send `api_base`/`api_key`, so the backend must resolve them
+        # from the right deployment.
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "openai/*"},
+            model_info={"id": "deployment-B-id"},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # The outbound health check must hit deployment B's api_base.
+        ahealth_check_call_args = mock_ahealth_check.call_args
+        assert ahealth_check_call_args is not None
+        model_params = ahealth_check_call_args.kwargs.get("model_params", {})
+
+        assert model_params.get("api_base") == (
+            "https://deployment-B-base.invalid/v1"
+        ), (
+            "Expected /health/test_connection to probe deployment B's "
+            "api_base when model_info.id='deployment-B-id' was provided. "
+            f"Got: {model_params.get('api_base')!r}. This means the "
+            "backend silently fell back to deployments[0] (A) instead "
+            "of disambiguating by model_info.id."
+        )
+        assert model_params.get("api_key") == "fake-key-B"
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_falls_back_to_deployments_zero_without_id():
+    """
+    Backwards-compat: when the request body does NOT include
+    `model_info.id`, the legacy behavior of using `deployments[0]`
+    is preserved (single-deployment case, or callers that haven't
+    been updated to pass an id).
+    """
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+
+    mock_prisma_client = MagicMock()
+
+    deployment_a = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "api_base": "https://deployment-A-base.invalid/v1",
+            "api_key": "fake-key-A",
+        },
+        "model_info": {"id": "deployment-A-id"},
+    }
+    deployment_b = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "api_base": "https://deployment-B-base.invalid/v1",
+            "api_key": "fake-key-B",
+        },
+        "model_info": {"id": "deployment-B-id"},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = [deployment_a, deployment_b]
+
+    mock_can_user_make_model_call = AsyncMock()
+    mock_health_check_result = {"status": "healthy"}
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+
+    def mock_update_params(model_info, litellm_params):
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    def mock_reject_os_environ(params):
+        return None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "openai/*"},
+            model_info={},  # no id provided
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # Without id, deployments[0] (A) should be used (legacy behavior).
+        model_params = mock_ahealth_check.call_args.kwargs.get("model_params", {})
+        assert model_params.get("api_base") == "https://deployment-A-base.invalid/v1"
+        assert model_params.get("api_key") == "fake-key-A"
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -512,7 +746,7 @@ def proxy_client(monkeypatch):
 
     Redis cache:
     - If REDIS_HOST is set in environment, Redis cache will be automatically configured
-    - Cache configuration is included in /health/readiness endpoint response
+    - Cache diagnostics are included in the authenticated /health/readiness/details response
     """
     client = create_proxy_test_client(monkeypatch)
     with client:
@@ -588,11 +822,7 @@ def test_health_liveness_endpoint(proxy_client):
 def test_health_readiness(proxy_client):
     """
     Test /health/readiness endpoint.
-    Database and Redis are optional - the endpoint should work whether they're available or not.
-
-    If DATABASE_URL is set, the endpoint will check database connectivity.
-    If REDIS_HOST is set, the endpoint will report cache status.
-    If neither is set, the endpoint should still return a valid health status.
+    Database and Redis are optional - the public endpoint should work whether they're available or not.
     """
     # Measure the time taken for the health check call
     start_time = time.perf_counter()
@@ -614,40 +844,62 @@ def test_health_readiness(proxy_client):
         duration_ms < 500
     ), f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
 
-    # Assert response contains expected fields
+    # Assert response contains only low-detail public probe fields. `db` is
+    # included so unauthenticated probes can distinguish "DB unreachable"
+    # from a fully-healthy worker; its value depends on whether the test env
+    # exposes DATABASE_URL.
     response_data = response.json()
-    assert "status" in response_data, "Response should contain 'status' field"
-    assert (
-        "litellm_version" in response_data
-    ), "Response should contain 'litellm_version' field"
-
-    # Display all health endpoint response fields (matches what /health/readiness returns)
-    print("\n" + "-" * 60)
-    print("HEALTH ENDPOINT RESPONSE")
-    print("-" * 60)
-    print(f"Status: {response_data.get('status', 'unknown')}")
-    print(f"Database: {response_data.get('db', 'not reported')}")
-    print(f"LiteLLM Version: {response_data.get('litellm_version', 'unknown')}")
-    print(f"Success Callbacks: {response_data.get('success_callbacks', [])}")
-    print(f"Cache: {response_data.get('cache', 'none')}")
-    print(
-        f"Use AioHTTP Transport: {response_data.get('use_aiohttp_transport', 'unknown')}"
-    )
+    assert set(response_data.keys()) == {"status", "db"}
+    assert response_data["status"] == "healthy"
+    assert response_data["db"] in {"connected", "disconnected", "Not connected"}
     print(f"Response time: {duration_ms:.2f}ms")
 
-    # If database status is reported, verify it's a valid status
-    # Database may be "connected", "disconnected", "unknown", or "Not connected" (when prisma_client is None)
-    if "db" in response_data:
-        db_status = response_data["db"]
-        # Database status can be any of these valid states
-        assert db_status in [
-            "connected",
-            "disconnected",
-            "unknown",
-            "Not connected",
-        ], f"Unexpected db status: {db_status}"
 
-    print("=" * 60 + "\n")
+def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
+    """
+    Detailed readiness diagnostics stay available behind the auth dependency.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["status"] == "healthy"
+    assert "litellm_version" in response_data
+    assert "success_callbacks" in response_data
+    assert "cache" in response_data
+
+
+def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
+    """
+    Operators can explicitly preserve the legacy public readiness payload.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_public_health_readiness_details": True},
+    )
+
+    response = client.get("/health/readiness")
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["status"] == "healthy"
+    assert "litellm_version" in response_data
+    assert "success_callbacks" in response_data
+    assert "cache" in response_data
 
 
 def test_get_callback_identifier_string_and_object_with_callback_name():
@@ -1503,8 +1755,7 @@ async def test_health_readiness_returns_503_when_db_disconnected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 503
-    assert result["db"] == "disconnected"
-    assert result["status"] == "healthy"  # body shape unchanged for back-compat
+    assert result == {"status": "healthy", "db": "disconnected"}
 
 
 @pytest.mark.asyncio
@@ -1527,7 +1778,7 @@ async def test_health_readiness_returns_200_when_db_connected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result["db"] == "connected"
+    assert result == {"status": "healthy", "db": "connected"}
 
 
 @pytest.mark.asyncio
@@ -1546,7 +1797,7 @@ async def test_health_readiness_returns_200_when_no_db_configured():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result["db"] == "Not connected"
+    assert result == {"status": "healthy", "db": "Not connected"}
 
 
 def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():

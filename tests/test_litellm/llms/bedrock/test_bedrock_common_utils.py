@@ -13,6 +13,141 @@ sys.path.insert(
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 
+# --------------------------------------------------------------------------- #
+# get_bedrock_response_stream_shape lazy-load tests                           #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _reset_bedrock_response_stream_shape_cache():
+    """Prevent lru_cache leakage between tests in this module."""
+    import litellm.llms.bedrock.common_utils as mod
+
+    mod.get_bedrock_response_stream_shape.cache_clear()
+    yield
+    mod.get_bedrock_response_stream_shape.cache_clear()
+
+
+def test_bedrock_response_stream_shape_lazy_loads_once():
+    """
+    get_bedrock_response_stream_shape() loads from botocore at most once per process.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    sentinel = MagicMock()
+    with patch.object(
+        mod, "_load_bedrock_response_stream_shape", return_value=sentinel
+    ) as mock_load:
+        assert mod.get_bedrock_response_stream_shape() is sentinel
+        assert mod.get_bedrock_response_stream_shape() is sentinel
+        mock_load.assert_called_once()
+
+
+def test_bedrock_response_stream_shape_loaded_on_first_access():
+    """
+    get_bedrock_response_stream_shape() loads once on first use.
+    In a standard environment with botocore installed it must be non-None.
+    """
+    pytest.importorskip("botocore")
+    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+
+    assert get_bedrock_response_stream_shape() is not None
+
+
+def test_bedrock_response_stream_shape_load_failure_returns_none():
+    """
+    If botocore's Loader raises (e.g. missing data files), _load_bedrock_response_stream_shape
+    should return None rather than propagating the exception, so the module
+    still imports cleanly.
+    """
+    from unittest.mock import patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    with patch(
+        "botocore.loaders.Loader.load_service_model",
+        side_effect=Exception("no data"),
+    ):
+        shape = mod._load_bedrock_response_stream_shape()
+        assert shape is None
+
+
+def test_bedrock_response_stream_shape_is_structure_shape():
+    """
+    The loaded shape should be the botocore StructureShape for ResponseStream,
+    not a plain dict or any other type.
+    """
+    pytest.importorskip("botocore")
+    from botocore.model import StructureShape
+
+    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+
+    loaded_shape = get_bedrock_response_stream_shape()
+    assert (
+        loaded_shape is not None
+    ), "get_bedrock_response_stream_shape() is None — botocore may not be installed"
+    shape: StructureShape = loaded_shape
+    assert isinstance(shape, StructureShape)
+    assert shape.name == "ResponseStream"
+
+
+def test_bedrock_response_stream_shape_same_object_across_calls():
+    """
+    Repeated calls must return the identical cached object.
+    """
+    from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
+
+    first = get_bedrock_response_stream_shape()
+    second = get_bedrock_response_stream_shape()
+    assert first is second
+
+
+def test_bedrock_event_stream_decoder_base_uses_module_shape():
+    """
+    BedrockEventStreamDecoderBase instances no longer carry their own
+    per-instance cache — _parse_message_from_event uses the module constant
+    directly, so there is no instance-level _response_stream_shape_cache attr.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    decoder_a = BedrockEventStreamDecoderBase()
+    decoder_b = BedrockEventStreamDecoderBase()
+
+    assert "_response_stream_shape_cache" not in decoder_a.__dict__
+    assert "_response_stream_shape_cache" not in decoder_b.__dict__
+
+
+def test_bedrock_parse_message_from_event_raises_on_none_shape():
+    """
+    When get_bedrock_response_stream_shape() returns None (botocore unavailable),
+    _parse_message_from_event must raise BedrockError before touching the
+    botocore parser — not an opaque AttributeError from inside botocore.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.bedrock.common_utils as mod
+    from litellm.llms.bedrock.common_utils import (
+        BedrockError,
+        BedrockEventStreamDecoderBase,
+    )
+
+    decoder = BedrockEventStreamDecoderBase.__new__(BedrockEventStreamDecoderBase)
+    decoder.parser = MagicMock()
+    mock_event = MagicMock()
+
+    with patch.object(mod, "get_bedrock_response_stream_shape", return_value=None):
+        with pytest.raises(BedrockError) as exc_info:
+            decoder._parse_message_from_event(mock_event)
+
+    assert exc_info.value.status_code == 500
+    assert "botocore" in str(exc_info.value.message).lower()
+    # The botocore parser must never have been called
+    mock_event.to_response_dict.assert_not_called()
+
+
 def test_deepseek_cris():
     """
     Test that DeepSeek models with cross-region inference prefix use converse route

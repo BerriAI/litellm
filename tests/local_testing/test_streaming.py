@@ -993,6 +993,11 @@ def test_vertex_ai_stream(provider):
 
         except litellm.RateLimitError as e:
             pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            # Streaming 429s are wrapped in MidStreamFallbackError so the
+            # Router can fall back; treat as a transient rate-limit pass.
+            if not isinstance(e.original_exception, litellm.RateLimitError):
+                pytest.fail(f"Error occurred: {e}")
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -1169,7 +1174,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
-        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
     ],
@@ -1241,7 +1246,7 @@ def test_bedrock_claude_3_streaming():
     try:
         litellm.set_verbose = True
         response: ModelResponse = completion(  # type: ignore
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             max_tokens=10,  # type: ignore
             stream=True,
@@ -1271,7 +1276,7 @@ def test_bedrock_claude_3_streaming():
     "model",
     [
         "claude-haiku-4-5-20251001",
-        "cohere.command-r-plus-v1:0",  # bedrock
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
 )
@@ -3495,7 +3500,7 @@ def test_unit_test_perplexity_citations_chunk():
     [
         "gpt-3.5-turbo",
         "claude-sonnet-4-5-20250929",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
@@ -3640,7 +3645,7 @@ def test_mock_response_iterator_tool_use():
     [
         # "deepseek/deepseek-reasoner",
         # "anthropic/claude-3-7-sonnet-20250219",
-        "openrouter/anthropic/claude-3.7-sonnet",
+        "openrouter/anthropic/claude-sonnet-4.5",
     ],
 )
 def test_reasoning_content_completion(model):

@@ -757,6 +757,60 @@ def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat()
     assert model_info.get("mode") != "responses"
 
 
+def test_responses_api_bridge_check_gpt_5_4_reasoning_summary_without_tools_routes_to_responses():
+    """gpt-5.4+ with reasoning_effort + reasoningSummary but no tools should bridge (AI SDK)."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            tools=None,
+            reasoning_effort="medium",
+            reasoning_summary="auto",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_reasoning_summary_routes_to_responses():
+    """Bare ``gpt-5`` with reasoning_effort + reasoningSummary should bridge (not 5.4+)."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5",
+            custom_llm_provider="openai",
+            tools=None,
+            reasoning_effort="medium",
+            reasoning_summary="auto",
+        )
+
+    assert model == "gpt-5"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_tools_without_summary_stays_chat():
+    """gpt-5 with tools + reasoning_effort but no summary should stay on chat."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="medium",
+            reasoning_summary=None,
+        )
+
+    assert model == "gpt-5"
+    assert model_info.get("mode") != "responses"
+
+
 @patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     mock_responses_completion,
@@ -791,6 +845,132 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     assert optional_params["reasoning_effort"] == {
         "effort": "xhigh",
         "summary": "detailed",
+    }
+
+
+@pytest.mark.parametrize(
+    "model, model_info, expected_model_param",
+    [
+        ("gemini/gemini-3.1-pro", None, "gemini-3.1-pro"),
+        (
+            "gemini/gemini-3.1-pro",
+            {"base_model": "gemini-3.1-pro-preview"},
+            "gemini-3.1-pro-preview",
+        ),
+    ],
+)
+def test_completion_optional_params_base_model(
+    model: str,
+    model_info: dict | None,
+    expected_model_param: str,
+):
+    with patch("litellm.main.get_optional_params") as mock_get_optional_params:
+        mock_get_optional_params.return_value = MagicMock()
+
+        import litellm
+
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "api_key": "fake-key",
+            "mock_response": "Hey, how's it going?",
+        }
+        if model_info is not None:
+            kwargs["model_info"] = model_info
+
+        litellm.completion(**kwargs)
+
+        assert mock_get_optional_params.called is True
+        get_optional_params_model_param = mock_get_optional_params.call_args.kwargs[
+            "model"
+        ]
+        assert get_optional_params_model_param == expected_model_param
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_gpt_5_4_responses_bridge_merges_reasoning_summary_kwarg_without_tools(
+    mock_responses_completion,
+):
+    """reasoningSummary without tools should route and merge into reasoning_effort dict."""
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    litellm.completion(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "ok"}],
+        reasoning_effort="medium",
+        reasoningSummary="auto",
+        api_key="fake-key",
+    )
+
+    assert mock_responses_completion.called is True
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params["reasoning_effort"] == {
+        "effort": "medium",
+        "summary": "auto",
+    }
+    assert "reasoningSummary" not in optional_params
+    assert "reasoning_summary" not in optional_params
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_responses_bridge_preserves_reasoning_summary_without_effort(
+    mock_responses_completion,
+):
+    """Reasoning summary should survive responses routing even without effort."""
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    with patch.object(litellm, "route_all_chat_openai_to_responses", True):
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "ok"}],
+            reasoningSummary="auto",
+            api_key="fake-key",
+        )
+
+    assert mock_responses_completion.called is True
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params["reasoning_effort"] == {"summary": "auto"}
+    assert "reasoningSummary" not in optional_params
+    assert "reasoning_summary" not in optional_params
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_gpt_5_responses_bridge_tools_and_reasoning_summary(
+    mock_responses_completion,
+):
+    """Bare gpt-5 with tools + reasoningSummary should bridge (OpenCode-style)."""
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    litellm.completion(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "ok"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_patch",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        tool_choice="auto",
+        reasoning_effort="medium",
+        reasoningSummary="auto",
+        stream=True,
+        api_key="fake-key",
+    )
+
+    assert mock_responses_completion.called is True
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params.get("reasoning_effort") == {
+        "effort": "medium",
+        "summary": "auto",
     }
 
 

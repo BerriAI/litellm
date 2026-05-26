@@ -498,6 +498,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             "error": f"Model capacity reached for {model}. "
                             f"Priority: {priority}, "
                             f"Rate limit type: {status['rate_limit_type']}, "
+                            f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
+                            f"Model RPM: {model_group_info.rpm if model_group_info.rpm is not None else 'not configured'}, "
                             f"Remaining: {status['limit_remaining']}"
                         },
                         headers={
@@ -515,8 +517,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         status_code=429,
                         detail={
                             "error": f"Priority-based rate limit exceeded. "
+                            f"Model: {model}, "
                             f"Priority: {priority}, "
                             f"Rate limit type: {status['rate_limit_type']}, "
+                            f"Model TPM: {model_group_info.tpm if model_group_info.tpm is not None else 'not configured'}, "
+                            f"Model RPM: {model_group_info.rpm if model_group_info.rpm is not None else 'not configured'}, "
                             f"Remaining: {status['limit_remaining']}, "
                             f"Model saturation: {saturation:.1%}"
                         },

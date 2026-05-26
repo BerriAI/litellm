@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
+    KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -14,10 +15,58 @@ from litellm.proxy._types import (
 
 from .auth_checks_organization import _user_is_org_admin
 
+# Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
+# endpoint to a management router REQUIRES adding it here too — the surrounding
+# check falls through to "allow" if the route is not matched, which previously
+# let view-only admins call /team/block, /team/unblock, /key/bulk_update, etc.
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
+    [
+        # user
+        "/user/new",
+        "/user/delete",
+        "/user/bulk_update",
+        # team
+        "/team/new",
+        "/team/update",
+        "/team/delete",
+        "/team/block",
+        "/team/unblock",
+        "/team/permissions_update",
+        "/team/permissions_bulk_update",
+        # model
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        # JWT key mapping
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        # key management — keep in sync with KeyManagementRoutes write entries
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+        KeyManagementRoutes.KEY_DELETE.value,
+        KeyManagementRoutes.KEY_REGENERATE.value,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
+        KeyManagementRoutes.KEY_BLOCK.value,
+        KeyManagementRoutes.KEY_UNBLOCK.value,
+        KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
+    ]
+)
+
+# Suffixes for `/key/{key_id}/...` path-parameterized write routes that the
+# enum templates with `{key_id}`. The blocklist above can't match templated
+# paths directly because the request route carries the resolved key id.
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
+
 
 class RouteChecks:
     @staticmethod
-    def should_call_route(route: str, valid_token: UserAPIKeyAuth):
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Optional[Request] = None,
+    ):
         """
         Check if management route is disabled and raise exception
         """
@@ -32,13 +81,15 @@ class RouteChecks:
 
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(
-            route=route, valid_token=valid_token
+            route=route, valid_token=valid_token, request=request
         )
         return True
 
     @staticmethod
     def is_virtual_key_allowed_to_call_route(
-        route: str, valid_token: UserAPIKeyAuth
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Optional[Request] = None,
     ) -> bool:
         """
         Raises Exception if Virtual Key is not allowed to call the route
@@ -82,6 +133,21 @@ class RouteChecks:
 
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                             route=route
+                        ):
+                            return True
+
+                        # Method-aware carve-out: allow GET on the two
+                        # read-only MCP-server discovery endpoints
+                        # (`/v1/mcp/server` and `/v1/mcp/server/{server_id}`)
+                        # so virtual keys with allowed_routes=["llm_api_routes"]
+                        # can list/inspect MCP servers. The GET handlers in
+                        # mcp_management_endpoints.py sanitize the response
+                        # for restricted virtual keys (stripping url,
+                        # headers, env, credentials). POST/PUT/DELETE on
+                        # these paths are admin-only management writes and
+                        # are intentionally not covered.
+                        if RouteChecks._is_get_mcp_server_discovery_route(
+                            route=route, request=request
                         ):
                             return True
 
@@ -350,9 +416,36 @@ class RouteChecks:
             return True
 
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if _llm_passthrough_route in route:
+            if route == _llm_passthrough_route or route.startswith(
+                _llm_passthrough_route + "/"
+            ):
                 return True
         return False
+
+    @staticmethod
+    def _is_get_mcp_server_discovery_route(
+        route: str, request: Optional[Request]
+    ) -> bool:
+        """
+        Returns True if `request` is a GET against one of the two read-only
+        MCP-server discovery paths:
+
+        - GET `/v1/mcp/server`               (list)
+        - GET `/v1/mcp/server/{server_id}`   (single server, single segment)
+
+        Multi-segment paths (`/v1/mcp/server/{id}/approve`, etc.) and any
+        non-GET method return False, so admin-only management writes on the
+        same path prefix are not reachable through this carve-out.
+        """
+        if request is None or request.method.upper() != "GET":
+            return False
+        if route == "/v1/mcp/server":
+            return True
+        prefix = "/v1/mcp/server/"
+        if not route.startswith(prefix):
+            return False
+        remainder = route[len(prefix) :]
+        return bool(remainder) and "/" not in remainder
 
     @staticmethod
     def is_management_route(route: str) -> bool:
@@ -580,7 +673,11 @@ class RouteChecks:
         Returns:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
-        if "thread" in request.url.path or "assistant" in request.url.path:
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from .auth_utils import get_request_route  # noqa: PLC0415
+
+        route = get_request_route(request)
+        if "thread" in route or "assistant" in route:
             return True
         return False
 
@@ -627,6 +724,7 @@ class RouteChecks:
             "/key/service-account/generate",
             "/key/block",
             "/key/unblock",
+            "/team/key/bulk_update",
         ]
     )
 
@@ -664,6 +762,31 @@ class RouteChecks:
                 detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
             )
 
+        # Check if this is a write operation on management routes
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
+        ):
+            # For management routes, only allow read operations or specific allowed updates
+            if route == "/user/update":
+                # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
+                if request_data is not None and isinstance(request_data, dict):
+                    _params_updated = request_data.keys()
+                    for param in _params_updated:
+                        if param not in ["user_email", "password"]:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                            )
+            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+                route.startswith("/key/")
+                and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
+            ):
+                # Block write operations for PROXY_ADMIN_VIEW_ONLY
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+                )
+            # Allow read operations on management routes (like /user/info, /team/info, /model/info)
         method = request.method.upper() if request is not None else "GET"
         is_safe_method = method in RouteChecks._SAFE_HTTP_METHODS
 

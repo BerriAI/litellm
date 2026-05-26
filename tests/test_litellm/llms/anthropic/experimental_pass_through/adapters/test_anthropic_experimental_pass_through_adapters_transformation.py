@@ -430,6 +430,46 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     assert result[1]["input"] == {"location": "Boston"}
 
 
+def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_call_id():
+    """
+    Non-streaming path must strip the Gemini thought-signature suffix from
+    tool_call.id, same as the streaming path. The base64 signature contains
+    `+ / =` which violate Anthropic's `^[a-zA-Z0-9_-]+$` tool_use.id pattern
+    and 400 when the history is replayed to an Anthropic-native provider.
+    """
+    base = "call_3e9417b7925e49aca9a71dc1885e"
+    sig = "CiIBDDnWx+/a=="
+    combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id=combined,
+                        type="function",
+                        function=Function(
+                            name="get_weather",
+                            arguments='{"location": "Boston"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == base
+    assert THOUGHT_SIGNATURE_SEPARATOR not in result[0]["id"]
+    assert result[0]["name"] == "get_weather"
+    assert result[0]["input"] == {"location": "Boston"}
+
+
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     """`translate_openai_response_to_anthropic` should surface assistant text even when tools fire."""
     openai_response = ModelResponse(
@@ -1161,6 +1201,51 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     assert block_type == "tool_use"
     assert content_block_start["name"] == "Bash"
     assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"
+
+
+def test_streaming_chunk_with_text_and_empty_tool_calls_returns_text_delta():
+    """
+    Some OpenAI-compatible providers emit `tool_calls: []` on regular text chunks.
+
+    Empty tool_calls should be treated as no tool call so the Anthropic adapter
+    does not shadow text with an empty input_json_delta.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Hello from vLLM",
+                role="assistant",
+                function_call=None,
+                tool_calls=[],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Hello from vLLM"
+
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "text"
+    assert content_block_start == {"type": "text", "text": ""}
 
 
 # ============================================================================
@@ -2327,7 +2412,8 @@ class TestAnthropicStreamWrapperToolArgs:
 
     def _find_tool_deltas(self, events):
         return [
-            e for e in events
+            e
+            for e in events
             if isinstance(e, dict)
             and e.get("type") == "content_block_delta"
             and isinstance(e.get("delta"), dict)
@@ -2373,7 +2459,6 @@ class TestAnthropicStreamWrapperToolArgs:
         combined = "".join(d["delta"]["partial_json"] for d in tool_deltas)
         parsed = json.loads(combined)
         assert parsed == {"city": "Tokyo"}
-
 
 
 def test_translate_anthropic_tool_choice_none():

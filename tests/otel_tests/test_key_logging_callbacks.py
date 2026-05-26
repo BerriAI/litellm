@@ -64,6 +64,6 @@ async def test_key_logging_callbacks():
     assert health_data["logging_callbacks"]["callbacks"] == ["gcs_bucket"]
     assert health_data["logging_callbacks"]["status"] == "unhealthy"
     assert (
-        "Failed to load vertex credentials"
+        "GCS_BUCKET_NAME is not set in the environment"
         in health_data["logging_callbacks"]["details"]
     )
