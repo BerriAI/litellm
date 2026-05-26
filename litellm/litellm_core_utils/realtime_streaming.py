@@ -267,18 +267,16 @@ class RealTimeStreaming:
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
+        turn_detection: Dict[str, Any] = {
+            "type": "server_vad",
+            "create_response": False,
+        }
         if self._backend_uses_beta_protocol:
-            session: Dict[str, Any] = {
-                "turn_detection": {"create_response": False},
-            }
+            session: Dict[str, Any] = {"turn_detection": turn_detection}
         else:
             session = {
                 "type": "realtime",
-                "audio": {
-                    "input": {
-                        "turn_detection": {"create_response": False},
-                    }
-                },
+                "audio": {"input": {"turn_detection": turn_detection}},
             }
         return json.dumps({"type": "session.update", "session": session})
 
@@ -564,9 +562,18 @@ class RealTimeStreaming:
                 try:
                     raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
                         decode=False
-                    )  # improves performance
+                    )
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+
+                if isinstance(raw_response, bytes):
+                    try:
+                        raw_response = raw_response.decode("utf-8")
+                    except UnicodeDecodeError:
+                        verbose_logger.warning(
+                            "Received non-UTF-8 binary frame from backend, skipping."
+                        )
+                        continue
 
                 if self.provider_config:
                     try:
