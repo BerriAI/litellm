@@ -2960,3 +2960,70 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
         user_request=user_request, user_api_key_dict=admin_caller
     )
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for #28880 — email normalization at the input boundary
+# ---------------------------------------------------------------------------
+
+
+def test_new_user_request_strips_and_lowercases_email():
+    """Padded + mixed-case email is trimmed and lowercased before storage."""
+    req = NewUserRequest(user_email="  Foo@Bar.COM  ")
+    assert req.user_email == "foo@bar.com"
+
+
+def test_new_user_request_empty_email_becomes_none():
+    """Whitespace-only email collapses to None so it stays an unset field."""
+    req = NewUserRequest(user_email="   ")
+    assert req.user_email is None
+
+
+def test_new_user_request_none_email_unchanged():
+    """None passes through untouched."""
+    req = NewUserRequest(user_email=None)
+    assert req.user_email is None
+
+
+def test_update_user_request_strips_and_lowercases_email():
+    req = UpdateUserRequest(user_id="u1", user_email=" A@B.com ")
+    assert req.user_email == "a@b.com"
+
+
+def test_update_user_request_whitespace_only_email_requires_user_id():
+    """If email collapses to None and user_id is missing, validation must fail."""
+    with pytest.raises(ValueError, match="Either user id or user email"):
+        UpdateUserRequest(user_email="   ")
+
+
+def test_member_base_strips_and_lowercases_email():
+    from litellm.proxy._types import Member
+
+    member = Member(user_email=" X@Y.COM ", role="user")
+    assert member.user_email == "x@y.com"
+
+
+def test_member_base_whitespace_only_email_requires_user_id():
+    from litellm.proxy._types import Member
+
+    with pytest.raises(ValueError, match="Either user id or user email"):
+        Member(user_email="   ", role="user")
+
+
+def test_update_user_request_model_validate_normalizes_email():
+    """field_validator must run regardless of how the model is constructed."""
+    a = UpdateUserRequest(user_id="u", user_email=" A@B.COM ")
+    assert a.user_email == "a@b.com"
+
+    b = UpdateUserRequest.model_validate({"user_id": "u", "user_email": "  C@D.COM  "})
+    assert b.user_email == "c@d.com"
+
+    c = UpdateUserRequest.model_validate(a.model_dump())
+    assert c.user_email == "a@b.com"
+
+
+def test_member_base_model_validate_normalizes_email():
+    from litellm.proxy._types import Member
+
+    m = Member.model_validate({"user_email": "  X@Y.COM  ", "role": "user"})
+    assert m.user_email == "x@y.com"

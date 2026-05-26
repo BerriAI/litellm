@@ -135,6 +135,14 @@ async def authenticate_user(  # noqa: PLR0915
             code=500,
         )
 
+    # Trim at the login boundary so an extra space pasted into the form still
+    # matches the trimmed value stored at create time (#28880). Casing is
+    # already handled by the case-insensitive DB lookup below, and we don't
+    # lowercase here to avoid breaking admin logins that set a mixed-case
+    # UI_USERNAME in env.
+    if isinstance(username, str):
+        username = username.strip()
+
     ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email

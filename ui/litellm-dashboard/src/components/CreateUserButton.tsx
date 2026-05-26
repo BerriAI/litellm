@@ -109,6 +109,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const handleCreate = async (formValues: {
     user_id: string;
+    user_email?: string;
     models?: string[];
     user_role: string;
     organization_ids?: string[];
@@ -117,6 +118,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   }) => {
     try {
       NotificationsManager.info("Making API Call");
+      // Trim user_email at submit time as a backstop — Form.Item normalize
+      // only fires on user onChange, not on programmatic setFieldsValue /
+      // initialValues. The backend always normalizes too (#28880).
+      if (typeof formValues.user_email === "string") {
+        formValues.user_email = formValues.user_email.trim();
+      }
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
@@ -199,7 +206,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           showIcon
           className="mb-4"
         />
-        <Form.Item label="User Email" name="user_email">
+        <Form.Item
+          label="User Email"
+          name="user_email"
+          normalize={(v) => (typeof v === "string" ? v.trim() : v)}
+          rules={[{ type: "email", message: "Please enter a valid email address" }]}
+        >
           <TextInput placeholder="" />
         </Form.Item>
         <Form.Item label="User Role" name="user_role">
@@ -281,7 +293,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           labelAlign="left"
           initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
         >
-          <Form.Item label="User Email" name="user_email">
+          <Form.Item
+            label="User Email"
+            name="user_email"
+            normalize={(v) => (typeof v === "string" ? v.trim() : v)}
+            rules={[{ type: "email", message: "Please enter a valid email address" }]}
+          >
             <Input />
           </Form.Item>
           <Form.Item
