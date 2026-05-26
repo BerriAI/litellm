@@ -30,6 +30,9 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
     }
 )
 
+# Pre-resolved DataResidency enum values for fast membership checks
+_VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
+
 
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
@@ -636,7 +639,7 @@ def _get_regional_uplift_multiplier(
     if data_residency is None:
         return 1.0
     residency = data_residency.lower()
-    if residency not in {r.value for r in DataResidency}:
+    if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
     multiplier = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:

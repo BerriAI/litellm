@@ -68,7 +68,19 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
     }
 )
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+# Individual tests (vs. whole files above) that VCR replay can't model:
+# - ``test_router_text_completion_client``: a concurrency test that fires 300
+#   identical requests to verify the async OpenAI client is *reused* across
+#   calls (per its own comment, it "fails when we create a new Async OpenAI
+#   client per request"). vcrpy patches the HTTP transport, so replay never
+#   opens real connections and cannot exercise the client pool the test exists
+#   to validate. Recording instead stores ~300 near-identical episodes, which
+#   blows past MAX_EPISODES_PER_CASSETTE (50) so the cassette is refused on
+#   every run (MISS:OVERFLOW). The endpoint is a free mock, so the live calls
+#   carry no real provider cost.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "test_router.py::test_router_text_completion_client",
+)
 
 
 _verbose_state = VerboseReporterState()

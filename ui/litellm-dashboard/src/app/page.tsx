@@ -1,5 +1,6 @@
 "use client";
 
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -73,10 +74,7 @@ interface ProxySettings {
  * When a user visits ?page=<key>, they are redirected to /ui/<value>.
  * Add entries here as pages are migrated from the if/else chain to path-based routes.
  */
-const LEGACY_REDIRECTS: Record<string, string> = {
-  api_ref: "api-reference",
-  "api-reference": "api-reference",
-};
+const LEGACY_REDIRECTS: Record<string, string> = {};
 
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
@@ -547,6 +545,8 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
+                  ) : page == "api_ref" || page == "api-reference" ? (
+                    <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (
