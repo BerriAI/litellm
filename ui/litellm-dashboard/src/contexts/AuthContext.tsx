@@ -5,7 +5,7 @@ import { jwtDecode } from "jwt-decode";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { formatUserRole } from "@/utils/roles";
-import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
 
 function deleteCookie(name: string, path = "/") {
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
@@ -47,22 +47,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
   const [showSSOBanner, setShowSSOBanner] = useState(true);
 
-  // Read token from cookie on mount and validate JWT expiry.
+  // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
+  // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
+  // (e.g. the unauthenticated login redirect) sees the resolved value rather than
+  // the module-init default. Then read the cookie and validate JWT expiry.
   useEffect(() => {
     let cancelled = false;
 
-    const raw = getCookie("token");
-    const valid = raw && !isJwtExpired(raw) ? raw : null;
+    (async () => {
+      try {
+        await getUiConfig();
+      } catch {
+        // proceed regardless; auth state must still be resolved
+      }
 
-    // Clear expired/invalid token so downstream code doesn't keep trying to use it.
-    if (raw && !valid) {
-      deleteCookie("token", "/");
-    }
+      if (cancelled) return;
 
-    if (!cancelled) {
+      const raw = getCookie("token");
+      const valid = raw && !isJwtExpired(raw) ? raw : null;
+
+      // Clear expired/invalid token so downstream code doesn't keep trying to use it.
+      if (raw && !valid) {
+        deleteCookie("token", "/");
+      }
+
       setToken(valid);
       setAuthLoading(false);
-    }
+    })();
 
     return () => {
       cancelled = true;

@@ -20,7 +20,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
-import { getUiConfig, Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
+import { Organization, proxyBaseUrl, getInProductNudgesCall } from "@/components/networking";
 import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
@@ -193,12 +193,6 @@ function CreateKeyPageContent() {
     setCreateClicked(() => !createClicked);
   };
   const redirectToLogin = authLoading === false && token === null && invitation_id === null;
-
-  useEffect(() => {
-    // Load runtime UI config (populates proxyBaseUrl etc. in networking module).
-    // Auth state (token, JWT decode) is owned by AuthProvider.
-    getUiConfig().catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (redirectToLogin) {
