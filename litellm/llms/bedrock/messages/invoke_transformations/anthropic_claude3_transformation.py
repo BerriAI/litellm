@@ -590,6 +590,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         # accepted `output_config` subset is also narrower than Anthropic's, so
         # consume the newer `output_config.format` shape here instead of
         # forwarding it as an unknown nested key.
+        existing_output_config = anthropic_messages_request.get("output_config")
+        if isinstance(existing_output_config, dict):
+            anthropic_messages_request["output_config"] = dict(existing_output_config)
         output_format = anthropic_messages_request.pop("output_format", None)
         output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_messages_request

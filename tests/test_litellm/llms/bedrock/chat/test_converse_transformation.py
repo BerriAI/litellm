@@ -403,6 +403,44 @@ def test_output_config_format_translated_to_native_output_config_converse():
     assert parsed_schema == {**schema, "additionalProperties": False}
 
 
+def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog):
+    """When Converse model lacks native structured-output support, the silently
+    dropped ``output_config.format`` must surface as a warning so callers can
+    diagnose plain-text responses."""
+    from unittest.mock import patch
+
+    config = AmazonConverseConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    with patch.object(
+        AmazonConverseConfig,
+        "_supports_native_structured_outputs",
+        return_value=False,
+    ):
+        with caplog.at_level("WARNING"):
+            result = config._transform_request(
+                model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={
+                    "maxTokens": 256,
+                    "output_config": {
+                        "format": {"type": "json_schema", "schema": schema},
+                    },
+                },
+                litellm_params={},
+                headers={},
+            )
+
+    assert "outputConfig" not in result
+    assert any(
+        "dropping `output_config.format`" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 @pytest.mark.parametrize(
     "model,expected_effort",
     [

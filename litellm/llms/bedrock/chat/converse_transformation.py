@@ -1258,6 +1258,15 @@ class AmazonConverseConfig(BaseConfig):
                 name=output_config_format.get("name"),
                 description=output_config_format.get("description"),
             )
+        elif output_config is None and output_config_format is not None:
+            litellm.verbose_logger.warning(
+                "Bedrock Converse: dropping `output_config.format` for model=%s — "
+                "model does not advertise `supports_native_structured_output` in "
+                "model_prices_and_context_window.json. The schema will not be "
+                "enforced; pass `response_format` to use the synthetic tool-call "
+                "fallback.",
+                model,
+            )
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
