@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Any, Optional, cast
 
@@ -271,12 +272,10 @@ class BedrockBatchesHandler:
             # (submitTime, endTime, …) and in ResponseMetadata. The
             # logging post_call path calls json.dumps() on dict responses,
             # which chokes on datetime — so we serialize with default=str.
-            import json as _json
-
             logging_obj.post_call(
                 input=batch_id,
                 api_key="",
-                original_response=_json.dumps(response, default=str),
+                original_response=json.dumps(response, default=str),
                 additional_args={"complete_input_dict": {"jobIdentifier": batch_id}},
             )
 
