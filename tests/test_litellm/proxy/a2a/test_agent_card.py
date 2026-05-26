@@ -39,11 +39,15 @@ def _full_upstream_card() -> dict:
     }
 
 
-def test_strips_top_level_url():
+def test_preserves_top_level_url_for_runtime_invocation():
+    # The runtime A2A invocation path reads ``agent_card_params['url']`` to
+    # know where to proxy requests, so the merge must keep the upstream URL
+    # on the stored card. The public well-known endpoint rewrites this field
+    # to the proxy URL before exposing it to clients.
     merged = merge_agent_card(
         _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
     )
-    assert "url" not in merged
+    assert merged["url"] == "http://internal:9999/"
 
 
 def test_overrides_protocol_version():

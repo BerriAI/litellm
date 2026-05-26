@@ -63,6 +63,12 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "security",
     "supportsAuthenticatedExtendedCard",
     "signatures",
+    # ``url`` is retained on the stored card because the runtime A2A invocation
+    # path (``a2a_endpoints.py``) reads ``agent.agent_card_params['url']`` to
+    # locate the upstream backend. The public ``/.well-known/agent-card.json``
+    # endpoint rewrites this field to the proxy URL before serving it to
+    # clients, so retaining it here does not leak the upstream to A2A callers.
+    "url",
 }
 
 _DEFAULT_SKILLS: List[Dict[str, Any]] = [
@@ -121,8 +127,10 @@ def merge_agent_card(
     """
     base: Dict[str, Any] = deepcopy(dict(upstream_card)) if upstream_card else {}
 
-    # Strip the upstream URL so clients don't accidentally bypass the proxy.
-    base.pop("url", None)
+    # Keep the upstream ``url`` on the stored card: the runtime A2A
+    # invocation path reads it from ``agent_card_params`` to know where to
+    # proxy requests. The public well-known endpoint rewrites this field
+    # to the proxy URL before exposing the card to clients.
 
     base["protocolVersion"] = LITELLM_A2A_PROTOCOL_VERSION
 
