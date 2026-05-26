@@ -879,7 +879,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned when neither is available so the caller can fall back to
         ``get_empty_usage()``.
         """
-        in_frame = frame.get("usageMetadata") if isinstance(frame, dict) else None
+        # ``pop`` (rather than ``get``) so a single Gemini frame containing
+        # multiple closing keys (e.g. both ``toolCall`` and
+        # ``serverContent.turnComplete``) cannot attribute the same
+        # ``usageMetadata`` to two ``response.done`` events and double-count
+        # tokens in spend/budget accounting.
+        in_frame = frame.pop("usageMetadata", None) if isinstance(frame, dict) else None
         if isinstance(in_frame, dict):
             self._pending_usage_metadata = None
             return in_frame
@@ -1324,7 +1329,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             server_content_handled = False
 
         tool_call_handled = False
-        for key, value in json_message.items():
+        # Snapshot the items so handlers below can safely mutate
+        # ``json_message`` (e.g. ``_consume_usage_metadata_for_response_done``
+        # pops ``usageMetadata`` to prevent a single frame from attributing
+        # the same token counts to two ``response.done`` events).
+        for key, value in list(json_message.items()):
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
             # ``map_openai_event`` raises ValueError on unknown keys, which
