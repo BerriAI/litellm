@@ -2556,17 +2556,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
-            content_policy_violations = (
-                VertexGeminiConfig().get_flagged_finish_reasons()
+            # Check if the candidate contains functionCall parts.
+            # Gemini may return a safety finishReason alongside valid functionCall data;
+            # in that case we must NOT short-circuit to content_filter,
+            # since _process_candidates and _check_finish_reason correctly
+            # extract tool_calls and return "tool_calls" as the finish reason.
+            candidate_parts = _candidates[0].get("content", {}).get("parts", [])
+            has_function_call = any(
+                "functionCall" in part for part in candidate_parts
             )
-            if (
-                "finishReason" in _candidates[0]
-                and _candidates[0]["finishReason"] in content_policy_violations.keys()
-            ):
-                return self._handle_content_policy_violation(
-                    model_response=model_response,
-                    completion_response=completion_response,
+            if not has_function_call:
+                content_policy_violations = (
+                    VertexGeminiConfig().get_flagged_finish_reasons()
                 )
+                if (
+                    "finishReason" in _candidates[0]
+                    and _candidates[0]["finishReason"]
+                    in content_policy_violations.keys()
+                ):
+                    return self._handle_content_policy_violation(
+                        model_response=model_response,
+                        completion_response=completion_response,
+                    )
 
         model_response.choices = []
         response_id = completion_response.get("responseId")
