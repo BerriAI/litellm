@@ -131,7 +131,11 @@ def test_transform_usage_no_token_details():
     """
     Test that transformation works when completion response has NO token details.
 
-    This simulates providers that don't return detailed token breakdowns.
+    This simulates providers that don't return detailed token breakdowns. Per the
+    OpenAI Responses spec, `input_tokens_details` and `output_tokens_details` must
+    always be present on `response.completed.usage`; strict deserializers (Grok
+    Build CLI, OpenAI SDK) reject the event when either is missing. Defaults are
+    zeros.
     """
     completion_response = create_mock_completion_response(
         model="gpt-4",
@@ -150,9 +154,11 @@ def test_transform_usage_no_token_details():
     assert responses_usage.output_tokens == 20
     assert responses_usage.total_tokens == 30
 
-    # Token details should not be present when not provided
-    assert responses_usage.input_tokens_details is None
-    assert responses_usage.output_tokens_details is None
+    # Token details are always emitted, defaulting to zeros when upstream omits them.
+    assert isinstance(responses_usage.input_tokens_details, InputTokensDetails)
+    assert responses_usage.input_tokens_details.cached_tokens == 0
+    assert isinstance(responses_usage.output_tokens_details, OutputTokensDetails)
+    assert responses_usage.output_tokens_details.reasoning_tokens == 0
 
     print("✓ Transformation works with no token details")
 
@@ -186,8 +192,10 @@ def test_transform_usage_with_cached_tokens_only():
     assert isinstance(responses_usage.input_tokens_details, InputTokensDetails)
     assert responses_usage.input_tokens_details.cached_tokens == 80
 
-    # Output details should not be present (no reasoning_tokens provided)
-    assert responses_usage.output_tokens_details is None
+    # Output details are always emitted (defaulting reasoning_tokens to 0) to match
+    # the OpenAI Responses spec — strict deserializers require the field.
+    assert isinstance(responses_usage.output_tokens_details, OutputTokensDetails)
+    assert responses_usage.output_tokens_details.reasoning_tokens == 0
 
     print("✓ Transformation works with cached_tokens only")
 
@@ -216,8 +224,10 @@ def test_transform_usage_with_reasoning_tokens_only():
     assert responses_usage.output_tokens == 100
     assert responses_usage.total_tokens == 150
 
-    # Input details should not be present (no cached_tokens provided)
-    assert responses_usage.input_tokens_details is None
+    # Input details are always emitted (defaulting cached_tokens to 0) to match
+    # the OpenAI Responses spec.
+    assert isinstance(responses_usage.input_tokens_details, InputTokensDetails)
+    assert responses_usage.input_tokens_details.cached_tokens == 0
 
     # Output details should be present with reasoning_tokens
     assert responses_usage.output_tokens_details is not None
