@@ -179,6 +179,29 @@ async def test_backend_to_client_send_text_receives_str_not_bytes():
 
 
 @pytest.mark.asyncio
+async def test_backend_to_client_skips_non_utf8_binary_frames():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            b"\xff\xfe",
+            json.dumps({"type": "session.created", "session": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.call_count == 1
+    assert isinstance(client_ws.send_text.call_args_list[0].args[0], str)
+
+
+@pytest.mark.asyncio
 async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
     client_ws = MagicMock()
     client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}

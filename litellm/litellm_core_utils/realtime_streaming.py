@@ -567,7 +567,13 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
                 if isinstance(raw_response, bytes):
-                    raw_response = raw_response.decode("utf-8")
+                    try:
+                        raw_response = raw_response.decode("utf-8")
+                    except UnicodeDecodeError:
+                        verbose_logger.warning(
+                            "Received non-UTF-8 binary frame from backend, skipping."
+                        )
+                        continue
 
                 if self.provider_config:
                     try:
