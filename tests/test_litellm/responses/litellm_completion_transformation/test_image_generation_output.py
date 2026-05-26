@@ -7,6 +7,7 @@ https://github.com/BerriAI/litellm/issues/16227
 Verifies that image generation outputs are correctly transformed
 from /chat/completions format to /responses API format.
 """
+
 import pytest
 from unittest.mock import Mock
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -37,9 +38,18 @@ class TestExtractBase64FromDataUrl:
 
     def test_handles_invalid_inputs(self):
         """Should return None for empty/None/malformed inputs"""
-        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("") is None
-        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None) is None
-        assert LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("data:image/png;base64") is None
+        assert (
+            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url("") is None
+        )
+        assert (
+            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(None) is None
+        )
+        assert (
+            LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
+                "data:image/png;base64"
+            )
+            is None
+        )
 
 
 class TestExtractImageGenerationOutputItems:
@@ -52,17 +62,27 @@ class TestExtractImageGenerationOutputItems:
 
         mock_message = Mock(spec=Message)
         mock_message.images = [
-            {"image_url": {"url": "data:image/png;base64,IMG1"}, "type": "image_url", "index": 0},
-            {"image_url": {"url": "data:image/jpeg;base64,IMG2"}, "type": "image_url", "index": 1},
+            {
+                "image_url": {"url": "data:image/png;base64,IMG1"},
+                "type": "image_url",
+                "index": 0,
+            },
+            {
+                "image_url": {"url": "data:image/jpeg;base64,IMG2"},
+                "type": "image_url",
+                "index": 1,
+            },
         ]
 
         mock_choice = Mock(spec=Choices)
         mock_choice.message = mock_message
         mock_choice.finish_reason = "stop"
 
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
+        result = (
+            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+                chat_completion_response=mock_response,
+                choice=mock_choice,
+            )
         )
 
         assert len(result) == 2
@@ -83,9 +103,11 @@ class TestExtractImageGenerationOutputItems:
         mock_choice.message = mock_message
         mock_choice.finish_reason = "stop"
 
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
+        result = (
+            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+                chat_completion_response=mock_response,
+                choice=mock_choice,
+            )
         )
 
         assert result == []
@@ -97,16 +119,22 @@ class TestExtractImageGenerationOutputItems:
 
         mock_message = Mock(spec=Message)
         mock_message.images = [
-            {"image_url": {"url": "data:image/png;base64,TEST"}, "type": "image_url", "index": 0}
+            {
+                "image_url": {"url": "data:image/png;base64,TEST"},
+                "type": "image_url",
+                "index": 0,
+            }
         ]
 
         mock_choice = Mock(spec=Choices)
         mock_choice.message = mock_message
         mock_choice.finish_reason = "length"
 
-        result = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-            chat_completion_response=mock_response,
-            choice=mock_choice,
+        result = (
+            LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
+                chat_completion_response=mock_response,
+                choice=mock_choice,
+            )
         )
 
         assert result[0].status == "incomplete"

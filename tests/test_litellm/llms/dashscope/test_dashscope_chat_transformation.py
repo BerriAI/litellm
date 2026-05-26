@@ -161,8 +161,10 @@ class TestDashScopeConfig:
             },
         ]
 
-        transformed_messages, _ = config.remove_cache_control_flag_from_messages_and_tools(
-            model="dashscope/qwen-turbo", messages=messages
+        transformed_messages, _ = (
+            config.remove_cache_control_flag_from_messages_and_tools(
+                model="dashscope/qwen-turbo", messages=messages
+            )
         )
 
         assert transformed_messages[0].get("cache_control") == {"type": "ephemeral"}

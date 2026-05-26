@@ -131,6 +131,42 @@ async def test_create_views_reraises_undefined_function_error():
 
 
 @pytest.mark.asyncio
+async def test_should_create_missing_views_reltuples_zero():
+    """should return True when reltuples is 0 (fresh empty table)."""
+    from litellm.proxy.db.create_views import should_create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(return_value=[{"reltuples": 0}])
+
+    result = await should_create_missing_views(mock_db)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_should_create_missing_views_reltuples_negative_one():
+    """should return True when reltuples is -1 (table created, no ANALYZE yet)."""
+    from litellm.proxy.db.create_views import should_create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(return_value=[{"reltuples": -1}])
+
+    result = await should_create_missing_views(mock_db)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_should_create_missing_views_reltuples_positive():
+    """should return False when reltuples > 0 (table has data)."""
+    from litellm.proxy.db.create_views import should_create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(return_value=[{"reltuples": 1000}])
+
+    result = await should_create_missing_views(mock_db)
+    assert result is False
+
+
+@pytest.mark.asyncio
 async def test_create_views_creates_view_on_undefined_table_error():
     """should treat 'undefined table' as a missing-view signal and attempt creation."""
     from litellm.proxy.db.create_views import create_missing_views

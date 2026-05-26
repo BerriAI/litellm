@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.oci.chat.transformation import OCIChatConfig
-from litellm.llms.oci.common_utils import OCIError
+from litellm.llms.oci.common_utils import OCIError, sign_with_manual_credentials
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ class TestOCIKeyNormalization:
         # We can't fully test signing without a real key, but we can verify
         # the error message indicates the key was processed (not a type error)
         with pytest.raises(Exception) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -67,7 +67,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(Exception) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -88,7 +88,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(OCIError) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -110,7 +110,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(OCIError) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -208,7 +208,9 @@ class TestOCIImageUrlTransformation:
 
     def test_image_url_as_string(self):
         """Test that image_url as a plain string works."""
-        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
 
         messages = [
             {
@@ -230,14 +232,19 @@ class TestOCIImageUrlTransformation:
 
     def test_image_url_as_openai_object(self):
         """Test that image_url as OpenAI-style object {"url": "..."} works."""
-        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
 
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What is in this image?"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"},
+                    },
                 ],
             }
         ]
@@ -256,14 +263,19 @@ class TestOCIImageUrlTransformation:
         Fixes: https://github.com/BerriAI/litellm/issues/19589
         OCI expects imageUrl to be an object with a 'url' property, not a plain string.
         """
-        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
 
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Describe this image."},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,ABC123"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,ABC123"},
+                    },
                 ],
             }
         ]
@@ -277,12 +289,14 @@ class TestOCIImageUrlTransformation:
         # Verify the structure matches OCI's expected format
         assert serialized == {
             "type": "IMAGE",
-            "imageUrl": {"url": "data:image/png;base64,ABC123"}
+            "imageUrl": {"url": "data:image/png;base64,ABC123"},
         }
 
     def test_image_url_invalid_type_raises_error(self):
         """Test that invalid image_url type raises an error."""
-        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
 
         messages = [
             {
@@ -301,14 +315,19 @@ class TestOCIImageUrlTransformation:
 
     def test_image_url_object_missing_url_raises_error(self):
         """Test that object without 'url' property raises an error."""
-        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
 
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What is in this image?"},
-                    {"type": "image_url", "image_url": {"detail": "high"}},  # Missing 'url'
+                    {
+                        "type": "image_url",
+                        "image_url": {"detail": "high"},
+                    },  # Missing 'url'
                 ],
             }
         ]

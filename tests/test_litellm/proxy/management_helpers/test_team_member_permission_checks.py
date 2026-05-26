@@ -195,7 +195,9 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
     async def test_raises_when_user_not_in_keys_team(self, monkeypatch):
         """Non-members should be blocked from team-scoped key management endpoints."""
         from litellm.proxy.management_endpoints import key_management_endpoints
-        from litellm.proxy.management_helpers import team_member_permission_checks as module
+        from litellm.proxy.management_helpers import (
+            team_member_permission_checks as module,
+        )
 
         async def _mock_get_team_object(**kwargs):
             team = MagicMock()
@@ -204,7 +206,9 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
             return team
 
         monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
-        monkeypatch.setattr(key_management_endpoints, "_get_user_in_team", lambda **kwargs: None)
+        monkeypatch.setattr(
+            key_management_endpoints, "_get_user_in_team", lambda **kwargs: None
+        )
 
         user_api_key_dict = MagicMock()
         user_api_key_dict.user_role = "internal_user"
@@ -229,7 +233,9 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
     async def test_allows_team_admin_in_keys_team(self, monkeypatch):
         """Team admins of the key's team should be allowed."""
         from litellm.proxy.management_endpoints import key_management_endpoints
-        from litellm.proxy.management_helpers import team_member_permission_checks as module
+        from litellm.proxy.management_helpers import (
+            team_member_permission_checks as module,
+        )
 
         async def _mock_get_team_object(**kwargs):
             team = MagicMock()

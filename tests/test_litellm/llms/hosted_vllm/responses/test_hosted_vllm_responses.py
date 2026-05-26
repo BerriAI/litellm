@@ -114,7 +114,10 @@ def test_hosted_vllm_responses_create_with_explicit_none_extra_body():
     )
 
     # extra_body=None should be normalized to an empty dict (or absent)
-    assert optional_params.get("extra_body") is not None or "extra_body" not in optional_params
+    assert (
+        optional_params.get("extra_body") is not None
+        or "extra_body" not in optional_params
+    )
 
 
 def test_hosted_vllm_provider_config_registration():

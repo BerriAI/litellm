@@ -157,8 +157,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     def _get_agent_runtime_arn(self, model: str) -> str:
         """
         Extract ARN from model string
-        model = "agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC"
-        returns: "arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC"
+        model = "agentcore/arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp"
+        returns: "arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp"
         """
         parts = model.split("/", 1)
         if len(parts) != 2 or parts[0] != "agentcore":
@@ -170,7 +170,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     def _extract_region_from_arn(self, arn: str) -> str:
         """
         Extract region from ARN
-        arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC
+        arn:aws:bedrock-agentcore:us-west-2:941277531214:runtime/hosted_agent_r9jvp-Rq79QFC2fp
         returns: us-west-2
         """
         parts = arn.split(":")
@@ -891,9 +891,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 )
             parsed = self._parse_json_response(response_json)
 
-            async def _json_as_async_stream() -> AsyncGenerator[
-                ModelResponseStream, None
-            ]:
+            async def _json_as_async_stream() -> (
+                AsyncGenerator[ModelResponseStream, None]
+            ):
                 # Content chunk
                 content_chunk = ModelResponseStream(
                     id=f"chatcmpl-{uuid.uuid4()}",

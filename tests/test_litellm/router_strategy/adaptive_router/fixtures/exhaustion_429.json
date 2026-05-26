@@ -1,0 +1,9 @@
+[
+  {
+    "user_content": "do the thing",
+    "assistant_content": null,
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 429
+  }
+]

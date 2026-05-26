@@ -7,7 +7,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
-  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
+  listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -174,6 +174,47 @@ describe("MCPServerEdit (stdio)", () => {
     expect(payload.command).toBe("npx");
     expect(payload.args).toEqual(["-y", "@circleci/mcp-server-circleci"]);
     expect(payload.env).toEqual({ CIRCLECI_TOKEN: "new-token", CIRCLECI_BASE_URL: "https://circleci.com" });
+  });
+});
+
+describe("MCPServerEdit (delegate auth)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should clear delegate auth flag when saving a non-oauth2 server", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "none",
+      delegate_auth_to_upstream: false,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "none",
+          delegate_auth_to_upstream: true,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("none");
+    expect(payload.delegate_auth_to_upstream).toBe(false);
   });
 });
 

@@ -19,7 +19,12 @@ ADVISOR_TOOL = {
     "model": "claude-opus-4-6",
 }
 
-MESSAGES = [{"role": "user", "content": "Write a Python function to check if a number is prime."}]
+MESSAGES = [
+    {
+        "role": "user",
+        "content": "Write a Python function to check if a number is prime.",
+    }
+]
 
 
 def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
@@ -34,7 +39,9 @@ def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
     }
 
 
-def _advisor_call_resp(question: str = "How do I approach this?", tool_id: str = "tid_01") -> Dict:
+def _advisor_call_resp(
+    question: str = "How do I approach this?", tool_id: str = "tid_01"
+) -> Dict:
     return {
         "id": "msg_int_test",
         "type": "message",
@@ -75,7 +82,7 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return _advisor_call_resp()   # executor: calls advisor
+            return _advisor_call_resp()  # executor: calls advisor
         if call_count == 2:
             return _text_resp("Use trial division.", model="claude-opus-4-6")  # advisor
         return _text_resp("def is_prime(n): ...")  # executor: final
@@ -99,10 +106,14 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
     assert isinstance(result, dict)
     content = result.get("content", [])
     text_blocks = [b for b in content if b.get("type") == "text"]
-    advisor_uses = [b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"]
+    advisor_uses = [
+        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
+    ]
 
     assert len(text_blocks) >= 1, "Final response must have text"
-    assert len(advisor_uses) == 0, "No advisor tool_use blocks must appear in final output"
+    assert (
+        len(advisor_uses) == 0
+    ), "No advisor tool_use blocks must appear in final output"
 
 
 # ---------------------------------------------------------------------------

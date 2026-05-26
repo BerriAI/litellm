@@ -1,6 +1,15 @@
 import datetime
 import traceback
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    Optional,
+    Union,
+    cast,
+)
 
 import anyio
 from litellm.files.types import FileContentProvider
@@ -10,6 +19,7 @@ if TYPE_CHECKING:
         Logging as LiteLLMLoggingObj,
     )
     from litellm.types.utils import StandardLoggingHiddenParams, StandardLoggingPayload
+
 
 class FileContentStreamingResponse:
     """
@@ -84,7 +94,9 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        self.stream_iterator = cast(
+            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
+        )
 
         # Shield cleanup from request cancellation so upstream HTTP connections
         # are released promptly on client disconnects.
@@ -103,7 +115,9 @@ class FileContentStreamingResponse:
         self._close_completed = True
         self._logging_completed = True
         stream_to_close = self.stream_iterator
-        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        self.stream_iterator = cast(
+            Union[Iterator[bytes], AsyncIterator[bytes]], iter(())
+        )
 
         if hasattr(stream_to_close, "close"):
             cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]

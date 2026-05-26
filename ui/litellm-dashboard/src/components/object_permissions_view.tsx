@@ -13,6 +13,7 @@ interface ObjectPermission {
   vector_stores: string[];
   agents?: string[];
   agent_access_groups?: string[];
+  search_tools?: string[];
 }
 
 interface ObjectPermissionsViewProps {
@@ -35,6 +36,7 @@ export function ObjectPermissionsView({
   const mcpToolsets = objectPermission?.mcp_toolsets || [];
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
+  const searchTools = objectPermission?.search_tools || [];
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
@@ -51,6 +53,16 @@ export function ObjectPermissionsView({
         agentAccessGroups={agentAccessGroups}
         accessToken={accessToken}
       />
+      <div className="rounded-md border border-gray-100 p-4">
+        <Text className="text-sm font-medium text-gray-800">Search tools</Text>
+        {searchTools.length === 0 ? (
+          <Text className="mt-1 block text-xs text-gray-500">
+            No restriction — all configured search tools are allowed for this team.
+          </Text>
+        ) : (
+          <Text className="mt-1 block text-xs text-gray-700">{searchTools.join(", ")}</Text>
+        )}
+      </div>
     </div>
   );
 

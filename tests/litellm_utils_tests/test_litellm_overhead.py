@@ -60,14 +60,17 @@ async def _vertex_ai_mocks():
         await asyncio.sleep(0.2)  # simulate ~200ms network latency
         return fake_response
 
-    with patch(
-        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token_async",
-        new_callable=AsyncMock,
-        return_value=("Bearer fake-token", "fake-project"),
-    ), patch.object(
-        httpx.AsyncClient,
-        "send",
-        new=fake_send,
+    with (
+        patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token_async",
+            new_callable=AsyncMock,
+            return_value=("Bearer fake-token", "fake-project"),
+        ),
+        patch.object(
+            httpx.AsyncClient,
+            "send",
+            new=fake_send,
+        ),
     ):
         yield
 
@@ -79,7 +82,7 @@ async def _vertex_ai_mocks():
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
         "openai/self_hosted",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "vertex_ai/gemini-1.5-flash",
     ],
 )
@@ -90,9 +93,9 @@ async def test_litellm_overhead_non_streaming(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    kwargs ={
+    kwargs = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model
+        "model": model,
     }
     #########################################################
     # Specific cases for models
@@ -138,14 +141,13 @@ async def test_litellm_overhead_non_streaming(model):
     pass
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",
     [
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "openai/self_hosted",
     ],
 )
@@ -153,7 +155,7 @@ async def test_litellm_overhead_stream(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    kwargs ={
+    kwargs = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
         "model": model,
         "stream": True,
@@ -165,10 +167,8 @@ async def test_litellm_overhead_stream(model):
         kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
         # warmup call for auth validation on vertex_ai models
         await litellm.acompletion(**kwargs)
-    
-    response = await litellm.acompletion(
-        **kwargs
-    )
+
+    response = await litellm.acompletion(**kwargs)
 
     async for chunk in response:
         print()
@@ -204,28 +204,34 @@ async def test_litellm_overhead_cache_hit():
     Makes two identical requests and checks that the second one (cache hit) has overhead in hidden params.
     """
     from litellm.caching.caching import Cache
-    
+
     litellm._turn_on_debug()
     litellm.cache = Cache()
     print("test2 for caching")
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "Hello, world! Cache test"}]
-    response1 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
+    response1 = await litellm.acompletion(
+        model="gpt-4.1-nano", messages=messages, caching=True
+    )
     await asyncio.sleep(2)
     # Wait for any pending background tasks to complete
     pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
     print("all pending tasks", pending_tasks)
     if pending_tasks:
         await asyncio.wait(pending_tasks, timeout=1.0)
-    
-    response2 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
+
+    response2 = await litellm.acompletion(
+        model="gpt-4.1-nano", messages=messages, caching=True
+    )
     print("RESPONSE 1", response1)
     print("RESPONSE 2", response2)
     assert response1.id == response2.id
 
     print("response 2 hidden params", response2._hidden_params)
 
-
     assert "_response_ms" in response2._hidden_params
     total_time_ms = response2._hidden_params["_response_ms"]
-    assert response2._hidden_params["litellm_overhead_time_ms"] > 0 and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+    assert (
+        response2._hidden_params["litellm_overhead_time_ms"] > 0
+        and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+    )

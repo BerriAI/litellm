@@ -28,7 +28,7 @@ jobs:
           - name: "key-generation"
             path: "tests/proxy_unit_tests/test_[k-o]*.py"
           - name: "proxy-config"
-            path: "tests/proxy_unit_tests/test_prisma*.py tests/proxy_unit_tests/test_project*.py tests/proxy_unit_tests/test_prompt*.py tests/proxy_unit_tests/test_proxy_[c-r]*.py"
+            path: "tests/proxy_unit_tests/test_prisma*.py tests/proxy_unit_tests/test_prompt*.py tests/proxy_unit_tests/test_proxy_[c-r]*.py"
           - name: "proxy-server"
             path: "tests/proxy_unit_tests/test_proxy_server.py"
           - name: "proxy-server-extras"

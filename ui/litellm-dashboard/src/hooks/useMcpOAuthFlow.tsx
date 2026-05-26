@@ -11,6 +11,7 @@ import {
   serverRootPath,
 } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
@@ -33,25 +34,6 @@ interface UseMcpOAuthFlowResult {
   error: string | null;
   tokenResponse: Record<string, any> | null;
 }
-
-const base64UrlEncode = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const generateCodeVerifier = () => {
-  const array = new Uint8Array(32);
-  window.crypto.getRandomValues(array);
-  return base64UrlEncode(array.buffer);
-};
-
-const generateCodeChallenge = async (verifier: string) => {
-  const data = new TextEncoder().encode(verifier);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return base64UrlEncode(digest);
-};
 
 export const useMcpOAuthFlow = ({
   accessToken,
@@ -242,12 +224,21 @@ export const useMcpOAuthFlow = ({
       if (!storedPayload) {
         return;
       }
-      
+
+      // Guard: the callback page writes to the admin result key for *all* OAuth
+      // flows (including the tools re-auth flow).  Only proceed if this hook's
+      // own flow state exists, meaning startOAuthFlow() was actually called here.
+      // Without this guard, a tools re-auth redirect triggers a spurious
+      // "OAuth session state was lost" error from this hook.
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      if (!storedFlowState) {
+        return;
+      }
+
       // Mark as processing
       processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
-      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
+      flowState = JSON.parse(storedFlowState);
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;
@@ -297,6 +288,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: flowState.clientSecret,
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
+        accessToken,
       });
 
       onTokenReceived(token);

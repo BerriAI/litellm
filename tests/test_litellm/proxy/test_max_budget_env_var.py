@@ -18,8 +18,9 @@ async def test_max_budget_string_converted_to_float():
     string. initialize() should convert it to float so the comparison
     `litellm.max_budget > 0` doesn't raise TypeError.
     """
-    with patch("litellm.proxy.common_utils.banner.show_banner"), patch(
-        "litellm.proxy.proxy_server.generate_feedback_box"
+    with (
+        patch("litellm.proxy.common_utils.banner.show_banner"),
+        patch("litellm.proxy.proxy_server.generate_feedback_box"),
     ):
         from litellm.proxy.proxy_server import initialize
 
@@ -35,8 +36,9 @@ async def test_max_budget_string_converted_to_float():
 @pytest.mark.asyncio
 async def test_max_budget_float_stays_float():
     """max_budget as float should still work."""
-    with patch("litellm.proxy.common_utils.banner.show_banner"), patch(
-        "litellm.proxy.proxy_server.generate_feedback_box"
+    with (
+        patch("litellm.proxy.common_utils.banner.show_banner"),
+        patch("litellm.proxy.proxy_server.generate_feedback_box"),
     ):
         from litellm.proxy.proxy_server import initialize
 

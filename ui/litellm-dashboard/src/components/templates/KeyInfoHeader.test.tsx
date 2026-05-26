@@ -8,10 +8,12 @@ const MOCK_DATA: KeyInfoData = {
   keyId: "sk-1234567890abcdef",
   userId: "user-abc-123",
   userEmail: "test@example.com",
+  userAlias: null,
   createdBy: "admin@example.com",
   createdAt: "Oct 29, 2025 at 1:26 AM",
   lastUpdated: "Oct 29, 2025 at 1:47 AM",
   lastActive: "Oct 29, 2025 at 2:00 AM",
+  expires: "Never",
 };
 
 describe("KeyInfoHeader", () => {
@@ -28,12 +30,11 @@ describe("KeyInfoHeader", () => {
 
   it("should render all metadata fields", () => {
     render(<KeyInfoHeader data={MOCK_DATA} />);
-    expect(screen.getByText("User Email")).toBeInTheDocument();
+    expect(screen.getByText("User")).toBeInTheDocument();
     expect(screen.getByText("test@example.com")).toBeInTheDocument();
-    expect(screen.getByText("User ID")).toBeInTheDocument();
-    expect(screen.getByText("user-abc-123")).toBeInTheDocument();
     expect(screen.getByText("Created At")).toBeInTheDocument();
     expect(screen.getByText("Created By")).toBeInTheDocument();
+    expect(screen.getByText("Expires")).toBeInTheDocument();
     expect(screen.getByText("Last Updated")).toBeInTheDocument();
     expect(screen.getByText("Last Active")).toBeInTheDocument();
   });
@@ -122,8 +123,8 @@ describe("KeyInfoHeader", () => {
   });
 
   describe("default_user_id handling", () => {
-    it("should show Default Proxy Admin tag for User ID when value is default_user_id", () => {
-      const data = { ...MOCK_DATA, userId: "default_user_id" };
+    it("should show Default Proxy Admin tag for User when userId is default_user_id and no alias/email", () => {
+      const data = { ...MOCK_DATA, userId: "default_user_id", userEmail: "", userAlias: null };
       render(<KeyInfoHeader data={data} />);
       expect(screen.getAllByText("Default Proxy Admin").length).toBeGreaterThanOrEqual(1);
     });
@@ -135,9 +136,27 @@ describe("KeyInfoHeader", () => {
     });
   });
 
-  describe("empty value handling", () => {
-    it("should show '-' for User Email when value is empty", () => {
-      const data = { ...MOCK_DATA, userEmail: "" };
+  describe("User field fallbacks", () => {
+    it("should display userAlias as primary when set, overriding email and userId", () => {
+      const data = { ...MOCK_DATA, userAlias: "alice" };
+      render(<KeyInfoHeader data={data} />);
+      expect(screen.getByText("alice")).toBeInTheDocument();
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    });
+
+    it("should display userEmail when alias is null", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+    });
+
+    it("should fall back to userId when alias and email are missing", () => {
+      const data = { ...MOCK_DATA, userEmail: "", userAlias: null };
+      render(<KeyInfoHeader data={data} />);
+      expect(screen.getByText("user-abc-123")).toBeInTheDocument();
+    });
+
+    it("should show '-' when alias, email, and userId are all empty", () => {
+      const data = { ...MOCK_DATA, userId: "", userEmail: "", userAlias: null };
       render(<KeyInfoHeader data={data} />);
       expect(screen.getByText("-")).toBeInTheDocument();
     });

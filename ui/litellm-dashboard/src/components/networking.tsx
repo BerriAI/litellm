@@ -81,7 +81,9 @@ const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
 // to the backend — use relative URLs (null) so rewrites can intercept them.
 const defaultProxyBaseUrl =
-  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+  process.env.NEXT_PUBLIC_BASE_URL
+    ? process.env.NEXT_PUBLIC_BASE_URL
+    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
     ? "http://localhost:4000"
     : null;
 const defaultServerRootPath = "/";
@@ -123,10 +125,11 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
     return;
   }
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl =
-    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-      ? "http://localhost:4000"
-      : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
+    ? process.env.NEXT_PUBLIC_BASE_URL
+    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+    ? "http://localhost:4000"
+    : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
@@ -1383,7 +1386,7 @@ export const teamInfoCall = async (accessToken: string, teamID: string | null) =
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
     if (teamID) {
-      url = `${url}?team_id=${teamID}`;
+      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
     }
     console.log("in teamInfoCall");
     const response = await fetch(url, {
@@ -2274,6 +2277,19 @@ export const mcpHubPublicServersCall = async () => {
   if (!response.ok) {
     console.error(`mcpHubPublicServersCall failed with status ${response.status}`);
     return [];
+  }
+  return response.json();
+};
+
+export const skillHubPublicCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/skill_hub` : `/public/skill_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    console.error(`skillHubPublicCall failed with status ${response.status}`);
+    return { plugins: [] };
   }
   return response.json();
 };
@@ -3759,6 +3775,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  allowed_models?: string[] | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -3897,6 +3914,9 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
+    }
+    if (formValues.allowed_models !== undefined) {
+      requestBody.allowed_models = formValues.allowed_models;
     }
 
     console.log("Final request body:", requestBody);
@@ -7048,46 +7068,33 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
 };
 
 export const listMCPTools = async (
-  accessToken: string, 
+  accessToken: string,
   serverId: string,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
 ) => {
+  // Construct base URL
+  let url = proxyBaseUrl
+    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+    : `/mcp-rest/tools/list?server_id=${serverId}`;
+
+  console.log("Fetching MCP tools from:", url);
+
+  const headers: Record<string, string> = {
+    [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    ...customHeaders, // Merge custom headers for passthrough auth
+  };
+
+  let response: Response;
   try {
-    // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-      : `/mcp-rest/tools/list?server_id=${serverId}`;
-
-    console.log("Fetching MCP tools from:", url);
-
-    const headers: Record<string, string> = {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      ...customHeaders, // Merge custom headers for passthrough auth
-    };
-
-    const response = await fetch(url, {
+    response = await fetch(url, {
       method: "GET",
       headers,
     });
-
-    const data = await response.json();
-    console.log("Fetched MCP tools response:", data);
-
-    if (!response.ok) {
-      // If the server returned an error response, use it
-      if (data.error && data.message) {
-        throw new Error(data.message);
-      }
-      // Otherwise use a generic error
-      throw new Error("Failed to fetch MCP tools");
-    }
-
-    // Return the full response object which includes tools, error, message, and stack_trace
-    return data;
   } catch (error) {
-    console.error("Failed to fetch MCP tools:", error);
-    // Return an error response in the same format as the API
+    // Network-level failure (no HTTP response). Preserve legacy shape so the
+    // caller can render a generic error message without crashing.
+    console.error("Failed to fetch MCP tools (network error):", error);
     return {
       tools: [],
       error: "network_error",
@@ -7095,6 +7102,44 @@ export const listMCPTools = async (
       stack_trace: null,
     };
   }
+
+  let data: any = null;
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    console.error("Failed to parse MCP tools response:", parseError);
+    return {
+      tools: [],
+      error: "parse_error",
+      message: "Failed to parse MCP tools response",
+      status: response.status,
+      statusText: response.statusText,
+      stack_trace: null,
+    };
+  }
+  console.log("Fetched MCP tools response:", data);
+
+  if (!response.ok) {
+    // Preserve the legacy "never throws" contract so existing callers
+    // (e.g. MCPToolPermissions, MCPAppsPanel, MCPConnectPicker) can continue
+    // to inspect `result.error` / `result.message`. Attach `status` so
+    // callers that need to react to auth failures (e.g. the useQuery in
+    // mcp_tools.tsx) can still detect 401s from the returned object.
+    const errorMessage =
+      (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    return {
+      tools: [],
+      error: (data && data.error) || `http_${response.status}`,
+      message: errorMessage,
+      status: response.status,
+      statusText: response.statusText,
+      details: data,
+      stack_trace: null,
+    };
+  }
+
+  // Return the full response object which includes tools, error, message, and stack_trace
+  return data;
 };
 
 interface CallMCPToolOptions {
@@ -7268,9 +7313,28 @@ export const tagInfoCall = async (accessToken: string, tagNames: string[]): Prom
   }
 };
 
-export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
+const formatYmd = (value: Date): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const tagListCall = async (
+  accessToken: string,
+  startTime?: Date | null,
+  endTime?: Date | null,
+): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
+
+    if (startTime && endTime) {
+      const params = new URLSearchParams({
+        start_date: formatYmd(startTime),
+        end_date: formatYmd(endTime),
+      });
+      url = `${url}?${params.toString()}`;
+    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -8761,6 +8825,7 @@ interface ExchangeMcpOAuthTokenParams {
   clientSecret?: string;
   codeVerifier: string;
   redirectUri: string;
+  accessToken?: string | null;
 }
 
 export const exchangeMcpOAuthToken = async ({
@@ -8770,6 +8835,7 @@ export const exchangeMcpOAuthToken = async ({
   clientSecret,
   codeVerifier,
   redirectUri,
+  accessToken,
 }: ExchangeMcpOAuthTokenParams) => {
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
@@ -8787,11 +8853,16 @@ export const exchangeMcpOAuthToken = async ({
   body.set("code_verifier", codeVerifier);
   body.set("redirect_uri", redirectUri);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: body.toString(),
   });
 
@@ -9965,4 +10036,148 @@ export const listMCPUserCredentials = async (
   });
   if (!response.ok) return [];
   return response.json();
+};
+
+// ============================================================
+// Memory management (/v1/memory)
+// ============================================================
+
+/**
+ * Encode a memory key for use in a URL path segment.
+ *
+ * The backend route is declared as `/v1/memory/{key:path}`, which supports
+ * slashes in the key (e.g. `user/123/notes`). Plain `encodeURIComponent`
+ * encodes `/` as `%2F`, and some proxies/middlewares (nginx default,
+ * CloudFlare, AWS ALB) either reject or silently re-decode `%2F`, which
+ * can break the request before FastAPI ever sees it.
+ *
+ * We keep slashes literal as path delimiters while still encoding every
+ * other potentially-unsafe character (spaces, `?`, `#`, `%`, etc.) per
+ * path segment.
+ */
+const encodeMemoryKeyForPath = (key: string): string =>
+  key.split("/").map(encodeURIComponent).join("/");
+
+export interface MemoryRow {
+  memory_id: string;
+  key: string;
+  value: string;
+  metadata?: unknown;
+  user_id?: string | null;
+  team_id?: string | null;
+  created_at?: string;
+  created_by?: string | null;
+  updated_at?: string;
+  updated_by?: string | null;
+}
+
+export interface MemoryListResponse {
+  memories: MemoryRow[];
+  total: number;
+}
+
+export const fetchMemoryList = async (
+  accessToken: string,
+  options: {
+    key?: string;
+    keyPrefix?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+): Promise<MemoryListResponse> => {
+  const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const params = new URLSearchParams();
+  // keyPrefix takes precedence — backend also does, but we omit `key`
+  // to keep the URL clean and intent obvious.
+  if (options.keyPrefix) {
+    params.append("key_prefix", options.keyPrefix);
+  } else if (options.key) {
+    params.append("key", options.key);
+  }
+  if (options.page != null) params.append("page", String(options.page));
+  if (options.pageSize != null)
+    params.append("page_size", String(options.pageSize));
+  const url = params.toString() ? `${base}?${params.toString()}` : base;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const createMemory = async (
+  accessToken: string,
+  payload: { key: string; value: string; metadata?: unknown },
+): Promise<MemoryRow> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
+  const body: Record<string, unknown> = {
+    key: payload.key,
+    value: payload.value,
+  };
+  if (payload.metadata !== undefined) body.metadata = payload.metadata;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const updateMemory = async (
+  accessToken: string,
+  key: string,
+  payload: { value?: string; metadata?: unknown },
+): Promise<MemoryRow> => {
+  const encoded = encodeMemoryKeyForPath(key);
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/memory/${encoded}`
+    : `/v1/memory/${encoded}`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const deleteMemory = async (
+  accessToken: string,
+  key: string,
+): Promise<void> => {
+  const encoded = encodeMemoryKeyForPath(key);
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/memory/${encoded}`
+    : `/v1/memory/${encoded}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
 };

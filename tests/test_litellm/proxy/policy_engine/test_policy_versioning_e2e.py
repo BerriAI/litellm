@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
-from litellm.types.proxy.policy_engine import (PolicyCreateRequest,
-                                               PolicyUpdateRequest)
+from litellm.types.proxy.policy_engine import PolicyCreateRequest, PolicyUpdateRequest
 
 
 def _make_row(

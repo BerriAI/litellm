@@ -15,6 +15,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -22,8 +23,87 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store_id,
+)
 
 router = APIRouter()
+
+
+def _raise_vector_store_scan_depth_exceeded() -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while scanning vector_store_id values"
+        },
+    )
+
+
+def _append_payload_to_scan_stack(
+    payload_stack: list[tuple[Any, int]],
+    value: Any,
+    next_depth: int,
+) -> None:
+    if isinstance(value, dict):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            _raise_vector_store_scan_depth_exceeded()
+        payload_stack.append((value, next_depth))
+    elif isinstance(value, list):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            if any(isinstance(item, (dict, list)) for item in value):
+                _raise_vector_store_scan_depth_exceeded()
+            return
+        payload_stack.append((value, next_depth))
+
+
+def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
+    vector_store_ids: set[str] = set()
+    payload_stack = [(payload, 0)]
+
+    while payload_stack:
+        current_payload, depth = payload_stack.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            _raise_vector_store_scan_depth_exceeded()
+
+        if isinstance(current_payload, dict):
+            for key, value in current_payload.items():
+                if key == "vector_store_id":
+                    if not isinstance(value, str) or not value:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "vector_store_id must be a non-empty string"
+                            },
+                        )
+                    vector_store_ids.add(value)
+                    continue
+                if isinstance(value, (dict, list)):
+                    _append_payload_to_scan_stack(
+                        payload_stack=payload_stack,
+                        value=value,
+                        next_depth=depth + 1,
+                    )
+        elif isinstance(current_payload, list):
+            for item in current_payload:
+                _append_payload_to_scan_stack(
+                    payload_stack=payload_stack,
+                    value=item,
+                    next_depth=depth + 1,
+                )
+
+    return vector_store_ids
+
+
+async def _authorize_nested_vector_store_ids(
+    payload: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload)):
+        await assert_user_can_access_vector_store_id(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+        )
 
 
 def _build_file_metadata_entry(
@@ -180,9 +260,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_name=vector_store_name,
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
-                litellm_params=provider_specific_params
-                if provider_specific_params
-                else None,
+                litellm_params=(
+                    provider_specific_params if provider_specific_params else None
+                ),
                 team_id=user_api_key_dict.team_id,
                 user_id=user_api_key_dict.user_id,
             )
@@ -304,6 +384,41 @@ async def parse_rag_ingest_request(
             },
         )
 
+    # Credential fields must come from server configuration, not user requests.
+    # Accepting user-supplied credentials (e.g. vertex_credentials with
+    # type=external_account + credential_source.file=/proc/1/environ) allows
+    # any authenticated user to exfiltrate host secrets via SSRF through
+    # google-auth's identity_pool credential refresh.
+    # api_base is also blocked: a user-controlled base URL causes the server
+    # to send its configured provider credentials to an attacker endpoint.
+    _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS = {
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "azure_ad_token",
+        "api_key",
+        "api_base",
+    }
+    vector_store_opts = ingest_options.get("vector_store", {})
+    if isinstance(vector_store_opts, dict):
+        for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
+            if field in vector_store_opts:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"'{field}' cannot be set in ingest_options.vector_store. "
+                        "Credentials must be configured server-side."
+                    },
+                )
+
     return ingest_options, file_data, file_url, file_id
 
 
@@ -384,6 +499,21 @@ async def rag_ingest(
                     "Provide 'vector_store_id' in ingest_options.vector_store."
                 },
             )
+
+        await _authorize_nested_vector_store_ids(
+            payload=ingest_options,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        try:
+            is_request_body_safe(
+                request_body=ingest_options.get("vector_store", {}),
+                general_settings=general_settings,
+                llm_router=llm_router,
+                model="",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": str(e)})
 
         # Add litellm data
         request_data: Dict[str, Any] = {}
@@ -537,11 +667,20 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "retrieval_config is required"},
             )
+        if not isinstance(retrieval_config, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config must be an object"},
+            )
         if "vector_store_id" not in retrieval_config:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
             )
+        await _authorize_nested_vector_store_ids(
+            payload=retrieval_config,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Add litellm data
         request_data: Dict[str, Any] = {}

@@ -23,13 +23,9 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@tremor/react";
-import { Switch, Tooltip } from "antd";
+import { Tooltip } from "antd";
 import React, { useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import {
-  disableClaudeCodePlugin,
-  enableClaudeCodePlugin,
-} from "../networking";
 import {
   getCategoryBadgeColor
 } from "./helpers";
@@ -40,7 +36,6 @@ interface PluginTableProps {
   isLoading: boolean;
   onDeleteClick: (pluginName: string, displayName: string) => void;
   accessToken: string | null;
-  onPluginUpdated: () => void;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
 }
@@ -50,14 +45,12 @@ const PluginTable: React.FC<PluginTableProps> = ({
   isLoading,
   onDeleteClick,
   accessToken,
-  onPluginUpdated,
   isAdmin,
   onPluginClick,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "created_at", desc: true },
   ]);
-  const [togglingPlugin, setTogglingPlugin] = useState<string | null>(null);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
@@ -70,29 +63,9 @@ const PluginTable: React.FC<PluginTableProps> = ({
     NotificationsManager.success("Copied to clipboard!");
   };
 
-  const handleToggleEnabled = async (plugin: Plugin) => {
-    if (!accessToken) return;
-
-    setTogglingPlugin(plugin.id);
-    try {
-      if (plugin.enabled) {
-        await disableClaudeCodePlugin(accessToken, plugin.name);
-        NotificationsManager.success(`Plugin "${plugin.name}" disabled`);
-      } else {
-        await enableClaudeCodePlugin(accessToken, plugin.name);
-        NotificationsManager.success(`Plugin "${plugin.name}" enabled`);
-      }
-      onPluginUpdated();
-    } catch (error) {
-      NotificationsManager.error("Failed to toggle plugin status");
-    } finally {
-      setTogglingPlugin(null);
-    }
-  };
-
   const columns: ColumnDef<Plugin>[] = [
     {
-      header: "Plugin Name",
+      header: "Skill Name",
       accessorKey: "name",
       cell: ({ row }) => {
         const plugin = row.original;
@@ -165,32 +138,18 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Enabled",
+      header: "Public",
       accessorKey: "enabled",
       cell: ({ row }) => {
         const plugin = row.original;
         return (
-          <div className="flex items-center gap-2">
-            <Badge
-              color={plugin.enabled ? "green" : "gray"}
-              className="text-xs font-normal"
-              size="xs"
-            >
-              {plugin.enabled ? "Yes" : "No"}
-            </Badge>
-            {isAdmin && (
-              <Tooltip
-                title={plugin.enabled ? "Disable plugin" : "Enable plugin"}
-              >
-                <Switch
-                  size="small"
-                  checked={plugin.enabled}
-                  loading={togglingPlugin === plugin.id}
-                  onChange={() => handleToggleEnabled(plugin)}
-                />
-              </Tooltip>
-            )}
-          </div>
+          <Badge
+            color={plugin.enabled ? "green" : "gray"}
+            className="text-xs font-normal"
+            size="xs"
+          >
+            {plugin.enabled ? "Yes" : "No"}
+          </Badge>
         );
       },
     },
@@ -217,7 +176,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
 
             return (
               <div className="flex items-center gap-1">
-                <Tooltip title="Delete plugin">
+                <Tooltip title="Delete skill">
                   <Button
                     size="xs"
                     variant="light"
@@ -312,7 +271,11 @@ const PluginTable: React.FC<PluginTableProps> = ({
               </TableRow>
             ) : pluginsList && pluginsList.length > 0 ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} className="h-8">
+                <TableRow
+                  key={row.id}
+                  className="h-8 cursor-pointer hover:bg-gray-50"
+                  onClick={() => onPluginClick(row.original.id)}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell
                       key={cell.id}
@@ -333,7 +296,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-8 text-center">
                   <div className="text-center text-gray-500">
-                    <p>No plugins found. Add one to get started.</p>
+                    <p>No skills found. Add one to get started.</p>
                   </div>
                 </TableCell>
               </TableRow>

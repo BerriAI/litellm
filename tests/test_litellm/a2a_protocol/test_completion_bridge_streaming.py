@@ -91,7 +91,10 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
+        assert (
+            event["result"]["artifact"]["parts"][0]["text"]
+            == "Hello, I am an AI assistant."
+        )
 
 
 @pytest.mark.asyncio
@@ -246,4 +249,3 @@ async def test_handle_non_streaming_forwards_api_key():
         assert call_kwargs["api_key"] == "my-secret-api-key"
         assert call_kwargs["api_base"] == "https://my-azure.com/"
         assert call_kwargs["model"] == "azure_ai/agents/asst_456"
-

@@ -1,9 +1,9 @@
 """
 BUDGET MANAGEMENT
 
-All /budget management endpoints 
+All /budget management endpoints
 
-/budget/new   
+/budget/new
 /budget/info
 /budget/update
 /budget/delete
@@ -12,11 +12,14 @@ All /budget management endpoints
 """
 
 #### BUDGET TABLE MANAGEMENT ####
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.utils import jsonify_object
 
 router = APIRouter()
@@ -56,18 +59,22 @@ async def new_budget(
         )
 
     # Validate budget values are not negative
-    if budget_obj.max_budget is not None and budget_obj.max_budget < 0:
+    if budget_obj.max_budget is not None and (
+        not math.isfinite(budget_obj.max_budget) or budget_obj.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {budget_obj.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {budget_obj.max_budget}"
             },
         )
-    if budget_obj.soft_budget is not None and budget_obj.soft_budget < 0:
+    if budget_obj.soft_budget is not None and (
+        not math.isfinite(budget_obj.soft_budget) or budget_obj.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {budget_obj.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"
             },
         )
 
@@ -145,18 +152,22 @@ async def update_budget(
         raise HTTPException(status_code=400, detail={"error": "budget_id is required"})
 
     # Validate budget values are not negative
-    if budget_obj.max_budget is not None and budget_obj.max_budget < 0:
+    if budget_obj.max_budget is not None and (
+        not math.isfinite(budget_obj.max_budget) or budget_obj.max_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"max_budget cannot be negative. Received: {budget_obj.max_budget}"
+                "error": f"max_budget must be a non-negative finite number. Received: {budget_obj.max_budget}"
             },
         )
-    if budget_obj.soft_budget is not None and budget_obj.soft_budget < 0:
+    if budget_obj.soft_budget is not None and (
+        not math.isfinite(budget_obj.soft_budget) or budget_obj.soft_budget < 0
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"soft_budget cannot be negative. Received: {budget_obj.soft_budget}"
+                "error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"
             },
         )
 
@@ -238,7 +249,7 @@ async def budget_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -305,7 +316,7 @@ async def list_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={

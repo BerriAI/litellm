@@ -33,7 +33,40 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
 @pytest.mark.parametrize(
     "prisma_error",
     [
+        # Specific connectivity subclasses.
+        HTTPClientClosedError(),
+        ClientNotConnectedError(),
+        # Bare / generic PrismaError defaults to connectivity — we can't
+        # tell what it is, so err on the safe side for genuine outages.
         PrismaError(),
+    ],
+)
+async def test_handle_authentication_error_db_unavailable_connectivity(prisma_error):
+    """Transport-level / connectivity failures (and generic PrismaError)
+    trigger the HA fallback."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    mock_request = MagicMock()
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    ):
+        result = await handler._handle_authentication_error(
+            prisma_error,
+            mock_request,
+            {},
+            "/test",
+            None,
+            "test-key",
+        )
+        assert result.key_name == "failed-to-connect-to-db"
+        assert result.token == "failed-to-connect-to-db"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         UniqueViolationError(
             data={"user_facing_error": {"meta": {"table": "test_table"}}}
@@ -51,35 +84,32 @@ from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHan
         RecordNotFoundError(
             data={"user_facing_error": {"meta": {"table": "test_table"}}}
         ),
-        HTTPClientClosedError(),
-        ClientNotConnectedError(),
     ],
 )
-async def test_handle_authentication_error_db_unavailable(prisma_error):
+async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
+    prisma_error,
+):
+    """Known data-layer PrismaError subclasses (UniqueViolation,
+    RecordNotFound, etc.) mean the DB IS reachable — they must propagate
+    instead of triggering the HA fallback, which would grant the
+    restricted INTERNAL_USER token to a request that should have
+    returned 401."""
     handler = UserAPIKeyAuthExceptionHandler()
 
-    # Mock request and other dependencies
     mock_request = MagicMock()
-    mock_request_data = {}
-    mock_route = "/test"
-    mock_span = None
-    mock_api_key = "test-key"
-
-    # Test with DB connection error when requests are allowed
     with patch(
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
-        result = await handler._handle_authentication_error(
-            prisma_error,
-            mock_request,
-            mock_request_data,
-            mock_route,
-            mock_span,
-            mock_api_key,
-        )
-        assert result.key_name == "failed-to-connect-to-db"
-        assert result.token == "failed-to-connect-to-db"
+        with pytest.raises(ProxyException):
+            await handler._handle_authentication_error(
+                prisma_error,
+                mock_request,
+                {},
+                "/test",
+                None,
+                "test-key",
+            )
 
 
 @pytest.mark.asyncio
@@ -110,6 +140,7 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
 
 
 @pytest.mark.asyncio

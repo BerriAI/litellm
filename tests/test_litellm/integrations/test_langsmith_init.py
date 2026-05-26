@@ -6,7 +6,16 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm
 from litellm.integrations.langsmith import LangsmithLogger
+
+
+@pytest.fixture
+def reset_redact_flag():
+    """Reset redact_user_api_key_info between tests so global state doesn't leak."""
+    original = litellm.redact_user_api_key_info
+    yield
+    litellm.redact_user_api_key_info = original
 
 
 class TestLangsmithLoggerInit:
@@ -127,12 +136,16 @@ class TestLangsmithLoggerInit:
         mock_start_periodic_flush_task.assert_called_once()
         assert logger._flush_task is None
 
-    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    @patch(
+        "asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")
+    )
     def test_start_periodic_flush_task_returns_none_without_running_loop(
         self, mock_get_running_loop
     ):
         """Test that helper returns None when no running event loop exists."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -165,7 +178,9 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
         """Test that async logging lazily starts periodic flush after sync init."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -185,7 +200,9 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_failure_event_lazily_starts_periodic_flush(self):
         """Test that async failure logging lazily starts periodic flush after sync init."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -201,6 +218,7 @@ class TestLangsmithLoggerInit:
 
         logger._start_periodic_flush_task.assert_called_once()
         assert len(logger.log_queue) == 1
+
 
 class TestLangsmithPrepareLogData:
     """Regression test for #24001: _prepare_log_data must inject
@@ -254,3 +272,78 @@ class TestLangsmithPrepareLogData:
         assert um["input_tokens"] == 100
         assert um["output_tokens"] == 50
         assert um["total_tokens"] == 150
+
+
+class TestLangsmithRedactUserApiKeyInfo:
+    """Verify litellm.redact_user_api_key_info is honored for LangSmith."""
+
+    def _logger(self):
+        return LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+        )
+
+    def _metadata_with_user_api_key_fields(self):
+        return {
+            "user_api_key_hash": "abc123",
+            "user_api_key_alias": "engineer-key",
+            "user_api_key_user_id": "default_user_id",
+            "user_api_key_team_id": "team-uuid",
+            "user_api_key_team_alias": "GNT",
+            "user_api_key_request_route": "/chat/completions",
+            "user_api_key_spend": 1.64,
+            "model": "gpt-4",
+            "requester_metadata": {
+                "user_api_key_team_id": "team-uuid",
+                "user_api_key_user_id": "default_user_id",
+                "session_id": "sess-1",
+            },
+        }
+
+    def test_redact_disabled_keeps_user_api_key_fields(self, reset_redact_flag):
+        """Flag off: user_api_key_* fields are preserved (no behavior change)."""
+        litellm.redact_user_api_key_info = False
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+
+        extra = logger._build_extra_metadata(metadata)
+
+        assert extra["user_api_key_hash"] == "abc123"
+        assert extra["user_api_key_team_id"] == "team-uuid"
+        assert extra["requester_metadata"]["user_api_key_user_id"] == "default_user_id"
+
+    def test_redact_enabled_strips_top_level_user_api_key_fields(
+        self, reset_redact_flag
+    ):
+        """Flag on: top-level user_api_key_* keys removed; other keys preserved."""
+        litellm.redact_user_api_key_info = True
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+
+        extra = logger._build_extra_metadata(metadata)
+
+        for key in (
+            "user_api_key_hash",
+            "user_api_key_alias",
+            "user_api_key_user_id",
+            "user_api_key_team_id",
+            "user_api_key_team_alias",
+            "user_api_key_request_route",
+            "user_api_key_spend",
+        ):
+            assert key not in extra, f"{key} should be redacted at top level"
+        assert extra["model"] == "gpt-4"
+
+    def test_redact_enabled_strips_nested_requester_metadata(self, reset_redact_flag):
+        """Flag on: nested requester_metadata.user_api_key_* removed; session_id still lifted."""
+        litellm.redact_user_api_key_info = True
+        logger = self._logger()
+        metadata = self._metadata_with_user_api_key_fields()
+
+        extra = logger._build_extra_metadata(metadata)
+
+        nested = extra["requester_metadata"]
+        assert "user_api_key_team_id" not in nested
+        assert "user_api_key_user_id" not in nested
+        assert nested["session_id"] == "sess-1"
+        assert extra["session_id"] == "sess-1"

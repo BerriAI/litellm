@@ -104,7 +104,9 @@ class TestBlackForestLabsImageEditTransformation:
         """Test that missing API key raises error."""
         headers = {}
 
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation.get_secret_str") as mock_get_secret:
+        with patch(
+            "litellm.llms.black_forest_labs.image_edit.transformation.get_secret_str"
+        ) as mock_get_secret:
             mock_get_secret.return_value = None
 
             with pytest.raises(BlackForestLabsError) as exc_info:

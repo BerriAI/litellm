@@ -115,7 +115,7 @@ def test_completion_bedrock_guardrails(streaming):
                 ],
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailIdentifier": "4w3d1di3snt5",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -144,7 +144,7 @@ def test_completion_bedrock_guardrails(streaming):
                 stream=True,
                 max_tokens=10,
                 guardrailConfig={
-                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailIdentifier": "4w3d1di3snt5",
                     "guardrailVersion": "DRAFT",
                     "trace": "enabled",
                 },
@@ -475,7 +475,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +498,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +537,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +602,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +630,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -737,7 +737,7 @@ def test_bedrock_ptu():
         from openai.types.chat import ChatCompletion
 
         model_id = (
-            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+            "arn:aws:bedrock:us-west-2:941277531214:provisioned-model/8fxff74qyhs3"
         )
         try:
             response = litellm.completion(
@@ -752,7 +752,7 @@ def test_bedrock_ptu():
         assert "url" in mock_client_post.call_args.kwargs
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A941277531214%3Aprovisioned-model%2F8fxff74qyhs3/converse"
         )
         mock_client_post.assert_called_once()
 
@@ -1323,7 +1323,7 @@ def test_base_aws_llm_get_credentials():
 def test_bedrock_completion_test_2():
     litellm.set_verbose = True
     data = {
-        "model": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "system",
@@ -1630,7 +1630,7 @@ def test_bedrock_completion_test_4(modify_params):
     litellm.modify_params = modify_params
 
     data = {
-        "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "user",
@@ -2115,7 +2115,7 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
@@ -2327,7 +2327,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[
             {
                 "role": "user",
@@ -2828,7 +2828,7 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
         client = AsyncHTTPHandler()
 
     params = {
-        "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "assistant",
@@ -2887,7 +2887,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ```
     """
     response = await litellm.acompletion(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[{"role": "user", "content": "Hello who is this?"}],
         stream=True,
         max_tokens=1080,
@@ -2969,9 +2969,10 @@ def test_bedrock_application_inference_profile():
         }
     ]
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        client2, "post"
-    ) as mock_post2:
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(client2, "post") as mock_post2,
+    ):
         try:
             resp = completion(
                 model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",

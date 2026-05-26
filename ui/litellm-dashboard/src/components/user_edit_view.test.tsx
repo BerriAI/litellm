@@ -85,9 +85,19 @@ vi.mock("@tremor/react", async (importOriginal) => {
     return React.createElement("option", { value, title }, childText || title || value);
   };
   SelectItem.displayName = "SelectItem";
+  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts.
+  // A file-level vi.mock fully replaces the setup-level mock, so without this
+  // the real Tremor Button leaks through and its useTooltip(300) schedules a
+  // native setTimeout that fires post-teardown -> "window is not defined".
+  const Button = React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
+    React.createElement("button", { ...props, ref }, children),
+  );
+  const TremorTooltip = ({ children }: any) => React.createElement(React.Fragment, null, children);
   return {
     ...actual,
     SelectItem,
+    Button,
+    Tooltip: TremorTooltip,
   };
 });
 
@@ -141,11 +151,6 @@ describe("UserEditView", () => {
   });
 
   afterEach(() => {
-    // Tremor's internal Tooltip sets a setTimeout that fires after teardown,
-    // causing "window is not defined". Flush pending timers before cleanup.
-    vi.useFakeTimers();
-    vi.runAllTimers();
-    vi.useRealTimers();
     cleanup();
   });
 
