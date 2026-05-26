@@ -3350,6 +3350,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+        # Provider-only params (e.g. Cohere input_type) are not in
+        # OPENAI_EMBEDDING_PARAMS, so embedding_pre_process drops them from
+        # non_default_params before map_openai_params. Restore only those extras
+        # from passed_params — skip OPENAI_EMBEDDING_PARAMS to avoid duplicating
+        # values already mapped (e.g. dimensions -> output_dimension).
+        if supported_params:
+            for param in supported_params:
+                if param in OPENAI_EMBEDDING_PARAMS:
+                    continue
+                if (
+                    param in passed_params
+                    and passed_params[param] is not None
+                    and param not in optional_params
+                ):
+                    optional_params[param] = passed_params[param]
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
@@ -8131,6 +8146,35 @@ def validate_openai_optional_params(
     return stop
 
 
+@lru_cache(maxsize=1)
+def _get_bundled_model_cost_map() -> Dict[str, Any]:
+    try:
+        model_cost_path = resources.files("litellm").joinpath(
+            "model_prices_and_context_window_backup.json"
+        )
+        return json.loads(model_cost_path.read_text())
+    except Exception:
+        return {}
+
+
+def _get_model_cost_entry_for_provider_config(
+    model: str,
+    provider: LlmProviders,
+) -> Dict[str, Any]:
+    candidate_keys = (model, f"{provider.value}/{model}")
+    for model_key in candidate_keys:
+        model_info = litellm.model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+
+    bundled_model_cost = _get_bundled_model_cost_map()
+    for model_key in candidate_keys:
+        model_info = bundled_model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+    return {}
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8437,6 +8481,10 @@ class ProviderConfigManager:
             return litellm.InfinityEmbeddingConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambaNovaEmbeddingConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            from litellm.llms.oci.embed.transformation import OCIEmbedConfig
+
+            return OCIEmbedConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
@@ -8494,10 +8542,6 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
-        elif litellm.LlmProviders.OCI == provider:
-            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
-
-            return OCIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8606,6 +8650,19 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAudioTranscriptionConfig]:
+        model_cost_entry = _get_model_cost_entry_for_provider_config(
+            model=model,
+            provider=provider,
+        )
+        if (
+            litellm.LlmProviders.AZURE == provider
+            and model_cost_entry.get("audio_transcription_config") == "azure_speech"
+        ):
+            from litellm.llms.azure.audio_transcription.transformation import (
+                AzureSpeechAudioTranscriptionConfig,
+            )
+
+            return AzureSpeechAudioTranscriptionConfig()
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
