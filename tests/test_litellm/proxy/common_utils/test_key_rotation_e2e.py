@@ -579,7 +579,9 @@ class TestDeprecatedKeyLookupDbE2E:
         """
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            pytest.skip("DATABASE_URL not set; skipping DB-backed key-rotation E2E test.")
+            pytest.skip(
+                "DATABASE_URL not set; skipping DB-backed key-rotation E2E test."
+            )
         db_url = cast(str, database_url)
 
         proxy_logging_obj = MagicMock()

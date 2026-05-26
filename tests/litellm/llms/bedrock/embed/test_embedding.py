@@ -11,7 +11,6 @@ import pytest
 from litellm.types.utils import Embedding
 from litellm.main import bedrock_embedding, embedding, EmbeddingResponse, Usage
 
-
 _mock_model_id = (
     "arn:aws:bedrock:us-east-1:123412341234:application-inference-profile/abc123123"
 )

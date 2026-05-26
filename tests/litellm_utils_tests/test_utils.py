@@ -2490,9 +2490,7 @@ def test_get_base_model_from_metadata():
         "litellm_params": {"base_model": "azure/gpt-5-mini"}
     }
     result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
-    assert (
-        result == "azure/gpt-5-mini"
-    ), f"Expected 'azure/gpt-5-mini', got {result}"
+    assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 4: metadata takes precedence over litellm_metadata
     model_call_details_with_both = {

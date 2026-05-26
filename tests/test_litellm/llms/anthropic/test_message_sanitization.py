@@ -363,7 +363,9 @@ class TestMessageSanitization:
         assert len(result) == 1
         assert result[0]["role"] == "user"
         text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
         ]
         assert len(text_blocks) == 3
         # No text block may be empty — that's the contract Anthropic enforces.
@@ -398,7 +400,9 @@ class TestMessageSanitization:
 
         assert len(result) == 1
         text_blocks = [
-            b for b in result[0]["content"] if isinstance(b, dict) and b.get("type") == "text"
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
         ]
         assert len(text_blocks) == 3
         assert text_blocks[0]["text"] == "real content"

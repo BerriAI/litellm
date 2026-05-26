@@ -1,14 +1,14 @@
 """
 LiteLLM Migration Script!
 
-Takes a config.yaml and calls /model/new 
+Takes a config.yaml and calls /model/new
 
 Inputs:
     - File path to config.yaml
     - Proxy base url to your hosted proxy
 
 Step 1: Reads your config.yaml
-Step 2: reads `model_list` and loops through all models 
+Step 2: reads `model_list` and loops through all models
 Step 3: calls `<proxy-base-url>/model/new` for each model
 """
 

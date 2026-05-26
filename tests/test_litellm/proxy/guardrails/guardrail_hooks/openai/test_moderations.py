@@ -2,6 +2,7 @@
 """
 Test OpenAI Moderation Guardrail
 """
+
 import os
 import sys
 

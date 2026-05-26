@@ -12,7 +12,6 @@ import pytest
 import asyncio
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
-
 # Test models from test_config.yaml
 # Note: bedrock-converse-claude-sonnet-4.5 removed temporarily as the Bedrock Converse API
 # for Claude Sonnet 4.5 may not be available in all regions/accounts

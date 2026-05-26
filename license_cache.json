@@ -56,5 +56,6 @@
   "vcrpy:8.1.1": "MIT",
   "langchain-openai:1.1.14": "MIT",
   "grpc-google-iam-v1:0.14.4": "Apache 2.0",
-  "tornado:6.5.5": "Apache-2.0"
+  "tornado:6.5.5": "Apache-2.0",
+  "azure-monitor-opentelemetry:1.6.10": "MIT License"
 }

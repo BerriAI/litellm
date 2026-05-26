@@ -217,9 +217,16 @@ def _create_request_with_host_header(path: str, host_header: str) -> Request:
     ],
 )
 def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
-    for protected_path in ["/health", "/user/new", "/key/generate", "/get/internal_user_settings"]:
-        request = _create_request_with_host_header(path=protected_path, host_header=host_header)
-        result = get_request_route(request)
-        assert result == protected_path, (
-            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+    for protected_path in [
+        "/health",
+        "/user/new",
+        "/key/generate",
+        "/get/internal_user_settings",
+    ]:
+        request = _create_request_with_host_header(
+            path=protected_path, host_header=host_header
         )
+        result = get_request_route(request)
+        assert (
+            result == protected_path
+        ), f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"

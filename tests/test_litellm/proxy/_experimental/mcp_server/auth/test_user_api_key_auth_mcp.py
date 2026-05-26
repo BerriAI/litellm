@@ -880,7 +880,7 @@ class TestMCPPublicRouteGuard:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
         ) as mock_auth:
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             mock_auth.assert_not_called()
             assert isinstance(auth_result, UserAPIKeyAuth)
 
@@ -997,7 +997,7 @@ class TestMCPOAuth2FallbackTargetGating:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
@@ -1157,7 +1157,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
@@ -1400,7 +1400,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -1437,7 +1437,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()

@@ -267,7 +267,6 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
 
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
-
 _PARALLEL_TOOL_HISTORY_MESSAGES = [
     {
         "role": "user",

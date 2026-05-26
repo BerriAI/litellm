@@ -14,7 +14,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-
 # Fake Vertex AI Gemini response for mocking
 FAKE_VERTEX_GEMINI_RESPONSE = {
     "candidates": [

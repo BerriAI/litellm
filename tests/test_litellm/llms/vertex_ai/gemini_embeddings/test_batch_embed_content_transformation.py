@@ -20,7 +20,6 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
 
-
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 
@@ -72,7 +71,9 @@ class TestBuildPartForInput:
         assert part["file_data"]["file_uri"] == GCS_URL
 
     def test_file_reference_resolved(self):
-        resolved = {"files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}}
+        resolved = {
+            "files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}
+        }
         part = _build_part_for_input("files/abc", resolved_files=resolved)
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
@@ -94,7 +95,9 @@ class TestTransformOpenaiInputGeminiContent:
 
     def test_multiple_texts(self):
         result = transform_openai_input_gemini_content(
-            input=["hello", "world"], model="gemini-embedding-2-preview", optional_params={}
+            input=["hello", "world"],
+            model="gemini-embedding-2-preview",
+            optional_params={},
         )
         assert len(result["requests"]) == 2
         assert result["requests"][0]["content"]["parts"][0]["text"] == "hello"
@@ -109,7 +112,10 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 2
         # First request is text
-        assert result["requests"][0]["content"]["parts"][0]["text"] == "The food was delicious"
+        assert (
+            result["requests"][0]["content"]["parts"][0]["text"]
+            == "The food was delicious"
+        )
         # Second request is image
         assert result["requests"][1]["content"]["parts"][0]["inline_data"] is not None
 

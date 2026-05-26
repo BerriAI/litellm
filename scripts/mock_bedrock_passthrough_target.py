@@ -44,6 +44,7 @@ Notes
   - `converse-stream` is still JSON-only placeholder (different inner event shapes).
   - Use real (or any non-empty) AWS creds in the environment of the **proxy**; signing still runs.
 """
+
 from __future__ import annotations
 
 import argparse

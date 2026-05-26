@@ -1,6 +1,7 @@
 """
 Tests for Crusoe provider integration
 """
+
 import os
 from unittest import mock
 
@@ -96,9 +97,9 @@ def test_crusoe_models_configuration():
         for model in crusoe_models:
             model_info = get_model_info(model)
             assert model_info is not None, f"Model info not found for {model}"
-            assert model_info.get("litellm_provider") == "crusoe", (
-                f"{model} should have crusoe as provider"
-            )
+            assert (
+                model_info.get("litellm_provider") == "crusoe"
+            ), f"{model} should have crusoe as provider"
             assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
     finally:
         litellm.model_cost = original_model_cost

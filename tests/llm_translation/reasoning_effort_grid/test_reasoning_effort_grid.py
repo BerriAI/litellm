@@ -15,7 +15,6 @@ from .grid_spec import (
     all_cells,
 )
 
-
 _PROMPT_MESSAGES: List[Dict[str, str]] = [
     {"role": "user", "content": "Step by step, calculate 47 * 53. Show your work."}
 ]

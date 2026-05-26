@@ -1,7 +1,7 @@
 """
 Integration tests for Perplexity cost calculation and transformation.
 
-Tests the end-to-end functionality of Perplexity cost calculation 
+Tests the end-to-end functionality of Perplexity cost calculation
 including integration with the main LiteLLM cost calculator.
 """
 

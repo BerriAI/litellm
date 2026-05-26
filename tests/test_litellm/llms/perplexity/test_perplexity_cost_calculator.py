@@ -1,7 +1,7 @@
 """
 Test file for Perplexity cost calculator functionality.
 
-Tests the cost calculation for Perplexity models including citation tokens, 
+Tests the cost calculation for Perplexity models including citation tokens,
 search queries, and reasoning tokens.
 """
 

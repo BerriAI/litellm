@@ -151,9 +151,7 @@ class TestRAGVertexAI(BaseRAGTest):
         Test document {unique_id} for Vertex AI RAG corpus creation.
         This tests the automatic corpus creation feature.
         The corpus should be created and the file should be uploaded successfully.
-        """.encode(
-            "utf-8"
-        )
+        """.encode("utf-8")
         file_data = (filename, text_content, "text/plain")
 
         # Get base options WITHOUT corpus_id to trigger creation
@@ -215,9 +213,7 @@ class TestRAGVertexAI(BaseRAGTest):
         text_content = f"""
         Test document {unique_id} for existing Vertex AI RAG corpus.
         This tests file upload to a pre-existing corpus.
-        """.encode(
-            "utf-8"
-        )
+        """.encode("utf-8")
         file_data = (filename, text_content, "text/plain")
 
         ingest_options = self.get_base_ingest_options()

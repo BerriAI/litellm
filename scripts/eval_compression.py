@@ -42,8 +42,7 @@ from litellm.types.utils import CallTypes
 PROBLEMS = [
     {
         "id": "has_close_elements",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def has_close_elements(numbers: List[float], threshold: float) -> bool:
@@ -54,10 +53,8 @@ PROBLEMS = [
                 >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)
                 True
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert has_close_elements([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.3) == True
             assert has_close_elements([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.05) == False
             assert has_close_elements([1.0, 2.0, 5.9, 4.0, 5.0], 0.95) == True
@@ -65,13 +62,11 @@ PROBLEMS = [
             assert has_close_elements([1.0, 2.0, 3.0, 4.0, 5.0], 2.0) == True
             assert has_close_elements([], 0.5) == False
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "separate_paren_groups",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def separate_paren_groups(paren_string: str) -> List[str]:
@@ -82,22 +77,18 @@ PROBLEMS = [
                 >>> separate_paren_groups('( ) (( )) (( )( ))')
                 ['()', '(())', '(()())']
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert separate_paren_groups('(()()) ((())) () ((())()())') == ['(()())', '((()))', '()', '((())()())']
             assert separate_paren_groups('() (()) ((())) (((())))') == ['()', '(())', '((()))', '(((())))']
             assert separate_paren_groups('(()(()))') == ['(()(()))']
             assert separate_paren_groups('( ) (( )) (( )( ))') == ['()', '(())', '(()())']
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "truncate_number",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             def truncate_number(number: float) -> float:
                 \"\"\"Given a positive floating point number, it can be decomposed into
                 an integer part (largest integer smaller than given number) and decimals
@@ -106,21 +97,17 @@ PROBLEMS = [
                 >>> truncate_number(3.5)
                 0.5
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert truncate_number(3.5) == 0.5
             assert abs(truncate_number(1.33) - 0.33) < 1e-6
             assert abs(truncate_number(123.456) - 0.456) < 1e-6
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "below_zero",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def below_zero(operations: List[int]) -> bool:
@@ -132,10 +119,8 @@ PROBLEMS = [
                 >>> below_zero([1, 2, -4, 5])
                 True
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert below_zero([]) == False
             assert below_zero([1, 2, -3, 1, 2, -3]) == False
             assert below_zero([1, 2, -4, 5, 6]) == True
@@ -143,13 +128,11 @@ PROBLEMS = [
             assert below_zero([1, -1, 2, -2, 5, -5, 4, -5]) == True
             assert below_zero([1, -2]) == True
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "mean_absolute_deviation",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def mean_absolute_deviation(numbers: List[float]) -> float:
@@ -161,21 +144,17 @@ PROBLEMS = [
                 >>> mean_absolute_deviation([1.0, 2.0, 3.0, 4.0])
                 1.0
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert abs(mean_absolute_deviation([1.0, 2.0, 3.0, 4.0]) - 1.0) < 1e-6
             assert abs(mean_absolute_deviation([1.0, 2.0, 3.0, 4.0, 5.0]) - 1.2) < 1e-6
             assert abs(mean_absolute_deviation([1.0, 1.0, 1.0, 1.0]) - 0.0) < 1e-6
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "intersperse",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def intersperse(numbers: List[int], delimiter: int) -> List[int]:
@@ -185,21 +164,17 @@ PROBLEMS = [
                 >>> intersperse([1, 2, 3], 4)
                 [1, 4, 2, 4, 3]
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert intersperse([], 7) == []
             assert intersperse([5, 6, 3, 2], 8) == [5, 8, 6, 8, 3, 8, 2]
             assert intersperse([2, 2, 2], 2) == [2, 2, 2, 2, 2]
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "parse_nested_parens",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def parse_nested_parens(paren_string: str) -> List[int]:
@@ -209,21 +184,17 @@ PROBLEMS = [
                 >>> parse_nested_parens('(()()) ((())) () ((())())')
                 [2, 3, 1, 3]
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert parse_nested_parens('(()()) ((())) () ((())())') == [2, 3, 1, 3]
             assert parse_nested_parens('() (()) ((())) (((())))') == [1, 2, 3, 4]
             assert parse_nested_parens('(()(())((())))') == [4]
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "filter_by_substring",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def filter_by_substring(strings: List[str], substring: str) -> List[str]:
@@ -233,22 +204,18 @@ PROBLEMS = [
                 >>> filter_by_substring(['abc', 'bacd', 'cde', 'array'], 'a')
                 ['abc', 'bacd', 'array']
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert filter_by_substring([], 'john') == []
             assert filter_by_substring(['xxx', 'asd', 'xxy', 'john doe', 'xxxuj', 'xxx'], 'xxx') == ['xxx', 'xxxuj', 'xxx']
             assert filter_by_substring(['xxx', 'asd', 'aaber', 'john doe', 'xxxuj', 'xxx'], 'xx') == ['xxx', 'xxxuj', 'xxx']
             assert filter_by_substring(['grunt', 'hierarchial', 'abc', 'hierarchial'], 'hi') == ['hierarchial', 'hierarchial']
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "sum_product",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List, Tuple
 
             def sum_product(numbers: List[int]) -> Tuple[int, int]:
@@ -259,23 +226,19 @@ PROBLEMS = [
                 >>> sum_product([1, 2, 3, 4])
                 (10, 24)
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert sum_product([]) == (0, 1)
             assert sum_product([1, 1, 1]) == (3, 1)
             assert sum_product([100, 0]) == (100, 0)
             assert sum_product([3, 5, 7]) == (15, 105)
             assert sum_product([10]) == (10, 10)
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "max_element",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def max_element(l: List[int]) -> int:
@@ -285,21 +248,17 @@ PROBLEMS = [
                 >>> max_element([5, 3, -5, 2, -3, 3, 9, 0, 123, 1, -10])
                 123
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert max_element([1, 2, 3]) == 3
             assert max_element([5, 3, -5, 2, -3, 3, 9, 0, 124, 1, -10]) == 124
             assert max_element([-1, -2, -3]) == -1
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "fizz_buzz",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             def fizz_buzz(n: int) -> int:
                 \"\"\"Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.
                 >>> fizz_buzz(50)
@@ -309,10 +268,8 @@ PROBLEMS = [
                 >>> fizz_buzz(79)
                 3
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert fizz_buzz(50) == 0
             assert fizz_buzz(78) == 2
             assert fizz_buzz(79) == 3
@@ -320,13 +277,11 @@ PROBLEMS = [
             assert fizz_buzz(200) == 6
             assert fizz_buzz(4000) == 192
             print("PASSED")
-        """
-        ),
+        """),
     },
     {
         "id": "sort_by_binary_len",
-        "prompt": textwrap.dedent(
-            """\
+        "prompt": textwrap.dedent("""\
             from typing import List
 
             def sort_array(arr: List[int]) -> List[int]:
@@ -339,10 +294,8 @@ PROBLEMS = [
                 >>> sort_array([1, 0, 2, 3, 4])
                 [0, 1, 2, 4, 3]
                 \"\"\"
-        """
-        ),
-        "tests": textwrap.dedent(
-            """\
+        """),
+        "tests": textwrap.dedent("""\
             assert sort_array([1, 5, 2, 3, 4]) == [1, 2, 4, 3, 5]
             assert sort_array([-2, -3, -4, -5, -6]) == [-6, -5, -4, -3, -2]
             assert sort_array([1, 0, 2, 3, 4]) == [0, 1, 2, 4, 3]
@@ -350,8 +303,7 @@ PROBLEMS = [
             assert sort_array([2, 5, 77, 4, 5, 3, 5, 7, 2, 3, 4]) == [2, 2, 4, 4, 3, 3, 5, 5, 5, 7, 77]
             assert sort_array([3, 6, 44, 12, 32, 5]) == [32, 3, 5, 6, 12, 44]
             print("PASSED")
-        """
-        ),
+        """),
     },
 ]
 
@@ -360,8 +312,7 @@ PROBLEMS = [
 # compressor to identify and drop them.
 DISTRACTOR_SNIPPETS = [
     # distractor 0 — database connection pool
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # db_pool.py
         import threading
         from contextlib import contextmanager
@@ -408,11 +359,9 @@ DISTRACTOR_SNIPPETS = [
                     for conn in self._pool:
                         conn.close()
                     self._pool.clear()
-    """
-    ),
+    """),
     # distractor 1 — HTTP retry logic
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # http_retry.py
         import time
         import random
@@ -456,11 +405,9 @@ DISTRACTOR_SNIPPETS = [
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
             return resp.json()
-    """
-    ),
+    """),
     # distractor 2 — LRU cache implementation
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # lru_cache.py
         from collections import OrderedDict
         from threading import RLock
@@ -509,11 +456,9 @@ DISTRACTOR_SNIPPETS = [
 
             def __contains__(self, key):
                 return key in self._cache
-    """
-    ),
+    """),
     # distractor 3 — CSV report generator
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # report_gen.py
         import csv
         import io
@@ -566,11 +511,9 @@ DISTRACTOR_SNIPPETS = [
                     except (ValueError, KeyError):
                         return False
                 return self.filter_rows(in_range)
-    """
-    ),
+    """),
     # distractor 4 — async task queue
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # task_queue.py
         import asyncio
         import logging
@@ -640,11 +583,9 @@ DISTRACTOR_SNIPPETS = [
             async def shutdown(self):
                 for w in self._workers:
                     w.cancel()
-    """
-    ),
+    """),
     # distractor 5 — config parser with env var interpolation
-    textwrap.dedent(
-        """\
+    textwrap.dedent("""\
         # config_parser.py
         import os
         import re
@@ -707,8 +648,7 @@ DISTRACTOR_SNIPPETS = [
                 if val is None:
                     raise ConfigError(f"Required config key missing: {key}")
                 return val
-    """
-    ),
+    """),
 ]
 
 

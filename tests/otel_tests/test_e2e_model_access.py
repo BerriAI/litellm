@@ -5,7 +5,6 @@ import json
 from httpx import AsyncClient
 from typing import Any, Optional, List, Literal
 
-
 # The proxy strips client-supplied `mock_response` unless the calling key or
 # team has this admin-metadata flag set. See `_UNTRUSTED_ROOT_CONTROL_FIELDS`
 # in litellm/proxy/litellm_pre_call_utils.py.
@@ -152,9 +151,7 @@ async def test_model_access_update():
     async with aiohttp.ClientSession() as session:
         # Both models should now work
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
-        await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-5-mini"
-        )
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
 
         # Non-OpenAI model should still fail
         with pytest.raises(Exception) as exc_info:
@@ -274,9 +271,7 @@ async def test_team_model_access_update():
     async with aiohttp.ClientSession() as session:
         # Both models should now work
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
-        await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-5-mini"
-        )
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5-mini")
 
         # Non-OpenAI model should still fail
         with pytest.raises(Exception) as exc_info:

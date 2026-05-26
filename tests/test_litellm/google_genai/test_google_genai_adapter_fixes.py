@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI adapter fixes
 """
+
 import json
 import os
 import sys
