@@ -143,31 +143,47 @@ class UserApiKeyCache(DualCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        self._honour_configured_management_ttl(kwargs)
+        self._honour_configured_management_ttl(kwargs, model_type=model_type)
         return await super().async_set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
 
-    def _honour_configured_management_ttl(self, kwargs: dict) -> None:
+    def _honour_configured_management_ttl(
+        self,
+        kwargs: dict,
+        *,
+        model_type: Optional[Type[BaseModel]],
+    ) -> None:
         """
         LIT-3338: ``general_settings.user_api_key_cache_ttl`` (set on
         ``self.default_in_memory_ttl`` at proxy startup via
         ``proxy_server.py``'s ``update_cache_ttl(...)`` call) was silently
         ignored by management-object writes.
 
-        Several call sites in ``litellm/proxy/auth/auth_checks.py``,
-        ``litellm/proxy/auth/handle_jwt.py``, and
-        ``litellm/proxy/_experimental/mcp_server/mcp_server_manager.py``
-        pass an explicit ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
-        (60s). Because ``DualCache.async_set_cache`` only consults
+        Several call sites in ``litellm/proxy/auth/auth_checks.py`` and
+        ``litellm/proxy/auth/handle_jwt.py`` pass an explicit
+        ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` (60s).  Because
+        ``DualCache.async_set_cache`` only consults
         ``self.default_in_memory_ttl`` when ``ttl`` is *absent* from kwargs,
         the explicit 60 always shadows a user-configured 300s TTL.
 
-        Promote the configured default whenever the explicit value matches
-        the historical management-object default — the only callers that
-        pass that exact constant are the management-object writes themselves,
-        which all want to follow the operator's configured TTL.
+        Promote the configured default only when:
+
+        1. an explicit ``ttl == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
+           was passed, AND
+        2. a different ``default_in_memory_ttl`` is configured on the cache,
+           AND
+        3. the write carried a ``model_type`` (i.e. it is a Pydantic-typed
+           management-object write).
+
+        Gating on ``model_type`` avoids inadvertently extending the lifetime
+        of short-lived non-management writes that also happen to use
+        ``ttl=60`` literally — most notably the single-use SSO/v3-login code
+        entries in ``proxy_server.py`` / ``ui_sso.py``, whose 60-second
+        expiry is advertised to clients via ``expires_in: 60``.
         """
+        if model_type is None:
+            return
         if (
             "ttl" in kwargs
             and self.default_in_memory_ttl is not None
