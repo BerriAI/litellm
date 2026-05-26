@@ -141,3 +141,50 @@ def test_round_trip_without_thought_signature_still_works():
     text_part = model_message["parts"][0]
     assert text_part["text"] == "Hi there"
     assert "thoughtSignature" not in text_part
+
+
+def test_function_call_thought_signature_not_extracted_to_message_level():
+    """
+    Regression test: functionCall parts carry thoughtSignature for multi-turn
+    context preservation, but it should NOT appear in the message-level
+    provider_specific_fields.thought_signatures list — it is handled via
+    tool_call.provider_specific_fields.thought_signature instead.
+
+    Non-functionCall parts with thoughtSignature should still be extracted.
+    """
+    config = VertexGeminiConfig()
+
+    # Parts: functionCall with thoughtSignature + text with thoughtSignature
+    parts = [
+        {"functionCall": {"name": "get_weather", "args": {}}, "thoughtSignature": "sig-func-1"},
+        {"text": "I'll check the weather", "thoughtSignature": "sig-text-1"},
+    ]
+
+    signatures = config._extract_thought_signatures_from_parts(parts)
+
+    # Only the text part's signature should be extracted
+    assert signatures is not None
+    assert len(signatures) == 1, (
+        f"Expected 1 signature (text only), got {len(signatures)}: {signatures}"
+    )
+    assert signatures[0] == "sig-text-1"
+
+
+def test_all_function_call_parts_skipped_in_thought_signatures():
+    """
+    Regression test: when ALL parts are functionCall, _extract_thought_signatures_from_parts
+    should return None (no signatures at message level).
+    """
+    config = VertexGeminiConfig()
+
+    parts = [
+        {"functionCall": {"name": "fn1", "args": {}}, "thoughtSignature": "sig-1"},
+        {"functionCall": {"name": "fn2", "args": {}}, "thoughtSignature": "sig-2"},
+    ]
+
+    signatures = config._extract_thought_signatures_from_parts(parts)
+
+    # All parts are functionCall — should return None
+    assert signatures is None, (
+        f"Expected None when all parts are functionCall, got {signatures}"
+    )
