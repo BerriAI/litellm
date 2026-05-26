@@ -35,6 +35,11 @@ _cache_health = {
     "save_failure_last_error": "",
     "load_failures": 0,
     "load_failure_last_error": "",
+    # Count of spurious ``GET``-returned-``None`` results for keys that
+    # actually existed, recovered by an immediate re-read. A non-zero value
+    # means the cassette cache hit a transient read inconsistency that would
+    # otherwise have surfaced as a phantom live re-record.
+    "transient_recoveries": 0,
 }
 
 
@@ -48,6 +53,12 @@ def _record_cache_failure(kind: str, exc: BaseException) -> None:
         _cache_health["load_failure_last_error"] = err
 
 
+def _record_transient_recovery() -> None:
+    _cache_health["transient_recoveries"] = (
+        int(_cache_health["transient_recoveries"]) + 1
+    )
+
+
 def cassette_cache_health() -> dict:
     return dict(_cache_health)
 
@@ -57,6 +68,7 @@ def reset_cassette_cache_health() -> None:
     _cache_health["save_failure_last_error"] = ""
     _cache_health["load_failures"] = 0
     _cache_health["load_failure_last_error"] = ""
+    _cache_health["transient_recoveries"] = 0
 
 
 def cassette_cache_capacity_snapshot(client: Optional[Any] = None) -> Optional[dict]:
@@ -159,7 +171,33 @@ def make_redis_persister(
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
             if data is None:
-                raise CassetteNotFoundError()
+                # Defensive re-read. Under concurrent CI load we have observed a
+                # ``GET`` return ``None`` for a key that demonstrably exists on
+                # the (single, non-clustered) master — an external monitor saw
+                # the key present with a healthy TTL at the same instant the
+                # in-process client read ``None``. That spurious None is treated
+                # as a cache miss, so the cassette re-records live (a phantom
+                # ``MISS:RECORDED``) and, for flaky/networked tests, the failed
+                # live call can trigger a pytest rerun. ``None`` is a valid GET
+                # result (not a ``RedisError``), so the retry-on-error client
+                # config never kicks in. Re-check existence and re-read once: if
+                # the key is really there, use it (and log loudly so the
+                # frequency is visible); only a genuinely-absent key (a brand
+                # new cassette) falls through to ``CassetteNotFoundError``.
+                try:
+                    if redis_client.exists(key):
+                        data = redis_client.get(key)
+                except RedisError:
+                    data = None
+                if data is None:
+                    raise CassetteNotFoundError()
+                _record_transient_recovery()
+                _log.warning(
+                    "[vcr-transient-miss-recovered] %s: first GET returned None "
+                    "but the key exists; recovered on re-read. This would "
+                    "otherwise have been a spurious live re-record.",
+                    cassette_path,
+                )
             try:
                 if isinstance(data, bytes):
                     data = data.decode("utf-8")

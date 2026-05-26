@@ -105,6 +105,67 @@ def test_load_refreshes_ttl_so_replayed_cassettes_do_not_expire():
     assert CASSETTE_TTL_SECONDS - 5 <= refreshed <= CASSETTE_TTL_SECONDS
 
 
+class _TransientNoneRedis:
+    """Returns None on the first GET for a key that actually exists, then the
+    real value on the re-read — simulating the spurious GET-None observed under
+    concurrent CI load."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self._none_served = set()
+
+    def get(self, key, *a, **k):
+        if key not in self._none_served and self._inner.exists(key):
+            self._none_served.add(key)
+            return None
+        return self._inner.get(key, *a, **k)
+
+    def set(self, *a, **k):
+        return self._inner.set(*a, **k)
+
+    def exists(self, *a, **k):
+        return self._inner.exists(*a, **k)
+
+    def expire(self, *a, **k):
+        return self._inner.expire(*a, **k)
+
+
+def test_load_recovers_from_transient_none_for_existing_key():
+    """A GET that spuriously returns None for an existing key must be
+    recovered by the re-read instead of becoming a phantom cache miss.
+
+    Regression: ``GET`` returning ``None`` is a valid result (not a
+    ``RedisError``), so the client's retry-on-error config never fires.
+    Under concurrent CI load this surfaced as deterministic cassettes
+    re-recording live (spurious ``MISS:RECORDED``). The persister now
+    re-checks existence and re-reads once.
+    """
+    reset_cassette_cache_health()
+    fake = fakeredis.FakeStrictRedis()
+    cassette_id = "tests/llm_translation/test_x/test_transient_none"
+    seed = make_redis_persister(client=fake)
+    seed.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    persister = make_redis_persister(client=_TransientNoneRedis(fake))
+    requests, responses = persister.load_cassette(cassette_id, yamlserializer)
+
+    assert len(requests) == 1
+    assert len(responses) == 1
+    assert cassette_cache_health()["transient_recoveries"] == 1
+    reset_cassette_cache_health()
+
+
+def test_load_genuinely_absent_key_raises_and_does_not_count_recovery():
+    reset_cassette_cache_health()
+    persister = make_redis_persister(client=fakeredis.FakeStrictRedis())
+
+    with pytest.raises(CassetteNotFoundError):
+        persister.load_cassette("tests/llm_translation/test_x/never", yamlserializer)
+
+    assert cassette_cache_health()["transient_recoveries"] == 0
+    reset_cassette_cache_health()
+
+
 def test_load_ttl_refresh_failure_does_not_break_load():
     """A failed TTL refresh must never turn a successful load into a miss."""
 
