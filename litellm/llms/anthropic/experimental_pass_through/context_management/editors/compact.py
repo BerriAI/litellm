@@ -529,7 +529,7 @@ async def apply_compact_20260112(
     # eligible turn exists, fall back to a synthetic continuation prompt so
     # the downstream call still has a non-empty user message.
     summarized_system = _augment_system_with_summary(system, summary_text)
-    downstream_messages_after_summary = _select_last_user_question(messages)
+    downstream_messages_after_summary = _select_last_user_question(effective_messages)
 
     return PolyfillResult(
         messages=downstream_messages_after_summary,

@@ -214,7 +214,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         metadata: Optional[Dict] = None,
         stop_sequences: Optional[List[str]] = None,
         stream: Optional[bool] = False,
-        system: Optional[str] = None,
+        system: Optional[Union[str, List[Dict[str, Any]]]] = None,
         temperature: Optional[float] = None,
         thinking: Optional[Dict] = None,
         tool_choice: Optional[Dict] = None,
