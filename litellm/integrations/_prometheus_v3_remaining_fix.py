@@ -18,22 +18,35 @@ method so it reads the v3 ``additional_headers`` as a fallback before falling
 through to ``sys.maxsize``; v1 metadata keys still take precedence so the
 existing public contract is preserved.
 
-This patch is installed at import time by ``litellm/integrations/__init__.py``.
+This module is imported by ``litellm/integrations/__init__.py``. To avoid a
+circular import (``prometheus.py`` -> ``litellm.proxy._types`` -> ``litellm``
+which is still mid-init), we DO NOT touch ``prometheus`` at import time.
+Instead we install a one-shot ``sys.meta_path`` finder that intercepts the
+first import of ``litellm.integrations.prometheus`` and installs the patch
+after that module finishes loading. By that point the litellm package has
+fully initialized, so the proxy helper import in the wrapped method works.
+
 A future cleanup can inline this logic directly into ``prometheus.py``; the
-indirection here exists because the size of ``prometheus.py`` (~156 KB) blocks
-the single-tool-call push path we have available today.
+indirection here exists because the size of ``prometheus.py`` (~156 KB)
+blocks the single-tool-call push path we have available today.
 """
 from __future__ import annotations
 
+import importlib
+import importlib.abc
+import importlib.util
+import sys
 from typing import Any, Dict, Optional, Union
+
+_PROMETHEUS_FQN = "litellm.integrations.prometheus"
 
 
 def _get_additional_headers_from_kwargs(kwargs: dict) -> Dict[str, Any]:
     """
     Pull ``additional_headers`` out of ``standard_logging_object.hidden_params``.
 
-    Returns an empty dict on any missing/non-dict layer so callers can
-    ``.get(...)`` freely without try/except.
+    Returns an empty dict on any missing / non-dict layer so callers can
+    ``.get(...)`` freely.
     """
     standard_logging_payload = kwargs.get("standard_logging_object") or {}
     if not isinstance(standard_logging_payload, dict):
@@ -54,11 +67,8 @@ def _get_remaining_from_v3_headers(
     """
     Return the per-(key, model) remaining value emitted by the v3 rate limiter.
 
-    The v3 post-call hook writes per-descriptor headers of the form
-    ``x-ratelimit-{descriptor_key}-remaining-{rate_limit_type}``. For the
-    Prometheus virtual-key gauges we want the per-(key, model) value so we
-    prefer ``model_per_key`` (which already scopes by both the API key and the
-    model_group) and fall back to ``key`` (per-key, all-models) if it is
+    Prefers ``model_per_key`` (which already scopes by both the API key and
+    the model_group) and falls back to ``key`` (per-key, all-models) if
     absent. Returns ``None`` if neither descriptor is present.
     """
     if not additional_headers:
@@ -69,42 +79,25 @@ def _get_remaining_from_v3_headers(
         )
         if value is not None:
             try:
-                # v3 values are ints but tolerate strings/floats just in case
                 return int(value)
             except (TypeError, ValueError):
                 return value
     return None
 
 
-def _install_patch() -> None:
+def _install_patch_on_module(prometheus_module: Any) -> None:
     """
-    Apply the v3 fallback to ``PrometheusLogger._set_virtual_key_rate_limit_metrics``.
+    Apply the v3 fallback wrap to ``PrometheusLogger._set_virtual_key_rate_limit_metrics``.
 
-    Idempotent — second/Nth call is a no-op.
-
-    Strategy: wrap the existing method. If either of the v1 metadata keys
-    (``litellm-key-remaining-{requests,tokens}-{model_group}``) is absent on
-    the inbound ``metadata`` dict, look the value up in the v3
-    ``additional_headers`` and inject it into a *shallow copy* of metadata
-    before delegating to the original. The original's existing
-    ``sys.maxsize`` fallback continues to handle the "neither limiter
-    populated anything" case unchanged.
+    Safe to call multiple times — second/Nth call is a no-op.
     """
-    # NOTE: import lazily. Importing this module is done from
-    # ``litellm/integrations/__init__.py``; resolving
-    # ``litellm.integrations.prometheus`` here works because Python returns
-    # the in-progress integrations package object for the parent reference
-    # and then loads ``prometheus.py`` to completion as a submodule.
-    from litellm.integrations import prometheus
-
-    if getattr(prometheus.PrometheusLogger, "_lit2577_patched", False):
+    PrometheusLogger = getattr(prometheus_module, "PrometheusLogger", None)
+    if PrometheusLogger is None:
+        return
+    if getattr(PrometheusLogger, "_lit2577_patched", False):
         return
 
-    from litellm.proxy.common_utils.callback_utils import (
-        get_model_group_from_litellm_kwargs,
-    )
-
-    original = prometheus.PrometheusLogger._set_virtual_key_rate_limit_metrics
+    original = PrometheusLogger._set_virtual_key_rate_limit_metrics
 
     def patched(
         self,
@@ -114,59 +107,123 @@ def _install_patch() -> None:
         metadata,
         model_id=None,
     ):
+        # NOTE: this import is intentionally lazy. Doing it at module load
+        # creates a circular import because ``callback_utils`` imports from
+        # ``litellm`` which is still mid-init when integrations is imported.
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
+
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         rk = f"litellm-key-remaining-requests-{model_group}"
         tk = f"litellm-key-remaining-tokens-{model_group}"
 
-        # Only do work if at least one v1 key is missing
         v1_requests = metadata.get(rk) if isinstance(metadata, dict) else None
         v1_tokens = metadata.get(tk) if isinstance(metadata, dict) else None
-        if v1_requests is not None and v1_tokens is not None:
-            return original(
-                self, user_api_key, user_api_key_alias, kwargs, metadata, model_id
-            )
 
-        headers = _get_additional_headers_from_kwargs(kwargs)
-        if not headers:
-            return original(
-                self, user_api_key, user_api_key_alias, kwargs, metadata, model_id
-            )
-
-        # Build a shallow copy of metadata with v3-derived values filled in.
-        # We never overwrite values the caller already provided.
-        patched_metadata: Optional[dict] = None
-        if v1_requests is None:
-            v = _get_remaining_from_v3_headers(headers, "requests")
-            if v is not None:
-                patched_metadata = dict(metadata) if isinstance(metadata, dict) else {}
-                patched_metadata[rk] = v
-        if v1_tokens is None:
-            v = _get_remaining_from_v3_headers(headers, "tokens")
-            if v is not None:
-                if patched_metadata is None:
-                    patched_metadata = (
-                        dict(metadata) if isinstance(metadata, dict) else {}
-                    )
-                patched_metadata[tk] = v
-
-        if patched_metadata is not None:
-            metadata = patched_metadata
+        if v1_requests is None or v1_tokens is None:
+            headers = _get_additional_headers_from_kwargs(kwargs)
+            if headers:
+                patched_metadata: Optional[dict] = None
+                if v1_requests is None:
+                    v = _get_remaining_from_v3_headers(headers, "requests")
+                    if v is not None:
+                        patched_metadata = (
+                            dict(metadata) if isinstance(metadata, dict) else {}
+                        )
+                        patched_metadata[rk] = v
+                if v1_tokens is None:
+                    v = _get_remaining_from_v3_headers(headers, "tokens")
+                    if v is not None:
+                        if patched_metadata is None:
+                            patched_metadata = (
+                                dict(metadata) if isinstance(metadata, dict) else {}
+                            )
+                        patched_metadata[tk] = v
+                if patched_metadata is not None:
+                    metadata = patched_metadata
 
         return original(
             self, user_api_key, user_api_key_alias, kwargs, metadata, model_id
         )
 
-    prometheus.PrometheusLogger._set_virtual_key_rate_limit_metrics = patched
-    prometheus.PrometheusLogger._lit2577_patched = True
+    PrometheusLogger._set_virtual_key_rate_limit_metrics = patched
+    PrometheusLogger._lit2577_patched = True
 
-    # Expose helpers as module-level attributes on ``prometheus`` so the
-    # regression tests (which import them from
-    # ``litellm.integrations.prometheus``) work without callers having to
-    # know about this patch module.
-    prometheus._get_additional_headers_from_kwargs = _get_additional_headers_from_kwargs
-    prometheus._get_remaining_from_v3_headers = _get_remaining_from_v3_headers
+    # Expose the helpers as module-level attributes on ``prometheus`` so the
+    # regression tests can ``from litellm.integrations.prometheus import
+    # _get_additional_headers_from_kwargs, _get_remaining_from_v3_headers``
+    # without needing to know about this patch module.
+    prometheus_module._get_additional_headers_from_kwargs = (
+        _get_additional_headers_from_kwargs
+    )
+    prometheus_module._get_remaining_from_v3_headers = (
+        _get_remaining_from_v3_headers
+    )
 
 
-# Apply on first import. The integrations package __init__ imports us, so this
-# runs before any user code touches ``PrometheusLogger``.
-_install_patch()
+class _PrometheusPostImportHook(importlib.abc.MetaPathFinder):
+    """
+    One-shot meta-path finder: intercepts the first import of
+    ``litellm.integrations.prometheus``, lets the normal loader run it to
+    completion, then installs our patch.
+
+    After firing it removes itself from ``sys.meta_path``.
+    """
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != _PROMETHEUS_FQN:
+            return None
+        try:
+            sys.meta_path.remove(self)
+        except ValueError:
+            pass
+        # Walk the remaining finders so we don't deadlock on ourselves.
+        for finder in list(sys.meta_path):
+            spec = finder.find_spec(fullname, path, target)
+            if spec is None:
+                continue
+            original_loader = spec.loader
+            if original_loader is None or not hasattr(
+                original_loader, "exec_module"
+            ):
+                return spec
+
+            class _WrappedLoader(importlib.abc.Loader):
+                def create_module(self, spec_):
+                    if hasattr(original_loader, "create_module"):
+                        return original_loader.create_module(spec_)
+                    return None
+
+                def exec_module(self, module):
+                    original_loader.exec_module(module)
+                    try:
+                        _install_patch_on_module(module)
+                    except Exception:
+                        # Patch failure must NOT break Prometheus logging.
+                        # The original method still works; we just don't get
+                        # the v3 fallback. Worse than a fix, better than a crash.
+                        import logging
+
+                        logging.getLogger(__name__).warning(
+                            "LIT-2577: failed to install Prometheus v3 fallback patch",
+                            exc_info=True,
+                        )
+
+            spec.loader = _WrappedLoader()
+            return spec
+        return None
+
+
+# If prometheus is already imported (unusual: would mean something pulled it
+# in before integrations.__init__), patch it directly. Otherwise install the
+# meta-path hook for the first future import.
+_existing = sys.modules.get(_PROMETHEUS_FQN)
+if _existing is not None:
+    _install_patch_on_module(_existing)
+else:
+    _hook = _PrometheusPostImportHook()
+    if not any(
+        isinstance(f, _PrometheusPostImportHook) for f in sys.meta_path
+    ):
+        sys.meta_path.insert(0, _hook)
