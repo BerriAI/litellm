@@ -1,0 +1,31 @@
+name: Dispatch Infra Build
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - litellm_internal_staging
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch infra build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.INFRA_REPOSITORY_DISPATCH_TOKEN }}
+          repository: rayward-internal/llm-gateway-infra
+          event-type: litellm-main-merged
+          client-payload: >-
+            {
+              "source_repo": "${{ github.repository }}",
+              "source_ref": "refs/heads/litellm_internal_staging",
+              "source_sha": "${{ github.event.pull_request.merge_commit_sha || github.sha }}",
+              "source_actor": "${{ github.actor }}",
+              "source_run_id": "${{ github.run_id }}",
+              "source_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
