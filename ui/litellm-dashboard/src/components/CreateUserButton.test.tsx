@@ -123,6 +123,75 @@ describe("CreateUserButton", () => {
     });
   });
 
+  describe("default user role (LIT-3149)", () => {
+    // Regression: admins inviting "internal users" used to land on
+    // internal_user_viewer by default, which then displayed everywhere as
+    // "Internal Viewer". The default for both the embedded and modal forms
+    // should be the regular `internal_user` role so newly invited users are
+    // not stuck as view-only by accident.
+    it("should default user_role to internal_user when submitting embedded form without changing role", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-default-role" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-default",
+        user_id: "new-user-default-role",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} isEmbedded />,
+      );
+
+      await user.type(screen.getByLabelText(/user email/i), "default-role@example.com");
+      // Intentionally skip the user-role combobox to assert the form default.
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "default-role@example.com",
+            user_role: "internal_user",
+          }),
+        );
+      });
+    });
+
+    it("should default user_role to internal_user when submitting the invite modal without changing role", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-modal-default" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-modal-default",
+        user_id: "new-user-modal-default",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      await user.type(within(dialog).getByLabelText(/user email/i), "modal-default@example.com");
+      // Intentionally skip the Global Proxy Role combobox to assert the form default.
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "modal-default@example.com",
+            user_role: "internal_user",
+          }),
+        );
+      });
+    });
+  });
+
   describe("embedded mode submission", () => {
     it("should call userCreateCall when form is submitted in embedded mode", async () => {
       const user = userEvent.setup();
