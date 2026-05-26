@@ -155,8 +155,9 @@ def test_login_form_authenticate_raises_500(client, monkeypatch):
     )
     # raise_server_exceptions=False -> TestClient returns 500 with body
     assert response.status_code == 500
-    # Some non-status assertion — body should be present
-    assert len(response.content) >= 0
+    # Body must be non-empty so a future refactor that drops the error body
+    # would trip this gate.
+    assert len(response.content) > 0
     assert response.headers.get("content-type") is not None
 
 

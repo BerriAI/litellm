@@ -9,6 +9,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -126,8 +127,13 @@ def test_reload_anthropic_beta_headers_preserves_existing_interval(
     call_kwargs = prisma.db.litellm_config.upsert.await_args.kwargs
     data = call_kwargs["data"]
     update_payload = data["update"]["param_value"]
-    assert '"interval_hours": 12' in update_payload
-    assert '"force_reload": true' in update_payload
+    parsed = (
+        json.loads(update_payload)
+        if isinstance(update_payload, str)
+        else update_payload
+    )
+    assert parsed["interval_hours"] == 12
+    assert parsed["force_reload"] is True
 
 
 def test_reload_anthropic_beta_headers_not_admin_forbidden(client, auth_as):

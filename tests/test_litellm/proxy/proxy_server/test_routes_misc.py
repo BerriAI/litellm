@@ -41,7 +41,7 @@ def test_home_invalid_method_405(client):
     """GET / handler is GET-only; DELETE returns 405 (error path)."""
     response = client.delete("/")
     assert response.status_code == 405
-    assert b"" in response.content or response.headers.get("content-type")
+    assert len(response.content) > 0 and response.headers.get("content-type")
 
 
 # ---------------------------------------------------------------------------

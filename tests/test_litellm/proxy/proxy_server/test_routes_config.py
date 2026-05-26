@@ -480,9 +480,9 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
         response = client.post(
             "/config/callback/delete", json={"callback_name": "langfuse"}
         )
-    # 404 may be re-wrapped as ProxyException — accept both 404 and the
-    # wrapped 500 surfacing, but pin the error message either way.
-    assert response.status_code in (404, 500)
+    # The handler re-raises HTTPException(404) verbatim (only generic
+    # `Exception` becomes a 500 ProxyException), so pin 404 strictly.
+    assert response.status_code == 404
     assert (
         "langfuse" in str(response.json()).lower()
         or "not found" in str(response.json()).lower()
