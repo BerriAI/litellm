@@ -128,6 +128,70 @@ class TestBedrockFilesTransformation:
         # Must have messages
         assert "messages" in model_input
 
+        # Nova Pro rejects empty additionalModelRequestFields / system — they must be absent
+        assert (
+            "additionalModelRequestFields" not in model_input
+        ), "Nova: empty additionalModelRequestFields must be omitted, not serialized as {}"
+        assert (
+            "system" not in model_input
+        ), "Nova: empty system must be omitted, not serialized as []"
+
+    def test_nova_batch_jsonl_omits_empty_converse_fields(self):
+        """
+        Regression test: Amazon Nova Pro returns 400 Malformed input request when
+        additionalModelRequestFields or system are present but empty in the Converse
+        API payload.  The proxy must strip these keys when they carry no data.
+        """
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+
+        openai_jsonl_content = [
+            {
+                "custom_id": "req-0",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "us.amazon.nova-pro-v1:0",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "What is 1 + 1? Answer with just the number.",
+                        }
+                    ],
+                    "max_tokens": 16,
+                },
+            }
+        ]
+
+        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content
+        )
+
+        assert len(result) == 1
+        model_input = result[0]["modelInput"]
+
+        assert (
+            "additionalModelRequestFields" not in model_input
+            or model_input["additionalModelRequestFields"]
+        ), "additionalModelRequestFields must be absent or non-empty — Nova rejects {}"
+        assert (
+            "system" not in model_input or model_input["system"]
+        ), "system must be absent or non-empty — Nova rejects []"
+
+        # Validate the exact shape AWS accepts
+        assert model_input == {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "What is 1 + 1? Answer with just the number."}
+                    ],
+                }
+            ],
+            "inferenceConfig": {"maxTokens": 16},
+        }
+
     def test_nova_image_content_uses_converse_image_blocks(self):
         """
         Test that image_url content blocks are converted to Bedrock Converse

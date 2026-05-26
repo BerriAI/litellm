@@ -3059,8 +3059,6 @@ async def test_bedrock_max_completion_tokens(model: str):
 
         assert request_body == {
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-            "additionalModelRequestFields": {},
-            "system": [],
             "inferenceConfig": {"maxTokens": 10},
         }
 
