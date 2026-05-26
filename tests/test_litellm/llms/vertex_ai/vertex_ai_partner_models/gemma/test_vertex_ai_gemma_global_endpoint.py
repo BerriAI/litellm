@@ -23,6 +23,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
@@ -128,9 +129,29 @@ class TestVertexBaseGetVertexRegionGemma:
 
 
 class TestCreateVertexURLGemma:
-    """Test that create_vertex_url produces the expected OpenAI-compatible URL."""
+    """Test that create_vertex_url produces the expected OpenAI-compatible URL.
+
+    Gemma MaaS models reach this code path via should_use_openai_handler(), which
+    selects VertexPartnerProvider.llama for all OpenAI-compatible partners including
+    Gemma.  test_gemma_routes_through_openai_handler() guards that mapping so the
+    URL-format tests below are meaningful regression guards for the Gemma path.
+    """
+
+    def test_gemma_routes_through_openai_handler(self):
+        """Gemma MaaS must be routed through the OpenAI-compatible handler.
+
+        This is what causes VertexPartnerProvider.llama to be selected downstream,
+        which in turn generates the /endpoints/openapi URL shape.  If this mapping
+        ever changes, the URL-shape tests below become misleading.
+        """
+        assert VertexAIPartnerModels.should_use_openai_handler(
+            "google/gemma-4-26b-a4b-it-maas"
+        ), "Gemma MaaS must use the OpenAI-compatible handler (VertexPartnerProvider.llama path)"
 
     def test_global_location_url_format(self):
+        # VertexPartnerProvider.llama is correct: Gemma MaaS reaches create_vertex_url
+        # via should_use_openai_handler() → partner = VertexPartnerProvider.llama.
+        # See test_gemma_routes_through_openai_handler for the routing guard.
         url = VertexBase.create_vertex_url(
             vertex_location="global",
             vertex_project="test-project",
@@ -187,6 +208,16 @@ def test_gemma_maas_supports_vision():
 
 # ---------------------------------------------------------------------------
 # Integration tests: verify payloads reach the global OpenAI endpoint
+#
+# Patch target note (P1): AsyncHTTPHandler is patched at its *definition* site
+# (litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler).  This works
+# correctly because the client is created by get_async_httpx_client(), which is
+# also defined in http_handler.py and calls AsyncHTTPHandler(...) using the
+# module-local name — so the patch intercepts instantiation there.
+# llm_http_handler.py only imports the class for type annotations; it never
+# instantiates it directly.  Confirmed: without the mock the test raises
+# AuthenticationError, proving the assertion would never silently pass against
+# an un-mocked real call.
 # ---------------------------------------------------------------------------
 
 _MOCK_RESPONSE_JSON = {
@@ -197,7 +228,10 @@ _MOCK_RESPONSE_JSON = {
     "choices": [
         {
             "index": 0,
-            "message": {"role": "assistant", "content": "Hello! How can I help you today?"},
+            "message": {
+                "role": "assistant",
+                "content": "Hello! How can I help you today?",
+            },
             "finish_reason": "stop",
         }
     ],
@@ -219,11 +253,28 @@ async def test_vertex_ai_gemma_global_endpoint_url():
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
-               return_value=("fake-token", "test-project")), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(litellm.model_cost, {"vertex_ai/google/gemma-4-26b-a4b-it-maas": {"supported_regions": ["global"]}}, clear=False):
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(
+            litellm.model_cost,
+            {
+                "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
+                    "supported_regions": ["global"]
+                }
+            },
+            clear=False,
+        ),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         response = await litellm.acompletion(
@@ -278,11 +329,20 @@ async def test_vertex_ai_gemma_function_calling_passthrough():
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
-               return_value=("fake-token", "test-project")), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         await litellm.acompletion(
@@ -342,11 +402,20 @@ async def test_vertex_ai_gemma_vision_passthrough():
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
-               return_value=("fake-token", "test-project")), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "test-project"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         await litellm.acompletion(
