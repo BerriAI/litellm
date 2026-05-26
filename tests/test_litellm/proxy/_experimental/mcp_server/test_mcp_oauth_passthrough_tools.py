@@ -126,7 +126,10 @@ def test_to_http_exception_preserves_upstream_www_authenticate():
     }
 
 
-def test_to_http_exception_fabricates_resource_metadata_when_upstream_omits_header():
+def test_to_http_exception_skips_fabrication_when_base_url_missing():
+    """Without ``base_url`` we cannot build an RFC 9728 §3.2-compliant absolute
+    URI, so we omit the fabricated ``WWW-Authenticate`` challenge entirely
+    instead of emitting a relative URI strict clients reject."""
     err = MCPUpstreamAuthError(
         status_code=401,
         www_authenticate=None,
@@ -135,9 +138,7 @@ def test_to_http_exception_fabricates_resource_metadata_when_upstream_omits_head
 
     http_exc = err.to_http_exception()
     assert http_exc.status_code == 401
-    assert http_exc.headers == {
-        "www-authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/sample_docs"'
-    }
+    assert http_exc.headers is None
 
 
 def test_to_http_exception_fabricates_absolute_resource_metadata_with_base_url():

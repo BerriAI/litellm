@@ -39,13 +39,14 @@ class MCPUpstreamAuthError(Exception):
         that points at the gateway's standard-pattern well-known endpoint for
         this server, so MCP clients can still initiate RFC 9728 discovery
         against the upstream IdP via the gateway's proxied metadata. Callers
-        should pass ``base_url`` (the gateway origin, no trailing slash) so
-        the fabricated URI is absolute as RFC 9728 §3.2 requires; strict
-        clients reject relative URIs in the Bearer challenge.
+        must pass ``base_url`` (the gateway origin, no trailing slash) so the
+        fabricated URI is absolute as RFC 9728 §3.2 requires; if ``base_url``
+        is missing we skip fabrication entirely rather than emit a relative
+        URI that strict clients reject in the Bearer challenge.
         """
         challenge: Optional[str] = self.www_authenticate
-        if challenge is None and self.status_code == 401:
-            prefix = base_url.rstrip("/") if base_url else ""
+        if challenge is None and self.status_code == 401 and base_url:
+            prefix = base_url.rstrip("/")
             challenge = (
                 "Bearer resource_metadata="
                 f'"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"'

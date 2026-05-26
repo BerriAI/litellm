@@ -18,19 +18,36 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 
-def _parse_mcp_server_names_from_path(path: str) -> Optional[List[str]]:
+def _parse_mcp_server_names_from_path(
+    path: str, mcp_servers_header: Optional[List[str]] = None
+) -> Optional[List[str]]:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
     :meth:`MCPRequestHandler._extract_target_server_names_from_path` so the
     names used here always match the names downstream routing uses; returns
     ``None`` whenever the bypass must not activate (aggregate ``/mcp``,
-    multi-server CSV paths, or any other unrecognized path)."""
+    multi-server CSV paths, or any other unrecognized path).
+
+    Also fails closed when the ``x-mcp-servers`` header introduces any server
+    not present in the path-derived target set. Downstream routing for
+    ``/mcp/...`` paths overrides the header with path-derived names, but a
+    header/path mismatch here is a sign of a confused or hostile caller —
+    refuse the cold-start bypass rather than admit anonymously based on the
+    path while the header advertises a stricter, non-passthrough target."""
     servers = MCPRequestHandler._extract_target_server_names_from_path(path)
     if len(servers) != 1:
         verbose_logger.debug(
             "MCP cold-start: path %r resolved to %r; passthrough 401 bypass "
             "requires exactly one target and will not activate",
             path,
+            servers,
+        )
+        return None
+    if mcp_servers_header is not None and (set(mcp_servers_header) - set(servers)):
+        verbose_logger.debug(
+            "MCP cold-start: x-mcp-servers header %r introduces target(s) not "
+            "in path-derived set %r; passthrough 401 bypass will not activate",
+            mcp_servers_header,
             servers,
         )
         return None
@@ -268,7 +285,7 @@ class MCPRequestHandler:
                     # budget / rate limited) and must propagate so those
                     # controls are not bypassed via anonymous admission.
                     mcp_servers_from_path = _parse_mcp_server_names_from_path(
-                        request_route
+                        request_route, mcp_servers
                     )
                     if (
                         mcp_servers_from_path is not None
@@ -300,7 +317,9 @@ class MCPRequestHandler:
                 # require unauthenticated requests to protected resources to receive
                 # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
                 # for pass-through servers instead of surfacing a generic admission error.
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route)
+                mcp_servers_from_path = _parse_mcp_server_names_from_path(
+                    request_route, mcp_servers
+                )
                 client_ip = IPAddressUtils.get_mcp_client_ip(request)
                 if (
                     mcp_servers_from_path is not None
