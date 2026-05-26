@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -132,7 +133,40 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
+    def _coerce_management_object_ttl(self, kwargs: dict) -> None:
+        """Honour ``general_settings.user_api_key_cache_ttl`` for management-object writes.
+
+        LIT-3338: ``auth_checks.py`` writes management objects (key, team, user,
+        budget, vector store, permission) with an explicit
+        ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` (the well-known
+        60s fallback constant). That explicit ttl always wins over the cache
+        instance's own ``default_in_memory_ttl``, which ``proxy_server.py``
+        *does* correctly update from ``general_settings.user_api_key_cache_ttl``
+        at startup via ``update_cache_ttl``. The user's configured TTL is
+        therefore silently capped at 60s.
+
+        Treat ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` as a sentinel
+        meaning "use the cache's configured default TTL". If the cache's
+        ``default_in_memory_ttl`` was customised away from the constant (i.e.
+        the user actually set ``user_api_key_cache_ttl``), substitute it in.
+        Otherwise the value is identical and behaviour is unchanged.
+
+        Mutates ``kwargs`` in place; no-op when ``ttl`` is not the sentinel.
+        """
+        ttl = kwargs.get("ttl")
+        if ttl is None:
+            return
+        if ttl != DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL:
+            return
+        configured = self.default_in_memory_ttl
+        if configured is None:
+            return
+        if configured == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL:
+            return
+        kwargs["ttl"] = configured
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+        self._coerce_management_object_ttl(kwargs)
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
         return super().set_cache(
@@ -140,6 +174,7 @@ class UserApiKeyCache(DualCache):
         )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
+        self._coerce_management_object_ttl(kwargs)
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(
