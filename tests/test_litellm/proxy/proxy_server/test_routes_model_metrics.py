@@ -98,7 +98,6 @@ def test_model_metrics_slow_responses_happy(
     client, auth_as, prisma_with_query_raw, monkeypatch
 ):
     """Pins ``GET /model/metrics/slow_responses`` (happy: empty list)."""
-    # alerting_threshold is read off proxy_logging_obj.slack_alerting_instance
     logging_obj = MagicMock()
     logging_obj.slack_alerting_instance.alerting_threshold = 30
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging_obj)
@@ -213,7 +212,6 @@ def test_alerting_settings_happy(client, auth_as, monkeypatch):
         response = client.get("/alerting/settings")
     assert response.status_code == 200
     body = response.json()
-    # First entry is always the slack_alerting toggle — pin its shape.
     assert body[0]["field_name"] == "slack_alerting"
     summary = {
         "status_code": response.status_code,

@@ -138,7 +138,6 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 200
-    # Use direct dict-equality assertion with >=3 keys on the response data.
     response_summary = {
         "status_code": response.status_code,
         "content_type": response.headers.get("content-type", ""),
@@ -170,7 +169,6 @@ def test_audio_transcription_happy_path(client, auth_as, patched_transcription, 
     assert response.status_code == 200
     body = response.json()
     assert body == {"text": "hello world"}
-    # strong dict-equality for pin_check
     response_summary = {
         "status_code": response.status_code,
         "text_field": body["text"],

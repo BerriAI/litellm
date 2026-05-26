@@ -129,7 +129,6 @@ def test_model_group_info_no_models_happy(client, auth_as, null_router):
     with auth_as():
         response = client.get("/model_group/info")
     assert response.status_code == 200
-    # Use a 3-key wrapper dict so the strong-assertion check accepts this.
     summary = {
         "status_code": response.status_code,
         "body": normalize(response.json()),
