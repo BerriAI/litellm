@@ -280,16 +280,25 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         True iff `model` refers to Amazon Titan Text Embeddings V2.
 
+        Resolution order:
+          1. `model_prices_and_context_window.json` via `get_model_info`.
+             When the registry resolves the id we trust `mode == "embedding"`
+             AND a matching `titan-embed-text-v2` marker in the id - the
+             marker is still needed because the registry's `mode` field
+             doesn't distinguish Titan v2's InvokeModel schema from Cohere,
+             Nova Multimodal, or Titan G1 (all also `mode == "embedding"`
+             but with incompatible bodies).
+          2. Substring fallback for ids the registry can't resolve - this
+             catches cross-region inference profile prefixes
+             (`us.amazon.titan-embed-text-v2:0`) and Bedrock ARN forms.
+             The marker boundary check rejects lookalikes like
+             `titan-embed-text-v20` or `titan-embed-text-v2-experimental`.
+
         Tolerant of common id shapes:
           - "amazon.titan-embed-text-v2:0"
           - "bedrock/amazon.titan-embed-text-v2:0"
           - "us.amazon.titan-embed-text-v2:0" (cross-region inference profile)
           - ARN forms ending in ".../amazon.titan-embed-text-v2:0"
-
-        The marker must be followed by ":" (version separator), end-of-string,
-        or "/" (ARN segment boundary). That stops `titan-embed-text-v20` or
-        `titan-embed-text-v2-experimental` from accidentally matching - those
-        would carry a different schema even if AWS shipped them tomorrow.
         """
         normalized = model.lower()
         if normalized.startswith("bedrock/"):
@@ -299,9 +308,40 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if idx < 0:
             return False
         end = idx + len(marker)
-        if end == len(normalized):
-            return True
-        return normalized[end] in (":", "/")
+        if not (end == len(normalized) or normalized[end] in (":", "/")):
+            return False
+
+        # Marker matches with a clean boundary. If the registry can also
+        # resolve this id, additionally confirm `mode == "embedding"` so a
+        # malformed id whose path-component is right but whose registered
+        # mode is, say, "chat" doesn't slip through. Registry silence
+        # (cross-region profiles, ARNs) is fine - the marker alone is
+        # authoritative there.
+        registry_mode = BedrockFilesConfig._lookup_registry_mode(model)
+        if registry_mode is not None and registry_mode != "embedding":
+            return False
+        return True
+
+    @staticmethod
+    def _lookup_registry_mode(model_id: str) -> Optional[str]:
+        """
+        Read `mode` for `model_id` from `model_prices_and_context_window.json`.
+
+        Returns the mode string when the registry resolves the id and the
+        entry has a non-empty string mode, else `None`. Isolating this
+        means the Titan v2 detector can layer a data-driven check on top
+        of the marker boundary without scattering try/except shapes.
+        """
+        try:
+            from litellm import get_model_info
+
+            info = get_model_info(model_id)
+        except Exception:
+            return None
+        if not isinstance(info, dict):
+            return None
+        mode = info.get("mode")
+        return mode if isinstance(mode, str) and mode else None
 
     @staticmethod
     def _coerce_embedding_input_to_string(raw_input: Any, model: str = "") -> str:
@@ -365,7 +405,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def _map_openai_embedding_to_bedrock_params(
         self,
         openai_request_body: Dict[str, Any],
-        provider: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Transform an OpenAI /v1/embeddings request body into the
@@ -542,7 +581,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # narrow contract and the embedding helper can evolve independently.
             if self._is_embedding_record(_openai_jsonl_content):
                 model_input = self._map_openai_embedding_to_bedrock_params(
-                    openai_request_body=openai_body, provider=provider
+                    openai_request_body=openai_body
                 )
             else:
                 model_input = self._map_openai_to_bedrock_params(
