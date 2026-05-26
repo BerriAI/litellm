@@ -34,6 +34,15 @@ class BedrockError(BaseLLMException):
 # Lazy import cache to avoid circular imports and performance impact
 _get_model_info = None
 
+BedrockOutputConfigEffort = Literal["low", "medium", "high", "max", "xhigh"]
+_BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER: Dict[BedrockOutputConfigEffort, int] = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "max": 3,
+    "xhigh": 4,
+}
+
 
 def get_cached_model_info():
     """
@@ -49,6 +58,69 @@ def get_cached_model_info():
 
         _get_model_info = get_model_info
     return _get_model_info
+
+
+@functools.lru_cache(maxsize=1)
+def _get_local_model_cost_map() -> Dict:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return GetModelCostMap.load_local_model_cost_map()
+
+
+def pop_bedrock_invoke_output_config_format(request_body: Dict) -> Optional[Dict]:
+    """
+    Remove and return Anthropic's nested ``output_config.format`` field.
+
+    Bedrock Invoke paths convert the schema to inline message text. Any remaining
+    ``output_config`` keys, such as ``effort``, are left in place.
+    """
+    output_config = request_body.get("output_config")
+    if not isinstance(output_config, dict):
+        return None
+
+    output_format = output_config.pop("format", None)
+    if not output_config:
+        request_body.pop("output_config", None)
+
+    if isinstance(output_format, dict):
+        return output_format
+    return None
+
+
+def convert_bedrock_invoke_output_format_to_inline_schema(
+    output_format: Dict,
+    request_body: Dict,
+) -> None:
+    """
+    Embed an Anthropic structured-output schema into the last user message.
+
+    Bedrock Invoke does not support ``output_format`` directly, so the schema is
+    appended to the final user message for prompt-engineered structured output.
+    """
+    schema = output_format.get("schema")
+    if not schema:
+        return
+
+    messages = request_body.get("messages", [])
+    if not messages:
+        return
+
+    last_user_message = None
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "user":
+            last_user_message = message
+            break
+
+    if last_user_message is None:
+        return
+
+    content = last_user_message.get("content", [])
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+        last_user_message["content"] = content
+
+    if isinstance(content, list):
+        content.append({"type": "text", "text": json.dumps(schema)})
 
 
 def remove_custom_field_from_tools(request_body: dict) -> None:
@@ -607,11 +679,10 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
     """
     Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
 
-    Bedrock's Claude Opus 4.5/4.6 request validator accepts a narrower effort
-    vocabulary than Anthropic's compatibility surface:
-    - Opus 4.5: low, medium, high
-    - Opus 4.6: low, medium, high, max
-    - Opus 4.7: low, medium, high, xhigh, max
+    Bedrock's Claude Opus request validator can accept a narrower effort
+    vocabulary than Anthropic's compatibility surface. The Bedrock ceiling is
+    read from ``model_prices_and_context_window.json`` via
+    ``bedrock_output_config_effort_ceiling``.
 
     Mutates ``output_config`` in place so callers can accept Claude Code's
     ``xhigh`` input without forwarding a provider-invalid value.
@@ -623,14 +694,41 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
     if effort not in ("xhigh", "max"):
         return
 
-    model_lower = model.lower()
-    if any(v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")):
+    ceiling = _get_bedrock_output_config_effort_ceiling(model)
+    if ceiling is None:
         return
-    if any(v in model_lower for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")):
-        output_config["effort"] = "max"
-        return
-    if any(v in model_lower for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")):
-        output_config["effort"] = "high"
+
+    if (
+        _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort]
+        > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]
+    ):
+        output_config["effort"] = ceiling
+
+
+def _get_bedrock_output_config_effort_ceiling(
+    model: str,
+) -> Optional[BedrockOutputConfigEffort]:
+    try:
+        model_info = get_cached_model_info()(
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+    except Exception:
+        return None
+
+    ceiling = model_info.get("bedrock_output_config_effort_ceiling")
+    if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+        return ceiling  # type: ignore[return-value]
+
+    model_cost_key = model_info.get("key")
+    if not isinstance(model_cost_key, str):
+        return None
+
+    local_model_info = _get_local_model_cost_map().get(model_cost_key, {})
+    ceiling = local_model_info.get("bedrock_output_config_effort_ceiling")
+    if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
+        return ceiling  # type: ignore[return-value]
+    return None
 
 
 # Import after standalone functions to avoid circular imports

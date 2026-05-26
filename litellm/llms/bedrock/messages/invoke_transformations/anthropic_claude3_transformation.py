@@ -32,11 +32,13 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    convert_bedrock_invoke_output_format_to_inline_schema,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -451,82 +453,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         else:
             anthropic_messages_request.pop("context_management", None)
 
-    def _convert_output_format_to_inline_schema(
-        self,
-        output_format: Dict,
-        anthropic_messages_request: Dict,
-    ) -> None:
-        """
-        Convert Anthropic output_format to inline schema in message content.
-
-        Bedrock Invoke doesn't support the output_format parameter, so we embed
-        the schema directly into the user message content as text instructions.
-
-        This approach adds the schema to the last user message, instructing the model
-        to respond in the specified JSON format.
-
-        Args:
-            output_format: The output_format dict with 'type' and 'schema'
-            anthropic_messages_request: The request dict to modify in-place
-
-        Ref: https://aws.amazon.com/blogs/machine-learning/structured-data-response-with-amazon-bedrock-prompt-engineering-and-tool-use/
-        """
-        import json
-
-        # Extract schema from output_format
-        schema = output_format.get("schema")
-        if not schema:
-            return
-
-        # Get messages from the request
-        messages = anthropic_messages_request.get("messages", [])
-        if not messages:
-            return
-
-        # Find the last user message
-        last_user_message_idx = None
-        for idx in range(len(messages) - 1, -1, -1):
-            if messages[idx].get("role") == "user":
-                last_user_message_idx = idx
-                break
-
-        if last_user_message_idx is None:
-            return
-
-        last_user_message = messages[last_user_message_idx]
-        content = last_user_message.get("content", [])
-
-        # Ensure content is a list
-        if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-            last_user_message["content"] = content
-
-        # Add schema as text content to the message
-        schema_text = {"type": "text", "text": json.dumps(schema)}
-        content.append(schema_text)
-
-    @staticmethod
-    def _pop_output_config_format(
-        anthropic_messages_request: Dict,
-    ) -> Optional[Dict]:
-        """
-        Remove and return Anthropic's newer ``output_config.format`` field.
-
-        Bedrock Invoke only gets the converted inline schema. Any remaining
-        ``output_config`` keys, such as ``effort``, are left in place.
-        """
-        output_config = anthropic_messages_request.get("output_config")
-        if not isinstance(output_config, dict):
-            return None
-
-        output_format = output_config.pop("format", None)
-        if not output_config:
-            anthropic_messages_request.pop("output_config", None)
-
-        if isinstance(output_format, dict):
-            return output_format
-        return None
-
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
@@ -665,18 +591,18 @@ class AmazonAnthropicClaudeMessagesConfig(
         # consume the newer `output_config.format` shape here instead of
         # forwarding it as an unknown nested key.
         output_format = anthropic_messages_request.pop("output_format", None)
-        output_config_format = self._pop_output_config_format(
+        output_config_format = pop_bedrock_invoke_output_config_format(
             anthropic_messages_request
         )
         if output_format:
-            self._convert_output_format_to_inline_schema(
+            convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_format,
-                anthropic_messages_request=anthropic_messages_request,
+                request_body=anthropic_messages_request,
             )
         elif output_config_format:
-            self._convert_output_format_to_inline_schema(
+            convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_config_format,
-                anthropic_messages_request=anthropic_messages_request,
+                request_body=anthropic_messages_request,
             )
         normalize_bedrock_opus_output_config_effort(
             model=model,

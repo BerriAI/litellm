@@ -984,7 +984,8 @@
         "tool_use_system_prompt_tokens": 159,
         "supports_native_structured_output": true,
         "supports_output_config": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1016,7 +1017,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1048,7 +1050,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1080,7 +1083,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1111,7 +1115,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1142,7 +1147,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "max"
     },
     "anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1174,7 +1180,8 @@
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-mythos-preview": {
         "input_cost_per_token": 0,
@@ -1221,7 +1228,8 @@
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "us.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1253,7 +1261,8 @@
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "eu.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1284,7 +1293,8 @@
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "au.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1315,7 +1325,8 @@
         "supports_native_structured_output": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -31618,7 +31629,8 @@
         "tool_use_system_prompt_tokens": 159,
         "supports_native_structured_output": true,
         "supports_output_config": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31649,7 +31661,8 @@
         "tool_use_system_prompt_tokens": 159,
         "supports_native_structured_output": true,
         "supports_output_config": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31679,7 +31692,8 @@
         "tool_use_system_prompt_tokens": 159,
         "supports_native_structured_output": true,
         "supports_output_config": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "bedrock_output_config_effort_ceiling": "high"
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,

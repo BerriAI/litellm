@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
@@ -16,9 +16,11 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    convert_bedrock_invoke_output_format_to_inline_schema,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -179,21 +181,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         output_format = anthropic_request.pop("output_format", None)
-        output_config_format = self._pop_output_config_format(anthropic_request)
+        output_config_format = pop_bedrock_invoke_output_config_format(
+            anthropic_request
+        )
         if output_format:
-            self._convert_output_format_to_inline_schema(
+            convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_format,
-                anthropic_request=anthropic_request,
+                request_body=anthropic_request,
             )
         elif output_config_format:
-            self._convert_output_format_to_inline_schema(
+            convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_config_format,
-                anthropic_request=anthropic_request,
+                request_body=anthropic_request,
             )
-        normalize_bedrock_opus_output_config_effort(
-            model=model,
-            output_config=anthropic_request.get("output_config"),
-        )
         if not (
             _supports_factory(
                 model=model,
@@ -219,54 +219,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         remove_custom_field_from_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
         return anthropic_request
-
-    @staticmethod
-    def _pop_output_config_format(anthropic_request: Dict) -> Optional[Dict]:
-        """Remove and return Anthropic's nested structured-output format."""
-        output_config = anthropic_request.get("output_config")
-        if not isinstance(output_config, dict):
-            return None
-
-        output_format = output_config.pop("format", None)
-        if not output_config:
-            anthropic_request.pop("output_config", None)
-
-        if isinstance(output_format, dict):
-            return output_format
-        return None
-
-    @staticmethod
-    def _convert_output_format_to_inline_schema(
-        output_format: Dict,
-        anthropic_request: Dict,
-    ) -> None:
-        """Embed Anthropic structured-output schema into the last user message."""
-        import json
-
-        schema = output_format.get("schema")
-        if not schema:
-            return
-
-        messages = anthropic_request.get("messages", [])
-        if not messages:
-            return
-
-        last_user_message = None
-        for message in reversed(messages):
-            if isinstance(message, dict) and message.get("role") == "user":
-                last_user_message = message
-                break
-
-        if last_user_message is None:
-            return
-
-        content = last_user_message.get("content", [])
-        if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-            last_user_message["content"] = content
-
-        if isinstance(content, list):
-            content.append({"type": "text", "text": json.dumps(schema)})
 
     def _compute_bedrock_invoke_beta_headers(
         self,
