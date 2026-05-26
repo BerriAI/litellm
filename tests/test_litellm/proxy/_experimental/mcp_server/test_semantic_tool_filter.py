@@ -489,9 +489,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +501,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +512,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +544,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +557,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +578,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
@@ -640,3 +626,306 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+    def test_chat_format_tools_matched_correctly(self):
+        """
+        Tools in OpenAI chat completions format (wrapped in
+        {"type": "function", "function": {...}}) must be matched by
+        the name inside the "function" dict.
+
+        Regression test for #28766: semantic filter could not extract
+        names from the chat format wrapper, causing empty matches.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "searxng-search",
+                    "description": "Search the web",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "tavily-tavily_search",
+                    "description": "Tavily search",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["searxng-search"], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["function"]["name"] == "searxng-search"
+
+
+class TestExtractToolInfo:
+    """
+    Tests for _extract_tool_info handling both OpenAI tool formats.
+
+    Regression coverage for #28766: the semantic filter must correctly
+    extract name/description from both the chat completions format
+    (nested "function" key) and the responses API format (flat dict).
+    """
+
+    def _make_filter(self):
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
+        return SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+
+    def test_responses_api_format(self):
+        """Flat dict with name/description at top level (responses API)."""
+        f = self._make_filter()
+        tool = {
+            "name": "web_search",
+            "description": "Search the web",
+            "parameters": {"type": "object"},
+            "type": "function",
+            "strict": False,
+        }
+
+        name, desc = f._extract_tool_info(tool)
+
+        assert name == "web_search"
+        assert desc == "Search the web"
+
+    def test_chat_completions_format(self):
+        """Nested dict with {type: "function", function: {name, description, ...}}."""
+        f = self._make_filter()
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "searxng-search",
+                "description": "Search via SearXNG",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+
+        name, desc = f._extract_tool_info(tool)
+
+        assert name == "searxng-search"
+        assert desc == "Search via SearXNG"
+
+    def test_chat_format_missing_description_falls_back_to_name(self):
+        """Chat format tool without description uses name as fallback."""
+        f = self._make_filter()
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "my_tool",
+                "parameters": {"type": "object"},
+            },
+        }
+
+        name, desc = f._extract_tool_info(tool)
+
+        assert name == "my_tool"
+        assert desc == "my_tool"
+
+    def test_mcp_tool_object(self):
+        """Native MCPTool object."""
+        f = self._make_filter()
+        tool = MCPTool(
+            name="gmail_send",
+            description="Send an email",
+            inputSchema={"type": "object"},
+        )
+
+        name, desc = f._extract_tool_info(tool)
+
+        assert name == "gmail_send"
+        assert desc == "Send an email"
+
+
+class TestGetToolNamesCsv:
+    """
+    Tests for SemanticToolFilterHook._get_tool_names_csv handling both
+    OpenAI tool formats.
+
+    Regression coverage for #28766.
+    """
+
+    def _make_hook(self):
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        filter_instance = SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+        return SemanticToolFilterHook(filter_instance)
+
+    def test_responses_format(self):
+        """Flat dicts produce correct CSV."""
+        hook = self._make_hook()
+        tools = [
+            {"name": "tool_a", "description": "A"},
+            {"name": "tool_b", "description": "B"},
+        ]
+
+        csv = hook._get_tool_names_csv(tools)
+
+        assert csv == "tool_a,tool_b"
+
+    def test_chat_completions_format(self):
+        """Nested function dicts produce correct CSV."""
+        hook = self._make_hook()
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "search", "description": "Search"},
+            },
+            {
+                "type": "function",
+                "function": {"name": "crawl", "description": "Crawl"},
+            },
+        ]
+
+        csv = hook._get_tool_names_csv(tools)
+
+        assert csv == "search,crawl"
+
+    def test_empty_list(self):
+        hook = self._make_hook()
+        assert hook._get_tool_names_csv([]) == ""
+
+
+class TestExpandMcpToolsFormat:
+    """
+    Tests that _expand_mcp_tools produces the correct OpenAI format
+    based on call_type.
+
+    Regression test for #28766: _expand_mcp_tools always produced
+    responses-API format (flat dicts), even for /chat/completions
+    requests that require the nested {type: "function", function: {...}}
+    wrapper.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chat_completion_produces_chat_format(self):
+        """
+        For call_type="acompletion", expanded tools must have the
+        chat completions wrapper: {type: "function", function: {name, ...}}.
+        """
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        filter_instance = SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+        hook = SemanticToolFilterHook(filter_instance)
+
+        mock_mcp_tools = [
+            MCPTool(
+                name="web_search",
+                description="Search the web",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+        ]
+
+        mock_user_api_key_dict = Mock()
+
+        with (
+            patch(
+                "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._parse_mcp_tools"
+            ) as mock_parse,
+            patch(
+                "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform"
+            ) as mock_process,
+        ):
+            mock_parse.return_value = (["mcp_ref"], [])
+            mock_process.return_value = (mock_mcp_tools, {})
+
+            result = await hook._expand_mcp_tools(
+                tools=["mcp_ref"],
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="acompletion",
+            )
+
+        assert len(result) == 1
+        tool = result[0]
+        assert "function" in tool, "Chat format must have 'function' key, got: " + str(
+            list(tool.keys())
+        )
+        assert tool["type"] == "function"
+        assert tool["function"]["name"] == "web_search"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_produces_flat_format(self):
+        """
+        For call_type="aresponses", expanded tools must use the flat
+        responses-API format: {name, parameters, type: "function", ...}.
+        """
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        filter_instance = SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+        hook = SemanticToolFilterHook(filter_instance)
+
+        mock_mcp_tools = [
+            MCPTool(
+                name="web_search",
+                description="Search the web",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+        ]
+
+        mock_user_api_key_dict = Mock()
+
+        with (
+            patch(
+                "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._parse_mcp_tools"
+            ) as mock_parse,
+            patch(
+                "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform"
+            ) as mock_process,
+        ):
+            mock_parse.return_value = (["mcp_ref"], [])
+            mock_process.return_value = (mock_mcp_tools, {})
+
+            result = await hook._expand_mcp_tools(
+                tools=["mcp_ref"],
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="aresponses",
+            )
+
+        assert len(result) == 1
+        tool = result[0]
+        assert (
+            tool.get("name") == "web_search"
+        ), "Responses format must have 'name' at top level"
+        assert (
+            "function" not in tool
+        ), "Responses format must not have nested 'function' key"
