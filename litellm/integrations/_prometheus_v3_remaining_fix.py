@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.abc
-import importlib.util
 import sys
 from typing import Any, Dict, Optional, Union
 
@@ -195,6 +194,7 @@ class _PrometheusPostImportHook(importlib.abc.MetaPathFinder):
         try:
             sys.meta_path.remove(self)
         except ValueError:
+            # Already removed (e.g. nested import) — harmless, fall through.
             pass
         # Walk the remaining finders so we don't deadlock on ourselves.
         for finder in list(sys.meta_path):
