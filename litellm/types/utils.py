@@ -182,6 +182,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    input_cost_per_token_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift)
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
@@ -192,8 +195,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift)
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift) for prompts >272K
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -203,6 +212,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
+    input_cost_per_token_above_272k_tokens_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift) for prompts >272K
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -219,6 +231,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    output_cost_per_token_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift)
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -230,6 +245,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_272k_tokens: Optional[
         float
     ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
+    output_cost_per_token_above_272k_tokens_regional: Optional[
+        float
+    ]  # OpenAI regional/data-residency processing pricing (10% uplift) for prompts >272K
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -3029,6 +3047,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: Optional[float] = None
     input_cost_per_token_priority: Optional[float] = None
+    input_cost_per_token_regional: Optional[float] = None
     cache_creation_input_token_cost: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
@@ -3036,6 +3055,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None
     cache_read_input_token_cost_priority: Optional[float] = None
+    cache_read_input_token_cost_regional: Optional[float] = None
     cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
     cache_read_input_audio_token_cost: Optional[float] = None
     input_cost_per_character: Optional[float] = None
@@ -3057,6 +3077,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_batches: Optional[float] = None
     output_cost_per_token_flex: Optional[float] = None
     output_cost_per_token_priority: Optional[float] = None
+    output_cost_per_token_regional: Optional[float] = None
     output_cost_per_character: Optional[float] = None
     output_cost_per_audio_token: Optional[float] = None
     output_cost_per_token_above_128k_tokens: Optional[float] = None
@@ -3599,6 +3620,7 @@ class ServiceTier(Enum):
 
     FLEX = "flex"
     PRIORITY = "priority"
+    REGIONAL = "regional"  # OpenAI regional/data-residency processing (10% uplift)
 
 
 LLMResponseTypes = Union[
