@@ -901,6 +901,37 @@ class TestBedrockFilesEmbeddingTransformation:
             "inputText" not in model_input
         ), "explicit chat URL must not produce an embedding-shaped modelInput"
 
+    def test_coerce_embedding_input_helper_isolated(self):
+        """Direct coverage of the extracted input-normalization helper."""
+        import pytest
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        # Happy paths
+        assert BedrockFilesConfig._coerce_embedding_input_to_string("hello") == "hello"
+        assert (
+            BedrockFilesConfig._coerce_embedding_input_to_string(["hello"]) == "hello"
+        )
+
+        # Error paths
+        with pytest.raises(ValueError, match="missing required `input`"):
+            BedrockFilesConfig._coerce_embedding_input_to_string(None, model="m")
+        with pytest.raises(ValueError, match="one input per JSONL record"):
+            BedrockFilesConfig._coerce_embedding_input_to_string(["a", "b"])
+        # A multi-element list of ints is rejected as "one input per JSONL
+        # record" too - we can't tell if it's pre-tokenized or "3 strings"
+        # without more context, so the most-actionable error wins.
+        with pytest.raises(ValueError, match="one input per JSONL record"):
+            BedrockFilesConfig._coerce_embedding_input_to_string([1, 2, 3])
+        # Single-element list wrapping a token list -> pre-tokenized error.
+        with pytest.raises(NotImplementedError, match="pre-tokenized"):
+            BedrockFilesConfig._coerce_embedding_input_to_string([[1, 2, 3]])
+        # Single-element list wrapping a bare int -> pre-tokenized error.
+        with pytest.raises(NotImplementedError, match="pre-tokenized"):
+            BedrockFilesConfig._coerce_embedding_input_to_string([42])
+        with pytest.raises(ValueError, match="must be a string"):
+            BedrockFilesConfig._coerce_embedding_input_to_string({"unsupported": True})
+
     def test_other_non_embedding_urls_route_to_chat(self):
         """Any non-/v1/embeddings url short-circuits to chat path."""
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig

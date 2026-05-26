@@ -303,6 +303,65 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             return True
         return normalized[end] in (":", "/")
 
+    @staticmethod
+    def _coerce_embedding_input_to_string(raw_input: Any, model: str = "") -> str:
+        """
+        Normalize an OpenAI /v1/embeddings `input` field into the single
+        string that Bedrock Titan v2 InvokeModel expects in `inputText`.
+
+        Accepts: a string, or a single-element list containing one string.
+        Rejects (with actionable messages):
+          - None / missing -> ValueError
+          - Multi-element string lists -> ValueError, prompts caller to
+            emit one JSONL line per input
+          - Pre-tokenized inputs (List[int], List[List[int]]) -> NotImplementedError
+          - Any other type -> ValueError
+
+        Extracted so the validation can be exercised in isolation and so
+        future embedding-provider branches (Titan G1, Cohere) can reuse it
+        without duplicating the type-shaping logic.
+        """
+        if raw_input is None:
+            raise ValueError(
+                "Embedding batch record is missing required `input` field: "
+                f"model={model}"
+            )
+
+        # Bedrock InvokeModel for Titan v2 takes exactly one string `inputText`
+        # per call. Pre-tokenized inputs and multi-element string lists are
+        # explicitly unsupported so callers emit one JSONL line per embedding
+        # instead of relying on us to silently fan out or concatenate.
+        if isinstance(raw_input, list):
+            if len(raw_input) == 1:
+                candidate = raw_input[0]
+            else:
+                raise ValueError(
+                    "Bedrock batch embedding requires one input per JSONL "
+                    "record. Got a list with "
+                    f"{len(raw_input)} items for model={model}; emit one "
+                    "JSONL line per input string instead."
+                )
+        else:
+            candidate = raw_input
+
+        # Catches pre-tokenized inputs (List[int] from OpenAI spec, or a
+        # single int slipping past the list-unwrap above).
+        # NOTE: bool is a subclass of int but treating True/False as a token
+        # is meaningless either way, so the broad check is fine.
+        if isinstance(candidate, (list, int)):
+            raise NotImplementedError(
+                "Bedrock Titan v2 batch embedding does not support "
+                "pre-tokenized integer inputs. Pass `input` as a string "
+                f"(model={model})."
+            )
+        if not isinstance(candidate, str):
+            raise ValueError(
+                "Bedrock batch embedding `input` must be a string (or a "
+                "single-element list of strings). Got type "
+                f"{type(candidate).__name__} for model={model}."
+            )
+        return candidate
+
     def _map_openai_embedding_to_bedrock_params(
         self,
         openai_request_body: Dict[str, Any],
@@ -339,45 +398,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 "embedding models in https://github.com/BerriAI/litellm/issues."
             )
 
-        raw_input = openai_request_body.get("input")
-        if raw_input is None:
-            raise ValueError(
-                "Embedding batch record is missing required `input` field: "
-                f"model={_model}"
-            )
-
-        # Bedrock InvokeModel for Titan v2 takes exactly one string `inputText`
-        # per call. Pre-tokenized inputs (List[int], List[List[int]]) and
-        # multi-element string lists are explicitly unsupported so callers
-        # emit one JSONL line per embedding instead of relying on us to
-        # silently fan out or concatenate.
-        if isinstance(raw_input, list):
-            if len(raw_input) == 1:
-                input_text = raw_input[0]
-            else:
-                raise ValueError(
-                    "Bedrock batch embedding requires one input per JSONL "
-                    "record. Got a list with "
-                    f"{len(raw_input)} items for model={_model}; emit one "
-                    "JSONL line per input string instead."
-                )
-        else:
-            input_text = raw_input
-
-        if isinstance(input_text, (list, int)):
-            # Catches pre-tokenized inputs (List[int] from OpenAI spec,
-            # or single int slipping past the list-unwrap above).
-            raise NotImplementedError(
-                "Bedrock Titan v2 batch embedding does not support "
-                "pre-tokenized integer inputs. Pass `input` as a string "
-                f"(model={_model})."
-            )
-        if not isinstance(input_text, str):
-            raise ValueError(
-                "Bedrock batch embedding `input` must be a string (or a "
-                "single-element list of strings). Got type "
-                f"{type(input_text).__name__} for model={_model}."
-            )
+        input_text = self._coerce_embedding_input_to_string(
+            openai_request_body.get("input"), model=_model
+        )
 
         # Map OpenAI-style params (dimensions, encoding_format) onto the
         # Titan v2 schema (dimensions, embeddingTypes) via the embed config
