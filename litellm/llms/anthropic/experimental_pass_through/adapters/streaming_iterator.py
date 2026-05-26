@@ -208,11 +208,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return self.chunk_queue.popleft()
 
                 if self.queued_usage_chunk:
-                    # Usage has already been merged + emitted. Pass any trailing
-                    # provider events through directly instead of silently
-                    # dropping them in the for-loop body.
-                    self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
+                    # Usage has already been merged + emitted. Any trailing
+                    # provider events would violate Anthropic SSE ordering
+                    # (no chunks may follow the final ``message_delta``), so
+                    # silently drop them — matches the async ``__anext__``
+                    # behavior where the block-handling logic is gated on
+                    # ``not self.queued_usage_chunk``.
+                    continue
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start

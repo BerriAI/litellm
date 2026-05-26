@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset(
-    {"output_config", "context_management", "_polyfill_result"}
+    {"output_config", "context_management"}
 )
 
 
