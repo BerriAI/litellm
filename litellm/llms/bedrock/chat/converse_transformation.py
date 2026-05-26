@@ -935,7 +935,7 @@ class AmazonConverseConfig(BaseConfig):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
                 )
-            if param == "context_management" and isinstance(value, (dict, list)):
+            elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
                 self._map_request_metadata_param(value, optional_params)

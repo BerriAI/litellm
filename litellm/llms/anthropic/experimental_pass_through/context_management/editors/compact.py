@@ -257,6 +257,50 @@ def _count_effective_tokens(
     return total
 
 
+def _is_tool_result_only_user_turn(msg: Dict[str, Any]) -> bool:
+    """Return True if ``msg`` is a ``role=user`` turn that carries only
+    ``tool_result`` blocks (i.e. an Anthropic tool-use response).
+
+    Such turns are not real "user question" turns and must not be used as
+    the sole downstream message after a full compaction: the adapter
+    translates them to OpenAI ``tool``-role messages, which require a
+    preceding assistant ``tool_calls`` turn that no longer exists once the
+    history has been summarized away.
+    """
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    for block in content:
+        if not isinstance(block, dict):
+            return False
+        if block.get("type") != "tool_result":
+            return False
+    return True
+
+
+def _select_last_user_question(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Pick the most recent ``user`` turn that is a real question.
+
+    Returns a one-element message list, or a synthetic continuation prompt
+    if no eligible turn exists (e.g. the conversation only ever contained
+    ``tool_result`` turns, or contained no user turns at all). The
+    downstream call always needs a non-empty user message.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") == "user" and not _is_tool_result_only_user_turn(msg):
+            return [msg]
+    return [
+        {
+            "role": "user",
+            "content": "Please continue based on the conversation summary above.",
+        }
+    ]
+
+
 def _extract_summary_text(raw: Optional[str]) -> Optional[str]:
     if not raw:
         return None
@@ -476,14 +520,16 @@ async def apply_compact_20260112(
     # Per Anthropic's contract, everything before the compaction block is
     # dropped. Phase D: the user/assistant log goes empty; the summary lives
     # on the system message instead. Anthropic requires a non-empty messages
-    # array, so keep the most recent original user turn so the model has the
-    # question to answer.
+    # array, so keep the most recent original user *question* turn so the
+    # model has something to answer. Skip ``tool_result``-only user turns:
+    # in Anthropic's format those are role=user but represent the response
+    # from a tool, and surfacing one as the sole downstream message would
+    # produce an orphaned ``tool``-role message on non-Anthropic providers
+    # with no matching ``tool_calls`` in the prior assistant history. If no
+    # eligible turn exists, fall back to a synthetic continuation prompt so
+    # the downstream call still has a non-empty user message.
     summarized_system = _augment_system_with_summary(system, summary_text)
-    downstream_messages_after_summary: List[Dict[str, Any]] = []
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            downstream_messages_after_summary = [msg]
-            break
+    downstream_messages_after_summary = _select_last_user_question(messages)
 
     return PolyfillResult(
         messages=downstream_messages_after_summary,
