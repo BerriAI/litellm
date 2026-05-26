@@ -59,8 +59,7 @@ class VetoGuardrail(CustomGuardrail):
         """POST one text to the Veto gateway. Returns the verdict JSON.
 
         Uses litellm's shared async HTTP client (connection pooling, retries,
-        observability; lifecycle owned by the global client cache). The handler
-        raises for non-2xx and retries transient connection errors internally.
+        observability; lifecycle owned by the global client cache).
         """
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -74,6 +73,11 @@ class VetoGuardrail(CustomGuardrail):
             json={"text": text, "categories": self.categories},
             timeout=self.timeout,
         )
+        # Fail closed on any non-2xx (auth / rate-limit / 5xx). The shared
+        # handler raises on its primary path; calling it here also covers the
+        # connection-retry path, so a gateway error can never silently pass
+        # unscanned text through to the model.
+        resp.raise_for_status()
         return resp.json()
 
     def _raise_blocked(self, verdict: dict) -> None:

@@ -9,6 +9,7 @@ post-call hooks plus the text-in/text-out ``apply_guardrail`` surface.
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from fastapi.exceptions import HTTPException
@@ -245,6 +246,28 @@ class TestVetoMultimodalAndInput:
                     data, MagicMock(), "completion"
                 )
 
+    @pytest.mark.asyncio
+    async def test_responses_input_list_of_strings_redacted(self, veto_guardrail):
+        data = {"input": ["email a@b.com"]}
+        with _patch_check(
+            veto_guardrail, _verdict("redact", redacted="email [REDACTED_EMAIL]")
+        ):
+            out = await veto_guardrail.async_pre_call_hook(
+                MagicMock(), MagicMock(), data, "responses"
+            )
+        assert out["input"][0] == "email [REDACTED_EMAIL]"
+
+    @pytest.mark.asyncio
+    async def test_null_content_passthrough(self, veto_guardrail):
+        # a message with no string/list content (e.g. a tool call) is left alone
+        data = {"messages": [{"role": "assistant", "content": None}]}
+        with _patch_check(veto_guardrail, _verdict("block")) as mock_post:
+            out = await veto_guardrail.async_pre_call_hook(
+                MagicMock(), MagicMock(), data, "completion"
+            )
+        assert mock_post.call_count == 0
+        assert out["messages"][0]["content"] is None
+
 
 # ---------------------------------------------------------------------------
 # moderation hook (block-only)
@@ -331,6 +354,12 @@ class TestVetoApplyGuardrail:
             with pytest.raises(HTTPException):
                 await veto_guardrail.apply_guardrail("ignore previous")
 
+    @pytest.mark.asyncio
+    async def test_empty_text_not_scanned(self, veto_guardrail):
+        with _patch_check(veto_guardrail, _verdict("block")) as mock_post:
+            assert await veto_guardrail.apply_guardrail("   ") == "   "
+        assert mock_post.call_count == 0
+
 
 # ---------------------------------------------------------------------------
 # request shape
@@ -353,6 +382,26 @@ class TestVetoRequest:
         assert sent["text"] == "scan me"
         assert sent["categories"] == ["pii", "secrets", "injection"]
         assert mock_post.call_args.args[0].endswith("/v1/check")
+
+    @pytest.mark.asyncio
+    async def test_no_api_key_omits_auth_header(self):
+        g = VetoGuardrail(guardrail_name="no-key", event_hook="pre_call")
+        data = {"messages": [{"role": "user", "content": "scan me"}]}
+        with _patch_check(g, _verdict("allow")) as mock_post:
+            await g.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+        assert "Authorization" not in mock_post.call_args.kwargs["headers"]
+
+    @pytest.mark.asyncio
+    async def test_gateway_error_fails_closed(self, veto_guardrail):
+        # a non-2xx from the gateway must raise (fail closed), never silently
+        # pass unscanned text through.
+        err_resp = MagicMock()
+        err_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=MagicMock()
+        )
+        with _patch_check(veto_guardrail, err_resp):
+            with pytest.raises(httpx.HTTPStatusError):
+                await veto_guardrail.apply_guardrail("scan me")
 
 
 # ---------------------------------------------------------------------------
