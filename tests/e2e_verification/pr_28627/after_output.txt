@@ -1,0 +1,29 @@
+
+PR #28627  e2e  | api_base=https://mateo-resource.openai.azure.com | model=gpt-5.3-codex
+Auth = azure_ad_token_provider() ONLY (no api_key, no env fallback)
+
+========================================================================
+SYNC v1 path  (api_version='preview', api_key=None, AD provider)
+========================================================================
+  client type           : OpenAI
+  client.base_url       : https://mateo-resource.openai.azure.com/openai/v1/
+  client._api_key_provider forwarded : True
+  -> making REAL call to Azure: client.responses.create(...)
+  Azure replied         : 'hello from azure'
+  provider was invoked   : 1 time(s)
+------------------------------------------------------------------------
+  SYNC RESULT: SUCCESS
+
+========================================================================
+ASYNC v1 path (sync provider wrapped in async wrapper by the fix)
+========================================================================
+  client type           : AsyncOpenAI
+  async provider forwarded : True
+  -> making REAL async call to Azure: await client.responses.create(...)
+  Azure replied         : 'hello from azure async'
+------------------------------------------------------------------------
+  ASYNC RESULT: SUCCESS
+
+========================================================================
+OVERALL: PASSED (AD auth works end to end on v1 path)
+========================================================================

@@ -1,0 +1,19 @@
+
+PR #28627  e2e  | api_base=https://mateo-resource.openai.azure.com | model=gpt-5.3-codex
+Auth = azure_ad_token_provider() ONLY (no api_key, no env fallback)
+
+========================================================================
+SYNC v1 path  (api_version='preview', api_key=None, AD provider)
+========================================================================
+------------------------------------------------------------------------
+  SYNC RESULT: FAILED -> OpenAIError: Missing credentials. Please pass an `api_key`, `workload_identity`, `admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.
+
+========================================================================
+ASYNC v1 path (sync provider wrapped in async wrapper by the fix)
+========================================================================
+------------------------------------------------------------------------
+  ASYNC RESULT: FAILED -> OpenAIError: Missing credentials. Please pass an `api_key`, `workload_identity`, `admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable.
+
+========================================================================
+OVERALL: FAILED (AD provider dropped on v1 path)
+========================================================================
