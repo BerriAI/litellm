@@ -2839,9 +2839,10 @@ async def test_find_team_with_model_access_unresolved_group_claim_returns_none(
 
 @pytest.mark.asyncio
 async def test_find_and_validate_specific_team_id_non_http_exception_still_propagates():
-    """Regression guard: only HTTPException (the "team doesn't exist in db"
-    404 raised by get_team_object) is softened. Other errors — e.g. "No DB
-    Connected" — must still propagate so operator-side problems are loud."""
+    """Regression guard: only the 404 HTTPException raised by
+    `get_team_object` ("team doesn't exist in db") is softened. Other
+    errors — e.g. "No DB Connected" — must still propagate so operator-side
+    problems are loud."""
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
     token = {"sub": "user-1", "team_id": "some-claim-team"}
@@ -2861,6 +2862,39 @@ async def test_find_and_validate_specific_team_id_non_http_exception_still_propa
                 parent_otel_span=None,
                 proxy_logging_obj=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_non_404_http_exception_propagates():
+    """Regression guard: only 404 HTTPException is softened. If
+    `get_team_object` is ever updated to raise a different HTTP status code
+    (e.g. 403 for a blocked team), that error must still propagate rather
+    than silently fall through to the single-team DB fallback."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="team_id")
+    token = {"sub": "user-1", "team_id": "some-claim-team"}
+
+    for status_code in (400, 403, 500):
+        with patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team:
+            mock_get_team.side_effect = HTTPException(
+                status_code=status_code, detail="non-404 failure"
+            )
+
+            with pytest.raises(HTTPException) as exc_info:
+                await JWTAuthManager.find_and_validate_specific_team_id(
+                    jwt_handler=jwt_handler,
+                    jwt_valid_token=token,
+                    prisma_client=None,
+                    user_api_key_cache=None,
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                )
+            assert exc_info.value.status_code == status_code
 
 
 @pytest.mark.asyncio

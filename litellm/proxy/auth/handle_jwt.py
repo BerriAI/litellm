@@ -1048,6 +1048,8 @@ class JWTAuthManager:
                 )
                 return individual_team_id, team_object
             except HTTPException as e:
+                if e.status_code != 404:
+                    raise
                 # Claim doesn't map to a known team — defer to fallback.
                 verbose_proxy_logger.debug(
                     "JWT team_id claim '%s' did not resolve to a team: %s",
