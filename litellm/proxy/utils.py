@@ -1596,7 +1596,22 @@ class ProxyLogging:
                 iterator_overrides.append((resolved, "override"))
             elif "apply_guardrail" in cls_attrs:
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            if "async_post_call_streaming_hook" in cls_attrs:
+            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
+            # using the leaf-class ``__dict__`` check used by the other flags:
+            # before this PR the hook was unconditionally invoked, so a
+            # callback that inherits an override from an intermediate parent
+            # (e.g. a vendor base class providing the override, with the
+            # registered class adding nothing else) MUST still be detected.
+            # A leaf-class miss here would silently drop the inherited hook.
+            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
+            cls_streaming_hook = getattr(
+                cls,
+                "async_post_call_streaming_hook",
+                base_streaming_hook,
+            )
+            if getattr(
+                cls_streaming_hook, "__func__", cls_streaming_hook
+            ) is not getattr(base_streaming_hook, "__func__", base_streaming_hook):
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
@@ -2220,6 +2235,16 @@ class ProxyLogging:
                 data=data, llm_router=llm_router
             )
 
+            # Track the first guardrail exception so we can re-raise it after
+            # iterating through every configured post-call guardrail. We must
+            # keep iterating after the first failure so every guardrail's
+            # @log_guardrail_information decorator gets a chance to record its
+            # standard_logging_guardrail_information entry into
+            # request_data["metadata"]. Without this, only the triggering
+            # guardrail shows up in spend logs / Langfuse / DataDog when
+            # multiple post-call guardrails are configured (LIT-2579).
+            first_guardrail_exception: Optional[BaseException] = None
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
@@ -2246,7 +2271,9 @@ class ProxyLogging:
                         )
                     except Exception as e:
                         _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
+                        if first_guardrail_exception is None:
+                            first_guardrail_exception = e
+                        continue
                 else:
                     try:
                         guardrail_response = (
@@ -2258,10 +2285,19 @@ class ProxyLogging:
                         )
                     except Exception as e:
                         _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
+                        if first_guardrail_exception is None:
+                            first_guardrail_exception = e
+                        continue
 
                 if guardrail_response is not None:
                     response = guardrail_response
+
+            # If any post-call guardrail raised, re-raise the first exception
+            # only after every guardrail has had a chance to record its outcome
+            # into request_data["metadata"] via the @log_guardrail_information
+            # decorator (LIT-2579).
+            if first_guardrail_exception is not None:
+                raise first_guardrail_exception
 
             ############ Handle CustomLogger ###############################
             #################################################################
@@ -2979,8 +3015,7 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(
-                f"""
+            ret = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -2992,8 +3027,7 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """
-            )
+                """)
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -3002,8 +3036,7 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw(
-                        """
+                    await self.db.execute_raw("""
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -3013,8 +3046,7 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """
-                    )
+                        """)
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -6068,6 +6100,8 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
     )
 
+    effective_team_id = team_id or user_api_key_dict.team_id
+
     # Get complete model list
     all_models = get_complete_model_list(
         key_models=key_models,
@@ -6080,6 +6114,7 @@ async def get_available_models_for_user(
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
+        team_id=effective_team_id,
     )
 
     return all_models
