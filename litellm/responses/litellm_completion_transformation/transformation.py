@@ -2082,6 +2082,8 @@ class LiteLLMCompletionResponsesConfig:
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
+                input_tokens_details=InputTokensDetails(cached_tokens=0),
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
             )
 
         response_usage = ResponseAPIUsage(
