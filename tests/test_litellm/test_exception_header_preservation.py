@@ -20,6 +20,8 @@ from litellm.exceptions import (
     RateLimitError,
 )
 
+from tests.ci_models import GPT_4, GPT_4O_MINI
+
 
 class TestExceptionHeaderPreservation:
     """Test that exception classes preserve headers from provider responses."""
@@ -44,7 +46,7 @@ class TestExceptionHeaderPreservation:
         """BadRequestError should preserve headers from the provider response."""
         error = BadRequestError(
             message="Invalid request",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=mock_response_with_headers,
         )
@@ -60,7 +62,7 @@ class TestExceptionHeaderPreservation:
         """ContentPolicyViolationError should preserve headers from the provider response."""
         error = ContentPolicyViolationError(
             message="Content policy violation",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=mock_response_with_headers,
         )
@@ -75,7 +77,7 @@ class TestExceptionHeaderPreservation:
         """ContextWindowExceededError should preserve headers from the provider response."""
         error = ContextWindowExceededError(
             message="Context window exceeded",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=mock_response_with_headers,
         )
@@ -90,7 +92,7 @@ class TestExceptionHeaderPreservation:
         """ImageFetchError should preserve headers from the provider response."""
         error = ImageFetchError(
             message="Failed to fetch image",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=mock_response_with_headers,
         )
@@ -103,7 +105,7 @@ class TestExceptionHeaderPreservation:
         """BadRequestError should handle None response gracefully."""
         error = BadRequestError(
             message="Invalid request",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=None,
         )
@@ -116,7 +118,7 @@ class TestExceptionHeaderPreservation:
         """ContentPolicyViolationError should handle None response gracefully."""
         error = ContentPolicyViolationError(
             message="Content policy violation",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=None,
         )
@@ -128,7 +130,7 @@ class TestExceptionHeaderPreservation:
         """ContextWindowExceededError should handle None response gracefully."""
         error = ContextWindowExceededError(
             message="Context window exceeded",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=None,
         )
@@ -144,7 +146,7 @@ class TestExceptionMessageFormatting:
         """BadRequestError should format message with litellm prefix."""
         error = BadRequestError(
             message="test error",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
         )
 
@@ -155,7 +157,7 @@ class TestExceptionMessageFormatting:
         """ContentPolicyViolationError should format message with specific prefix."""
         error = ContentPolicyViolationError(
             message="test error",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
         )
 
@@ -166,7 +168,7 @@ class TestExceptionMessageFormatting:
         """ContextWindowExceededError should format message with specific prefix."""
         error = ContextWindowExceededError(
             message="test error",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
         )
 
@@ -183,7 +185,7 @@ class TestExceptionAttributes:
 
         error = ContentPolicyViolationError(
             message="test error",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             provider_specific_fields=provider_fields,
         )
@@ -198,14 +200,14 @@ class TestExceptionAttributes:
         """BadRequestError should set all expected attributes."""
         error = BadRequestError(
             message="test error",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             litellm_debug_info="debug info",
             max_retries=3,
             num_retries=1,
         )
 
-        assert error.model == "gpt-4"
+        assert error.model == GPT_4
         assert error.llm_provider == "azure"
         assert error.litellm_debug_info == "debug info"
         assert error.max_retries == 3
@@ -225,13 +227,13 @@ class TestExceptionAttributes:
         rate_limit_error = RateLimitError(
             message="Rate limit exceeded",
             llm_provider="openai",
-            model="gpt-4o-mini",
+            model=GPT_4O_MINI,
             response=original_resp,
         )
 
         midstream_error = MidStreamFallbackError(
             message="stream broke",
-            model="gpt-4o-mini",
+            model=GPT_4O_MINI,
             llm_provider="openai",
             original_exception=rate_limit_error,
         )
@@ -245,7 +247,7 @@ class TestExceptionAttributes:
         # With no original exception, should default to 503.
         midstream_fallback = MidStreamFallbackError(
             message="stream broke without original",
-            model="gpt-4o-mini",
+            model=GPT_4O_MINI,
             llm_provider="openai",
             original_exception=None,
         )
@@ -295,7 +297,7 @@ class TestProxyHeaderExtraction:
         )
         error = ContentPolicyViolationError(
             message="test",
-            model="gpt-4",
+            model=GPT_4,
             llm_provider="azure",
             response=mock_response,
         )
