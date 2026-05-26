@@ -59,12 +59,12 @@ async def mock_chat_completion(session, key: str, model: str):
     "key_models, test_model, expect_success",
     [
         (["openai/*"], "anthropic/claude-2", False),  # Non-matching model
-        (["gpt-4"], "gpt-4", True),  # Exact model match
+        (["gpt-5.5"], "gpt-5.5", True),  # Exact model match
         (["bedrock/*"], "bedrock/anthropic.claude-3", True),  # Bedrock wildcard
         (["bedrock/anthropic.*"], "bedrock/anthropic.claude-3", True),  # Pattern match
         (["bedrock/anthropic.*"], "bedrock/amazon.titan", False),  # Pattern non-match
-        (None, "gpt-4", True),  # No model restrictions
-        ([], "gpt-4", True),  # Empty model list
+        (None, "gpt-5.5", True),  # No model restrictions
+        ([], "gpt-5.5", True),  # Empty model list
     ],
 )
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ async def test_model_access_update():
     response = await client.post(
         "/key/generate",
         json={
-            "models": ["openai/gpt-4"],
+            "models": ["openai/gpt-5.5"],
             "metadata": dict(_ALLOW_CLIENT_MOCK_METADATA),
         },
         headers=headers,
@@ -130,13 +130,13 @@ async def test_model_access_update():
 
     # Test initial access
     async with aiohttp.ClientSession() as session:
-        # Should work with gpt-4
-        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
+        # Should work with gpt-5.5
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
 
-        # Should fail with gpt-3.5-turbo
+        # Should fail with gpt-5-mini
         with pytest.raises(Exception) as exc_info:
             await mock_chat_completion(
-                session=session, key=key, model="openai/gpt-3.5-turbo"
+                session=session, key=key, model="openai/gpt-5-mini"
             )
         _validate_model_access_exception(
             exc_info.value, expected_type="key_model_access_denied"
@@ -151,9 +151,9 @@ async def test_model_access_update():
     # Test updated access
     async with aiohttp.ClientSession() as session:
         # Both models should now work
-        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
         await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-3.5-turbo"
+            session=session, key=key, model="openai/gpt-5-mini"
         )
 
         # Non-OpenAI model should still fail
@@ -226,7 +226,7 @@ async def test_team_model_access_update():
     response = await client.post(
         "/team/new",
         json={
-            "models": ["openai/gpt-4"],
+            "models": ["openai/gpt-5.5"],
             "name": "test-team",
             "metadata": dict(_ALLOW_CLIENT_MOCK_METADATA),
         },
@@ -250,13 +250,13 @@ async def test_team_model_access_update():
 
     # Test initial access
     async with aiohttp.ClientSession() as session:
-        # Should work with gpt-4
-        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
+        # Should work with gpt-5.5
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
 
-        # Should fail with gpt-3.5-turbo
+        # Should fail with gpt-5-mini
         with pytest.raises(Exception) as exc_info:
             await mock_chat_completion(
-                session=session, key=key, model="openai/gpt-3.5-turbo"
+                session=session, key=key, model="openai/gpt-5-mini"
             )
         _validate_model_access_exception(
             exc_info.value, expected_type="team_model_access_denied"
@@ -273,9 +273,9 @@ async def test_team_model_access_update():
     # Test updated access
     async with aiohttp.ClientSession() as session:
         # Both models should now work
-        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
         await mock_chat_completion(
-            session=session, key=key, model="openai/gpt-3.5-turbo"
+            session=session, key=key, model="openai/gpt-5-mini"
         )
 
         # Non-OpenAI model should still fail

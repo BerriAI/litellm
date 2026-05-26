@@ -12,14 +12,17 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm  # noqa: E402,F401
 
-from tests._vcr_conftest_common import (  # noqa: E402
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
     install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
+    reset_vcr_diag_dir,
     vcr_config_dict,
 )
 
@@ -35,7 +38,22 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
     }
 )
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+# AWS Secrets Manager resource-lifecycle tests. Each run creates a secret
+# under a per-run unique name (``litellm_test_<uuid>``) and either asserts the
+# API response echoes that exact unique name or reads it straight back. The
+# name *must* be unique per run because AWS enforces a >=7-day deletion
+# recovery window — a fixed name can't be re-created on the daily VCR
+# re-record. Deterministic replay returns the previously-recorded (different)
+# name, so the unique-name round-trip cannot be reproduced offline. The
+# config-parsing tests in the same file (settings / STS endpoint) make no such
+# unique-resource calls and stay VCR-cached.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "::test_write_and_read_simple_secret",
+    "::test_write_and_read_json_secret",
+    "::test_read_nonexistent_secret",
+    "::test_primary_secret_functionality",
+    "::test_write_secret_with_description_and_tags",
+)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -86,6 +104,7 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
 
 
 def pytest_runtest_logreport(report):
@@ -116,3 +135,4 @@ def pytest_collection_modifyitems(config, items):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     emit_cassette_cache_session_banner(terminalreporter)
     emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)

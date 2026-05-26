@@ -1,7 +1,7 @@
 model_list:
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/gpt-3.5-turbo
+     model: openai/gpt-5-mini
      api_key: fake-key
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
      tags: ["teamA"]
@@ -9,7 +9,7 @@ model_list:
      id: "team-a-model"
  - model_name: fake-openai-endpoint
    litellm_params:
-     model: openai/gpt-3.5-turbo
+     model: openai/gpt-5-mini
      api_key: fake-key
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
      tags: ["teamB"]
@@ -55,7 +55,7 @@ guardrails:
     litellm_params:
       guardrail: bedrock  # supported values: "bedrock", "lakera"
       mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
+      guardrailIdentifier: 4w3d1di3snt5
       guardrailVersion: "DRAFT"
   - guardrail_name: "custom-pre-guard"
     litellm_params:

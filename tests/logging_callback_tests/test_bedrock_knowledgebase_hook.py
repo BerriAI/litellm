@@ -2,7 +2,6 @@ import io
 import os
 import sys
 
-
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
@@ -67,7 +66,7 @@ def setup_vector_store_registry():
     litellm.vector_store_registry = VectorStoreRegistry(
         vector_stores=[
             LiteLLM_ManagedVectorStore(
-                vector_store_id="T37J8R4WTM", custom_llm_provider="bedrock"
+                vector_store_id="LCYXFBR2TU", custom_llm_provider="bedrock"
             )
         ]
     )
@@ -111,7 +110,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids=["T37J8R4WTM"],
+                vector_store_ids=["LCYXFBR2TU"],
                 client=client,
             )
         except Exception as e:
@@ -152,7 +151,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(
     response = await litellm.acompletion(
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": "what is litellm?"}],
-        vector_store_ids=["T37J8R4WTM"],
+        vector_store_ids=["LCYXFBR2TU"],
         client=async_client,
     )
     print("OPENAI RESPONSE:", json.dumps(dict(response), indent=4, default=str))
@@ -196,7 +195,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
-        vector_store_ids=["T37J8R4WTM"],
+        vector_store_ids=["LCYXFBR2TU"],
         stream=True,
         client=async_client,
     )
@@ -255,7 +254,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
         max_tokens=10,
-        tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
+        tools=[{"type": "file_search", "vector_store_ids": ["LCYXFBR2TU"]}],
     )
     assert response is not None
 
@@ -279,7 +278,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
         tools=[
             {
                 "type": "file_search",
-                "vector_store_ids": ["T37J8R4WTM"],
+                "vector_store_ids": ["LCYXFBR2TU"],
                 "filters": {
                     "key": "user_id",
                     "value": "fake-user-id",
@@ -387,7 +386,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
             tools=[
                 {
                     "type": "file_search",
-                    "vector_store_ids": ["T37J8R4WTM"],
+                    "vector_store_ids": ["LCYXFBR2TU"],
                     "filters": {
                         "key": "user_id",
                         "value": "fake-user-id",
@@ -445,7 +444,7 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
-            mock_response.model = "gpt-4"
+            mock_response.model = "gpt-5.5"
 
             # Store the request for verification
             captured_request.update(kwargs)
@@ -459,9 +458,9 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
 
         try:
             await litellm.acompletion(
-                model="gpt-4",
+                model="gpt-5.5",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids=["T37J8R4WTM"],
+                vector_store_ids=["LCYXFBR2TU"],
                 client=client,
             )
         except Exception as e:
@@ -521,7 +520,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
-            mock_response.model = "gpt-4"
+            mock_response.model = "gpt-5.5"
 
             # Store the request for verification
             captured_request.update(kwargs)
@@ -535,9 +534,9 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(
 
         try:
             await litellm.acompletion(
-                model="gpt-4",
+                model="gpt-5.5",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
+                tools=[{"type": "file_search", "vector_store_ids": ["LCYXFBR2TU"]}],
                 client=client,
             )
         except Exception as e:
@@ -594,7 +593,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
-            mock_response.model = "gpt-4"
+            mock_response.model = "gpt-5.5"
 
             # Store the request for verification
             captured_request.update(kwargs)
@@ -608,10 +607,10 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 
         try:
             await litellm.acompletion(
-                model="gpt-4",
+                model="gpt-5.5",
                 messages=[{"role": "user", "content": "what is litellm?"}],
                 tools=[
-                    {"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]},
+                    {"type": "file_search", "vector_store_ids": ["LCYXFBR2TU"]},
                     {"type": "file_search", "vector_store_ids": ["unknownVS"]},
                 ],
                 client=client,
@@ -642,10 +641,10 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 #     test_custom_logger = MockCustomLogger()
 #     litellm.set_verbose = True
 #     await litellm.acompletion(
-#         model="gpt-4",
+#         model="gpt-5.5",
 #         messages=[{"role": "user", "content": "what is litellm?"}],
 #         vector_store_ids = [
-#             "T37J8R4WTM"
+#             "LCYXFBR2TU"
 #         ],
 #     )
 
@@ -667,7 +666,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 
 #     # expect the vector store request metadata object to have the correct values
 #     vector_store_request_metadata = standard_logging_vector_store_request_metadata[0]
-#     assert vector_store_request_metadata.get("vector_store_id") == "T37J8R4WTM"
+#     assert vector_store_request_metadata.get("vector_store_id") == "LCYXFBR2TU"
 #     assert vector_store_request_metadata.get("query") == "what is litellm?"
 #     assert vector_store_request_metadata.get("custom_llm_provider") == "bedrock"
 
@@ -723,7 +722,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids=["T37J8R4WTM"],
+                vector_store_ids=["LCYXFBR2TU"],
                 client=client,
             )
         except Exception as e:
@@ -834,7 +833,7 @@ async def test_provider_specific_fields_in_proxy_http_response(
 
     # Initialize proxy
     await initialize(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         alias=None,
         api_base=None,
         debug=False,
@@ -857,7 +856,7 @@ async def test_provider_specific_fields_in_proxy_http_response(
     # Create mock response with provider_specific_fields
     mock_response = litellm.ModelResponse(
         id="test-123",
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         created=1234567890,
         object="chat.completion",
     )
@@ -897,7 +896,7 @@ async def test_provider_specific_fields_in_proxy_http_response(
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "messages": [{"role": "user", "content": "What is litellm?"}],
             },
         )
