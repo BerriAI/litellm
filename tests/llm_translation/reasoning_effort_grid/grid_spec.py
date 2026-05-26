@@ -157,7 +157,7 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         model="azure_ai/claude-opus-4-6",
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="azure-claude-sonnet-4-6",
@@ -191,7 +191,7 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("vertex_location", "us-east5"),),
         required_env=_VERTEX_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_4_6,
     ),
     ModelEntry(
         alias="vertex-claude-sonnet-4-6",
