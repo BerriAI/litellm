@@ -299,3 +299,4 @@ class TestProxyMcpStatelessBehavior:
                     assert result_b.content
                     text_b = getattr(result_b.content[0], "text", None)
                     assert text_b == "300"
+
