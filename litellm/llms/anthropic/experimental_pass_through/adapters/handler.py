@@ -13,6 +13,7 @@ from typing import (
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -477,17 +478,52 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
+        # Run the context_management polyfill on the sync path too so that
+        # ``litellm.messages.create()`` callers don't silently lose edits like
+        # ``clear_tool_uses_20250919``. The dispatcher is async (so the
+        # ``compact_20260112`` editor can ``await`` the summarization model);
+        # bridge to it via ``run_async_function``.
+        context_management = kwargs.pop("context_management", None)
+        drop_params: Optional[bool] = kwargs.get("drop_params", None)
+        litellm_router = kwargs.pop("litellm_router", None)
+        if litellm_router is None:
+            try:
+                from litellm.proxy.proxy_server import llm_router as _proxy_router
+
+                litellm_router = _proxy_router
+            except Exception:
+                pass
+
+        polyfill_result = run_async_function(
+            _run_polyfill_if_enabled,
+            model=model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management_spec=context_management,
+            metadata=metadata,
+            drop_params=drop_params,
+            llm_router=litellm_router,
+        )
+
+        effective_messages = (
+            polyfill_result.messages if polyfill_result is not None else messages
+        )
+        effective_system = (
+            polyfill_result.system if polyfill_result is not None else system
+        )
+
         (
             completion_kwargs,
             tool_name_mapping,
         ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=effective_messages,
             model=model,
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
-            system=system,
+            system=effective_system,
             temperature=temperature,
             thinking=thinking,
             tool_choice=tool_choice,
@@ -506,6 +542,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,
+                    polyfill_result=polyfill_result,
                 )
             )
             if transformed_stream is not None:
@@ -515,6 +552,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
+                polyfill_result=polyfill_result,
             )
             if anthropic_response is not None:
                 return anthropic_response

@@ -521,9 +521,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # Handle any remaining queued chunks before stopping
             if self.chunk_queue:
                 return self.chunk_queue.popleft()
-            # Handle any held stop_reason chunk
+            # Handle any held stop_reason chunk — clear after capturing so a
+            # subsequent ``__anext__`` call doesn't re-emit the same chunk
+            # (matches the sync ``__next__`` path).
             if self.holding_stop_reason_chunk is not None:
-                return self.holding_stop_reason_chunk
+                held = self.holding_stop_reason_chunk
+                self.holding_stop_reason_chunk = None
+                return held
             if not self.sent_last_message:
                 self.sent_last_message = True
                 return {"type": "message_stop"}
