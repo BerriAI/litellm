@@ -258,7 +258,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
 
-            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
+            verbose_proxy_logger.debug(f"Hiddenlayer response: {result}")
 
             return result
         except HTTPStatusError as e:
@@ -282,7 +282,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
 
-            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
+            verbose_proxy_logger.debug(f"Hiddenlayer response: {result}")
             return result
 
     @staticmethod
@@ -483,7 +483,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             )
             response.raise_for_status()
 
-            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {response}")
+            verbose_proxy_logger.debug(f"Hiddenlayer response: {response}")
 
             return response
         except HTTPStatusError as e:
@@ -506,7 +506,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
             response.raise_for_status()
 
-            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {response}")
+            verbose_proxy_logger.debug(f"Hiddenlayer response: {response}")
             return response
 
     @staticmethod
