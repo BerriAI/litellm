@@ -160,9 +160,10 @@ def make_redis_persister(
         def load_cassette(cassette_path, serializer):
             key = redis_key_for(cassette_path)
             # TEMP DIAGNOSTIC: trace load outcomes for the handful of cassettes
-            # that re-record every run despite being present in Redis. Remove
-            # before merge. Logs key, GET length-or-None, and EXISTS so CI shows
-            # exactly what the in-process client sees at load time.
+            # that re-record every run despite being present in Redis. Writes to
+            # a Redis list (truncation-proof, unlike CI stdout) so we can read
+            # exactly what the in-process client sees at load time. Remove
+            # before merge.
             _dbg = any(
                 m in key
                 for m in (
@@ -173,16 +174,20 @@ def make_redis_persister(
             )
             if _dbg:
                 try:
+                    import time as _t
+
                     _d = redis_client.get(key)
                     _e = redis_client.exists(key)
-                    _log.warning(
-                        "[vcr-loaddbg] key=%s get=%s exists=%s",
-                        key,
-                        ("None" if _d is None else f"{len(_d)}B"),
-                        _e,
+                    _wk = os.environ.get("PYTEST_XDIST_WORKER", "main")
+                    redis_client.rpush(
+                        "litellm:vcr:loaddbg",
+                        f"{_t.strftime('%H:%M:%S')} wk={_wk} "
+                        f"get={'None' if _d is None else str(len(_d)) + 'B'} "
+                        f"exists={_e} key={key}",
                     )
-                except Exception as _exc:  # pragma: no cover - diagnostic only
-                    _log.warning("[vcr-loaddbg] key=%s probe-error=%r", key, _exc)
+                    redis_client.expire("litellm:vcr:loaddbg", 3600)
+                except Exception:  # pragma: no cover - diagnostic only
+                    pass
             try:
                 data = redis_client.get(key)
             except RedisError as exc:
