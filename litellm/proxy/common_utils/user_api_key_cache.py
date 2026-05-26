@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -142,9 +143,38 @@ class UserApiKeyCache(DualCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
+        self._honour_configured_management_ttl(kwargs)
         return await super().async_set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
+
+    def _honour_configured_management_ttl(self, kwargs: dict) -> None:
+        """
+        LIT-3338: ``general_settings.user_api_key_cache_ttl`` (set on
+        ``self.default_in_memory_ttl`` at proxy startup via
+        ``proxy_server.py``'s ``update_cache_ttl(...)`` call) was silently
+        ignored by management-object writes.
+
+        Several call sites in ``litellm/proxy/auth/auth_checks.py``,
+        ``litellm/proxy/auth/handle_jwt.py``, and
+        ``litellm/proxy/_experimental/mcp_server/mcp_server_manager.py``
+        pass an explicit ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
+        (60s). Because ``DualCache.async_set_cache`` only consults
+        ``self.default_in_memory_ttl`` when ``ttl`` is *absent* from kwargs,
+        the explicit 60 always shadows a user-configured 300s TTL.
+
+        Promote the configured default whenever the explicit value matches
+        the historical management-object default — the only callers that
+        pass that exact constant are the management-object writes themselves,
+        which all want to follow the operator's configured TTL.
+        """
+        if (
+            "ttl" in kwargs
+            and self.default_in_memory_ttl is not None
+            and kwargs["ttl"] == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+            and self.default_in_memory_ttl != DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        ):
+            kwargs["ttl"] = self.default_in_memory_ttl
 
     async def async_set_cache_pipeline(  # type: ignore[override]
         self, cache_list: list, local_only: bool = False, **kwargs
