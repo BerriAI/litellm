@@ -3283,7 +3283,7 @@ async def test_spend_key_fn_internal_user_scoped_to_own_keys(client, monkeypatch
         {"token": "hashed-mine-1", "user_id": "alice", "spend": 2.0},
         {"token": "hashed-mine-2", "user_id": "alice", "spend": 1.0},
     ]
-    mock_prisma = _SpendScopeMockPrismaClient(find_many_returns=caller_owned_keys)
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=caller_owned_keys)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -3294,13 +3294,14 @@ async def test_spend_key_fn_internal_user_scoped_to_own_keys(client, monkeypatch
             "/spend/keys", headers={"Authorization": "Bearer sk-test"}
         )
         assert response.status_code == 200
-        # Non-admin path: scoped find_many, no full-table get_data
-        assert mock_prisma.get_data_calls == []
-        assert len(mock_prisma.find_many_calls) == 1
-        call = mock_prisma.find_many_calls[0]
-        assert call["where"] == {"user_id": "alice"}
-        assert call["order"] == {"spend": "desc"}
-        assert call["include"] == {"litellm_budget_table": True}
+        # Non-admin path goes through the same get_data helper as admin,
+        # but with a user_id scope so only the caller's rows come back.
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+        call = mock_prisma.get_data_calls[0]
+        assert call["table_name"] == "key"
+        assert call["query_type"] == "find_all"
+        assert call["user_id"] == "alice"
         assert response.json() == caller_owned_keys
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
@@ -3424,12 +3425,12 @@ async def test_spend_user_fn_internal_user_scoped_without_user_id(
 
 
 @pytest.mark.asyncio
-async def test_spend_user_fn_internal_user_ignores_supplied_user_id(
+async def test_spend_user_fn_internal_user_supplying_other_user_id_returns_403(
     client, monkeypatch
 ):
     """
-    An internal user passing user_id=victim must NOT receive the victim's
-    row. The caller's authenticated user_id always wins.
+    An internal user passing user_id=victim must be rejected outright, not
+    silently rewritten. A 403 makes the attempt observable in logs.
     """
     leaked_victim_row = {
         "user_id": "victim",
@@ -3448,10 +3449,38 @@ async def test_spend_user_fn_internal_user_ignores_supplied_user_id(
             params={"user_id": "victim"},
             headers={"Authorization": "Bearer sk-test"},
         )
+        assert response.status_code == 403
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_supplying_own_user_id_is_allowed(
+    client, monkeypatch
+):
+    """
+    Passing your own user_id explicitly is fine — the 403 only fires when
+    the supplied id differs from the caller's.
+    """
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "alice"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
         assert response.status_code == 200
         assert len(mock_prisma.get_data_calls) == 1
         assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
         assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

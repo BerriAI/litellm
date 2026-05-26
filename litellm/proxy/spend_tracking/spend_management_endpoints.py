@@ -71,10 +71,10 @@ async def spend_key_fn(
         caller_user_id = user_api_key_dict.user_id
         if not caller_user_id:
             return []
-        return await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"user_id": caller_user_id},
-            order={"spend": "desc"},
-            include={"litellm_budget_table": True},
+        return await prisma_client.get_data(
+            table_name="key",
+            query_type="find_all",
+            user_id=caller_user_id,
         )
 
     except Exception as e:
@@ -111,10 +111,12 @@ async def spend_user_fn(
 
     - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every user, or
       a specific user when ``user_id`` is supplied.
-    - All other callers are scoped to their own row. Any ``user_id`` query
-      parameter they supply is ignored and replaced with their authenticated
-      ``user_id``. A caller with no ``user_id`` on their key has no scope and
-      receives an empty list rather than the full table.
+    - All other callers may only read their own row. If they supply a
+      ``user_id`` query parameter that does not match their authenticated
+      ``user_id`` the request is rejected with HTTP 403; supplying their
+      own id (or none at all) returns just their row. A caller with no
+      ``user_id`` on their key has no scope and receives an empty list
+      rather than the full table.
 
     Example Request:
     ```
@@ -137,9 +139,15 @@ async def spend_user_fn(
             )
 
         if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
-            if not user_api_key_dict.user_id:
+            caller_user_id = user_api_key_dict.user_id
+            if not caller_user_id:
                 return []
-            user_id = user_api_key_dict.user_id
+            if user_id is not None and user_id != caller_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "Not authorized to view spend for another user."},
+                )
+            user_id = caller_user_id
 
         if user_id is not None:
             user_info = await prisma_client.get_data(
@@ -155,6 +163,8 @@ async def spend_user_fn(
         _strip_password_from_users(result)
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
