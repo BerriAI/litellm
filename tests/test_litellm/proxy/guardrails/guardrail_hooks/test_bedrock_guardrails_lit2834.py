@@ -44,10 +44,10 @@ def _bedrock_input_texts(call):
 
 
 @pytest.mark.asyncio
-async def test_bedrock_pre_call_hook_drops_tool_messages_by_default():
-    """LIT-2834: pre-call guardrail must not receive role=tool results or
-    assistant messages with tool_calls when mask_tool_call_messages defaults
-    to True.
+async def test_bedrock_pre_call_hook_drops_tool_messages_when_enabled():
+    """LIT-2834: with `mask_tool_call_messages=True` (opt-in), the pre-call
+    guardrail must not receive role=tool/function results or assistant
+    messages with tool_calls.
     """
     guardrail = BedrockGuardrail(
         guardrail_name="lit2834",
@@ -55,6 +55,7 @@ async def test_bedrock_pre_call_hook_drops_tool_messages_by_default():
         guardrailVersion="DRAFT",
         event_hook="pre_call",
         default_on=True,
+        mask_tool_call_messages=True,
     )
 
     data = {
@@ -112,15 +113,16 @@ async def test_bedrock_pre_call_hook_drops_tool_messages_by_default():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_pre_call_hook_includes_tool_messages_when_opt_out():
-    """Legacy behavior must remain available via mask_tool_call_messages=False."""
+async def test_bedrock_pre_call_hook_includes_tool_messages_by_default():
+    """LIT-2834: backwards compatibility — with the default
+    `mask_tool_call_messages=False`, tool messages still flow into the
+    Bedrock INPUT payload (pre-LIT-2834 behavior preserved)."""
     guardrail = BedrockGuardrail(
-        guardrail_name="lit2834-opt-out",
+        guardrail_name="lit2834-default-legacy",
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         event_hook="pre_call",
         default_on=True,
-        mask_tool_call_messages=False,
     )
 
     data = {
@@ -194,15 +196,16 @@ async def test_bedrock_pre_call_hook_preserves_plain_assistant_text():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_moderation_hook_drops_tool_messages_by_default():
+async def test_bedrock_moderation_hook_drops_tool_messages_when_enabled():
     """During-call (async_moderation_hook) goes through the same chokepoint
-    and must also drop tool messages by default."""
+    and must also drop tool messages when `mask_tool_call_messages=True`."""
     guardrail = BedrockGuardrail(
         guardrail_name="lit2834-during",
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         event_hook="during_call",
         default_on=True,
+        mask_tool_call_messages=True,
     )
 
     data = {
@@ -263,3 +266,59 @@ def test_is_tool_related_message_classifier():
     assert not BedrockGuardrail._is_tool_related_message(
         {"role": "system", "content": "sys"}
     )
+
+
+def test_is_tool_related_message_classifier_covers_role_function():
+    """LIT-2834: the older OpenAI function-calling shape (`role="function"`)
+    must be treated the same as `role="tool"` — both carry tool execution
+    output that should not leak into the guardrail INPUT payload."""
+    assert BedrockGuardrail._is_tool_related_message(
+        {"role": "function", "name": "lookup", "content": "{\"age\": 34}"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_pre_call_hook_drops_role_function_when_enabled():
+    """LIT-2834: confirm the end-to-end pre-call hook also strips
+    `role="function"` (legacy OpenAI function-calling) when
+    `mask_tool_call_messages=True`."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="lit2834-function-role",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook="pre_call",
+        default_on=True,
+        mask_tool_call_messages=True,
+    )
+
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": "ask"},
+            {
+                "role": "function",
+                "name": "lookup",
+                "content": json.dumps({"name": "Alice", "age": 34}),
+            },
+            {"role": "user", "content": "followup"},
+        ],
+    }
+
+    with patch.object(
+        guardrail,
+        "make_bedrock_api_request",
+        new=AsyncMock(
+            return_value={"action": "NONE", "output": [], "outputs": [], "assessments": []}
+        ),
+    ) as mock_make:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+
+    texts = _bedrock_input_texts(mock_make.call_args)
+    assert all('"age"' not in t for t in texts), texts
+    assert "ask" in texts
+    assert "followup" in texts
