@@ -114,19 +114,21 @@ if MCP_AVAILABLE:
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
-        delete_user_variables,
         get_all_mcp_servers_for_user,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
         get_user_oauth_credential,
-        get_user_variables,
         list_user_oauth_credentials,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
-        store_user_variables,
         update_mcp_server,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_variable_store import (
+        delete_user_variables,
+        get_user_variables,
+        store_user_variables,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         authorize_with_server,

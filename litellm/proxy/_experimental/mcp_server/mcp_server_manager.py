@@ -1411,7 +1411,7 @@ class MCPServerManager:
 
         if prisma_client is None:
             return {}
-        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+        from litellm.proxy._experimental.mcp_server.mcp_variable_store import (  # noqa: PLC0415
             get_user_variables,
         )
 
