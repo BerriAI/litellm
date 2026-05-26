@@ -1,6 +1,7 @@
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
-import { LoadingOutlined } from "@ant-design/icons";
+import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
+import { DownOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Space, Typography } from "antd";
 import type { MenuProps } from "antd";
 import React from "react";
@@ -74,9 +75,13 @@ export const BlogDropdown: React.FC = () => {
     ];
   }
 
+  // Blog opens a post list; Docs is a single outbound link — navbar adds a layout-only chevron there for alignment.
   return (
     <Dropdown menu={{ items }} trigger={["hover"]} placement="bottomRight">
-      <Button type="text">Blog</Button>
+      <Button type="text" className={`${NAV_PRODUCT_LINK_CLASS} !border-0 !bg-transparent`}>
+        Blog
+        <DownOutlined className="text-[10px] text-gray-500" aria-hidden />
+      </Button>
     </Dropdown>
   );
 };
