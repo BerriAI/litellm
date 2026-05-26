@@ -534,6 +534,30 @@ def _current_test_records_telemetry() -> bool:
     return any(marker in nodeid for marker in _TELEMETRY_TEST_PATH_MARKERS)
 
 
+# Test paths that legitimately RECORD AND REPLAY a telemetry *export* POST and
+# assert on its response. Only the pass-through proxy test does this: it
+# forwards a client POST to Langfuse's ``/api/public/ingestion`` and asserts the
+# upstream multi-status (207) it replays from the cassette. Every other
+# telemetry test either mocks the export client and asserts on the mock (the
+# langfuse e2e suite) or asserts on a read-back GET / an in-memory span exporter
+# — for those the export POST is fire-and-forget and must not be recorded (see
+# ``_should_drop_telemetry_record``).
+_TELEMETRY_EXPORT_REPLAY_TEST_MARKERS = ("pass_through",)
+
+
+def _current_test_replays_telemetry_export() -> bool:
+    nodeid = _current_test_nodeid.lower()
+    return any(m in nodeid for m in _TELEMETRY_EXPORT_REPLAY_TEST_MARKERS)
+
+
+def _is_telemetry_export_request(request) -> bool:
+    """A telemetry *export* — a span/trace/event ingestion call, always a POST
+    to an observability host. Read-backs (verifying a trace landed) are GETs."""
+    if not _is_telemetry_request(request):
+        return False
+    return str(getattr(request, "method", "") or "").upper() == "POST"
+
+
 # Thread-local "we are inside Cassette._load" flag. vcrpy's ``Cassette._load``
 # replays each *stored* interaction through ``Cassette.append``, which runs
 # ``before_record_request`` on it; a ``None`` return there silently drops the
@@ -593,10 +617,31 @@ def _should_drop_telemetry_record(request) -> bool:
     Crucially, this never fires while ``Cassette._load`` is replaying stored
     interactions (see ``_vcr_load_in_progress``): dropping there would delete an
     already-recorded telemetry episode on read and force a live re-record.
+
+    The async-flush leak also rotates *within* the telemetry test set: litellm's
+    observability loggers flush on a background thread, so an export POST
+    scheduled by one telemetry test fires mid-way through a *later*
+    telemetry-named test (after that test's own ``httpx`` mock has exited) and
+    is recorded as a phantom episode — a non-deterministic MISS:RECORDED /
+    PARTIAL that lands on a different telemetry test from run to run. Telemetry
+    *export* POSTs are fire-and-forget; no test asserts on a recorded export
+    response except the pass-through proxy test (which forwards to Langfuse
+    ingestion and replays its 207). So drop incidental export POSTs everywhere
+    else too — dropping returns ``None`` (live fire-and-forget, never stored),
+    which can only turn a phantom miss into a harmless live call, never the
+    reverse. Recorded read-back GETs that telemetry tests assert on are matched
+    by method and so are left untouched.
     """
     if _vcr_load_in_progress():
         return False
-    return _is_telemetry_request(request) and not _current_test_records_telemetry()
+    if not _is_telemetry_request(request):
+        return False
+    if (
+        _is_telemetry_export_request(request)
+        and not _current_test_replays_telemetry_export()
+    ):
+        return True
+    return not _current_test_records_telemetry()
 
 
 # Google APIs (Vertex AI, Gemini, OAuth2/STS). Auth is a ``ya29.*`` OAuth2

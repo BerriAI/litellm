@@ -243,12 +243,14 @@ def test_banner_silent_on_xdist_worker(
 
 
 class _FakeRequest:
-    def __init__(self, host, scheme="https"):
+    def __init__(
+        self, host, scheme="https", method="POST", path="/api/public/ingestion"
+    ):
         self.host = host
         self.scheme = scheme
-        self.uri = f"{scheme}://{host}/api/public/ingestion"
+        self.uri = f"{scheme}://{host}{path}"
         self.headers = {}
-        self.method = "POST"
+        self.method = method
         self.body = b"{}"
 
 
@@ -264,53 +266,90 @@ def current_test(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "nodeid,host,expected_drop",
+    "nodeid,host,method,expected_drop",
     [
         # Non-telemetry test: incidental telemetry leak is dropped (not recorded).
         (
             "tests/local_testing/test_lowest_latency_routing.py::test_lowest_latency_routing_buffer[1]",
             "us.cloud.langfuse.com",
+            "POST",
             True,
         ),
         (
             "tests/local_testing/test_function_call_parsing.py::test_parse",
             "us.cloud.langfuse.com",
+            "POST",
             True,
         ),
         (
             "tests/llm_translation/test_x.py::test_y",
             "otlp.arize.com",
+            "POST",
             True,
         ),
         # Non-telemetry host on a non-telemetry test: never dropped.
         (
             "tests/local_testing/test_lowest_latency_routing.py::test_lowest_latency_routing_buffer[1]",
             "api.openai.com",
+            "POST",
             False,
         ),
-        # Tests that legitimately assert on telemetry keep recording it.
+        # Telemetry EXPORT POSTs are fire-and-forget and dropped even for
+        # telemetry-named tests: litellm's background flush makes them rotate
+        # into a later telemetry test's window as a phantom MISS:RECORDED. The
+        # e2e suite mocks the export client and asserts on the mock; read-back
+        # tests assert on a GET — neither needs the recorded export POST.
         (
             "tests/local_testing/test_alangfuse.py::test_langfuse_logging",
             "us.cloud.langfuse.com",
-            False,
+            "POST",
+            True,
         ),
         (
             "tests/logging_callback_tests/test_langfuse_e2e_test.py::test_e2e",
             "us.cloud.langfuse.com",
-            False,
+            "POST",
+            True,
         ),
         (
             "tests/logging_callback_tests/test_dynamic_otel_keys.py::test_keys",
             "otlp.arize.com",
+            "POST",
+            True,
+        ),
+        # Read-back GETs that telemetry tests assert on are kept (matched by
+        # method, so the export-POST drop does not touch them).
+        (
+            "tests/local_testing/test_alangfuse.py::test_langfuse_logging",
+            "us.cloud.langfuse.com",
+            "GET",
+            False,
+        ),
+        # ...but a read-back GET on a NON-telemetry test is still incidental.
+        (
+            "tests/local_testing/test_function_call_parsing.py::test_parse",
+            "us.cloud.langfuse.com",
+            "GET",
+            True,
+        ),
+        # The pass-through proxy test forwards a client POST to Langfuse
+        # ingestion and asserts the replayed 207 — its export POST is kept.
+        (
+            "tests/local_testing/test_pass_through_endpoints.py::test_aaapass_through_endpoint_pass_through_keys_langfuse[False-0-207]",
+            "us.cloud.langfuse.com",
+            "POST",
             False,
         ),
     ],
 )
-def test_should_drop_telemetry_record(current_test, nodeid, host, expected_drop):
+def test_should_drop_telemetry_record(
+    current_test, nodeid, host, method, expected_drop
+):
     import tests._vcr_conftest_common as common
 
     current_test(nodeid)
-    assert common._should_drop_telemetry_record(_FakeRequest(host)) is expected_drop
+    req = _FakeRequest(host, method=method)
+    assert common._should_drop_telemetry_record(req) is expected_drop
 
 
 def test_drop_is_suppressed_while_loading_stored_episodes(current_test):
