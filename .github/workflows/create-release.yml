@@ -52,7 +52,34 @@ jobs:
             // are stable maintenance releases, not pre-releases.
             const isPrerelease = /(?:rc|nightly|alpha|beta|[-.]dev)/i.test(tag);
 
-            const cosignSection = [
+            // The "convenience" verification URL embeds `${tag}` in a
+            // raw.githubusercontent.com path, so cosign.pub must exist in the
+            // tree at the target commit for that URL to resolve. Backport
+            // branches that diverged before cosign.pub was added (commit
+            // 0112e53) lack the file, which produced 404s in the release notes
+            // for v1.82.x patches (see #27643). Detect that case and omit just
+            // the tag URL section; the commit-hash URL works for any release.
+            let tagHasCosignPub = false;
+            try {
+              await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'cosign.pub',
+                ref: commitHash,
+              });
+              tagHasCosignPub = true;
+            } catch (e) {
+              if (e.status !== 404) {
+                throw e;
+              }
+              core.warning(
+                `cosign.pub not found at ${commitHash} for tag ${tag}; ` +
+                `omitting the tag-based convenience URL in release notes to ` +
+                `avoid a broken link.`
+              );
+            }
+
+            const cosignSectionParts = [
               `## Verify Docker Image Signature`,
               ``,
               `All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit \`0112e53\`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).`,
@@ -67,16 +94,24 @@ jobs:
               `  ghcr.io/berriai/litellm:${tag}`,
               '```',
               ``,
-              `**Verify using the release tag (convenience):**`,
-              ``,
-              `Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:`,
-              ``,
-              '```bash',
-              `cosign verify \\`,
-              `  --key https://raw.githubusercontent.com/BerriAI/litellm/${tag}/cosign.pub \\`,
-              `  ghcr.io/berriai/litellm:${tag}`,
-              '```',
-              ``,
+            ];
+
+            if (tagHasCosignPub) {
+              cosignSectionParts.push(
+                `**Verify using the release tag (convenience):**`,
+                ``,
+                `Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:`,
+                ``,
+                '```bash',
+                `cosign verify \\`,
+                `  --key https://raw.githubusercontent.com/BerriAI/litellm/${tag}/cosign.pub \\`,
+                `  ghcr.io/berriai/litellm:${tag}`,
+                '```',
+                ``,
+              );
+            }
+
+            cosignSectionParts.push(
               `Expected output:`,
               ``,
               '```',
@@ -87,7 +122,9 @@ jobs:
               ``,
               `---`,
               ``,
-            ].join('\n');
+            );
+
+            const cosignSection = cosignSectionParts.join('\n');
 
             try {
               const response = await github.rest.repos.createRelease({
