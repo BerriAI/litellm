@@ -15,6 +15,9 @@ from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.callback_utils import (
+    sanitize_openai_provider_metadata,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
@@ -120,6 +123,9 @@ async def create_batch(  # noqa: PLR0915
             or get_custom_llm_provider_from_request_headers(request=request)
             or "openai"
         )
+        if isinstance(data.get("metadata"), dict):
+            data["metadata"] = sanitize_openai_provider_metadata(data["metadata"])
+
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
 
         # Apply team-level batch output expiry enforcement
