@@ -284,6 +284,29 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     _OPENAI_EMBEDDINGS_ENDPOINT = "/v1/embeddings"
 
     @staticmethod
+    def _lookup_registry_mode(model_id: str) -> Optional[str]:
+        """
+        Read `mode` for `model_id` from `model_prices_and_context_window.json`.
+
+        Returns the mode string (e.g. `"embedding"`, `"chat"`) when the
+        registry knows the id, or `None` when `get_model_info` raises
+        (ARN forms, cross-region inference profile prefixes, unreleased
+        models). Isolating this means the dispatch logic in
+        `_infer_openai_endpoint_from_model_id` stays linear and the
+        registry-vs-fallback split is unit-testable on its own.
+        """
+        try:
+            from litellm import get_model_info
+
+            info = get_model_info(model_id)
+        except Exception:
+            return None
+        if not isinstance(info, dict):
+            return None
+        mode = info.get("mode")
+        return mode if isinstance(mode, str) and mode else None
+
+    @staticmethod
     def _infer_openai_endpoint_from_model_id(model_id: Optional[str]) -> str:
         """
         Map a Bedrock model id to the OpenAI endpoint the batch job represents.
@@ -295,7 +318,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         exposes the model id).
 
         Resolution order:
-          1. `model_prices_and_context_window.json` via `litellm.get_model_info`.
+          1. `model_prices_and_context_window.json` via `_lookup_registry_mode`.
              This is the project-wide source of truth: every current Bedrock
              embedding model is registered with `"mode": "embedding"`, so
              future additions get classified automatically once their entry
@@ -311,21 +334,12 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         if not model_id:
             return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
 
-        try:
-            from litellm import get_model_info
-
-            info = get_model_info(model_id)
-            mode = (info or {}).get("mode")
-            if mode == "embedding":
-                return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
-            if mode:
-                # Registry knows the mode and it's not embedding - trust it.
-                return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
-        except Exception:
-            # `get_model_info` raises for ids it can't normalize (ARN forms,
-            # cross-region profile prefixes, unreleased models). Fall through
-            # to the substring fallback rather than misclassifying.
-            pass
+        registry_mode = BedrockBatchesConfig._lookup_registry_mode(model_id)
+        if registry_mode == "embedding":
+            return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
+        if registry_mode is not None:
+            # Registry knows the mode and it's not embedding - trust it.
+            return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
 
         if "embed" in model_id.lower():
             return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT

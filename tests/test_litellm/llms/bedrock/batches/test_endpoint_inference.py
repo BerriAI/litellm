@@ -340,3 +340,43 @@ class TestRegistryDrivenClassification:
             )
             == "/v1/chat/completions"
         )
+
+
+class TestLookupRegistryMode:
+    """Direct tests for the extracted `_lookup_registry_mode` helper.
+
+    Pinning this separately lets us assert the registry-vs-fallback split
+    in isolation, instead of inferring it from end-to-end endpoint output.
+    """
+
+    def test_returns_mode_when_registry_resolves(self, mocker):
+        mocker.patch("litellm.get_model_info", return_value={"mode": "embedding"})
+        assert (
+            BedrockBatchesConfig._lookup_registry_mode("amazon.titan-embed-text-v2:0")
+            == "embedding"
+        )
+
+    def test_returns_none_when_registry_raises(self, mocker):
+        mocker.patch("litellm.get_model_info", side_effect=Exception("not mapped"))
+        assert BedrockBatchesConfig._lookup_registry_mode("anything") is None
+
+    def test_returns_none_when_registry_returns_non_dict(self, mocker):
+        # Defensive: get_model_info isn't supposed to return non-dict but if
+        # it ever does we treat it the same as 'not mapped' rather than
+        # crashing the batch transformer.
+        mocker.patch("litellm.get_model_info", return_value="not a dict")
+        assert BedrockBatchesConfig._lookup_registry_mode("anything") is None
+
+    def test_returns_none_when_mode_missing(self, mocker):
+        mocker.patch("litellm.get_model_info", return_value={})
+        assert BedrockBatchesConfig._lookup_registry_mode("anything") is None
+
+    def test_returns_none_when_mode_is_empty_string(self, mocker):
+        mocker.patch("litellm.get_model_info", return_value={"mode": ""})
+        assert BedrockBatchesConfig._lookup_registry_mode("anything") is None
+
+    def test_returns_none_when_mode_is_non_string(self, mocker):
+        # If a malformed registry entry has a non-string mode we don't trust
+        # it and fall through to the substring heuristic.
+        mocker.patch("litellm.get_model_info", return_value={"mode": 42})
+        assert BedrockBatchesConfig._lookup_registry_mode("anything") is None
