@@ -164,6 +164,8 @@ def test_banner_silent_when_vcr_disabled(
 
     emit_cassette_cache_session_banner(reporter)
 
+    assert reporter.output == ""
+
 
 # ---------------------------------------------------------------------------
 # Diagnostic-log dedup + cap. CircleCI truncates step output to the last
@@ -210,8 +212,6 @@ def test_diagnostic_log_silent_when_no_dir(tmp_path, monkeypatch):
     reporter = _FakeTerminalReporter()
 
     emit_vcr_diagnostic_log(reporter)
-
-    assert reporter.output == ""
 
     assert reporter.output == ""
 
