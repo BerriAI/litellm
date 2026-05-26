@@ -233,6 +233,162 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     # example; add others here as they adopt the same schema.
     CONVERSE_INVOKE_PROVIDERS = ("nova",)
 
+    # OpenAI batch URL that signals an embedding request. Per OpenAI Batch API
+    # spec, every JSONL record carries a `url` field; we use it as the
+    # authoritative signal to route the line to the embedding code path
+    # instead of inferring from the presence of `input` vs `messages`.
+    OPENAI_EMBEDDINGS_URL = "/v1/embeddings"
+
+    @staticmethod
+    def _is_embedding_record(openai_jsonl_record: Dict[str, Any]) -> bool:
+        """
+        Decide whether an OpenAI batch JSONL line is an embedding request.
+
+        Precedence:
+          1. Explicit `url == "/v1/embeddings"` wins - this is authoritative
+             per the OpenAI Batch API spec.
+          2. Otherwise we fall back to body shape and require both `input`
+             present AND `messages` absent. The `messages absent` half is
+             important: a malformed record with both fields routes to the
+             chat path (safer default - Anthropic transforms ignore unknown
+             top-level keys, whereas the embedding transformer would silently
+             drop the messages).
+        """
+        url = openai_jsonl_record.get("url")
+        if url == BedrockFilesConfig.OPENAI_EMBEDDINGS_URL:
+            return True
+        body = openai_jsonl_record.get("body", {})
+        if not isinstance(body, dict):
+            return False
+        return "input" in body and "messages" not in body
+
+    # Substring match against the model id (case-insensitive, after stripping
+    # any "bedrock/" routing prefix and any cross-region "<region>." prefix
+    # like "us.amazon.titan-embed-text-v2:0"). Kept as a constant so future
+    # PRs can extend the set without touching the dispatch logic.
+    _TITAN_V2_EMBED_MODEL_MARKER = "titan-embed-text-v2"
+
+    @staticmethod
+    def _is_titan_v2_embed_model(model: str) -> bool:
+        """
+        True iff `model` refers to Amazon Titan Text Embeddings V2.
+
+        Tolerant of common id shapes:
+          - "amazon.titan-embed-text-v2:0"
+          - "bedrock/amazon.titan-embed-text-v2:0"
+          - "us.amazon.titan-embed-text-v2:0" (cross-region inference profile)
+          - ARN forms ending in ".../amazon.titan-embed-text-v2:0"
+
+        The marker must be followed by ":" (version separator), end-of-string,
+        or "/" (ARN segment boundary). That stops `titan-embed-text-v20` or
+        `titan-embed-text-v2-experimental` from accidentally matching - those
+        would carry a different schema even if AWS shipped them tomorrow.
+        """
+        normalized = model.lower()
+        if normalized.startswith("bedrock/"):
+            normalized = normalized[len("bedrock/") :]
+        marker = BedrockFilesConfig._TITAN_V2_EMBED_MODEL_MARKER
+        idx = normalized.find(marker)
+        if idx < 0:
+            return False
+        end = idx + len(marker)
+        if end == len(normalized):
+            return True
+        return normalized[end] in (":", "/")
+
+    def _map_openai_embedding_to_bedrock_params(
+        self,
+        openai_request_body: Dict[str, Any],
+        provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Transform an OpenAI /v1/embeddings request body into the
+        Bedrock InvokeModel `modelInput` for embedding models that AWS
+        supports via batch inference (CreateModelInvocationJob).
+
+        Currently routes Amazon Titan Text Embeddings V2 only; other
+        embedding providers (Titan G1, Titan Multimodal, Cohere Embed,
+        Nova Multimodal Embeddings) raise NotImplementedError until they
+        get a dedicated branch. Splitting them keeps PR scope tight and
+        lets each model's request schema be exercised by its own tests.
+
+        AWS docs (Titan v2 InvokeModel body):
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
+        """
+        from litellm.llms.bedrock.embed.amazon_titan_v2_transformation import (
+            AmazonTitanV2Config,
+        )
+
+        _model = openai_request_body.get("model", "")
+        if not self._is_titan_v2_embed_model(_model):
+            # Refuse early instead of silently shaping the body for the wrong
+            # provider. The synchronous /v1/embeddings path supports more
+            # models, but each has a different InvokeModel schema; mapping
+            # them here without dedicated tests would risk corrupt batches.
+            raise NotImplementedError(
+                "Bedrock batch embedding currently supports only Amazon "
+                "Titan Text Embeddings V2 (model id contains "
+                f"'titan-embed-text-v2'). Got model={_model!r}. Track other "
+                "embedding models in https://github.com/BerriAI/litellm/issues."
+            )
+
+        raw_input = openai_request_body.get("input")
+        if raw_input is None:
+            raise ValueError(
+                "Embedding batch record is missing required `input` field: "
+                f"model={_model}"
+            )
+
+        # Bedrock InvokeModel for Titan v2 takes exactly one string `inputText`
+        # per call. Pre-tokenized inputs (List[int], List[List[int]]) and
+        # multi-element string lists are explicitly unsupported so callers
+        # emit one JSONL line per embedding instead of relying on us to
+        # silently fan out or concatenate.
+        if isinstance(raw_input, list):
+            if len(raw_input) == 1:
+                input_text = raw_input[0]
+            else:
+                raise ValueError(
+                    "Bedrock batch embedding requires one input per JSONL "
+                    "record. Got a list with "
+                    f"{len(raw_input)} items for model={_model}; emit one "
+                    "JSONL line per input string instead."
+                )
+        else:
+            input_text = raw_input
+
+        if isinstance(input_text, (list, int)):
+            # Catches pre-tokenized inputs (List[int] from OpenAI spec,
+            # or single int slipping past the list-unwrap above).
+            raise NotImplementedError(
+                "Bedrock Titan v2 batch embedding does not support "
+                "pre-tokenized integer inputs. Pass `input` as a string "
+                f"(model={_model})."
+            )
+        if not isinstance(input_text, str):
+            raise ValueError(
+                "Bedrock batch embedding `input` must be a string (or a "
+                "single-element list of strings). Got type "
+                f"{type(input_text).__name__} for model={_model}."
+            )
+
+        # Map OpenAI-style params (dimensions, encoding_format) onto the
+        # Titan v2 schema (dimensions, embeddingTypes) via the embed config
+        # so this stays in sync with the synchronous /v1/embeddings path.
+        non_default_params = {
+            k: v for k, v in openai_request_body.items() if k not in ("model", "input")
+        }
+        titan_config = AmazonTitanV2Config()
+        inference_params = titan_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+        )
+        return dict(
+            titan_config._transform_request(
+                input=input_text, inference_params=inference_params
+            )
+        )
+
     def _map_openai_to_bedrock_params(
         self,
         openai_request_body: Dict[str, Any],
@@ -349,10 +505,19 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # Determine provider from model name
             provider = self.get_bedrock_invoke_provider(model)
 
-            # Transform to Bedrock modelInput format
-            model_input = self._map_openai_to_bedrock_params(
-                openai_request_body=openai_body, provider=provider
-            )
+            # Route to the embedding transformer when the OpenAI batch line
+            # targets /v1/embeddings; otherwise fall back to the existing
+            # chat-completion path. We branch here (rather than inside
+            # `_map_openai_to_bedrock_params`) so the chat helper keeps its
+            # narrow contract and the embedding helper can evolve independently.
+            if self._is_embedding_record(_openai_jsonl_content):
+                model_input = self._map_openai_embedding_to_bedrock_params(
+                    openai_request_body=openai_body, provider=provider
+                )
+            else:
+                model_input = self._map_openai_to_bedrock_params(
+                    openai_request_body=openai_body, provider=provider
+                )
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get(
