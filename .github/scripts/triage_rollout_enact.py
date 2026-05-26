@@ -31,7 +31,7 @@ preview shows those would-close decisions before they actually fire.
 Time-travel is implemented in exactly one place: a ``current_time`` variable
 is computed at the top of ``run()`` and threaded through ``review_gate(now=)``
 for PRs. For issues (whose grace check goes through
-``seconds_since_latest_marker_comment``), we patch ``agent_shin_shared``'s
+``seconds_since_latest_marker_comment``), we patch ``triage_with_llm``'s
 ``dt.datetime.now`` under a context manager for the duration of each
 ``triage()`` call — one small surface, easy to audit.
 
@@ -66,7 +66,6 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import agent_shin_shared  # noqa: E402
 import triage_with_llm  # noqa: E402
 from _agent_shin_actions import (  # noqa: E402
     maybe_add_label,
@@ -94,31 +93,23 @@ from triage_with_llm import (  # noqa: E402
 # real run, so 24h+1s gives a "what fires tomorrow" preview without any edge
 # cases at the boundary itself.
 DEFAULT_SIMULATE_HOURS = 24
-_DEFAULT_FUTURE_SECONDS = DEFAULT_SIMULATE_HOURS * 3600 + 1
 
 
 @contextlib.contextmanager
 def _fake_now(when: dt.datetime) -> Iterator[None]:
-    """Patch ``dt.datetime.now`` in agent_shin_shared so issue triage's grace
+    """Patch ``dt.datetime.now`` in triage_with_llm so issue triage's grace
     check resolves against ``when`` rather than wall-clock time.
 
-    Patches ``agent_shin_shared.dt`` (the module's local alias) rather than
+    Patches ``triage_with_llm.dt`` (the module's local alias) rather than
     the global ``datetime`` so we don't leak the override into unrelated code.
-    The patch is scoped to the ``with`` block — once it exits, the original
-    ``dt`` module is restored, so a per-item call to ``triage()`` is the only
-    code that ever sees the fake clock.
+    The issue grace check reads the wall clock inside
+    ``_seconds_since_latest_marker_comment`` via this module's ``dt`` alias,
+    so this is the only surface that needs to be frozen. The patch is scoped
+    to the ``with`` block — once it exits, the original ``dt`` module is
+    restored, so a per-item call to ``triage()`` is the only code that ever
+    sees the fake clock.
     """
-    real_dt = agent_shin_shared.dt
-
-    class _FakeDt:
-        """Drop-in replacement for ``datetime`` with a frozen ``now``."""
-
-        timezone = real_dt.timezone
-        datetime = real_dt.datetime
-
-        @staticmethod
-        def datetime_now(tz: dt.tzinfo | None = None) -> dt.datetime:
-            return when if tz is None else when.astimezone(tz)
+    real_dt = triage_with_llm.dt
 
     # We only need to override `dt.datetime.now`. Easiest path: install a
     # tiny shim that proxies to the real `datetime` module for everything
@@ -135,11 +126,11 @@ def _fake_now(when: dt.datetime) -> Iterator[None]:
         def __getattr__(self, name: str) -> Any:  # pragma: no cover - shim
             return getattr(real_dt, name)
 
-    agent_shin_shared.dt = _DtShim()
+    triage_with_llm.dt = _DtShim()
     try:
         yield
     finally:
-        agent_shin_shared.dt = real_dt
+        triage_with_llm.dt = real_dt
 
 
 def _list_open_numbers(repo: str, kind: str) -> list[int]:

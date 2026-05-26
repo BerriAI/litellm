@@ -3,7 +3,7 @@
 Covers:
 
   * ``_fake_now`` — the time-travel context manager. Patches
-    ``agent_shin_shared.dt`` so ``datetime.now()`` returns a pinned value,
+    ``triage_with_llm.dt`` so ``datetime.now()`` returns a pinned value,
     and restores the original module on exit (even on exception).
   * ``_apply_pr_result`` / ``_apply_issue_result`` — dispatch tables that
     turn a review_gate/triage verdict into one or two ``maybe_*`` calls.
@@ -65,25 +65,25 @@ def enact_module(triage_module, actions_module, shared_module):
 
 
 class TestFakeNow:
-    def test_patches_dt_now_inside_context(self, enact_module, shared_module):
+    def test_patches_dt_now_inside_context(self, enact_module, triage_module):
         when = dt.datetime(2099, 1, 1, tzinfo=dt.timezone.utc)
         with enact_module._fake_now(when):
-            assert shared_module.dt.datetime.now(dt.timezone.utc) == when
+            assert triage_module.dt.datetime.now(dt.timezone.utc) == when
 
-    def test_restores_dt_on_exit(self, enact_module, shared_module):
-        original = shared_module.dt
+    def test_restores_dt_on_exit(self, enact_module, triage_module):
+        original = triage_module.dt
         with enact_module._fake_now(dt.datetime(2099, 1, 1, tzinfo=dt.timezone.utc)):
             pass
-        assert shared_module.dt is original
+        assert triage_module.dt is original
 
-    def test_restores_dt_on_exception(self, enact_module, shared_module):
-        original = shared_module.dt
+    def test_restores_dt_on_exception(self, enact_module, triage_module):
+        original = triage_module.dt
         with pytest.raises(RuntimeError):
             with enact_module._fake_now(
                 dt.datetime(2099, 1, 1, tzinfo=dt.timezone.utc)
             ):
                 raise RuntimeError("boom")
-        assert shared_module.dt is original
+        assert triage_module.dt is original
 
 
 # ---------------------------------------------------------------------------
