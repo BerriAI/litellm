@@ -385,6 +385,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
+        oauth_passthrough: oauthPassthroughRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -554,14 +555,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
         // ``delegate_auth_to_upstream`` is only honored server-side for
-        // ``auth_type=oauth2`` (PKCE passthrough) or ``auth_type=none`` with
-        // ``Authorization`` in ``extra_headers`` (OAuth pass-through). The
-        // Form.Item is conditionally rendered so the value drops out of the
-        // form on auth_type change; force false for any other configuration
-        // to avoid persisting a stale ``true`` that would silently
-        // re-activate if the configuration is later switched back.
+        // ``auth_type=oauth2`` (PKCE passthrough). The Form.Item is
+        // conditionally rendered so the value drops out of the form on
+        // auth_type change; force false for any other configuration to avoid
+        // persisting a stale ``true`` that would silently re-activate if the
+        // configuration is later switched back.
         delegate_auth_to_upstream: (() => {
           const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
+          return isOauth2
+            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
+            : false;
+        })(),
+        // ``oauth_passthrough`` is the dedicated, non-oauth2 opt-in. It is only
+        // honored for ``auth_type=none`` servers that forward ``Authorization``
+        // upstream. Kept separate from ``delegate_auth_to_upstream`` so enabling
+        // pass-through never regresses oauth2 servers. Force false otherwise.
+        oauth_passthrough: (() => {
           const isNoneAuth =
             restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
           const extraHeaders = Array.isArray(restValues.extra_headers)
@@ -570,9 +579,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           const hasAuthorizationHeader = extraHeaders.some(
             (h: unknown) => typeof h === "string" && h.toLowerCase() === "authorization",
           );
-          const eligible = isOauth2 || (isNoneAuth && hasAuthorizationHeader);
-          return eligible
-            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
+          return isNoneAuth && hasAuthorizationHeader
+            ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
             : false;
         })(),
         // Include token_validation when it is set (non-null) or when clearing an existing value

@@ -288,6 +288,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
+        oauth_passthrough: oauthPassthroughRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -393,6 +394,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+        oauth_passthrough: Boolean(oauthPassthroughRaw),
         static_headers: staticHeaders,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };

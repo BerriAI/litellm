@@ -581,6 +581,7 @@ class MCPServerManager:
                 delegate_auth_to_upstream=bool(
                     server_config.get("delegate_auth_to_upstream", False)
                 ),
+                oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -979,6 +980,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=bool(
                 getattr(mcp_server, "delegate_auth_to_upstream", False)
             ),
+            oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(
@@ -3901,6 +3903,7 @@ class MCPServerManager:
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
+            oauth_passthrough=getattr(server, "oauth_passthrough", False),
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

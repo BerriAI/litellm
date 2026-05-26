@@ -876,7 +876,7 @@ class TestMCPPublicRouteGuard:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
         ) as mock_auth:
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             mock_auth.assert_not_called()
             assert isinstance(auth_result, UserAPIKeyAuth)
 
@@ -1114,7 +1114,7 @@ class TestMCPPassthroughColdStartAdmission:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_mgr.get_mcp_server_by_name.assert_any_call(
@@ -1151,7 +1151,7 @@ class TestMCPPassthroughColdStartAdmission:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPPassthroughColdStartAdmission._make_passthrough_server()
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
 
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_mgr.get_mcp_server_by_name.assert_any_call(
@@ -1276,7 +1276,7 @@ class TestMCPOAuth2FallbackTargetGating:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
 
     async def test_fallback_allowed_when_target_is_passthrough(self):
@@ -1317,7 +1317,7 @@ class TestMCPOAuth2FallbackTargetGating:
                     is_oauth_passthrough=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.api_key is None
 
@@ -1489,6 +1489,39 @@ class TestMCPDelegateAuthToUpstream:
             is False
         )
 
+    def test_build_mcp_server_table_preserves_oauth_passthrough(self):
+        """Registry → API list rows must expose oauth_passthrough for the UI.
+
+        ``oauth_passthrough`` is the dedicated non-oauth2 pass-through opt-in,
+        distinct from ``delegate_auth_to_upstream`` (oauth2-only). Both must
+        round-trip independently so neither flag silently implies the other.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        passthrough = MCPServer(
+            server_id="passthrough-1",
+            name="passthrough",
+            transport="http",
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+            available_on_public_internet=True,
+        )
+        row = manager._build_mcp_server_table(passthrough)
+        assert row.oauth_passthrough is True
+        # The oauth2-only flag must remain independent and default off.
+        assert row.delegate_auth_to_upstream is False
+
+        not_passthrough = passthrough.model_copy(update={"oauth_passthrough": False})
+        assert (
+            manager._build_mcp_server_table(not_passthrough).oauth_passthrough is False
+        )
+
     async def test_delegate_skips_litellm_auth_with_no_authorization(self):
         """
         oauth2 + delegate_auth_to_upstream=True, no Authorization header at
@@ -1518,7 +1551,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
@@ -1761,7 +1794,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -1798,7 +1831,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()

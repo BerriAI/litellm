@@ -68,24 +68,29 @@ class MCPServer(BaseModel):
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Explicit opt-in to upstream-delegated authentication. Two distinct modes
-    # depending on ``auth_type``:
+    # Explicit opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
+    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
+    # completes PKCE directly with the upstream MCP server. See
+    # ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
     #
-    #   * ``auth_type == oauth2``: MCP requests bypass LiteLLM API-key/SSO
-    #     auth (and the pre-emptive 401) so the client completes PKCE
-    #     directly with the upstream MCP server. See
-    #     ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
-    #   * ``auth_type in (None, MCPAuth.none)`` AND ``extra_headers`` contains
-    #     ``Authorization``: enables OAuth pass-through (see
-    #     ``is_oauth_passthrough``). The gateway proxies upstream
-    #     ``/.well-known/oauth-protected-resource`` metadata, emits
-    #     spec-compliant 401 challenges when no bearer is supplied, and
-    #     propagates upstream 401/403 responses instead of swallowing them.
-    #
-    # Ignored for any other ``auth_type``. The flag must be set explicitly to
-    # avoid silently changing behavior for servers that forward
-    # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens).
+    # Honored only for ``auth_type == oauth2``; ignored for any other
+    # ``auth_type``. OAuth pass-through for non-oauth2 servers
+    # (``auth_type in (None, MCPAuth.none)``) is a separate, explicit opt-in —
+    # see ``oauth_passthrough`` / ``is_oauth_passthrough``.
     delegate_auth_to_upstream: bool = False
+    # Explicit opt-in to OAuth pass-through for non-oauth2 servers. When this
+    # is ``True`` AND ``auth_type in (None, MCPAuth.none)`` AND ``extra_headers``
+    # contains ``Authorization``, the gateway proxies upstream
+    # ``/.well-known/oauth-protected-resource`` metadata, emits spec-compliant
+    # 401 challenges when no bearer is supplied, and propagates upstream
+    # 401/403 responses instead of swallowing them. See ``is_oauth_passthrough``.
+    #
+    # Intentionally distinct from ``delegate_auth_to_upstream`` (oauth2-only):
+    # reusing that flag would silently change behavior for servers that forward
+    # ``Authorization`` for non-OAuth reasons (e.g. static bearer tokens). Must
+    # be set explicitly to avoid regressing servers that did not opt in.
+    oauth_passthrough: bool = False
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
@@ -163,12 +168,15 @@ class MCPServer(BaseModel):
         2. ``extra_headers`` includes ``Authorization`` — the admin has
            opted this server into forwarding the client's bearer token
            straight to the upstream MCP server.
-        3. ``delegate_auth_to_upstream`` is ``True`` — the admin has
+        3. ``oauth_passthrough`` is ``True`` — the admin has
            explicitly opted into upstream-delegated OAuth semantics for
            this server. This is the explicit detection flag: without it,
            a server that merely forwards ``Authorization`` (e.g. for
            static bearer tokens or custom auth schemes) keeps the
            pre-PR behavior and is not treated as OAuth pass-through.
+           This is deliberately a separate flag from
+           ``delegate_auth_to_upstream`` (which is oauth2-only) so enabling
+           pass-through here never changes behavior for oauth2 servers.
 
         This is intentionally narrower than ``requires_per_user_auth``,
         which also covers PATs (``x-api-key``, ``api-key``, ``apikey``).
@@ -179,7 +187,7 @@ class MCPServer(BaseModel):
             return False
         if not self.extra_headers:
             return False
-        if self.delegate_auth_to_upstream is not True:
+        if self.oauth_passthrough is not True:
             return False
         return any(h.lower() == "authorization" for h in self.extra_headers)
 

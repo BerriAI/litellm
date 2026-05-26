@@ -70,7 +70,7 @@ def test_is_oauth_passthrough_true_when_none_auth_and_authorization_header():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is True
 
@@ -82,7 +82,7 @@ def test_is_oauth_passthrough_true_when_auth_type_none_and_mixed_case_header():
         transport=MCPTransport.http,
         auth_type=None,
         extra_headers=["authorization", "x-request-id"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is True
 
@@ -94,7 +94,7 @@ def test_is_oauth_passthrough_false_for_oauth2_server():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is False
 
@@ -106,7 +106,7 @@ def test_is_oauth_passthrough_false_without_authorization_header():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["x-api-key"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is False
 
@@ -117,12 +117,12 @@ def test_is_oauth_passthrough_false_without_extra_headers():
         name="s1",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     assert server.is_oauth_passthrough is False
 
 
-def test_is_oauth_passthrough_false_without_delegate_flag():
+def test_is_oauth_passthrough_false_without_oauth_passthrough_flag():
     """The detection flag must be set explicitly. Without it, the legacy
     behavior is preserved for servers that forward Authorization for
     non-OAuth reasons (static bearer tokens, custom auth schemes)."""
@@ -132,19 +132,38 @@ def test_is_oauth_passthrough_false_without_delegate_flag():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        # delegate_auth_to_upstream defaults to False
+        # oauth_passthrough defaults to False
     )
     assert server.is_oauth_passthrough is False
 
 
-def test_is_oauth_passthrough_false_when_delegate_flag_explicitly_false():
+def test_is_oauth_passthrough_false_when_oauth_passthrough_explicitly_false():
     server = MCPServer(
         server_id="s1",
         name="s1",
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=False,
+        oauth_passthrough=False,
+    )
+    assert server.is_oauth_passthrough is False
+
+
+def test_is_oauth_passthrough_false_when_only_delegate_auth_to_upstream_set():
+    """Regression guard: ``delegate_auth_to_upstream`` is the oauth2-only
+    PKCE-bypass flag and must NOT, on its own, turn a non-oauth2 server into
+    an OAuth pass-through server. Pass-through requires the dedicated
+    ``oauth_passthrough`` opt-in. This protects existing deployments that set
+    ``delegate_auth_to_upstream`` from silently gaining pass-through behavior.
+    """
+    server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        extra_headers=["Authorization"],
+        delegate_auth_to_upstream=True,
+        # oauth_passthrough intentionally left at its default (False)
     )
     assert server.is_oauth_passthrough is False
 
@@ -170,7 +189,7 @@ async def test_oauth_protected_resource_passthrough_proxies_upstream_metadata():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = (
         passthrough_server
@@ -221,7 +240,7 @@ async def test_oauth_protected_resource_passthrough_cache_hit():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = (
         passthrough_server
@@ -314,7 +333,7 @@ async def test_oauth_metadata_cache_expired_entry_is_refetched():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     _OAUTH_METADATA_CACHE[(passthrough_server.server_id, passthrough_server.url)] = (
         0,
@@ -356,7 +375,7 @@ async def test_oauth_protected_resource_passthrough_network_error_returns_502():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = (
         passthrough_server
@@ -389,7 +408,7 @@ async def test_fetch_upstream_metadata_returns_none_when_not_all_candidates_netw
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     not_found_response = MagicMock()

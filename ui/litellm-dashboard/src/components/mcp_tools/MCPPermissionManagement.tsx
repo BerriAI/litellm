@@ -31,13 +31,15 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
     && watchedExtraHeaders.some(
       (h) => typeof h === "string" && h.toLowerCase() === "authorization",
     );
-  // Two modes that honor delegate_auth_to_upstream server-side:
-  //   - oauth2 servers (PKCE passthrough — bypass LiteLLM admission)
-  //   - auth_type=none + Authorization in extra_headers (OAuth pass-through:
-  //     proxy upstream oauth-protected-resource, emit 401 challenges,
-  //     propagate upstream 401/403)
-  const isOAuthPassthrough = isNoneAuth && hasAuthorizationHeader;
-  const canDelegateAuth = isOAuth2 || isOAuthPassthrough;
+  // Two distinct, independent opt-ins:
+  //   - delegate_auth_to_upstream: oauth2 servers only (PKCE passthrough —
+  //     bypass LiteLLM admission).
+  //   - oauth_passthrough: auth_type=none + Authorization in extra_headers
+  //     (OAuth pass-through: proxy upstream oauth-protected-resource, emit 401
+  //     challenges, propagate upstream 401/403).
+  // Kept as separate flags so neither silently implies the other and existing
+  // oauth2 servers can't regress into pass-through behavior.
+  const canEnableOAuthPassthrough = isNoneAuth && hasAuthorizationHeader;
   const watchedDelegateAuth = Form.useWatch("delegate_auth_to_upstream", form);
   const watchedPublicInternet = Form.useWatch("available_on_public_internet", form);
   const showInternalDelegatePkceWarning =
@@ -64,22 +66,33 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       if (typeof mcpServer.delegate_auth_to_upstream === "boolean") {
         form.setFieldValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
       }
+      if (typeof mcpServer.oauth_passthrough === "boolean") {
+        form.setFieldValue("oauth_passthrough", mcpServer.oauth_passthrough);
+      }
     } else {
       form.setFieldValue("allow_all_keys", false);
       form.setFieldValue("available_on_public_internet", true);
       form.setFieldValue("delegate_auth_to_upstream", false);
+      form.setFieldValue("oauth_passthrough", false);
     }
   }, [mcpServer, form]);
 
-  // delegate_auth_to_upstream is only honored server-side for oauth2 servers
-  // or auth_type=none servers that forward Authorization to upstream. Force
-  // it back to false whenever the user switches to any other configuration
-  // so a stale toggle value doesn't get persisted unexpectedly.
+  // delegate_auth_to_upstream is only honored server-side for oauth2 servers.
+  // Force it back to false whenever the user switches away from oauth2 so a
+  // stale toggle value doesn't get persisted unexpectedly.
   useEffect(() => {
-    if (!canDelegateAuth) {
+    if (!isOAuth2) {
       form.setFieldValue("delegate_auth_to_upstream", false);
     }
-  }, [canDelegateAuth, form]);
+  }, [isOAuth2, form]);
+
+  // oauth_passthrough is only honored for auth_type=none servers that forward
+  // Authorization upstream. Force it back to false otherwise.
+  useEffect(() => {
+    if (!canEnableOAuthPassthrough) {
+      form.setFieldValue("oauth_passthrough", false);
+    }
+  }, [canEnableOAuthPassthrough, form]);
 
   return (
     <Collapse className="bg-gray-50 border border-gray-200 rounded-lg" expandIconPosition="end" ghost={false}>
@@ -140,33 +153,47 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             </Form.Item>
           </div>
 
-          {canDelegateAuth && (
+          {isOAuth2 && (
             <div className="flex items-start justify-between gap-4">
               <div>
                 <span className="text-sm font-medium text-gray-700 flex items-center">
-                  {isOAuth2
-                    ? "Delegate auth to upstream (PKCE passthrough)"
-                    : "Delegate auth to upstream (OAuth pass-through)"}
-                  <Tooltip
-                    title={
-                      isOAuth2
-                        ? "When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route."
-                        : "When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers."
-                    }
-                  >
+                  Delegate auth to upstream (PKCE passthrough)
+                  <Tooltip title="When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
                 <p className="text-sm text-gray-600 mt-1">
-                  {isOAuth2
-                    ? "Bypass LiteLLM auth so clients authenticate directly with the upstream OAuth MCP server."
-                    : "Forward upstream OAuth discovery and 401 challenges so clients negotiate OAuth directly with the upstream MCP server."}
+                  Bypass LiteLLM auth so clients authenticate directly with the upstream OAuth MCP server.
                 </p>
               </div>
               <Form.Item
                 name="delegate_auth_to_upstream"
                 valuePropName="checked"
                 initialValue={mcpServer?.delegate_auth_to_upstream ?? false}
+                className="mb-0"
+              >
+                <Switch />
+              </Form.Item>
+            </div>
+          )}
+
+          {canEnableOAuthPassthrough && (
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  OAuth pass-through
+                  <Tooltip title="When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+                <p className="text-sm text-gray-600 mt-1">
+                  Forward upstream OAuth discovery and 401 challenges so clients negotiate OAuth directly with the upstream MCP server.
+                </p>
+              </div>
+              <Form.Item
+                name="oauth_passthrough"
+                valuePropName="checked"
+                initialValue={mcpServer?.oauth_passthrough ?? false}
                 className="mb-0"
               >
                 <Switch />

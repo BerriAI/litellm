@@ -153,7 +153,7 @@ def test_prepare_mcp_server_headers_passthrough_strips_authorization_without_adm
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization", "x-request-id"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
@@ -191,7 +191,7 @@ def test_prepare_mcp_server_headers_passthrough_forwards_authorization_for_anony
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization", "x-request-id"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
@@ -233,7 +233,7 @@ def test_prepare_mcp_server_headers_passthrough_strips_authorization_for_authent
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization", "x-request-id"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(

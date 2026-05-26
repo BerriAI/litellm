@@ -216,6 +216,41 @@ describe("MCPServerEdit (delegate auth)", () => {
     expect(payload.auth_type).toBe("none");
     expect(payload.delegate_auth_to_upstream).toBe(false);
   });
+
+  it("does not enable oauth_passthrough for an oauth2 server", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      oauth_passthrough: false,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          extra_headers: ["Authorization"],
+          oauth_passthrough: true,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2");
+    // oauth_passthrough is non-oauth2 only — must be forced false here.
+    expect(payload.oauth_passthrough).toBe(false);
+  });
 });
 
 describe("MCPServerEdit (interactive OAuth)", () => {

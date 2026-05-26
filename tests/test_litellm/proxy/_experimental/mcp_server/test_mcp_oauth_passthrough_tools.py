@@ -60,7 +60,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     response = httpx.Response(
@@ -98,7 +98,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
 
     tool = MagicMock()

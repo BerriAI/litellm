@@ -60,7 +60,7 @@ def test_passthrough_cold_start_emits_401_with_matching_resource_metadata(
         transport=MCPTransport.http,
         auth_type=MCPAuth.none,
         extra_headers=["Authorization"],
-        delegate_auth_to_upstream=True,
+        oauth_passthrough=True,
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = (
         passthrough_server

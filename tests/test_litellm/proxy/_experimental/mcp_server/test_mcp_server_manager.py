@@ -497,7 +497,7 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             extra_headers=["Authorization", "x-request-id"],
-            delegate_auth_to_upstream=True,
+            oauth_passthrough=True,
         )
 
         mock_client = AsyncMock()
@@ -550,7 +550,7 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             extra_headers=["Authorization"],
-            delegate_auth_to_upstream=True,
+            oauth_passthrough=True,
         )
 
         mock_client = AsyncMock()
@@ -606,7 +606,7 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             extra_headers=["Authorization"],
-            delegate_auth_to_upstream=True,
+            oauth_passthrough=True,
         )
 
         mock_client = AsyncMock()
