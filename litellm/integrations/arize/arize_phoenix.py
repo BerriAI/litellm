@@ -232,17 +232,18 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
     @staticmethod
     def _is_proxy_request(kwargs: dict) -> bool:
-        """True when the call is routed through the LiteLLM proxy."""
-        litellm_params = kwargs.get("litellm_params")
-        if isinstance(litellm_params, dict) and litellm_params.get(
-            "proxy_server_request"
-        ):
-            return True
+        """True when the call is routed through the LiteLLM proxy.
 
-        for metadata in ArizePhoenixLogger._iter_metadata_dicts_from_kwargs(kwargs):
-            if isinstance(metadata.get("user_api_key_auth_metadata"), dict):
-                return True
-        return False
+        Proxy mode is determined solely by the server-set ``proxy_server_request``
+        field in ``litellm_params``.  Checking request metadata for
+        ``user_api_key_auth_metadata`` is intentionally avoided: that field is
+        user-supplied and would let an authenticated caller fake proxy-mode
+        detection to route their telemetry into arbitrary Arize/Phoenix projects.
+        """
+        litellm_params = kwargs.get("litellm_params")
+        return isinstance(litellm_params, dict) and bool(
+            litellm_params.get("proxy_server_request")
+        )
 
     @staticmethod
     def _project_from_metadata_dict(

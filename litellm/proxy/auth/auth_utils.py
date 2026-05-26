@@ -214,6 +214,11 @@ _EXTRA_BANNED_OBSERVABILITY_PARAMS: FrozenSet[str] = frozenset(
         "posthog_api_url",
         "phoenix_project_name",
         "phoenix_project_name_override",
+        # Server-reserved: written exclusively by add_user_api_key_auth_to_request_metadata
+        # from the authenticated key's database record.  A caller-supplied value
+        # would survive the server merge and let an authenticated user redirect
+        # their Arize/Phoenix telemetry into arbitrary projects.
+        "user_api_key_auth_metadata",
         "wandb_api_key",
         "weave_project_id",
     }

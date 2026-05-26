@@ -471,10 +471,25 @@ async def _emit_management_endpoint_otel_span(
         route = func.__name__
         request_body = {}
 
+    _CREDENTIAL_FIELDS = frozenset(
+        {
+            "key",
+            "token",
+            "api_key",
+            "secret",
+            "password",
+            "access_token",
+            "refresh_token",
+            "private_key",
+            "service_account_key",
+        }
+    )
+
     _response: Optional[dict] = None
     if exception is None and result is not None:
         try:
-            _response = dict(result)
+            raw = dict(result)
+            _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
         except Exception:
             _response = None
 
