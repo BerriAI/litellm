@@ -21,6 +21,13 @@ DOCKERFILE_PATH = os.path.join(
     "docker",
     "Dockerfile.non_root",
 )
+DOCKERFILE_DATABASE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "docker",
+    "Dockerfile.database",
+)
 
 
 def _final_user_directive(dockerfile_text: str) -> str:
@@ -28,6 +35,15 @@ def _final_user_directive(dockerfile_text: str) -> str:
     matches = re.findall(r"^USER\s+(\S+)\s*$", dockerfile_text, re.MULTILINE)
     assert matches, "Dockerfile.non_root has no USER directive"
     return matches[-1]
+
+
+def _nodejs_apk_add_blocks(dockerfile_text: str) -> list[str]:
+    """Return apk add command blocks that install nodejs."""
+    return re.findall(
+        r"RUN .*?apk add --no-cache .*?nodejs.*?(?=\n\n|^RUN |\Z)",
+        dockerfile_text,
+        re.MULTILINE | re.DOTALL,
+    )
 
 
 @pytest.mark.skipif(
@@ -52,3 +68,25 @@ def test_final_user_directive_is_numeric():
         f"Dockerfile.non_root final USER is {final_user} (root); the non_root image "
         "must run as a non-zero UID."
     )
+
+
+@pytest.mark.parametrize(
+    "dockerfile_path",
+    [DOCKERFILE_PATH, DOCKERFILE_DATABASE_PATH],
+)
+def test_wolfi_nodejs_installs_libatomic(dockerfile_path: str):
+    """Wolfi images that install nodejs for prisma must also install libatomic."""
+    if not os.path.exists(dockerfile_path):
+        pytest.skip(f"{dockerfile_path} not present in this checkout")
+
+    with open(dockerfile_path, "r", encoding="utf-8") as f:
+        contents = f.read()
+
+    nodejs_blocks = _nodejs_apk_add_blocks(contents)
+    assert nodejs_blocks, f"{dockerfile_path} has no apk add block that installs nodejs"
+
+    for block in nodejs_blocks:
+        assert "libatomic" in block, (
+            f"{dockerfile_path} installs nodejs without libatomic in:\n{block}\n"
+            "Node/Prisma on Wolfi can fail to start with missing libatomic.so.1."
+        )
