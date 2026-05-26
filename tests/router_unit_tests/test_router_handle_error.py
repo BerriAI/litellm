@@ -15,7 +15,6 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from unittest.mock import AsyncMock, MagicMock
 
-
 load_dotenv()
 
 

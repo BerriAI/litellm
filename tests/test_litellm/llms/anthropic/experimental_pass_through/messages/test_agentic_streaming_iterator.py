@@ -22,7 +22,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming
     _parse_sse_events,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers to build SSE byte payloads
 # ---------------------------------------------------------------------------

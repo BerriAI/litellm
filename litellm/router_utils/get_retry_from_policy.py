@@ -1,5 +1,5 @@
 """
-Get num retries for an exception. 
+Get num retries for an exception.
 
 - Account for retry policy by exception type.
 """

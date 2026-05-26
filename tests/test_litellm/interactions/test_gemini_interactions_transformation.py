@@ -127,7 +127,12 @@ class TestTransformRequest:
         request_body = config.transform_request(
             model=None,
             agent="my-custom-slides-agent",
-            input=[{"type": "text", "text": "Create a 5-slide presentation about AI trends."}],
+            input=[
+                {
+                    "type": "text",
+                    "text": "Create a 5-slide presentation about AI trends.",
+                }
+            ],
             optional_params={
                 "environment": "remote",
                 "stream": False,
@@ -172,6 +177,8 @@ class TestTransformRequest:
         )
 
         assert request_body["environment"] == env_id
+
+
 class TestStreamingIterator:
     def _make_iterator(self) -> LiteLLMResponsesInteractionsStreamingIterator:
         return LiteLLMResponsesInteractionsStreamingIterator(

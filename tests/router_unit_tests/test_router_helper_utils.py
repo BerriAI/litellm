@@ -997,9 +997,7 @@ def test_filter_cooldown_deployments(model_list):
         healthy_deployments=router._get_all_deployments(model_name="gpt-5-mini"),  # type: ignore
         cooldown_deployments=[],
     )
-    assert len(deployments) == len(
-        router._get_all_deployments(model_name="gpt-5-mini")
-    )
+    assert len(deployments) == len(router._get_all_deployments(model_name="gpt-5-mini"))
 
 
 def test_track_deployment_metrics(model_list):

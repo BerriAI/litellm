@@ -31,13 +31,16 @@ def _call_handler_and_capture_optional_params(thinking=None, **extra_kwargs):
     """
     captured = {}
 
-    with patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.handler."
-        "base_llm_http_handler"
-    ) as mock_handler, patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.handler."
-        "ProviderConfigManager"
-    ) as mock_pcm:
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler."
+            "base_llm_http_handler"
+        ) as mock_handler,
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler."
+            "ProviderConfigManager"
+        ) as mock_pcm,
+    ):
         # Make get_provider_anthropic_messages_config return a non-None config
         # so the handler takes the native Anthropic path
         mock_pcm.get_provider_anthropic_messages_config.return_value = MagicMock()
@@ -119,8 +122,9 @@ class TestReasoningAutoSummaryMessages:
 
     def test_env_var_enables_auto_summary(self):
         """LITELLM_REASONING_AUTO_SUMMARY=true env var enables the feature."""
-        with patch.object(litellm, "reasoning_auto_summary", False), patch.dict(
-            os.environ, {"LITELLM_REASONING_AUTO_SUMMARY": "true"}
+        with (
+            patch.object(litellm, "reasoning_auto_summary", False),
+            patch.dict(os.environ, {"LITELLM_REASONING_AUTO_SUMMARY": "true"}),
         ):
             params = _call_handler_and_capture_optional_params(
                 thinking={"type": "adaptive", "budget_tokens": 5000}

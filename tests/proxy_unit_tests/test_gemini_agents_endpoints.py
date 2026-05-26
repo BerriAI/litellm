@@ -23,7 +23,6 @@ from litellm.proxy.google_endpoints.agents_endpoints import (
     _merge_query_params_into_data,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

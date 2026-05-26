@@ -477,4 +477,3 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base  # Should use the argument base
-

@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # /project/update — _check_user_permission_for_project
 # ---------------------------------------------------------------------------

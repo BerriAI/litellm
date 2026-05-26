@@ -3863,7 +3863,15 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     # No model_info on deployment object → treated as not blocked
     assert litellm.Router._is_deployment_blocked(object()) is False
     missing_blocked = types.SimpleNamespace()
-    assert litellm.Router._is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
-    assert litellm.Router._is_deployment_blocked(
-        types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
-    ) is True
+    assert (
+        litellm.Router._is_deployment_blocked(
+            types.SimpleNamespace(model_info=missing_blocked)
+        )
+        is False
+    )
+    assert (
+        litellm.Router._is_deployment_blocked(
+            types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
+        )
+        is True
+    )

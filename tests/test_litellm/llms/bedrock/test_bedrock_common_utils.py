@@ -12,7 +12,6 @@ sys.path.insert(
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
 # --------------------------------------------------------------------------- #

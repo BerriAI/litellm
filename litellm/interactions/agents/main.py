@@ -49,7 +49,6 @@ from litellm.types.interactions import InteractionEnvironment
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client
 
-
 # ------------------------------------------------------------------ #
 # Shared helpers                                                       #
 # ------------------------------------------------------------------ #

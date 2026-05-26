@@ -12,7 +12,6 @@ import os
 import pytest
 import asyncio
 
-
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
 

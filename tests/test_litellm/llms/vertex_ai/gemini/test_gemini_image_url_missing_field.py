@@ -23,7 +23,12 @@ def test_missing_url_inside_image_url_dict_raises_bad_request_error():
     """When image_url is a dict but 'url' key is absent, a BadRequestError is raised."""
     messages = cast(
         List[AllMessageValues],
-        [{"role": "user", "content": [{"type": "image_url", "image_url": {"detail": "high"}}]}],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"detail": "high"}}],
+            }
+        ],
     )
     with pytest.raises(litellm.BadRequestError) as exc_info:
         _gemini_convert_messages_with_history(messages, model="gemini-1.5-pro")

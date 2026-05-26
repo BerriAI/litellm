@@ -1,9 +1,9 @@
 """
 PROD TEST - DO NOT Delete this Test
 
-e2e test for langfuse callback in DB 
+e2e test for langfuse callback in DB
 - Add langfuse callback to DB - with /config/update
-- wait 20 seconds for the callback to be loaded into the instance 
+- wait 20 seconds for the callback to be loaded into the instance
 - Make a /chat/completions request to the proxy
 - Check if the request is logged in Langfuse
 """

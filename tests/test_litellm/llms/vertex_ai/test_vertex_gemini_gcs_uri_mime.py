@@ -2,6 +2,7 @@
 
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
+
 import asyncio
 import os
 import sys
@@ -222,7 +223,9 @@ def test_get_gcs_object_content_type_http_error_explicit_vs_anonymous():
         ),
     ):
         assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
+            gt._get_gcs_object_content_type(
+                image_url="gs://public-bucket/public-object"
+            )
             is None
         )
     mock_v2.get_access_token.assert_not_called()
@@ -247,7 +250,9 @@ def test_get_gcs_object_content_type_anonymous_success_no_auth_header():
         ),
     ):
         assert (
-            gt._get_gcs_object_content_type(image_url="gs://public-bucket/public-object")
+            gt._get_gcs_object_content_type(
+                image_url="gs://public-bucket/public-object"
+            )
             == "image/jpeg"
         )
     mock_v.get_access_token.assert_not_called()
@@ -340,7 +345,9 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     async def run_plain():
         with patch(
             "litellm.llms.vertex_ai.gemini.transformation.asyncify",
-            side_effect=AssertionError("asyncify must not run without extensionless gs://"),
+            side_effect=AssertionError(
+                "asyncify must not run without extensionless gs://"
+            ),
         ):
             return await gemini_transformation.async_transform_request_body(
                 gemini_api_key=None,

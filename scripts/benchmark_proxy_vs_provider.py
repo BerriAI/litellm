@@ -11,7 +11,7 @@ USAGE EXAMPLES:
    export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
    export LITELLM_PROXY_API_KEY='sk-1234'
    export PROVIDER_API_KEY='sk-openai-key'
-   
+
    # Run from scripts directory
    cd scripts
    python benchmark_proxy_vs_provider.py

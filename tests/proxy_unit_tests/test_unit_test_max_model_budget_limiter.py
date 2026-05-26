@@ -423,7 +423,9 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
     _push_in_memory_increments_to_redis when Redis is wired so other workers see spend.
     """
     dual_cache = DualCache()
-    dual_cache.redis_cache = object()  # truthy placeholder; push only checks is not None
+    dual_cache.redis_cache = (
+        object()
+    )  # truthy placeholder; push only checks is not None
     limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     model = "gpt-4"
     kwargs = {
@@ -471,7 +473,9 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
             },
         },
     }
-    with patch.object(budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock):
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock
+    ):
         with patch.object(
             budget_limiter,
             "_push_in_memory_increments_to_redis",

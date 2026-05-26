@@ -60,7 +60,9 @@ class TestGetOpenaiCompatibleBatchMetadata:
 
     def test_non_dict_input_returns_empty_dict(self):
         assert BedrockBatchesConfig._get_openai_compatible_batch_metadata(None) == {}
-        assert BedrockBatchesConfig._get_openai_compatible_batch_metadata("string") == {}
+        assert (
+            BedrockBatchesConfig._get_openai_compatible_batch_metadata("string") == {}
+        )
         assert BedrockBatchesConfig._get_openai_compatible_batch_metadata(123) == {}
 
     def test_empty_dict_returns_empty_dict(self):
@@ -82,7 +84,9 @@ class TestGetOpenaiCompatibleBatchMetadata:
 
         # All values must be strings
         for key, value in result.items():
-            assert isinstance(value, str), f"metadata[{key!r}] is {type(value)}, not str"
+            assert isinstance(
+                value, str
+            ), f"metadata[{key!r}] is {type(value)}, not str"
 
         # Excluded keys
         assert "standard_logging_guardrail_information" not in result
