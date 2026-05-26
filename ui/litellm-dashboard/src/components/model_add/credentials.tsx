@@ -64,7 +64,12 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       },
     };
 
-    await credentialUpdateCall(accessToken, values.credential_name, newCredential);
+    // PATCH /credentials/{credential_name} looks up the row by its existing
+    // name, so route the request to the credential's ORIGINAL name. The new
+    // name (if changed) is carried in newCredential.credential_name in the
+    // request body and the backend swaps the DB + in-memory entry over to it.
+    const originalCredentialName = selectedCredential?.credential_name ?? values.credential_name;
+    await credentialUpdateCall(accessToken, originalCredentialName, newCredential);
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
     await refetchCredentials();

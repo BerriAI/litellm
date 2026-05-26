@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
@@ -117,7 +118,46 @@ describe("EditCredentialModal", () => {
     await waitFor(() => {
       const credentialNameInput = screen.getByLabelText("Credential Name:") as HTMLInputElement;
       expect(credentialNameInput.value).toBe("test-credential");
-      expect(credentialNameInput.disabled).toBe(true);
+      // LIT-2074: credential name must stay editable so admins can rename
+      // a credential after creation.
+      expect(credentialNameInput.disabled).toBe(false);
     });
+  });
+
+  it("should allow renaming the credential and pass the new name to onUpdateCredential", async () => {
+    const queryClient = createQueryClient();
+    const onCancel = vi.fn();
+    const onUpdateCredential = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EditCredentialModal
+          open={true}
+          onCancel={onCancel}
+          onUpdateCredential={onUpdateCredential}
+          uploadProps={mockUploadProps}
+          existingCredential={mockCredential}
+        />
+      </QueryClientProvider>,
+    );
+
+    const credentialNameInput = (await screen.findByLabelText(
+      "Credential Name:",
+    )) as HTMLInputElement;
+    expect(credentialNameInput.disabled).toBe(false);
+
+    // Replace the existing name with a new one.
+    await user.clear(credentialNameInput);
+    await user.type(credentialNameInput, "test-credential-renamed");
+
+    await user.click(screen.getByRole("button", { name: /update credential/i }));
+
+    await waitFor(() => {
+      expect(onUpdateCredential).toHaveBeenCalledTimes(1);
+    });
+    expect(onUpdateCredential.mock.calls[0][0].credential_name).toBe(
+      "test-credential-renamed",
+    );
   });
 });
