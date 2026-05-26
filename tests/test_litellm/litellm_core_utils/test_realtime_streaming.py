@@ -133,7 +133,9 @@ def test_make_disable_auto_response_message_produces_ga_shape():
         "turn_detection" not in session
     ), "turn_detection must not be at the top-level session (beta shape); use audio.input"
     # turn_detection must be nested under audio.input
-    assert session["audio"]["input"]["turn_detection"]["create_response"] is False
+    td = session["audio"]["input"]["turn_detection"]
+    assert td["type"] == "server_vad"
+    assert td["create_response"] is False
 
 
 def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients():
@@ -148,7 +150,32 @@ def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients
 
     assert msg["type"] == "session.update"
     session = msg["session"]
-    assert session == {"turn_detection": {"create_response": False}}
+    assert session == {
+        "turn_detection": {"type": "server_vad", "create_response": False}
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_send_text_receives_str_not_bytes():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.created", "session": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.called
+    sent = client_ws.send_text.call_args_list[0].args[0]
+    assert isinstance(sent, str)
 
 
 @pytest.mark.asyncio
