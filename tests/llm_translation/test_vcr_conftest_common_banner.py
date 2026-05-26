@@ -311,3 +311,44 @@ def test_should_drop_telemetry_record(current_test, nodeid, host, expected_drop)
 
     current_test(nodeid)
     assert common._should_drop_telemetry_record(_FakeRequest(host)) is expected_drop
+
+
+def test_drop_is_suppressed_while_loading_stored_episodes(current_test):
+    """During ``Cassette._load`` the drop MUST be inert.
+
+    vcrpy replays each stored interaction through ``Cassette.append`` →
+    ``before_record_request``; a ``None`` there silently drops the stored
+    episode. If the telemetry drop fired on load, an already-recorded
+    telemetry episode would be deleted the instant a non-telemetry-named
+    test loaded it, forcing an endless live re-record (a phantom
+    MISS:RECORDED on a cassette that was present in Redis). The drop must
+    only stop *new* incidental recordings, never filter the cassette on read.
+    """
+    import tests._vcr_conftest_common as common
+
+    # A non-telemetry test loading a stored Langfuse episode: dropped on
+    # record, but must be KEPT while loading.
+    current_test("tests/local_testing/test_lowest_latency_routing.py::test_buf")
+    req = _FakeRequest("us.cloud.langfuse.com")
+
+    assert common._should_drop_telemetry_record(req) is True  # record path
+
+    common._vcr_load_guard.active = True
+    try:
+        assert common._vcr_load_in_progress() is True
+        assert common._should_drop_telemetry_record(req) is False  # load path
+    finally:
+        common._vcr_load_guard.active = False
+    assert common._should_drop_telemetry_record(req) is True
+
+
+def test_load_guard_patch_is_idempotent():
+    import vcr.cassette as cassette_mod
+
+    import tests._vcr_conftest_common as common
+
+    common.patch_vcrpy_cassette_load_guard()
+    first = cassette_mod.Cassette._load
+    common.patch_vcrpy_cassette_load_guard()
+    assert cassette_mod.Cassette._load is first
+    assert getattr(cassette_mod.Cassette._load, "_litellm_load_guarded", False)

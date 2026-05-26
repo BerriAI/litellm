@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import sys
+import threading
 from collections import defaultdict
 from typing import Iterable
 
@@ -533,6 +534,45 @@ def _current_test_records_telemetry() -> bool:
     return any(marker in nodeid for marker in _TELEMETRY_TEST_PATH_MARKERS)
 
 
+# Thread-local "we are inside Cassette._load" flag. vcrpy's ``Cassette._load``
+# replays each *stored* interaction through ``Cassette.append``, which runs
+# ``before_record_request`` on it; a ``None`` return there silently drops the
+# stored episode. ``_should_drop_telemetry_record`` must therefore NOT fire
+# during load, or it would delete already-recorded telemetry episodes the
+# instant a non-telemetry-named test (or the very first test in a worker, whose
+# ``_current_test_nodeid`` is still empty) loads them — forcing an endless live
+# re-record (a phantom MISS:RECORDED on a cassette that was present in Redis).
+# The drop is only ever meant to stop *new* incidental telemetry from being
+# recorded, never to filter the existing cassette on read. ``_load`` and its
+# ``append`` calls run synchronously in one thread, so a thread-local correctly
+# scopes the guard and never masks a concurrent background-flush record.
+_vcr_load_guard = threading.local()
+
+
+def _vcr_load_in_progress() -> bool:
+    return getattr(_vcr_load_guard, "active", False)
+
+
+def patch_vcrpy_cassette_load_guard() -> None:
+    """Wrap ``Cassette._load`` so ``_should_drop_telemetry_record`` is inert
+    while stored episodes are being replayed into the in-memory cassette."""
+    import vcr.cassette as _cassette_mod
+
+    if getattr(_cassette_mod.Cassette._load, "_litellm_load_guarded", False):
+        return
+    _orig_load = _cassette_mod.Cassette._load
+
+    def _guarded_load(self):
+        _vcr_load_guard.active = True
+        try:
+            return _orig_load(self)
+        finally:
+            _vcr_load_guard.active = False
+
+    _guarded_load._litellm_load_guarded = True
+    _cassette_mod.Cassette._load = _guarded_load
+
+
 def _should_drop_telemetry_record(request) -> bool:
     """Whether to refuse to record this request into the active cassette.
 
@@ -549,7 +589,13 @@ def _should_drop_telemetry_record(request) -> bool:
     vcrpy treats a ``None`` from ``before_record_request`` as "don't record" and
     "can't replay" → the request passes through live and is never stored).
     Tests that actually assert on telemetry keep recording it.
+
+    Crucially, this never fires while ``Cassette._load`` is replaying stored
+    interactions (see ``_vcr_load_in_progress``): dropping there would delete an
+    already-recorded telemetry episode on read and force a live re-record.
     """
+    if _vcr_load_in_progress():
+        return False
     return _is_telemetry_request(request) and not _current_test_records_telemetry()
 
 
@@ -1027,6 +1073,7 @@ def register_persister_if_enabled(vcr) -> None:
     vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
     vcr.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
     patch_vcrpy_aiohttp_record_path()
+    patch_vcrpy_cassette_load_guard()
     global _atexit_banner_registered
     if not _atexit_banner_registered:
         atexit.register(_print_atexit_banner)
