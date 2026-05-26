@@ -35,7 +35,9 @@ COPY --from=uvbin /uv /uvx /usr/local/bin/
 # instead of nodeenv downloading one whose dynamic deps may not be in Wolfi
 # (e.g. Node 26.2.0 needs libatomic). Retry for transient apk.cgr.dev flakes.
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break || sleep 5; \
+      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
     done
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
@@ -85,7 +87,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl tzdata python3 libsndfile libatomic && break || sleep 5; \
+      apk add --no-cache bash openssl tzdata python3 libsndfile libatomic && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
     done
 
 # wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532). The
