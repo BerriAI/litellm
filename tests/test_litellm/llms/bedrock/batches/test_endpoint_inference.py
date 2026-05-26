@@ -1,0 +1,280 @@
+"""
+Tests for BedrockBatchesConfig endpoint propagation.
+
+Before these changes, both `transform_create_batch_response` and
+`transform_retrieve_batch_response` reported `endpoint="/v1/chat/completions"`
+unconditionally, which mis-labelled embedding batches and broke OpenAI
+clients that introspect the batch object.
+
+The new helper `_infer_openai_endpoint_from_model_id` is a best-effort
+mapper used as a fallback when the caller didn't (or couldn't) pass the
+original `endpoint` through `litellm_params["original_batch_request"]`.
+"""
+
+import os
+import sys
+from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.abspath("../../../../.."))
+
+from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+
+
+class TestInferOpenaiEndpointFromModelId:
+    """Direct tests for the static inference helper."""
+
+    def test_titan_v2_text_embed_routes_to_embeddings(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "amazon.titan-embed-text-v2:0"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_titan_multimodal_embed_routes_to_embeddings(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "amazon.titan-embed-image-v1"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_nova_multimodal_embed_routes_to_embeddings(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "amazon.nova-2-multimodal-embeddings-v1:0"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_cohere_embed_routes_to_embeddings(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "cohere.embed-english-v3"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_arn_form_embed_routes_to_embeddings(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "arn:aws:bedrock:us-east-1:123:foundation-model/amazon.titan-embed-text-v2:0"
+            )
+            == "/v1/embeddings"
+        )
+
+    def test_anthropic_chat_routes_to_chat_completions(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "anthropic.claude-3-5-sonnet-20240620-v1:0"
+            )
+            == "/v1/chat/completions"
+        )
+
+    def test_cross_region_inference_profile_chat_routes_to_chat(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+            )
+            == "/v1/chat/completions"
+        )
+
+    def test_nova_chat_routes_to_chat_completions(self):
+        # Nova Pro is a chat model, not an embedding model; the name has
+        # no "embed" so we must NOT misclassify it.
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "us.amazon.nova-pro-v1:0"
+            )
+            == "/v1/chat/completions"
+        )
+
+    def test_none_model_defaults_to_chat(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(None)
+            == "/v1/chat/completions"
+        )
+
+    def test_empty_model_defaults_to_chat(self):
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id("")
+            == "/v1/chat/completions"
+        )
+
+    def test_case_insensitive_matching(self):
+        # AWS model ids are lowercase but defensive coercion shouldn't hurt.
+        assert (
+            BedrockBatchesConfig._infer_openai_endpoint_from_model_id(
+                "AMAZON.TITAN-EMBED-TEXT-V2:0"
+            )
+            == "/v1/embeddings"
+        )
+
+
+class TestTransformCreateBatchResponseEndpoint:
+    """End-to-end checks that the create-batch response carries the right endpoint."""
+
+    @staticmethod
+    def _mock_raw_response(payload):
+        m = MagicMock()
+        m.json.return_value = payload
+        return m
+
+    def test_create_response_uses_original_request_endpoint_when_set(self):
+        """Explicit endpoint on the original request wins over the heuristic."""
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+            }
+        )
+        batch = config.transform_create_batch_response(
+            model="amazon.titan-embed-text-v2:0",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={"original_batch_request": {"endpoint": "/v1/embeddings"}},
+        )
+        assert batch.endpoint == "/v1/embeddings"
+
+    def test_create_response_falls_back_to_model_inference_for_embed(self):
+        """Without `original_batch_request.endpoint`, infer from model id."""
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+            }
+        )
+        batch = config.transform_create_batch_response(
+            model="amazon.titan-embed-text-v2:0",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/embeddings"
+
+    def test_create_response_chat_default_when_no_signal(self):
+        """No endpoint and no embed marker in model id -> chat completions."""
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+            }
+        )
+        batch = config.transform_create_batch_response(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/chat/completions"
+
+    def test_create_response_chat_when_model_is_none_but_request_says_chat(self):
+        """If model is None but original request says chat, that wins."""
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+            }
+        )
+        batch = config.transform_create_batch_response(
+            model=None,
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={
+                "original_batch_request": {"endpoint": "/v1/chat/completions"}
+            },
+        )
+        assert batch.endpoint == "/v1/chat/completions"
+
+
+class TestTransformRetrieveBatchResponseEndpoint:
+    """The retrieve path has no original request to read from, so it must
+    infer the endpoint from the AWS response's modelId."""
+
+    @staticmethod
+    def _mock_raw_response(payload):
+        m = MagicMock()
+        m.json.return_value = payload
+        m.status_code = 200
+        return m
+
+    def test_retrieve_response_infers_embeddings_from_modelid(self):
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Completed",
+                "modelId": "amazon.titan-embed-text-v2:0",
+                "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://b/in.jsonl"}},
+                "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://b/out/"}},
+            }
+        )
+        batch = config.transform_retrieve_batch_response(
+            model=None,
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/embeddings"
+
+    def test_retrieve_response_infers_chat_from_modelid(self):
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Completed",
+                "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://b/in.jsonl"}},
+                "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://b/out/"}},
+            }
+        )
+        batch = config.transform_retrieve_batch_response(
+            model=None,
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/chat/completions"
+
+    def test_retrieve_response_model_arg_wins_over_response_modelid(self):
+        """If the caller passed `model`, prefer it over the AWS payload."""
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Completed",
+                # AWS-reported model is chat; caller-supplied model is embed.
+                "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://b/in.jsonl"}},
+                "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://b/out/"}},
+            }
+        )
+        batch = config.transform_retrieve_batch_response(
+            model="amazon.titan-embed-text-v2:0",
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/embeddings"
+
+    def test_retrieve_response_defaults_to_chat_when_no_modelid(self):
+        config = BedrockBatchesConfig()
+        raw = self._mock_raw_response(
+            {
+                "jobArn": "arn:aws:bedrock:us-east-1:123:model-invocation-job/abc",
+                "status": "Submitted",
+                "inputDataConfig": {"s3InputDataConfig": {"s3Uri": "s3://b/in.jsonl"}},
+                "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://b/out/"}},
+            }
+        )
+        batch = config.transform_retrieve_batch_response(
+            model=None,
+            raw_response=raw,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+        assert batch.endpoint == "/v1/chat/completions"
