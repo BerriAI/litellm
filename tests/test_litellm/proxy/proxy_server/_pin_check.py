@@ -9,8 +9,8 @@ For each identifier in a pin list, asserts that the test directory contains:
      status OR uses pytest.raises).
   3. No test that is "status-only" (its sole assert is on response.status_code).
 
-Files matching ``_test_harness_*.py`` and ``_*.py`` are ignored (harness
-self-tests).
+``test_harness_smoke.py`` is ignored (harness self-tests don't count toward
+behavior pinning).
 
 Exits 0 on PASS, non-zero on FAIL.
 """
@@ -111,14 +111,15 @@ def _extract_status_code(node: ast.Assert) -> Optional[int]:
 def collect_test_functions(test_dir: Path) -> List[TestFunction]:
     funcs: List[TestFunction] = []
     for path in sorted(test_dir.glob("test_*.py")):
-        # Skip harness self-tests — they don't count toward behavior pinning.
-        if path.name.startswith("_") or path.name == "test_harness_smoke.py":
-            continue
-        try:
-            tree = ast.parse(path.read_text())
-        except SyntaxError:
+        # Skip the harness's own smoke tests — they don't count toward
+        # behavior pinning.
+        if path.name == "test_harness_smoke.py":
             continue
         source = path.read_text()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

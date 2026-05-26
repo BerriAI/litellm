@@ -122,6 +122,27 @@ def parse_coverage_xml(xml_path: Path) -> Tuple[float, float]:
     return 0.0, 0.0
 
 
+def parse_baseline(baseline_path: Path) -> Tuple[float, float]:
+    """Parse ``line:<float> branch:<float>`` baseline; missing file -> (0, 0)."""
+    if not baseline_path.is_file():
+        return 0.0, 0.0
+    line_pct = 0.0
+    branch_pct = 0.0
+    for token in baseline_path.read_text().split():
+        if ":" not in token:
+            continue
+        key, _, value = token.partition(":")
+        try:
+            num = float(value)
+        except ValueError:
+            continue
+        if key == "line":
+            line_pct = num
+        elif key == "branch":
+            branch_pct = num
+    return line_pct, branch_pct
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -141,7 +162,15 @@ def main() -> int:
         target = f"PR{args.pr_target}"
     else:
         target = detect_pr_target(HERE)
-    line_min, branch_min = TARGETS[target]
+    target_line, target_branch = TARGETS[target]
+
+    # The effective floor is the max of the PR target and the committed
+    # baseline. The baseline is updated as each PR lands so a future
+    # regression (e.g. a test deletion) trips this gate even if the
+    # static PR target is already met.
+    baseline_line, baseline_branch = parse_baseline(HERE / ".coverage_baseline")
+    line_min = max(target_line, baseline_line)
+    branch_min = max(target_branch, baseline_branch)
 
     xml_path = Path(args.coverage_xml)
     try:
@@ -154,7 +183,9 @@ def main() -> int:
     branch_ok = branch_pct >= branch_min
     status = "PASS" if (line_ok and branch_ok) else "FAIL"
 
-    print(f"target={target}")
+    print(
+        f"target={target} baseline=(line:{baseline_line:.2f} branch:{baseline_branch:.2f})"
+    )
     print(
         f"line:   {line_pct:6.2f}% / {line_min:6.2f}% " f"{'OK' if line_ok else 'MISS'}"
     )

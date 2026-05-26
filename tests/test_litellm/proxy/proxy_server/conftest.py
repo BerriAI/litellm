@@ -7,17 +7,20 @@ here and update the Notion plan.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 import sys
-import types
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../"))
+# Repo root, anchored to this file (not CWD) so the path is correct no
+# matter where pytest is invoked from. With the project installed via
+# uv this is defensive — `litellm` already resolves through site-packages
+# — but it lets the harness work in editable-source layouts too.
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 
 # ---------------------------------------------------------------------------
