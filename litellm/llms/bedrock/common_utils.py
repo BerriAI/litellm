@@ -701,10 +701,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
         return
 
     effort = output_config.get("effort")
-    if (
-        effort not in ("xhigh", "max")
-        or effort not in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER
-    ):
+    if effort not in ("xhigh", "max"):
         return
 
     ceiling = _get_bedrock_output_config_effort_ceiling(model)
