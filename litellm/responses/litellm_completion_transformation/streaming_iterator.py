@@ -1079,7 +1079,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if hasattr(annotation, "model_dump")
                             else dict(annotation)
                         )
-                        self._sequence_number += 1
+                        # Sequence number is assigned at emit time (see Priority 4
+                        # below) to preserve monotonic ordering relative to
+                        # higher-priority events from later chunks.
                         event = OutputTextAnnotationAddedEvent(
                             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
                             item_id=item_id,
@@ -1087,7 +1089,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             content_index=0,
                             annotation_index=idx,
                             annotation=annotation_dict,
-                            sequence_number=self._sequence_number,
                         )
                         self._pending_annotation_events.append(event)
         # Priority 1: Handle reasoning content (highest priority)
@@ -1134,12 +1135,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._pending_tool_events.pop(0)
 
         # Priority 4: If we have pending annotation events, emit the next one
-        # This happens when the current chunk has no text/reasoning content
+        # This happens when the current chunk has no text/reasoning content.
+        # Assign the sequence number here (at emit time) so it stays monotonic
+        # relative to other events emitted from intervening chunks.
         if (
             hasattr(self, "_pending_annotation_events")
             and self._pending_annotation_events
         ):
             event = self._pending_annotation_events.pop(0)
+            self._sequence_number += 1
+            event.sequence_number = self._sequence_number
             return event
 
         # Priority 5: If we have pending tool events (from earlier chunk), emit the next one
