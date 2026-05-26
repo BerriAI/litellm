@@ -48,11 +48,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        litellm_call_id: Optional[str] = None,
     ):
         super().__init__(completion_stream)
         self.model = model
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
+        # Store litellm_call_id for spend log correlation (Bug #28568/#28562)
+        # Use as message id to match spend_logs.request_id
+        self.litellm_call_id = litellm_call_id
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -90,7 +94,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": "msg_{}".format(
+                                self.litellm_call_id or uuid.uuid4()
+                            ),
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -230,7 +236,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(uuid.uuid4()),
+                            "id": "msg_{}".format(
+                                self.litellm_call_id or uuid.uuid4()
+                            ),
                             "type": "message",
                             "role": "assistant",
                             "content": [],
