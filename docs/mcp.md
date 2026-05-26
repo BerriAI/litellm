@@ -18,6 +18,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools <br/>• Prompts <br/>• Resources |
+| Direct REST API | [`/mcp-rest/tools/list` and `/mcp-rest/tools/call`](./mcp_rest_api.md) — call tools with curl without an LLM |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
 

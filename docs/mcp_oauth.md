@@ -281,15 +281,20 @@ mcp_servers:
 ```bash title="Terminal 2 - Start proxy and test" showLineNumbers
 litellm --config config.yaml --port 4000
 
-# List tools
+# See MCP REST API guide for full examples (server_id, tool naming, common errors)
+# https://docs.litellm.ai/docs/mcp_rest_api
+
 curl http://localhost:4000/mcp-rest/tools/list \
   -H "Authorization: Bearer sk-1234"
 
-# Call a tool
 curl http://localhost:4000/mcp-rest/tools/call \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
-  -d '{"name": "echo", "arguments": {"message": "hello"}}'
+  -d '{
+    "server_id": "test_oauth2",
+    "name": "echo",
+    "arguments": {"message": "hello"}
+  }'
 ```
 
 ### Config Reference

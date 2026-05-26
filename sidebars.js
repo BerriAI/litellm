@@ -329,6 +329,7 @@ const sidebars = {
               items: [
                 "mcp",
                 "mcp_usage",
+                "mcp_rest_api",
                 "mcp_openapi",
                 "mcp_oauth",
                 "mcp_obo_auth",
@@ -714,6 +715,7 @@ const sidebars = {
           items: [
             "mcp",
             "mcp_usage",
+            "mcp_rest_api",
             "mcp_openapi",
             "mcp_oauth",
             "mcp_obo_auth",

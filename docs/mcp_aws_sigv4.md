@@ -113,10 +113,13 @@ curl http://localhost:4000/mcp-rest/tools/call \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "name": "my_agentcore_mcp_your_tool_name",
+    "server_id": "my_agentcore_mcp",
+    "name": "my_agentcore_mcp-your_tool_name",
     "arguments": {"key": "value"}
   }'
 ```
+
+See [MCP REST API](./mcp_rest_api.md) for tool naming, `server_id` formats, and common mistakes.
 
 ## Config Reference
 
