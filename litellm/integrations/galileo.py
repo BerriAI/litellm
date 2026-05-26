@@ -19,6 +19,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.openai import AllMessageValues
 
 GALILEO_CLOUD_API_BASE_URL = "https://api.galileo.ai"
+# Cap the in-memory buffer so persistent flush failures (e.g. Galileo
+# unavailable, invalid credentials) cannot leak memory unboundedly.
+GALILEO_MAX_IN_MEMORY_RECORDS = 1000
 
 
 class LLMResponse(BaseModel):
@@ -259,6 +262,20 @@ class GalileoObserve(CustomLogger):
             if messages:
                 request_dict["messages"] = messages
             self.in_memory_records.append(request_dict)
+
+            # Bound the buffer so persistent flush failures cannot grow it
+            # without limit. Drop the oldest records once we exceed the cap.
+            if len(self.in_memory_records) > GALILEO_MAX_IN_MEMORY_RECORDS:
+                dropped = len(self.in_memory_records) - GALILEO_MAX_IN_MEMORY_RECORDS
+                self.in_memory_records = self.in_memory_records[
+                    -GALILEO_MAX_IN_MEMORY_RECORDS:
+                ]
+                verbose_logger.warning(
+                    "Galileo Logger: in-memory buffer exceeded %s records; "
+                    "dropped %s oldest record(s). Check Galileo connectivity/credentials.",
+                    GALILEO_MAX_IN_MEMORY_RECORDS,
+                    dropped,
+                )
 
             if len(self.in_memory_records) >= self.batch_size:
                 await self.flush_in_memory_records()

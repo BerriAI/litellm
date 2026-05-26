@@ -546,14 +546,22 @@ def management_endpoint_wrapper(func):
             )
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
-                await _emit_management_endpoint_otel_span(
-                    func=func,
-                    kwargs=kwargs,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    exception=e,
-                )
+                try:
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        exception=e,
+                    )
+                except Exception as otel_exc:
+                    # Non-Blocking Exception - never let OTEL failures swallow
+                    # the original management-endpoint exception.
+                    verbose_logger.debug(
+                        "Error emitting OTEL span in management endpoint wrapper failure path: %s",
+                        str(otel_exc),
+                    )
 
             raise e
 
