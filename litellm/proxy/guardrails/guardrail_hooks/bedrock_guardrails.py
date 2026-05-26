@@ -125,14 +125,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.experimental_use_latest_role_message_only = bool(
             kwargs.get("experimental_use_latest_role_message_only")
         )
-        # LIT-2834: by default, do not pass `role="tool"` results or
-        # `assistant` messages that carry `tool_calls` into the Bedrock
-        # guardrail. They are not user-authored content and scanning them
-        # caused spurious pre-guard hits (e.g. an `age` field returned by a
-        # RAG tool tripping a PII policy). Set to False to restore legacy
-        # behavior of scanning the entire conversation including tool I/O.
+        # LIT-2834: opt-in filter that drops `role="tool"` / `role="function"`
+        # results and `assistant` messages carrying `tool_calls` from the
+        # Bedrock guardrail INPUT payload. Tool I/O is not user-authored and
+        # scanning it produced spurious pre-guard hits (e.g. an `age` field
+        # returned by a RAG tool tripping a PII policy). Defaults to False
+        # to preserve the pre-LIT-2834 behavior of scanning the entire
+        # conversation including tool messages; set to True in your guardrail
+        # config to enable the filter for tool-using agent flows.
         self.mask_tool_call_messages = bool(
-            kwargs.get("mask_tool_call_messages", True)
+            kwargs.get("mask_tool_call_messages", False)
         )
 
         # store kwargs as optional_params
@@ -241,13 +243,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Tool sections are not user-authored content and should not be sent to
         a pre/during-call Bedrock guardrail (LIT-2834). This covers:
 
-        * ``role="tool"`` messages (tool execution results)
+        * ``role="tool"`` messages (current tool-calling API tool result)
+        * ``role="function"`` messages (older OpenAI function-calling API
+          tool result; still emitted by some clients)
         * ``role="assistant"`` messages that carry ``tool_calls`` (the model's
           decision to call a tool, including any preamble text the model
           emitted in the same turn)
         """
         role = message.get("role")
-        if role == "tool":
+        # role="tool" is the current OpenAI/Anthropic tool-calling shape;
+        # role="function" is the older (deprecated) OpenAI function-calling
+        # shape. Both carry tool-execution output and must be filtered the
+        # same way (LIT-2834).
+        if role in ("tool", "function"):
             return True
         if role == "assistant" and message.get("tool_calls"):
             return True
@@ -261,9 +269,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         Two independent filters may apply:
 
-        * ``mask_tool_call_messages`` (default True, LIT-2834): drop tool-call
-          announcements and tool results so tool I/O isn't scanned as user
-          input.
+        * ``mask_tool_call_messages`` (default False, opt-in, LIT-2834): drop
+          tool-call announcements and tool results so tool I/O isn't scanned
+          as user input. Off by default to preserve backward compatibility
+          for deployments that intentionally scan tool results.
         * ``experimental_use_latest_role_message_only`` (default False): scan
           only the most recent user-role message.
         """
