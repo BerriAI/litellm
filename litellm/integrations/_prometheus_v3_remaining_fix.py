@@ -69,7 +69,11 @@ def _get_remaining_from_v3_headers(
 
     Prefers ``model_per_key`` (which already scopes by both the API key and
     the model_group) and falls back to ``key`` (per-key, all-models) if
-    absent. Returns ``None`` if neither descriptor is present.
+    absent. Returns ``None`` if neither descriptor is present *or* the value
+    cannot be coerced to a number. Returning ``None`` (rather than the raw
+    value) keeps the caller's fallback chain intact -- a malformed header
+    must NOT propagate into ``Gauge.set()`` which only accepts numbers and
+    would raise ``TypeError`` mid-callback, breaking the whole logging hook.
     """
     if not additional_headers:
         return None
@@ -77,11 +81,25 @@ def _get_remaining_from_v3_headers(
         value = additional_headers.get(
             f"x-ratelimit-{descriptor}-remaining-{rate_limit_type}"
         )
-        if value is not None:
+        if value is None:
+            continue
+        # Accept ints/floats directly; coerce numeric strings; reject anything
+        # else (will fall through to the next descriptor / sys.maxsize).
+        if isinstance(value, bool):
+            # bool is a subclass of int; reject to avoid silently treating
+            # True/False as 1/0 in a rate-limit gauge.
+            continue
+        if isinstance(value, (int, float)):
+            return value
+        try:
+            return int(value)
+        except (TypeError, ValueError):
             try:
-                return int(value)
+                return float(value)
             except (TypeError, ValueError):
-                return value
+                # Non-numeric header value (e.g. an error string). Skip it
+                # rather than crash the prometheus gauge.
+                continue
     return None
 
 
