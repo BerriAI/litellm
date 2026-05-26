@@ -10,17 +10,28 @@ from typing import Iterator
 import pytest
 
 
-@pytest.fixture
-def fresh_ci_models(monkeypatch: pytest.MonkeyPatch) -> Iterator[object]:
-    """Return a freshly-imported ``tests.ci_models`` module.
+@pytest.fixture(autouse=True)
+def _clean_ci_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip every ``CI_MODEL_*`` env var before each test.
 
-    The module resolves its constants at import time, so any test that wants
-    to observe an env-var override must re-import the module after setting
-    the env var. We also remove any leftover ``CI_MODEL_*`` env vars so
-    tests are independent of the surrounding environment.
+    Without this, any ``CI_MODEL_*`` set in the surrounding CI environment
+    (which is exactly the environment this module is meant to support) can
+    poison the default-value assertions in tests that don't use the
+    ``fresh_ci_models`` fixture.
     """
     for key in [k for k in os.environ if k.startswith("CI_MODEL_")]:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture
+def fresh_ci_models() -> Iterator[object]:
+    """Return a freshly-imported ``tests.ci_models`` module.
+
+    The module resolves its constants at import time, so any test that
+    wants to observe an env-var override must re-import the module after
+    setting the env var. ``_clean_ci_model_env`` (autouse, module-wide)
+    ensures the outer environment doesn't leak into the import.
+    """
     sys.modules.pop("tests.ci_models", None)
     module = importlib.import_module("tests.ci_models")
     yield module
@@ -66,7 +77,8 @@ class TestEnvOverride:
         ci_models = importlib.import_module("tests.ci_models")
         try:
             assert ci_models.GPT_4O == "gpt-4o-2024-08-06"
-            # Unrelated constants are untouched.
+            # Unrelated constants are untouched (autouse fixture above
+            # guarantees no stray CI_MODEL_GPT_4 from the outer env).
             assert ci_models.GPT_4 == "gpt-4"
         finally:
             sys.modules.pop("tests.ci_models", None)
