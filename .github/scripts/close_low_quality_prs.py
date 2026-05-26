@@ -164,7 +164,12 @@ def fetch_pr_comments(pr_number: int, repo: str | None) -> list[dict]:
         line = line.strip()
         if not line:
             continue
-        parsed = json.loads(line)
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            # A malformed line should not blow up the whole sweep. Skip and
+            # carry on so the remaining PRs in this run still get evaluated.
+            continue
         if isinstance(parsed, list):
             comments.extend(parsed)
         else:

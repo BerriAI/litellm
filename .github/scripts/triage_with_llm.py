@@ -1213,7 +1213,6 @@ def triage(
             }
 
     if kind == "pr":
-        prompt = build_pr_prompt(title=title, body=body)
         # Short-circuit: if body very clearly links a related issue, just pass.
         if has_linked_issue(body):
             base = {
@@ -1242,6 +1241,7 @@ def triage(
                     "comment": reopen_body,
                 }
             return base
+        prompt = build_pr_prompt(title=title, body=body)
     else:
         prompt = build_issue_prompt(title=title, body=body)
 

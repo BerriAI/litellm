@@ -173,7 +173,7 @@ def format_heads_up_comment(
 
     return (
         "👋 **Heads-up: new OSS triage bot landing on "
-        f"{cutoff.strftime('%A, %B %-d, %Y')}.**\n"
+        f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year}.**\n"
         "\n"
         "We're rolling out **Agent Shin**, an LLM-as-judge triage bot for "
         f"external {noun}s. After the rollout, the bot will read each open "
@@ -191,7 +191,7 @@ def format_heads_up_comment(
         f"{explanation_block}"
         "**Timeline (you have a week):**\n"
         "\n"
-        f"- You have **until {cutoff.strftime('%A, %B %-d')}** "
+        f"- You have **until {cutoff.strftime('%A, %B')} {cutoff.day}** "
         f"({DEFAULT_GRACE_DAYS} days from this comment) to update the "
         f"{noun} description with the missing pieces. Nothing happens to "
         f"this {noun} during that window.\n"
