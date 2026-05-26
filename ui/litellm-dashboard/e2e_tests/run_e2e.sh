@@ -108,15 +108,10 @@ npm run build
 # Copy the fresh build to the proxy's static UI directory
 cp -r "$DASHBOARD_DIR/out/" "$REPO_ROOT/litellm/proxy/_experimental/out/"
 
-# Restructure HTML files so extensionless routes work (e.g. /ui/login)
-# Next.js export produces login.html; the proxy expects login/index.html
-find "$REPO_ROOT/litellm/proxy/_experimental/out" -name '*.html' ! -name 'index.html' | while read -r htmlfile; do
-  target_dir="${htmlfile%.html}"
-  target_path="$target_dir/index.html"
-  mkdir -p "$target_dir"
-  mv "$htmlfile" "$target_path"
-done
-echo "UI build copied and restructured"
+# With `trailingSlash: true` in next.config.mjs, Next.js already exports every
+# route as <dir>/index.html, so no restructuring is needed here. Special files
+# like 404.html / _not-found.html must remain at the export root.
+echo "UI build copied"
 
 # --- Python environment ---
 echo "=== Setting up Python environment ==="
