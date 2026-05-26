@@ -417,9 +417,36 @@ def cost_per_token(  # noqa: PLR0915
     prompt_tokens_cost_usd_dollar: float = 0
     completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref = litellm.model_cost
+    # Only callers that explicitly pass `custom_llm_provider` get the
+    # dedup/prefix-join treatment. When provider is omitted, preserve legacy
+    # behavior: `model_with_provider` stays equal to the raw `model` string
+    # (provider is detected below for downstream use only).
+    caller_supplied_provider = custom_llm_provider is not None
+
+    # `model` is normally a string, but callers that mock the transport can pass
+    # non-string objects. Only run the string-based dedup/prefix-join when it is
+    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
+    # its slices return new mocks, which would spin the dedup loop forever.
+    model_is_str = isinstance(model, str)
+
+    # Router/proxy deployments may repeat the provider segment (e.g. model_name
+    # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
+    if caller_supplied_provider and model_is_str:
+        _dup_prefix = f"{custom_llm_provider}/"
+        while model.startswith(_dup_prefix):
+            _remainder = model[len(_dup_prefix) :]
+            if _remainder.startswith(_dup_prefix):
+                model = _remainder
+            else:
+                break
+
     model_with_provider = model
-    if custom_llm_provider is not None:
-        model_with_provider = custom_llm_provider + "/" + model
+    if caller_supplied_provider:
+        _prov_prefix = f"{custom_llm_provider}/"
+        if model_is_str and model.startswith(_prov_prefix):
+            model_with_provider = model
+        else:
+            model_with_provider = f"{custom_llm_provider}/{model}"
         if region_name is not None:
             model_with_provider_and_region = (
                 f"{custom_llm_provider}/{region_name}/{model}"
@@ -430,6 +457,9 @@ def cost_per_token(  # noqa: PLR0915
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
+
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:

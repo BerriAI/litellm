@@ -3642,3 +3642,299 @@ class TestOrgMCPPermissions:
                 user_api_key_auth=auth,
             )
             assert sorted(result) == ["tool_a", "tool_b"]
+
+
+# ---------------------------------------------------------------------------
+# LIT-3189: key unified access_group_ids extend team MCP scope
+# ---------------------------------------------------------------------------
+
+
+def _patch_proxy_server_globals_for_mcp():
+    """Non-None mocks so the helper's None-guard doesn't short-circuit."""
+    return [
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ]
+
+
+def _fake_mcp_access_group(
+    access_group_id,
+    access_mcp_server_ids=None,
+    assigned_team_ids=None,
+    assigned_key_ids=None,
+):
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    return LiteLLM_AccessGroupTable(
+        access_group_id=access_group_id,
+        access_group_name=access_group_id,
+        access_mcp_server_ids=access_mcp_server_ids or [],
+        assigned_team_ids=assigned_team_ids or [],
+        assigned_key_ids=assigned_key_ids or [],
+    )
+
+
+def _start_patches(patches):
+    for p in patches:
+        p.start()
+
+
+def _stop_patches(patches):
+    for p in patches:
+        p.stop()
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_team_authorized():
+    """Group's assigned_team_ids includes key's team and grants an MCP server → server returned."""
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        access_group_ids=["mcp-premium"],
+        team_id="team-a",
+    )
+    fake_ag = _fake_mcp_access_group(
+        access_group_id="mcp-premium",
+        access_mcp_server_ids=["srv-stripe"],
+        assigned_team_ids=["team-a"],
+    )
+
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list.side_effect = lambda x: list(x)
+
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+            valid_token
+        )
+        assert result == ["srv-stripe"]
+    finally:
+        _stop_patches(patches)
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_key_directly_authorized():
+    """Group's assigned_key_ids includes the key's token → server returned (per-key auth)."""
+    valid_token = UserAPIKeyAuth(
+        token="test-token-hashed",
+        access_group_ids=["mcp-per-key"],
+        team_id="team-a",
+    )
+    fake_ag = _fake_mcp_access_group(
+        access_group_id="mcp-per-key",
+        access_mcp_server_ids=["srv-stripe"],
+        assigned_team_ids=[],
+        assigned_key_ids=["test-token-hashed"],
+    )
+
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list.side_effect = lambda x: list(x)
+
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+            valid_token
+        )
+        assert result == ["srv-stripe"]
+    finally:
+        _stop_patches(patches)
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_key_has_no_groups():
+    """Empty access_group_ids → no extras, no DB read."""
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        access_group_ids=[],
+        team_id="team-a",
+    )
+    result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+        valid_token
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_group_has_no_servers():
+    """Group authorizes the team but its access_mcp_server_ids is empty → no extras."""
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        access_group_ids=["mcp-empty"],
+        team_id="team-a",
+    )
+    fake_ag = _fake_mcp_access_group(
+        access_group_id="mcp-empty",
+        access_mcp_server_ids=[],
+        assigned_team_ids=["team-a"],
+    )
+
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+            valid_token
+        )
+        assert result == []
+    finally:
+        _stop_patches(patches)
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_group_authorizes_neither():
+    """
+    Escalation regression: team member attaches a foreign access group to their key.
+    Group grants servers BUT assigned_team_ids/assigned_key_ids exclude this caller.
+    No extras contributed.
+    """
+    valid_token = UserAPIKeyAuth(
+        token="team-a-token",
+        access_group_ids=["team-b-mcp-group"],
+        team_id="team-a",
+    )
+    fake_ag = _fake_mcp_access_group(
+        access_group_id="team-b-mcp-group",
+        access_mcp_server_ids=["srv-finance-only"],
+        assigned_team_ids=["team-b"],
+        assigned_key_ids=["team-b-token"],
+    )
+
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+            valid_token
+        )
+        assert result == []
+    finally:
+        _stop_patches(patches)
+
+
+@pytest.mark.asyncio
+async def test_mcp_key_access_group_extras_when_get_access_object_raises():
+    """Group lookup failure is treated as no authorization (does not crash)."""
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        access_group_ids=["missing-mcp-group"],
+        team_id="team-a",
+    )
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=Exception("not found"),
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+            valid_token
+        )
+        assert result == []
+    finally:
+        _stop_patches(patches)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_unions_key_access_group_extras():
+    """End-to-end: team has [srv-team], key access group grants [srv-extra] → both in final list.
+
+    Without this fix [srv-extra] would be intersected away because the team doesn't list it.
+    """
+    auth = UserAPIKeyAuth(
+        token="test-token",
+        api_key="test-key",
+        team_id="team-a",
+        access_group_ids=["mcp-extra-group"],
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_key",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=["srv-team"],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_key_access_group_mcp_server_extras",
+            new_callable=AsyncMock,
+            return_value=["srv-extra"],
+        ),
+    ):
+        result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert sorted(result) == ["srv-extra", "srv-team"]
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_no_union_when_no_authorized_extras():
+    """End-to-end: no authorized extras → behavior identical to today (team ceiling enforced)."""
+    auth = UserAPIKeyAuth(
+        token="test-token",
+        api_key="test-key",
+        team_id="team-a",
+        access_group_ids=["mcp-foreign-group"],
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_key",
+            new_callable=AsyncMock,
+            return_value=["srv-key-only"],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=["srv-team"],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_key_access_group_mcp_server_extras",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        # key ∩ team = {} (no overlap), extras = [] → final = []
+        result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert result == []

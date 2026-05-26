@@ -719,25 +719,32 @@ class MCPRequestHandler:
                 )
             )
 
+            key_access_group_extras = (
+                await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+                    user_api_key_auth
+                )
+            )
+
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            allowed_mcp_servers: List[str] = []
-            has_lower_level_mcp_restrictions = (
-                len(allowed_mcp_servers_for_key) > 0
-                or len(allowed_mcp_servers_for_team) > 0
-            )
-            if len(allowed_mcp_servers_for_team) > 0:
-                if len(allowed_mcp_servers_for_key) > 0:
-                    # Key has its own MCP permissions - use intersection with team permissions
-                    for _mcp_server in allowed_mcp_servers_for_key:
-                        if _mcp_server in allowed_mcp_servers_for_team:
-                            allowed_mcp_servers.append(_mcp_server)
-                else:
-                    # Key has no MCP permissions - inherit from team
-                    allowed_mcp_servers = allowed_mcp_servers_for_team
+            key_set = set(allowed_mcp_servers_for_key)
+            team_set = set(allowed_mcp_servers_for_team)
+            extras_set = set(key_access_group_extras)
+
+            has_lower_level_mcp_restrictions = bool(key_set or team_set or extras_set)
+
+            # 1. Team-gated base scope.
+            if not team_set:
+                base = key_set  # no team restriction
+            elif not key_set:
+                base = team_set  # key has no own perms → inherits team
             else:
-                allowed_mcp_servers = allowed_mcp_servers_for_key
+                base = key_set & team_set  # both restrict → intersect
+
+            # 2. Extend with access-group extras (LIT-3189 — bypasses team
+            # ceiling, gated by group's assigned_team_ids / assigned_key_ids).
+            allowed_mcp_servers: List[str] = list(base | extras_set)
 
             #########################################################
             # Check end_user permissions if end_user_id is set
@@ -1029,6 +1036,43 @@ class MCPRequestHandler:
         elif server_name in allowed_mcp_servers:
             return True
         return False
+
+    @staticmethod
+    async def _get_key_access_group_mcp_server_extras(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Resolve the key's unified `access_group_ids` (LiteLLM_AccessGroupTable) to
+        MCP server IDs, gated by the access group's `assigned_team_ids` /
+        `assigned_key_ids`. These servers extend the team's MCP scope rather
+        than being capped by it. Tag-style `mcp_access_groups` (per-server tags)
+        are intentionally not handled here — they have no assignment fields and
+        remain subject to the team ceiling.
+        """
+        if user_api_key_auth is None:
+            return []
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_checks import (
+                get_authorized_resources_from_key_access_groups,
+            )
+
+            raw_server_ids = await get_authorized_resources_from_key_access_groups(
+                valid_token=user_api_key_auth,
+                team_object=None,
+                resource_field="access_mcp_server_ids",
+            )
+            if not raw_server_ids:
+                return []
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            return global_mcp_server_manager.expand_permission_list(raw_server_ids)
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get key access group MCP server extras: {str(e)}"
+            )
+            return []
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(
