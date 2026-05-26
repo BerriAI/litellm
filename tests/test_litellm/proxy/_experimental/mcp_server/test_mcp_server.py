@@ -3154,6 +3154,206 @@ class TestMergeGatewayInitializeInstructions:
             )
 
 
+class TestEnsureUpstreamInitializeInstructionsCached:
+    @pytest.mark.asyncio
+    async def test_skips_when_yaml_instructions_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="yaml-only", instructions="from yaml"
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_already_cached(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cached-only", instructions=None)
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+            "cached-only"
+        ] = "warm"
+        try:
+            with patch.object(
+                global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+            ) as mock_create:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+            mock_create.assert_not_awaited()
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                "cached-only", None
+            )
+
+    @pytest.mark.asyncio
+    async def test_skips_when_spec_path_set(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(
+            server_id="openapi-spec", spec_path="/openapi.json", url=None
+        )
+        with patch.object(
+            global_mcp_server_manager, "_create_mcp_client", AsyncMock()
+        ) as mock_create:
+            await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                server
+            )
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runs_upstream_session_and_caches(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="cold-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = "  upstream says hi  "
+
+        with patch.object(
+            global_mcp_server_manager,
+            "_create_mcp_client",
+            AsyncMock(return_value=fake_client),
+        ):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert (
+                    global_mcp_server_manager._upstream_initialize_instructions_by_server_id[
+                        "cold-server"
+                    ]
+                    == "upstream says hi"
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop(
+                    "cold-server", None
+                )
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "cold-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_empty_upstream_response(self):
+        """Upstream returns no instructions → next call within cooldown must not reconnect."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="empty-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(return_value="ok")
+        fake_client._last_initialize_instructions = None  # upstream sent nothing
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect to upstream"
+                )
+                assert (
+                    "empty-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "empty-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "empty-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_cooldown_after_upstream_failure(self):
+        """run_with_session raises → cooldown applies, no immediate retry."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        server = _make_instruction_server(server_id="boom-server", instructions=None)
+        fake_client = MagicMock()
+        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
+        fake_client._last_initialize_instructions = None
+
+        create = AsyncMock(return_value=fake_client)
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+            try:
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                    server
+                )
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect after failure"
+                )
+                assert (
+                    "boom-server"
+                    not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
+                )
+                assert (
+                    "boom-server"
+                    in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+                )
+            finally:
+                global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                    "boom-server", None
+                )
+
+    @pytest.mark.asyncio
+    async def test_reload_resets_probe_cooldown(self):
+        """load_servers_from_config clears the negative-cache map so reloads re-probe."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager._upstream_initialize_instructions_probed_at[
+            "reload-target"
+        ] = 1.0
+        try:
+            await global_mcp_server_manager.load_servers_from_config({})
+            assert (
+                "reload-target"
+                not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
+            )
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop(
+                "reload-target", None
+            )
+
+
 class TestGatewayCreateInitializationOptions:
     """Tests for the patched server.create_initialization_options via ContextVar."""
 

@@ -95,6 +95,10 @@ export DISABLE_SCHEMA_UPDATE="true"
 export SERVER_ROOT_PATH=""
 # Prevent logout from redirecting to an external URL
 export PROXY_LOGOUT_URL=""
+# Forward LITELLM_LICENSE if set in the outer env so premium-gated UI flows
+# (e.g. Team-BYOK Model switch) can be exercised. Tests that depend on a
+# premium proxy gate themselves on process.env.LITELLM_LICENSE.
+export LITELLM_LICENSE="${LITELLM_LICENSE:-}"
 
 # --- Rebuild UI from source ---
 echo "=== Building UI from source ==="

@@ -184,15 +184,19 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        request_route = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
-        # Match on request.url.path (path-only, exact prefix) so the substring
-        # cannot be smuggled via query string, hostname, or a deeper URL segment.
-        if request.url.path.startswith("/.well-known/"):
+        if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
             not litellm_api_key
             and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
-                path=request.url.path,
+                path=request_route,
                 mcp_servers=mcp_servers,
                 client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
@@ -240,7 +244,7 @@ class MCPRequestHandler:
                 is_unauthenticated = status in (401, "401")
                 client_ip = IPAddressUtils.get_mcp_client_ip(request)
                 if is_auth_error and MCPRequestHandler._target_servers_use_oauth2(
-                    path=request.url.path,
+                    path=request_route,
                     mcp_servers=mcp_servers,
                     client_ip=client_ip,
                 ):
@@ -264,7 +268,7 @@ class MCPRequestHandler:
                     # budget / rate limited) and must propagate so those
                     # controls are not bypassed via anonymous admission.
                     mcp_servers_from_path = _parse_mcp_server_names_from_path(
-                        request.url.path
+                        request_route
                     )
                     if (
                         mcp_servers_from_path is not None
@@ -296,8 +300,7 @@ class MCPRequestHandler:
                 # require unauthenticated requests to protected resources to receive
                 # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
                 # for pass-through servers instead of surfacing a generic admission error.
-                path = scope.get("path", "")
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(path)
+                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route)
                 client_ip = IPAddressUtils.get_mcp_client_ip(request)
                 if (
                     mcp_servers_from_path is not None

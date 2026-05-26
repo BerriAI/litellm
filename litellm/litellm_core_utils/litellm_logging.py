@@ -994,10 +994,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
-                        _metadata["raw_request"] = (
-                            "redacted by litellm. \
+                        _metadata["raw_request"] = "redacted by litellm. \
                             'litellm.turn_off_message_logging=True'"
-                        )
                     else:
                         curl_command = self._get_request_curl_command(
                             api_base=additional_args.get("api_base", ""),
@@ -1031,12 +1029,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             error=str(e),
                         )
                     )
-                    _metadata["raw_request"] = (
-                        "Unable to Log \
-                        raw request: {}".format(
-                            str(e)
-                        )
-                    )
+                    _metadata["raw_request"] = "Unable to Log \
+                        raw request: {}".format(str(e))
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1550,6 +1544,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 "service_tier": (
                     self.optional_params.get("service_tier")
                     if self.optional_params
+                    else None
+                ),
+                "data_residency": (
+                    self.litellm_params.get("data_residency")
+                    if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
             }
@@ -5146,13 +5145,17 @@ class StandardLoggingPayloadSetup:
     ) -> StandardLoggingPayloadErrorInformation:
         from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 
-        # Check for 'code' first (used by ProxyException), then fall back to 'status_code' (used by LiteLLM exceptions)
-        # Ensure error_code is always a string for Prisma Python JSON field compatibility
+        # ProxyException uses .code, LiteLLM exceptions use .status_code,
+        # httpx.HTTPStatusError exposes status only as .response.status_code.
+        # Stringified for Prisma JSON compatibility.
         error_code_attr = getattr(original_exception, "code", None)
         if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
             error_status: str = str(error_code_attr)
         else:
             status_code_attr = getattr(original_exception, "status_code", None)
+            if status_code_attr is None:
+                response_attr = getattr(original_exception, "response", None)
+                status_code_attr = getattr(response_attr, "status_code", None)
             error_status = str(status_code_attr) if status_code_attr is not None else ""
         error_class: str = (
             str(original_exception.__class__.__name__) if original_exception else ""
