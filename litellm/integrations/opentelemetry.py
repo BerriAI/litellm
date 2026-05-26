@@ -763,8 +763,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         from opentelemetry import trace as _trace
 
+        # Guardrail info may be in "metadata" or "litellm_metadata" depending
+        # on the endpoint (see LITELLM_METADATA_ROUTES).
         metadata = (request_data or {}).get("metadata") or {}
         guardrail_information = metadata.get("standard_logging_guardrail_information")
+        if not guardrail_information:
+            metadata = (request_data or {}).get("litellm_metadata") or {}
+            guardrail_information = metadata.get(
+                "standard_logging_guardrail_information"
+            )
         if not guardrail_information:
             return
 
@@ -982,6 +989,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {}) or {}
         proxy_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback to litellm_metadata for /v1/messages and other
+        # LITELLM_METADATA_ROUTES where the span is stored under a
+        # different key.  Fixes: https://github.com/BerriAI/litellm/issues/27934
+        if proxy_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            proxy_span = _litellm_metadata.get("litellm_parent_otel_span", None)
+
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -2609,6 +2624,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         traceparent = headers.get("traceparent", None)
         _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # On /v1/messages and other LITELLM_METADATA_ROUTES the parent span
+        # is stored under litellm_params["litellm_metadata"] instead of
+        # litellm_params["metadata"].  If the primary lookup missed, check
+        # the alternative key so the span hierarchy stays intact.
+        # Fixes: https://github.com/BerriAI/litellm/issues/27934
+        if parent_otel_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            parent_otel_span = _litellm_metadata.get("litellm_parent_otel_span", None)
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:

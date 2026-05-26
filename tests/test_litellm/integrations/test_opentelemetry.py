@@ -1262,7 +1262,6 @@ class TestOpenTelemetry(unittest.TestCase):
             ) as mock_get_headers,
             patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
         ):
-
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -2642,7 +2641,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
                 # Verify parent span is still recording after each call
                 self.assertTrue(
                     parent_span.is_recording(),
-                    f"External span should still be recording after completion #{i+1}",
+                    f"External span should still be recording after completion #{i + 1}",
                 )
 
         # Verify all spans have the same trace_id
@@ -5142,3 +5141,160 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _get_span_context() falling back to litellm_metadata.
+
+    On /v1/messages (Anthropic Messages API) and other LITELLM_METADATA_ROUTES,
+    litellm_parent_otel_span is stored in litellm_params["litellm_metadata"]
+    instead of litellm_params["metadata"].  _get_span_context() must check
+    both locations.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/27934
+    """
+
+    def test_fallback_to_litellm_metadata(self):
+        """When metadata has no span but litellm_metadata does, use it."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        parent_span = tracer.start_span("proxy-parent")
+
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {},  # no span here
+                "litellm_metadata": {
+                    "litellm_parent_otel_span": parent_span,
+                },
+            },
+        }
+
+        ctx, _ = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        parent_span.end()
+
+    def test_primary_metadata_still_preferred(self):
+        """When metadata has the span, litellm_metadata is not checked."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        primary_span = tracer.start_span("primary")
+        fallback_span = tracer.start_span("fallback")
+
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "litellm_parent_otel_span": primary_span,
+                },
+                "litellm_metadata": {
+                    "litellm_parent_otel_span": fallback_span,
+                },
+            },
+        }
+
+        ctx, _ = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        # Context should contain the primary span, not the fallback
+        from opentelemetry import trace
+
+        span_from_ctx = trace.get_current_span(ctx)
+        self.assertIs(span_from_ctx, primary_span)
+        primary_span.end()
+        fallback_span.end()
+
+    def test_no_span_in_either_metadata(self):
+        """When neither metadata dict has the span, fall through."""
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {},
+                "litellm_metadata": {},
+            },
+        }
+        ctx, span = otel._get_span_context(kwargs)
+        # Should not crash; returns some context (possibly None/default)
+        # The important thing is no exception is raised
+
+
+class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _end_proxy_span_from_kwargs() falling back to litellm_metadata.
+    """
+
+    def test_end_proxy_span_from_litellm_metadata(self):
+        """Proxy span in litellm_metadata should be found and closed."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        proxy_span = tracer.start_span("Received Proxy Server Request")
+
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {},  # no span here
+                "litellm_metadata": {
+                    "litellm_parent_otel_span": proxy_span,
+                },
+            },
+        }
+        otel._end_proxy_span_from_kwargs(kwargs, datetime.now())
+        # Span should have been ended
+        self.assertFalse(proxy_span.is_recording())
+
+
+class TestEmitGuardrailSpansLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _emit_guardrail_spans_from_request_data() checking
+    litellm_metadata when metadata has no guardrail information.
+    """
+
+    def test_guardrail_info_from_litellm_metadata(self):
+        """Guardrail info in litellm_metadata should be found."""
+        otel = OpenTelemetry()
+        otel.tracer = MagicMock()
+        mock_span = MagicMock()
+        otel.tracer.start_span = MagicMock(return_value=mock_span)
+
+        request_data = {
+            "metadata": {},  # no guardrail info here
+            "litellm_metadata": {
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "test-guard",
+                        "guardrail_mode": "pre_call",
+                        "start_time": 1000.0,
+                        "end_time": 1001.0,
+                    }
+                ],
+            },
+        }
+
+        otel._emit_guardrail_spans_from_request_data(
+            request_data=request_data, parent_span=None
+        )
+
+        # Should have called _create_guardrail_span (via the constructed kwargs)
+        # which uses the tracer to start a span
+        self.assertTrue(otel.tracer.start_span.called)
