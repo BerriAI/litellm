@@ -466,6 +466,11 @@ def main() -> int:
         current_time = dt.datetime.fromisoformat(
             args.simulate_now.replace("Z", "+00:00")
         )
+        if current_time.tzinfo is None:
+            parser.error(
+                "--simulate-now must include a timezone offset "
+                "(e.g. '2026-06-02T09:00:00Z' or '2026-06-02T09:00:00+00:00')."
+            )
     else:
         offset = (
             args.simulate_future_hours
