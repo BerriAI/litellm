@@ -6,6 +6,7 @@ mapping (allow / redact / block) across the pre-call, moderation, and
 post-call hooks plus the text-in/text-out ``apply_guardrail`` surface.
 """
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,7 +35,7 @@ def veto_guardrail():
 def _verdict(
     action: str, redacted: str = "", findings=None, degraded=None
 ) -> MagicMock:
-    """A mock httpx response whose .json() returns a Veto verdict."""
+    """A mock HTTP response whose .json() returns a Veto verdict."""
     mock = MagicMock()
     mock.json.return_value = {
         "allowed": action != "block",
@@ -44,14 +45,21 @@ def _verdict(
         "latency_ms": 1.0,
         "degraded": degraded or [],
     }
-    mock.raise_for_status = MagicMock()
     return mock
 
 
+@contextmanager
 def _patch_check(guardrail, verdict_mock):
-    return patch.object(
-        guardrail.client, "post", new=AsyncMock(return_value=verdict_mock)
-    )
+    """Patch the shared litellm async HTTP client that _check fetches, and
+    yield the AsyncMock standing in for the handler's .post."""
+    post_mock = AsyncMock(return_value=verdict_mock)
+    handler = MagicMock()
+    handler.post = post_mock
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.veto.veto.get_async_httpx_client",
+        return_value=handler,
+    ):
+        yield post_mock
 
 
 def _model_response(content: str) -> ModelResponse:
@@ -77,10 +85,6 @@ class TestVetoConfiguration:
     def test_default_categories(self):
         g = VetoGuardrail(api_key="vt_live_x")
         assert g.categories == ["pii", "secrets", "injection"]
-
-    def test_custom_categories(self):
-        g = VetoGuardrail(api_key="vt_live_x", categories=["pii"])
-        assert g.categories == ["pii"]
 
     def test_apply_guardrail_defined_on_class(self):
         # during_call dispatch requires apply_guardrail on the class dict,
@@ -232,9 +236,7 @@ class TestVetoRequest:
     async def test_bearer_auth_and_payload(self, veto_guardrail):
         data = {"messages": [{"role": "user", "content": "scan me"}]}
         verdict = _verdict("allow")
-        with patch.object(
-            veto_guardrail.client, "post", new=AsyncMock(return_value=verdict)
-        ) as mock_post:
+        with _patch_check(veto_guardrail, verdict) as mock_post:
             await veto_guardrail.async_pre_call_hook(
                 MagicMock(), MagicMock(), data, "completion"
             )
@@ -273,4 +275,4 @@ class TestVetoConfigModel:
         )
 
         fields = VetoGuardrailConfigModel.model_fields
-        assert {"api_key", "api_base", "categories"}.issubset(fields.keys())
+        assert {"api_key", "api_base"}.issubset(fields.keys())

@@ -13,10 +13,14 @@
 
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union
 
-import httpx
+from fastapi import HTTPException
 
 from litellm import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ModelResponse
 
@@ -35,13 +39,12 @@ class VetoGuardrail(CustomGuardrail):
         self,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
-        categories: Optional[List[str]] = None,
         **kwargs,
     ):
         self.api_base = (api_base or "https://api.vetocheck.com").rstrip("/")
         self.api_key = api_key
-        self.categories = categories or VETO_DEFAULT_CATEGORIES
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.categories = VETO_DEFAULT_CATEGORIES
+        self.timeout = 10.0
         super().__init__(**kwargs)
 
     @staticmethod
@@ -53,21 +56,27 @@ class VetoGuardrail(CustomGuardrail):
         return VetoGuardrailConfigModel
 
     async def _check(self, text: str) -> dict:
-        """POST one text to the Veto gateway. Returns the verdict JSON."""
+        """POST one text to the Veto gateway. Returns the verdict JSON.
+
+        Uses litellm's shared async HTTP client (connection pooling, retries,
+        observability; lifecycle owned by the global client cache). The handler
+        raises for non-2xx and retries transient connection errors internally.
+        """
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        resp = await self.client.post(
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        resp = await client.post(
             f"{self.api_base}/v1/check",
             headers=headers,
             json={"text": text, "categories": self.categories},
+            timeout=self.timeout,
         )
-        resp.raise_for_status()
         return resp.json()
 
     def _raise_blocked(self, verdict: dict) -> None:
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail={
