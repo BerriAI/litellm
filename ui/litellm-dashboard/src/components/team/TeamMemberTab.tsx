@@ -209,12 +209,18 @@ export default function TeamMemberTab({
         const membership = teamData.team_memberships.find(
           (tm) => tm.user_id === record.user_id
         );
+        // LIT-2651: pre-fill budget_duration with the stored value so the
+        // dropdown reflects the member's current Reset-Period setting (or ""
+        // for the "No reset" sentinel). Anything else makes editing TPM/RPM on
+        // a member who already has a periodic budget look like the period is
+        // unset.
         const enhancedMember = {
           ...record,
           max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
           tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
           rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
           allowed_models: membership?.litellm_budget_table?.allowed_models || [],
+          budget_duration: membership?.litellm_budget_table?.budget_duration ?? "",
         };
         setSelectedEditMember(enhancedMember);
         setIsEditMemberModalVisible(true);
