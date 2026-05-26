@@ -495,6 +495,40 @@ class ChunkProcessor:
             "prompt_tokens_details": prompt_tokens_details,
         }
 
+    def _merge_prompt_tokens_details(
+        self,
+        existing: Optional[PromptTokensDetailsWrapper],
+        incoming: Optional[PromptTokensDetailsWrapper],
+    ) -> Optional[PromptTokensDetailsWrapper]:
+        """
+        Merge streaming prompt token detail snapshots.
+
+        Keep previously observed non-null fields when later chunks omit them
+        (for example Anthropic ``message_start`` may include
+        ``cache_creation_token_details`` while the final usage chunk does not).
+        """
+        if incoming is None:
+            return existing
+        if existing is None:
+            return incoming
+
+        merged = existing.model_dump(exclude_none=True)
+        incoming_dict = incoming.model_dump(exclude_none=True)
+
+        for key, value in incoming_dict.items():
+            if (
+                isinstance(value, dict)
+                and key in merged
+                and isinstance(merged[key], dict)
+            ):
+                for nested_key, nested_value in value.items():
+                    if nested_value is not None:
+                        merged[key][nested_key] = nested_value
+            elif value is not None:
+                merged[key] = value
+
+        return PromptTokensDetailsWrapper(**merged)
+
     def count_reasoning_tokens(self, response: ModelResponse) -> Optional[int]:
         reasoning_tokens: Optional[int] = None
         for choice in response.choices:
@@ -594,7 +628,10 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+                prompt_tokens_details = self._merge_prompt_tokens_details(
+                    existing=prompt_tokens_details,
+                    incoming=usage_chunk_dict["prompt_tokens_details"],
+                )
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
