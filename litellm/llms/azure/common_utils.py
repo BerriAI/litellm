@@ -474,8 +474,27 @@ class BaseAzureLLM(BaseOpenAILLM):
             if self._is_azure_v1_api_version(api_version):
                 # Extract only params that OpenAI client accepts
                 # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
-                v1_params = {
-                    "api_key": azure_client_params.get("api_key"),
+                # The OpenAI client accepts a callable for `api_key` and re-invokes it
+                # on every request (via `_refresh_api_key`), so passing
+                # `azure_ad_token_provider` directly preserves Azure AD token refresh
+                # behavior that the regular AzureOpenAI client provides.
+                v1_api_key: Optional[Union[str, Callable[[], Any]]] = (
+                    azure_client_params.get("api_key")
+                    or azure_client_params.get("azure_ad_token_provider")
+                    or azure_client_params.get("azure_ad_token")
+                )
+                if _is_async is True and callable(v1_api_key):
+                    # AsyncOpenAI expects an async provider; wrap the sync provider
+                    # returned by azure-identity.
+                    _sync_provider = v1_api_key
+
+                    async def _async_v1_api_key() -> str:
+                        return _sync_provider()
+
+                    v1_api_key = _async_v1_api_key
+
+                v1_params: Dict[str, Any] = {
+                    "api_key": v1_api_key,
                     "base_url": f"{api_base}/openai/v1/",
                 }
                 if "timeout" in azure_client_params:
