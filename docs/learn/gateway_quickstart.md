@@ -33,6 +33,7 @@ model_list:
 
 general_settings:
   master_key: sk-1234
+  database_url: postgresql://llmproxy:dbpassword9090@db:5432/litellm
 ```
 
 ## 4. Start The Gateway

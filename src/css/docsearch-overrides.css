@@ -1,0 +1,56 @@
+/**
+ * DocSearch overrides — import after @docsearch/react/style.
+ * Variables use !important so they win when Algolia CSS loads later.
+ */
+
+:root {
+  --docsearch-primary-color: var(--ifm-color-primary) !important;
+  --docsearch-text-color: var(--ifm-font-color-base) !important;
+  --docsearch-highlight-color: var(--ifm-color-primary) !important;
+  --docsearch-focus-color: var(--ifm-color-primary-dark) !important;
+  --docsearch-logo-color: var(--ifm-color-primary) !important;
+  --docsearch-soft-primary-color: color-mix(in srgb, var(--ifm-color-primary) 10%, transparent) !important;
+  --docsearch-hit-highlight-color: color-mix(in srgb, var(--ifm-color-primary) 10%, transparent) !important;
+  --docsearch-search-button-background: var(--ifm-background-color) !important;
+  --docsearch-subtle-color: #e5e7eb !important;
+}
+
+html[data-theme='dark'] {
+  --docsearch-highlight-color: var(--ifm-color-primary) !important;
+  --docsearch-focus-color: var(--ifm-color-primary-light) !important;
+  --docsearch-logo-color: var(--ifm-color-primary) !important;
+  --docsearch-soft-primary-color: color-mix(in srgb, var(--ifm-color-primary) 15%, transparent) !important;
+  --docsearch-hit-highlight-color: color-mix(in srgb, var(--ifm-color-primary) 15%, transparent) !important;
+  --docsearch-search-button-background: var(--ifm-background-surface-color) !important;
+  --docsearch-subtle-color: #2d3748 !important;
+  --docsearch-modal-background: var(--ifm-background-surface-color) !important;
+  --docsearch-hit-background: var(--ifm-background-color) !important;
+  --docsearch-key-background: #21262d !important;
+  --docsearch-search-button-text-color: #9ca3af !important;
+  --docsearch-icon-color: #9ca3af !important;
+}
+
+/* Layout tweaks not covered by DocSearch variables */
+.DocSearch-Button {
+  border-radius: var(--ifm-border-radius) !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+}
+
+.DocSearch-Button-Placeholder {
+  font-size: 14px !important;
+}
+
+.DocSearch-Button-Keys {
+  min-width: 0 !important;
+  gap: 2px;
+}
+
+.DocSearch-Button-Key {
+  height: 20px !important;
+  width: auto !important;
+  min-width: 20px !important;
+  padding: 0 4px !important;
+  font-size: 11px !important;
+  background: transparent !important;
+}

@@ -29,26 +29,45 @@
   width: 100%;
 }
 
-/* Make the sidebar content scroll inside the container */
-.sidebarContainer > aside,
-.sidebarContainer > div:last-child {
+/* Fixed header zone: clears the navbar, then holds the search input. */
+.searchBarSection {
+  flex-shrink: 0;
+  padding-top: var(--ifm-navbar-height);
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+}
+
+/* Inset wrapper — keeps the DocSearch button off sidebar edges. */
+.searchBarInner {
+  box-sizing: border-box;
+  margin: 0.75rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.searchBarInner :global(.DocSearch-Button) {
+  width: 100%;
+  max-width: 100%;
+  /* height: 40px; */
+  padding: 0 0.625rem;
+  box-sizing: border-box;
+}
+
+/* Sidebar nav scrolls independently below the search block. */
+.sidebarScroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
-.searchBarContainer {
-  flex-shrink: 0;
-  padding: 0.75rem 1rem;
-  padding-top: calc(var(--ifm-navbar-height) + 0.75rem);
-  border-bottom: 1px solid var(--ifm-toc-border-color);
-}
-
-.searchBarContainer > div {
-  width: 100%;
-}
-
-/* Remove the default top padding from the sidebar content that follows */
-.searchBarContainer + div {
+/* Navbar offset lives on .searchBarSection. DocSidebar/Desktop uses a
+   CSS-module hashed class (not literal "sidebar"), so :global(.sidebar)
+   never matched and padding-top: var(--ifm-navbar-height) stayed — causing
+   the dead space below the search bar. */
+.sidebarScroll > div {
   padding-top: 0 !important;
+  height: 100%;
+}
+
+.sidebarScroll :global(.menu) {
+  padding-top: 0.25rem;
 }
