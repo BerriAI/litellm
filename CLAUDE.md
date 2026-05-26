@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Documentation lives in a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). It is served at [docs.litellm.ai](https://docs.litellm.ai). Do not create or edit documentation files in this repository — open doc PRs against `BerriAI/litellm-docs` instead.
 
+## Domain Glossary
+
+See [CONTEXT.md](./CONTEXT.md) for precise definitions of domain terminology. Use these terms consistently:
+- **Deployment** vs **Model Group** — A deployment is a specific provider+model+credentials config; a model group is the public name that maps to one or more deployments
+- **Virtual Key** vs **API Key** — Virtual keys are proxy-issued; API keys are provider credentials
+- **Internal User** vs **End User** — Internal users access the proxy directly; end users are downstream customers
+- **Spend** vs **Budget** — Spend is actual cost; budget is the limit
+- **Callback** vs **Integration** — Callbacks are lifecycle hooks; integrations are third-party service connectors (a type of callback)
+
 ## Development Commands
 
 ### Installation
