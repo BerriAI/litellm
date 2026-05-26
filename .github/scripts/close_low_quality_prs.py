@@ -494,66 +494,90 @@ def main() -> int:
         "skip-score-ok": 0,
     }
 
+    # `warned` tracks grace-warning comments posted in this run so the
+    # `--limit` safety net bounds *all* destructive write actions, not
+    # just closures. Without this cap, a backlog of PRs failing the
+    # threshold simultaneously could flood contributors with comments.
+    warned = 0
     for pr in sorted(prs, key=lambda p: p["createdAt"]):
-        action, score, age_days = evaluate_pr(
-            pr,
-            now,
-            args.min_age_days,
-            args.min_score,
-            args.repo,
-            optout_labels,
-        )
-        summary[action] = summary.get(action, 0) + 1
+        try:
+            action, score, age_days = evaluate_pr(
+                pr,
+                now,
+                args.min_age_days,
+                args.min_score,
+                args.repo,
+                optout_labels,
+            )
+            summary[action] = summary.get(action, 0) + 1
 
-        # Per-PR dry-run override: `IMMEDIATE_CLOSE_LOGINS` accounts (e.g.
-        # SwiftWinds) always run in real-close mode regardless of the
-        # global `--close` flag. Lets a maintainer dogfood the bot from
-        # an external account while the rest of the open-PR queue stays
-        # on the safe dry-run default.
-        author_login = ((pr.get("author") or {}).get("login") or "").lower()
-        is_immediate = author_login in IMMEDIATE_CLOSE_LOGINS
-        pr_dry_run = dry_run and not is_immediate
+            # Per-PR dry-run override: `IMMEDIATE_CLOSE_LOGINS` accounts (e.g.
+            # SwiftWinds) always run in real-close mode regardless of the
+            # global `--close` flag. Lets a maintainer dogfood the bot from
+            # an external account while the rest of the open-PR queue stays
+            # on the safe dry-run default.
+            author_login = ((pr.get("author") or {}).get("login") or "").lower()
+            is_immediate = author_login in IMMEDIATE_CLOSE_LOGINS
+            pr_dry_run = dry_run and not is_immediate
 
-        if action == "warn-grace":
-            assert score is not None
+            if action == "warn-grace":
+                assert score is not None
+                print(
+                    f"#{pr['number']}: \"{pr['title']}\" "
+                    f"(age={age_days}d, greptile={score}/5) -> warn-grace"
+                )
+                post_grace_warning(
+                    pr,
+                    score=score,
+                    threshold=args.min_score,
+                    repo=args.repo,
+                    dry_run=pr_dry_run,
+                )
+                if not pr_dry_run:
+                    warned += 1
+                    if args.limit is not None and (warned + closed) >= args.limit:
+                        print(
+                            f"\nReached --limit={args.limit} "
+                            f"(closed={closed}, warned={warned}); stopping."
+                        )
+                        break
+                continue
+
+            if action != "close":
+                continue
+
+            assert score is not None and age_days is not None
             print(
                 f"#{pr['number']}: \"{pr['title']}\" "
-                f"(age={age_days}d, greptile={score}/5) -> warn-grace"
+                f"(age={age_days}d, greptile={score}/5) -> close"
+                + (" [immediate-close login]" if is_immediate else "")
             )
-            post_grace_warning(
+            close_pr(
                 pr,
                 score=score,
                 threshold=args.min_score,
+                age_days=age_days,
                 repo=args.repo,
                 dry_run=pr_dry_run,
+                label=args.close_label,
+                grace_period_elapsed=not is_immediate,
+            )
+
+            if not pr_dry_run:
+                closed += 1
+                if args.limit is not None and (warned + closed) >= args.limit:
+                    print(
+                        f"\nReached --limit={args.limit} "
+                        f"(closed={closed}, warned={warned}); stopping."
+                    )
+                    break
+        except Exception as exc:  # noqa: BLE001 - per-PR errors don't abort the sweep
+            summary["error"] = summary.get("error", 0) + 1
+            print(
+                f"!! PR #{pr.get('number')}: {exc}",
+                file=sys.stderr,
             )
             continue
-
-        if action != "close":
-            continue
-
-        assert score is not None and age_days is not None
-        print(
-            f"#{pr['number']}: \"{pr['title']}\" "
-            f"(age={age_days}d, greptile={score}/5) -> close"
-            + (" [immediate-close login]" if is_immediate else "")
-        )
-        close_pr(
-            pr,
-            score=score,
-            threshold=args.min_score,
-            age_days=age_days,
-            repo=args.repo,
-            dry_run=pr_dry_run,
-            label=args.close_label,
-            grace_period_elapsed=not is_immediate,
-        )
-
-        if not pr_dry_run:
-            closed += 1
-            if args.limit is not None and closed >= args.limit:
-                print(f"\nReached --limit={args.limit}; stopping.")
-                break
 
     print("\n=== Summary ===")
     for key, value in summary.items():
