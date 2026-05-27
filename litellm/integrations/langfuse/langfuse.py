@@ -333,9 +333,12 @@ class LangFuseLogger:
                 safe_litellm_params["litellm_metadata"] = dict(
                     safe_litellm_params["litellm_metadata"]
                 )
-            metadata = get_litellm_metadata_from_kwargs(
-                {**kwargs, "litellm_params": safe_litellm_params}
-            ) or {}
+            metadata = (
+                get_litellm_metadata_from_kwargs(
+                    {**kwargs, "litellm_params": safe_litellm_params}
+                )
+                or {}
+            )
             # Final defensive copy: downstream code pops keys off ``metadata`` /
             # ``clean_metadata``; the helper may return one of the dicts we
             # already copied above, but be explicit.
