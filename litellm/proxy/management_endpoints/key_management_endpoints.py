@@ -4211,7 +4211,7 @@ async def _insert_deprecated_key(
         )
 
 
-async def _execute_virtual_key_regeneration(
+async def _execute_virtual_key_regeneration(  # noqa: PLR0915
     *,
     prisma_client: PrismaClient,
     key_in_db: LiteLLM_VerificationToken,
