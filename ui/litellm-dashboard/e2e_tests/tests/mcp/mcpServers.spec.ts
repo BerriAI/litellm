@@ -3,6 +3,11 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 
+// Coverage scope: only the happy-path Streamable HTTP + None auth create flow.
+// See E2E_COVERAGE.md (#29 row) for the full list of uncovered MCP surfaces
+// — SSE / stdio / OpenAPI transports, API Key / Bearer / OAuth2 / Basic / Token
+// / AWS SigV4 auth, edit/delete, BYOK credentials, tool list/call (needs a real
+// or mocked MCP server in the e2e fixture stack), and access-group permissions.
 test.describe("MCP Servers", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
