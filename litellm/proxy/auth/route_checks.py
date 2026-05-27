@@ -252,13 +252,24 @@ class RouteChecks:
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
             and route == "/team/new"
+            and request_data.get("organization_id") is None
             and RouteChecks._user_team_self_serve_enabled()
         ):
             # LIT-3254: opt-in self-service team creation. The /team/new
             # handler already auto-adds the creating user as the team's
             # `admin` (team_endpoints.new_team) when their user_id is not
             # in `members_with_roles`, so flipping this flag is the only
-            # change needed to unblock the customer ask.
+            # change needed for the standalone-team case.
+            #
+            # Standalone teams only — org-scoped requests intentionally
+            # fall through to the existing org-admin path
+            # (`_user_is_org_admin` branch below). Without this guard, an
+            # internal user with no organization memberships could POST
+            # /team/new with any known organization_id and silently create
+            # a team they admin inside that organization, because the
+            # team_endpoints.new_team handler only checks that the org row
+            # exists, not that the caller belongs to it. Veria caught this
+            # cross-org bypass on the first revision of this PR.
             pass
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
