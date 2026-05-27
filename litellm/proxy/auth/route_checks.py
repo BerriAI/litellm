@@ -251,6 +251,17 @@ class RouteChecks:
             )
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
+            and route == "/team/new"
+            and RouteChecks._user_team_self_serve_enabled()
+        ):
+            # LIT-3254: opt-in self-service team creation. The /team/new
+            # handler already auto-adds the creating user as the team's
+            # `admin` (team_endpoints.new_team) when their user_id is not
+            # in `members_with_roles`, so flipping this flag is the only
+            # change needed to unblock the customer ask.
+            pass
+        elif (
+            _user_role == LitellmUserRoles.INTERNAL_USER.value
             and RouteChecks.check_route_access(
                 route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
             )
@@ -304,6 +315,23 @@ class RouteChecks:
             RouteChecks._raise_admin_only_route_exception(
                 user_obj=user_obj, route=route
             )
+
+    @staticmethod
+    def _user_team_self_serve_enabled() -> bool:
+        """
+        Return True when `general_settings.allow_user_team_creation` is
+        enabled in the proxy config. Module-level import is intentionally
+        deferred to avoid a circular import with `proxy_server`. When the
+        proxy module hasn't initialised general_settings yet (e.g. unit
+        tests that hit RouteChecks directly), this safely returns False.
+        """
+        try:
+            from litellm.proxy.proxy_server import general_settings
+        except Exception:
+            return False
+        if not isinstance(general_settings, dict):
+            return False
+        return bool(general_settings.get("allow_user_team_creation", False))
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
