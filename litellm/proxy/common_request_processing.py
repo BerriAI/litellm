@@ -1509,8 +1509,6 @@ class ProxyBaseLLMRequestProcessing:
                 response=response,
                 user_api_key_dict=user_api_key_dict,
             )
-        except HTTPException:
-            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Container ownership recording failed after responses call: %s",

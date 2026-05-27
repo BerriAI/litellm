@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 
@@ -202,7 +202,7 @@ async def record_container_owner(
     file_object["custom_llm_provider"] = resolved_provider
     file_object["provider_container_id"] = original_container_id
     # Prisma Python requires Json fields to be serialized as a JSON string.
-    file_object_json: Union[str, dict] = json.dumps(file_object)
+    file_object_json: str = json.dumps(file_object)
 
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
