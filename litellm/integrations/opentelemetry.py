@@ -174,7 +174,15 @@ class OpenTelemetryConfig:
         )
 
 
-def _make_hashable(value: object) -> object:
+# Maximum nesting depth ``_make_hashable`` will recurse before giving up
+# and falling back to ``repr()``. The function is only ever called on
+# ``_emit_once`` scope parts (typically scalar guardrail names, timestamps,
+# and ``guardrail_mode`` which is at most a one-level list/dict), so 10 is
+# already an order of magnitude beyond anything observed in practice.
+_MAKE_HASHABLE_MAX_DEPTH = 10
+
+
+def _make_hashable(value: object, _depth: int = 0) -> object:
     """Best-effort conversion of arbitrary ``_emit_once`` scope parts into a
     hashable representation so they can be used inside the dedupe-key tuple.
 
@@ -195,19 +203,26 @@ def _make_hashable(value: object) -> object:
     * everything else is returned unchanged; if it is still unhashable, we
       fall back to its ``repr()`` so a key can always be formed.
 
-    Conversion recurses into nested containers.
+    Conversion recurses into nested containers, but is hard-capped at
+    ``_MAKE_HASHABLE_MAX_DEPTH`` to guarantee bounded CPU even on adversarial
+    or accidentally-self-referential structures.
     """
+    if _depth >= _MAKE_HASHABLE_MAX_DEPTH:
+        # Bounded depth: fall back to repr() rather than recurse further.
+        return repr(value)
     if isinstance(value, (str, bytes)):
         return value
+    next_depth = _depth + 1
     if isinstance(value, list):
-        return tuple(_make_hashable(v) for v in value)
+        return tuple(_make_hashable(v, next_depth) for v in value)
     if isinstance(value, tuple):
-        return tuple(_make_hashable(v) for v in value)
+        return tuple(_make_hashable(v, next_depth) for v in value)
     if isinstance(value, (set, frozenset)):
-        return frozenset(_make_hashable(v) for v in value)
+        return frozenset(_make_hashable(v, next_depth) for v in value)
     if isinstance(value, dict):
         return frozenset(
-            (_make_hashable(k), _make_hashable(v)) for k, v in value.items()
+            (_make_hashable(k, next_depth), _make_hashable(v, next_depth))
+            for k, v in value.items()
         )
     try:
         hash(value)
