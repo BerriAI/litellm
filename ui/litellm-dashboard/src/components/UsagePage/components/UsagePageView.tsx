@@ -45,6 +45,7 @@ import ViewUserSpend from "../../view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
+import { mergeResultsByDate } from "../utils/mergeDailyResults";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -428,8 +429,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       .slice(0, topKeysLimit);
   }, [userSpendData.results, topKeysLimit]);
 
+  // Dedupe by date BEFORE sorting so the Daily Spend BarChart can never
+  // receive multiple rows whose `date` collides (one X-axis label, two+
+  // bars). Belt + suspenders alongside the dedupe inside
+  // `usePaginatedDailyActivity`: also guards the aggregated endpoint and
+  // the backend timezone-window ghost-row case. See LIT-3383.
   const sortedDailyResults = useMemo(
-    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+    () =>
+      mergeResultsByDate(userSpendData.results).sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      ),
     [userSpendData.results],
   );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
