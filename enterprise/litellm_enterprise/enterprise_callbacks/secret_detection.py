@@ -49,23 +49,24 @@ def _expand_private_key_values(
     Because detect-secrets de-duplicates by secret value, multiple PEM
     blocks that share the same BEGIN header (e.g. two ``-----BEGIN PRIVATE
     KEY-----`` blocks in the same message) collapse to a single entry in
-    *detected_secrets*.  To make sure every block is redacted, we add a
-    synthetic ``Private Key`` entry for each additional PEM block in *text*
-    that shares the same header but has no matching detected entry.
+    *detected_secrets*.  In addition, ``_PEM_BLOCK_RE`` is intentionally
+    broader than detect-secrets's built-in matcher and may catch blocks
+    (e.g. ``BEGIN OPENSSH PRIVATE KEY``) that detect-secrets never flagged.
+    To make sure every block is redacted, after expansion we add a
+    synthetic ``Private Key`` entry for every PEM block in *text* that did
+    not get claimed by an existing detected entry.
 
     Each PEM block is claimed at most once.  All other secret types pass
     through unchanged.
     """
     pem_blocks = list(_PEM_BLOCK_RE.finditer(text))
     claimed: set = set()
-    seen_headers: set = set()
 
     expanded: List[Dict[str, Any]] = []
     for secret in detected_secrets:
         if secret.get("type") == "Private Key":
             header = secret.get("value")
             if header:
-                seen_headers.add(header)
                 for idx, match in enumerate(pem_blocks):
                     if idx in claimed:
                         continue
@@ -75,16 +76,20 @@ def _expand_private_key_values(
                         break
         expanded.append(secret)
 
-    # Backfill PEM blocks whose header matched a detected entry but where
-    # detect-secrets de-duplicated them down to a single record.  This
-    # guarantees every block is independently redactable downstream.
+    # Backfill every unclaimed PEM block that ``_PEM_BLOCK_RE`` matched.
+    # detect-secrets de-duplicates entries by secret value, so multiple PEM
+    # blocks that share the same BEGIN header collapse to one detected
+    # record.  In addition, ``_PEM_BLOCK_RE`` is intentionally broader than
+    # detect-secrets's built-in matcher (e.g. it accepts headers like
+    # ``BEGIN OPENSSH PRIVATE KEY``), so a PEM block in the message may
+    # have been emitted with no matching detected entry at all.  Either
+    # way, the right behavior for ``hide_secrets`` is to redact the full
+    # block, so we synthesize a ``Private Key`` entry for every leftover.
     for idx, match in enumerate(pem_blocks):
         if idx in claimed:
             continue
-        block = match.group(0)
-        if any(header in block for header in seen_headers):
-            expanded.append({"type": "Private Key", "value": block})
-            claimed.add(idx)
+        expanded.append({"type": "Private Key", "value": match.group(0)})
+        claimed.add(idx)
 
     return expanded
 
