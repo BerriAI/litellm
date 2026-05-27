@@ -398,7 +398,7 @@ Use [**`/utils/transform_request`**](./utils/transform_request) to inspect exact
 LiteLLM is a unified gateway for **LLMs, agents, and MCP** — you don't need a separate agent or MCP gateway. One endpoint for 100+ models, A2A agents, and MCP tools.
 
 <NavigationCards
-columns={2}
+columns={3}
 items={[
 {
 icon: "🔗",
@@ -411,6 +411,12 @@ icon: "🛠️",
 title: "MCP Gateway",
 description: "Central MCP endpoint with per-key access control.",
 to: "/docs/mcp",
+},
+{
+icon: "✨",
+title: "✨ Enterprise Quickstart",
+description: "Quickstart guide for trial customers — LLM, MCP, and Agent gateway.",
+to: "/docs/learn/enterprise_quickstart",
 },
 ]}
 />

@@ -15,7 +15,7 @@ LiteLLM gives you one OpenAI-compatible interface for 100+ LLM providers. Start 
 Pick one path first.
 
 <NavigationCards
-columns={2}
+columns={3}
 items={[
   {
     icon: "🐍",
@@ -38,6 +38,17 @@ items={[
       "Connect clients",
     ],
     to: "/docs/learn/gateway_quickstart",
+  },
+  {
+    icon: "✨",
+    title: "✨ Enterprise Quickstart",
+    description: "Quickstart Guide for LiteLLM Enterprise — LLM, MCP, and Agent gateway.",
+    listDescription: [
+      "Deploy with license",
+      "Validate three gateways",
+      "Enable enterprise controls",
+    ],
+    to: "/docs/learn/enterprise_quickstart",
   },
 ]}
 />
@@ -114,4 +125,4 @@ items={[
 ]}
 />
 
-Not sure where to start? Use [SDK Quickstart](/docs/learn/sdk_quickstart) for app code or [Gateway Quickstart](/docs/learn/gateway_quickstart) for shared infrastructure.
+Not sure where to start? Use [SDK Quickstart](/docs/learn/sdk_quickstart) for app code, [Gateway Quickstart](/docs/learn/gateway_quickstart) for shared infrastructure, or [✨ Enterprise Quickstart](/docs/learn/enterprise_quickstart) for a trial or PoC evaluation.

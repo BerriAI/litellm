@@ -6,6 +6,7 @@ import TabItem from '@theme/TabItem';
 
 :::info
 
+- **New to Enterprise?** Start with the [✨ Enterprise Quickstart](/docs/learn/enterprise_quickstart)
 - **Free trial**: [7-day enterprise license](https://www.litellm.ai/enterprise#trial)
 - **Talk to us**: [Book a demo](https://enterprise.litellm.ai/demo)
 - **SSO is free for up to 5 users.** Beyond that, an enterprise license is required.

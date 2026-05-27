@@ -1216,6 +1216,7 @@ const learnSidebar = {
       items: [
         "learn/sdk_quickstart",
         "learn/gateway_quickstart",
+        "learn/enterprise_quickstart",
       ],
     },
 
