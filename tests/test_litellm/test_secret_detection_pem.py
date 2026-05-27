@@ -13,8 +13,8 @@ import pytest
 
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
     _ENTERPRISE_SecretDetection,
-    _PEM_BLOCK_RE,
     _expand_private_key_values,
+    _find_pem_blocks,
 )
 
 
@@ -116,9 +116,11 @@ def test_expand_missing_value_key_passes_through():
     assert {"type": "Private Key"} in result
 
 
-def test_pem_block_regex_matches_pkcs8_and_rsa():
-    assert _PEM_BLOCK_RE.search(_SAMPLE_PEM)
-    assert _PEM_BLOCK_RE.search(_SAMPLE_RSA_PEM)
+def test_find_pem_blocks_matches_pkcs8_and_rsa():
+    """``_find_pem_blocks`` walks the input line-by-line and returns the
+    full text of every PEM private-key block."""
+    assert _find_pem_blocks(_SAMPLE_PEM) == [_SAMPLE_PEM]
+    assert _find_pem_blocks(_SAMPLE_RSA_PEM) == [_SAMPLE_RSA_PEM]
 
 
 # End-to-end through scan_message_for_secrets
@@ -230,3 +232,75 @@ def test_backfill_redacts_block_when_detect_secrets_emits_unrelated_header():
     pks = [s["value"] for s in result if s["type"] == "Private Key"]
     assert _SAMPLE_PEM in pks
     assert _SAMPLE_OPENSSH_PEM in pks
+
+
+
+# ---------------------------------------------------------------------------
+# DoS resistance + truncated/orphan PEM block coverage
+# ---------------------------------------------------------------------------
+#
+# ``_find_pem_blocks`` walks line-by-line, so an attacker who pastes many
+# ``-----BEGIN PRIVATE KEY-----`` headers without matching END footers
+# cannot trigger super-linear regex backtracking on the proxy worker.
+# This test pins the linear behavior with a heavy worst-case input.
+#
+# It also covers the ``BEGIN header + body, no END footer`` case that the
+# previous regex would have left only partially redacted.
+
+import time
+
+
+def test_find_pem_blocks_is_linear_with_many_begin_only_lines():
+    """1000 ``BEGIN`` lines with no matching END finish in well under 1s."""
+    text = "\n".join(["-----BEGIN PRIVATE KEY-----"] * 1000)
+    t0 = time.monotonic()
+    blocks = _find_pem_blocks(text)
+    elapsed = time.monotonic() - t0
+    # 1 second is generous; the implementation completes in ~3ms.
+    assert elapsed < 1.0, f"_find_pem_blocks took {elapsed:.3f}s, expected linear"
+    assert len(blocks) == 1000
+
+
+def test_find_pem_blocks_is_linear_with_many_begin_plus_body_no_end():
+    """1000 BEGIN-plus-body sections with no END finish in well under 2s."""
+    section = "-----BEGIN PRIVATE KEY-----\n" + "X" * 200
+    text = "\n".join([section] * 1000)
+    t0 = time.monotonic()
+    blocks = _find_pem_blocks(text)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 2.0, f"_find_pem_blocks took {elapsed:.3f}s, expected linear"
+    assert len(blocks) == 1000
+
+
+def test_orphan_begin_no_end_is_still_redacted():
+    """A BEGIN header with body but no matching END footer is treated as
+    secret material so the body does not slip through un-redacted (closes
+    the partial-redaction gap the pure-regex approach left behind)."""
+    orphan = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n"
+        "SECRETBODYBASE64NEVERTERMINATED\n"
+    )
+    text = f"truncated key:\n{orphan}rest of message"
+    result = _expand_private_key_values([], text)
+    pks = [s["value"] for s in result if s["type"] == "Private Key"]
+    # Some block was returned, and it includes the SECRETBODY marker.
+    assert pks, "orphan BEGIN block should still be redacted"
+    assert any("SECRETBODYBASE64NEVERTERMINATED" in p for p in pks)
+
+
+def test_orphan_begin_is_bounded_at_block_max_lines():
+    """An orphan BEGIN does not consume the rest of an arbitrarily long
+    message — the block is capped at _PEM_BLOCK_MAX_LINES (256) to keep
+    parsing strictly linear."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _PEM_BLOCK_MAX_LINES,
+    )
+    # A long tail of non-PEM lines after an orphan BEGIN.
+    tail_lines = ["just a normal line"] * (_PEM_BLOCK_MAX_LINES * 4)
+    text = "-----BEGIN PRIVATE KEY-----\nbody1\nbody2\n" + "\n".join(tail_lines)
+    blocks = _find_pem_blocks(text)
+    # The captured block should not exceed the cap (counted in lines).
+    assert blocks
+    line_count = blocks[0].count("\n") + 1
+    assert line_count <= _PEM_BLOCK_MAX_LINES + 1, line_count
