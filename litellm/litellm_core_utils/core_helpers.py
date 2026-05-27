@@ -143,13 +143,20 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
 
 # Proxy-set metadata fields (populated by the proxy, not the client request body) that
 # must survive the merge from `metadata` -> `litellm_metadata` when both containers exist.
-# Keep in sync with `LitellmMetadataFromRequestHeaders` and `add_litellm_metadata_from_request_headers`.
-_PROXY_SET_METADATA_KEYS_TO_PRESERVE: tuple = (
-    "spend_logs_metadata",
-    "agent_id",
-    "trace_id",
-    "session_id",
-    "requester_ip_address",
+# - `spend_logs_metadata`, `agent_id`, `trace_id`, `session_id` are set by
+#   `LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers` based on the
+#   `LitellmMetadataFromRequestHeaders` TypedDict.
+# - `requester_ip_address` is set separately by the proxy from `x-forwarded-for` /
+#   `request.client.host` in `litellm_pre_call_utils.py`.
+# In all cases the value lives on `metadata` and is needed by `_get_spend_logs_metadata`.
+_PROXY_SET_METADATA_KEYS_TO_PRESERVE: frozenset = frozenset(
+    {
+        "spend_logs_metadata",
+        "agent_id",
+        "trace_id",
+        "session_id",
+        "requester_ip_address",
+    }
 )
 
 
