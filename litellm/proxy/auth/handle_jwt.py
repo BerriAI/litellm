@@ -1048,7 +1048,10 @@ class JWTAuthManager:
                 )
                 return individual_team_id, team_object
             except HTTPException as e:
-                if e.status_code != 404:
+                if (
+                    e.status_code != 404
+                    or not jwt_handler.litellm_jwtauth.team_claim_fallback
+                ):
                     raise
                 # Claim doesn't map to a known team — defer to fallback.
                 verbose_proxy_logger.debug(
@@ -1181,14 +1184,17 @@ class JWTAuthManager:
             except Exception:
                 continue
 
-        if requested_model and any_claim_team_resolved:
-            # Claim teams resolved but none grant the model — deny.
+        if requested_model and (
+            any_claim_team_resolved
+            or not jwt_handler.litellm_jwtauth.team_claim_fallback
+        ):
+            # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
                 detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
             )
 
-        # No claim team resolved — defer to fallback.
+        # No claim team resolved and fallback enabled — defer to fallback.
         return None, None
 
     @staticmethod

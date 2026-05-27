@@ -4524,6 +4524,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
     )
+    team_claim_fallback: bool = Field(
+        default=False,
+        description=(
+            "If True, when a configured team_id_jwt_field / team_ids_jwt_field "
+            "claim is present but does not resolve to any known team, defer to "
+            "the single-team DB fallback (caller's only team membership) "
+            "instead of raising. Default False preserves strict claim-based "
+            "authorization."
+        ),
+    )
     #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
