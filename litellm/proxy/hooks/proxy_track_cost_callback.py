@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+import uuid
 from datetime import datetime
 from typing import Any, List, Optional, Union, cast
 
@@ -29,6 +30,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
+    get_logging_payload,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -41,6 +43,143 @@ from litellm.utils import get_end_user_id_for_cost_tracking
 class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Per-deployment-attempt failure logger for spend logs.
+
+        The SDK fires this for EVERY failed ``litellm.acompletion`` attempt,
+        including attempts that are subsequently rescued by a router
+        retry/fallback. The proxy-level ``async_post_call_failure_hook`` only
+        fires once, for the request's terminal outcome, so without this method a
+        failure rescued by a fallback writes NO row to ``LiteLLM_SpendLogs`` and
+        is invisible in the spend logs UI (and per-deployment error rates are
+        undercounted).
+
+        This writes exactly one failure row per failed attempt, isolated to the
+        SpendLogs table:
+
+        - ``request_id`` is suffixed with a unique token so attempt rows never
+          collide under ``create_many(skip_duplicates=True)`` with each other,
+          with the terminal proxy-hook row, or with the request's success row.
+          (All attempts in a request reuse the same ``litellm_call_id``; the
+          success row keys off the response id, the terminal failure row off the
+          bare ``litellm_call_id``.) The ``litellm_call_id`` prefix plus the
+          shared ``litellm_trace_id`` / ``session_id`` keep the row correlatable.
+        - ``status`` is forced to ``"failure"`` and ``error_information`` is
+          lifted from the standard_logging_object onto the metadata the spend-log
+          builder reads, so the UI's error_code / error_message filters work.
+          ``get_litellm_metadata_from_kwargs`` prefers ``litellm_metadata`` over
+          ``metadata``, so both are stamped.
+        - Daily aggregation tables and budget counters are intentionally NOT
+          touched: we call ``_insert_spend_log_to_db`` directly rather than
+          ``update_database``, so existing analytics/counters are unchanged.
+
+        Failures here are non-blocking — never let spend-log bookkeeping break
+        the request's error path.
+        """
+        if _ProxyDBLogger._should_track_errors_in_db() is False:
+            return
+
+        base_call_id = kwargs.get("litellm_call_id")
+        if not base_call_id:
+            return
+
+        from litellm.proxy.proxy_server import (
+            disable_spend_logs,
+            prisma_client,
+            proxy_logging_obj,
+        )
+
+        # Calling _insert_spend_log_to_db directly (below) bypasses
+        # update_database's own kill-switch, so honor disable_spend_logs here.
+        if disable_spend_logs is True:
+            return
+
+        try:
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+
+            # Mirror the success path (_PROXY_track_cost_callback): only track
+            # failures for calls that carry a real identity. This skips
+            # identity-less internal calls (e.g. semantic-cache embeddings) so
+            # they don't create blank failure rows, and — via
+            # _should_track_cost_callback — also honors disable_spend_updates.
+            if not _should_track_cost_callback(
+                user_api_key=metadata.get("user_api_key"),
+                user_id=metadata.get("user_api_key_user_id"),
+                team_id=metadata.get("user_api_key_team_id"),
+                end_user_id=get_end_user_id_for_cost_tracking(litellm_params),
+            ):
+                return
+
+            sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+            error_information = (
+                sl_object.get("error_information") if sl_object is not None else None
+            )
+
+            # Timing can arrive as None on the failure path (and
+            # ``completion_start_time`` is frequently present-but-None in
+            # model_call_details); get_logging_payload calls ``.astimezone()`` on
+            # all three, so default them to now() before building the payload.
+            now = datetime.now()
+            start_time = start_time or now
+            end_time = end_time or now
+
+            # Unique request_id keeps the call_id prefix (for correlation) but
+            # guarantees this row is never dropped by skip_duplicates.
+            attempt_request_id = f"{base_call_id}_attempt_{uuid.uuid4().hex[:12]}"
+
+            # Stamp failure status + error info onto BOTH metadata dicts without
+            # mutating the shared model_call_details.
+            failure_litellm_params = {**litellm_params}
+            failure_metadata = {**(litellm_params.get("metadata") or {})}
+            failure_metadata["status"] = "failure"
+            if error_information and not failure_metadata.get("error_information"):
+                failure_metadata["error_information"] = error_information
+            failure_litellm_params["metadata"] = failure_metadata
+            if litellm_params.get("litellm_metadata"):
+                failure_litellm_metadata = {**litellm_params["litellm_metadata"]}
+                failure_litellm_metadata["status"] = "failure"
+                if error_information and not failure_litellm_metadata.get(
+                    "error_information"
+                ):
+                    failure_litellm_metadata["error_information"] = error_information
+                failure_litellm_params["litellm_metadata"] = failure_litellm_metadata
+
+            failure_kwargs = {
+                **kwargs,
+                "litellm_call_id": attempt_request_id,
+                "litellm_params": failure_litellm_params,
+                "completion_start_time": kwargs.get("completion_start_time")
+                or end_time,
+            }
+
+            payload = get_logging_payload(
+                kwargs=failure_kwargs,
+                response_obj=None,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            payload["spend"] = 0.0
+            # Finalize timestamps exactly like update_database (which only
+            # isoformats startTime/endTime and leaves completionStartTime as a
+            # datetime) so these rows match the proven success-path shape.
+            if isinstance(payload.get("startTime"), datetime):
+                payload["startTime"] = payload["startTime"].isoformat()
+            if isinstance(payload.get("endTime"), datetime):
+                payload["endTime"] = payload["endTime"].isoformat()
+
+            await proxy_logging_obj.db_spend_update_writer._insert_spend_log_to_db(
+                payload=payload,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "async_log_failure_event: failed to write per-attempt failure spend log"
+            )
 
     async def async_post_call_failure_hook(
         self,
