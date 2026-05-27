@@ -67,6 +67,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         # boto3 doc:
         # https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
         model_id = optional_params.pop("model_id", None)
+        # Strip whitespace so a value like " " is treated the same as None:
+        # SageMaker rejects empty / whitespace-only InferenceComponent names.
+        if isinstance(model_id, str):
+            model_id = model_id.strip()
         if model_id:
             headers["X-Amzn-SageMaker-Inference-Component"] = model_id
         return headers
