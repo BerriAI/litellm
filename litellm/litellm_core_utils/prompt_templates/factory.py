@@ -86,6 +86,9 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     ],
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+# used as a filler for empty/whitespace-only user messages
+_DEFAULT_EMPTY_CONTENT_MESSAGE = "."
+
 
 def map_system_message_pt(messages: list) -> list:
     """
@@ -1148,7 +1151,13 @@ def anthropic_messages_pt_xml(messages: list):
     if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
             new_messages.insert(
-                0, {"role": "user", "content": [{"type": "text", "text": "."}]}
+                0,
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _DEFAULT_EMPTY_CONTENT_MESSAGE}
+                    ],
+                },
             )
         else:
             raise Exception(
@@ -2122,9 +2131,6 @@ def anthropic_process_openai_file_message(
     raise Exception(
         f"Either file_data or file_id must be present in the file message: {message}"
     )
-
-
-_DEFAULT_EMPTY_CONTENT_MESSAGE = "Please continue."
 
 
 def _sanitize_empty_text_content(

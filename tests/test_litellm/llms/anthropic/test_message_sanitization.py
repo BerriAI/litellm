@@ -188,7 +188,7 @@ class TestMessageSanitization:
 
         assert len(sanitized) == 2
         assert sanitized[0]["role"] == "user"
-        assert sanitized[0]["content"] == "Please continue."
+        assert sanitized[0]["content"] == "."
 
     def test_case_c_whitespace_only_content(self):
         """
@@ -203,7 +203,7 @@ class TestMessageSanitization:
         sanitized = sanitize_messages_for_tool_calling(messages)
 
         assert len(sanitized) == 2
-        assert sanitized[0]["content"] == "Please continue."
+        assert sanitized[0]["content"] == "."
         assert sanitized[1]["content"] is None
 
     def test_case_c_valid_content_preserved(self):
@@ -261,7 +261,7 @@ class TestMessageSanitization:
         assert sanitized[2]["role"] == "tool"
         assert sanitized[2]["tool_call_id"] == "call_1"  # Dummy added
         assert sanitized[3]["role"] == "user"
-        assert sanitized[3]["content"] == "Please continue."
+        assert sanitized[3]["content"] == "."
         assert sanitized[4]["role"] == "assistant"
 
     def test_modify_params_false_no_sanitization(self):
@@ -359,7 +359,7 @@ class TestMessageSanitization:
         # No text block may be empty — that's the contract Anthropic enforces.
         for block in text_blocks:
             assert block["text"].strip() != ""
-        assert text_blocks[2]["text"] == "Please continue."
+        assert text_blocks[2]["text"] == "."
 
     def test_empty_text_block_in_list_content_sanitized(self):
         """
