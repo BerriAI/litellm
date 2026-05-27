@@ -1008,3 +1008,102 @@ async def test_service_account_can_access_container_after_responses_tracking(
     )
     assert original_id == "cntr_native"
     assert provider == "azure"
+
+
+@pytest.mark.asyncio
+async def test_should_record_container_ownership_after_streaming_responses_finish(
+    monkeypatch,
+):
+    """Streaming /v1/responses calls return through the
+    ``select_data_generator`` branch and never reach the non-streaming
+    container-ownership tail. The wrapper must read
+    ``completed_response`` off the upstream iterator once iteration
+    finishes and write the row, otherwise code-interpreter containers
+    created during the stream stay unregistered and follow-up file API
+    calls 403.
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    encoded_container_id = (
+        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
+        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
+    )
+    response_body = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="code_interpreter_call",
+                container_id=encoded_container_id,
+                code_interpreter_call=None,
+            )
+        ]
+    )
+    stream_response = SimpleNamespace(
+        completed_response=SimpleNamespace(response=response_body),
+        _hidden_params={"custom_llm_provider": "azure"},
+    )
+
+    async def fake_sse_generator():
+        yield "data: chunk-1\n\n"
+        yield "data: chunk-2\n\n"
+
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(team_id="team-1")
+
+    wrapped = (
+        ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+            original_stream_response=stream_response,
+            wrapped_generator=fake_sse_generator(),
+            user_api_key_dict=auth,
+        )
+    )
+
+    chunks = [chunk async for chunk in wrapped]
+    assert chunks == ["data: chunk-1\n\n", "data: chunk-2\n\n"]
+
+    table.create.assert_awaited_once()
+    created_data = table.create.await_args.kwargs["data"]
+    assert created_data["created_by"] == "team:team-1"
+    assert created_data["unified_object_id"] == encoded_container_id
+
+
+@pytest.mark.asyncio
+async def test_streaming_ownership_wrap_no_op_when_stream_did_not_complete(
+    monkeypatch,
+):
+    """If the stream errored before ``response.completed``,
+    ``completed_response`` is ``None`` — we must skip the ownership
+    write rather than crash the response generator."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    stream_response = SimpleNamespace(completed_response=None)
+
+    async def fake_sse_generator():
+        yield "data: chunk-1\n\n"
+
+    record = AsyncMock()
+    monkeypatch.setattr(
+        ownership,
+        "record_container_owners_from_responses_response",
+        record,
+    )
+
+    wrapped = (
+        ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+            original_stream_response=stream_response,
+            wrapped_generator=fake_sse_generator(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+    )
+    chunks = [chunk async for chunk in wrapped]
+
+    assert chunks == ["data: chunk-1\n\n"]
+    record.assert_not_awaited()
