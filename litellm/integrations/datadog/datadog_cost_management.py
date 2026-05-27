@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -193,7 +193,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         self._add_tag(tags, "model", log.get("model"))
         self._add_tag(tags, "model_id", log.get("model_id"))
 
-        metadata: Dict[str, Any] = log.get("metadata") or {}
+        # cast because StandardLoggingMetadata is a TypedDict; we iterate it
+        # as a generic mapping below.
+        metadata: Dict[str, Any] = cast(Dict[str, Any], log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
