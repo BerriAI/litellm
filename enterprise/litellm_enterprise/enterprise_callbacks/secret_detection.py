@@ -448,6 +448,15 @@ def _expand_private_key_values(
     Header-only matches that have no corresponding ``-----END`` footer in the
     text are left as-is, preserving today's header-line redaction behavior for
     truncated/malformed inputs.
+
+    Note (security-conservative behavior): when ``detect-secrets`` flags any
+    ``Private Key`` entry we expand to *every* PEM block found in the message
+    text via ``_PEM_BLOCK_RE``, not strictly to the block the detector
+    matched. This intentionally diverges from a strict 1-to-1 mapping to
+    detect-secrets' own verdict: if a user has tuned ``detect_secrets_config``
+    to allow specific PEM example data through, those blocks would still be
+    redacted here. We prefer the safer failure mode for a security guardrail —
+    redacting an allowed example is recoverable, leaking a real key is not.
     """
     if not detected_secrets:
         return detected_secrets
