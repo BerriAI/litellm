@@ -15,6 +15,7 @@ The fix routes metadata extraction through
 which prefers ``litellm_metadata`` and merges spend-tracking fields
 from ``metadata`` when both are present.
 """
+
 import os
 from datetime import datetime
 from unittest.mock import MagicMock
