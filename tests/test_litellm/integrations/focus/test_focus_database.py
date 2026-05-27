@@ -72,3 +72,23 @@ async def test_should_reject_invalid_limit(monkeypatch: pytest.MonkeyPatch):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_should_select_organization_columns_via_left_join(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """LIT-2895: SELECT clause must include organization_id (from TeamTable) and
+    organization_alias (from OrganizationTable via LEFT JOIN), so Vantage Token
+    Allocation can route on org-level data."""
+    db, query_mock = _setup_db(monkeypatch, [])
+
+    await db.get_usage_data()
+
+    query_text, *_ = query_mock.await_args.args
+    assert "tt.organization_id as organization_id" in query_text
+    assert "ot.organization_alias as organization_alias" in query_text
+    assert (
+        'LEFT JOIN "LiteLLM_OrganizationTable" ot ON tt.organization_id = ot.organization_id'
+        in query_text
+    )
