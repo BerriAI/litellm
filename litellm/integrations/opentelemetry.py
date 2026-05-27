@@ -1843,7 +1843,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Step 2: collect every source of error info into a normalized
             # tuple. Each source feeds into one set of attributes so the span
             # surface is identical regardless of which input was populated.
-            error_information: Optional[dict] = None
+            error_information: Any = None
             error_str: Optional[str] = None
             if standard_logging_payload is not None:
                 error_information = standard_logging_payload.get("error_information")
@@ -1937,7 +1937,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     @staticmethod
     def _normalize_error_attributes(
         exception: Any,
-        error_information: Optional[dict],
+        error_information: Any,
         error_str: Optional[str],
     ) -> dict:
         """
