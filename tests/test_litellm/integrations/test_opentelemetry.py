@@ -5142,3 +5142,164 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestOpenTelemetryEmitOnceUnhashableScope(unittest.TestCase):
+    """Regression tests for the ``_emit_once`` unhashable-scope crash.
+
+    ``_emit_once`` builds ``dedupe_key = (cls_name, id(self), *scope)`` and
+    uses it as a ``dict`` key. Some real callers pass scope parts that are
+    legitimately unhashable -- ``guardrail_mode`` for example is a list when
+    a guardrail is configured with multiple lifecycle hooks, e.g.
+    ``["pre_call", "post_call"]``. Before the fix, every guardrailed
+    request returned HTTP 500 with ``TypeError: unhashable type: list``.
+
+    These tests assert two properties:
+      1. ``_emit_once`` no longer raises for list / dict / set / nested
+         scope values (the original crash).
+      2. Equality-preserving normalization: two calls with scope values
+         that have the same content still dedupe to the same key, so
+         the original dedupe semantics survive the normalization.
+    """
+
+    def _kwargs(self):
+        return {"litellm_params": {"metadata": {}}}
+
+    def test_list_scope_does_not_raise(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"])
+        )
+
+    def test_list_scope_dedupes_on_repeat(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]),
+            "Same list content must produce the same dedupe key",
+        )
+
+    def test_list_scope_distinct_contents_dont_collide(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call"])
+        )
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]),
+            "Distinct list content must be a distinct scope",
+        )
+
+    def test_list_scope_order_matters(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "g", ["a", "b"]))
+        self.assertTrue(
+            otel._emit_once(kwargs, "g", ["b", "a"]),
+            "List order is significant -- different order is a different scope",
+        )
+
+    def test_dict_scope_does_not_raise_and_dedupes(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "g", {"a": 1, "b": 2}))
+        self.assertFalse(
+            otel._emit_once(kwargs, "g", {"b": 2, "a": 1}),
+            "Dicts with same items in different insertion order must "
+            "dedupe to the same key",
+        )
+
+    def test_set_scope_does_not_raise_and_dedupes_order_independent(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "g", {"x", "y", "z"}))
+        self.assertFalse(
+            otel._emit_once(kwargs, "g", {"z", "x", "y"}),
+            "Sets with same members must dedupe",
+        )
+
+    def test_nested_list_in_dict_scope(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "g", {"modes": ["pre_call", "post_call"], "n": 1})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "g", {"n": 1, "modes": ["pre_call", "post_call"]}),
+            "Nested list inside dict must dedupe regardless of dict order",
+        )
+
+    def test_hashable_scope_unchanged(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "success"))
+        self.assertFalse(otel._emit_once(kwargs, "success"))
+        self.assertTrue(otel._emit_once(kwargs, "failure"))
+        self.assertFalse(otel._emit_once(kwargs, "failure"))
+
+
+class TestOpenTelemetryMakeHashable(unittest.TestCase):
+    """Unit tests for the ``_make_hashable`` helper itself."""
+
+    def test_primitives_unchanged(self):
+        for v in ("x", 1, 1.5, True, None, b"bytes"):
+            self.assertEqual(OpenTelemetry._make_hashable(v), v)
+
+    def test_hashable_tuple_unchanged(self):
+        t = ("a", 1, 2.5)
+        self.assertEqual(OpenTelemetry._make_hashable(t), t)
+
+    def test_list_to_tuple(self):
+        self.assertEqual(
+            OpenTelemetry._make_hashable(["a", "b", "c"]), ("a", "b", "c")
+        )
+
+    def test_nested_list(self):
+        self.assertEqual(
+            OpenTelemetry._make_hashable([["a", "b"], ["c"]]),
+            (("a", "b"), ("c",)),
+        )
+
+    def test_set_to_frozenset(self):
+        self.assertEqual(
+            OpenTelemetry._make_hashable({"a", "b"}), frozenset({"a", "b"})
+        )
+
+    def test_dict_to_sorted_tuple_pairs(self):
+        result = OpenTelemetry._make_hashable({"b": 2, "a": 1})
+        self.assertEqual(result, (("a", 1), ("b", 2)))
+        self.assertEqual(
+            OpenTelemetry._make_hashable({"a": 1, "b": 2}),
+            OpenTelemetry._make_hashable({"b": 2, "a": 1}),
+        )
+
+    def test_tuple_of_unhashables(self):
+        self.assertEqual(
+            OpenTelemetry._make_hashable((["a"], ["b"])),
+            (("a",), ("b",)),
+        )
+
+    def test_result_is_hashable(self):
+        for v in (
+            ["pre_call", "post_call"],
+            {"a": [1, 2]},
+            {"x", "y"},
+            [["nested"], {"k": [1, 2]}],
+        ):
+            r = OpenTelemetry._make_hashable(v)
+            _ = {r: True}
+
+    def test_unknown_unhashable_falls_back_to_repr(self):
+        class Weird:
+            __hash__ = None
+
+            def __repr__(self):
+                return "<Weird>"
+
+        result = OpenTelemetry._make_hashable(Weird())
+        self.assertEqual(result, "<Weird>")
+        _ = {result: True}
