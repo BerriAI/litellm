@@ -164,19 +164,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }));
   }, [mcpServer.static_headers]);
 
-  const initialEnvJson = React.useMemo(() => {
-    const env = mcpServer.env ?? undefined;
-    if (!env || Object.keys(env).length === 0) {
-      return "";
-    }
-    try {
-      return JSON.stringify(env, null, 2);
-    } catch {
-      return "";
-    }
-  }, [mcpServer.env]);
-
-
   // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
     if (mcpServer.spec_path && mcpServer.transport !== "stdio") {
@@ -191,12 +178,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
       extra_headers: mcpServer.extra_headers || [],
+      env_json: undefined,
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
     }),
-    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson],
+    [mcpServer, effectiveTransport, initialStaticHeaders],
   );
 
   // Initialize cost config from existing server data
@@ -444,19 +432,28 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               ? actualConfig.args.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
               : [];
 
-            const parsedEnv =
-              actualConfig?.env && typeof actualConfig.env === "object" && !Array.isArray(actualConfig.env)
-                ? Object.entries(actualConfig.env).reduce((acc: Record<string, string>, [k, v]) => {
-                    if (k == null || String(k).trim() === "") return acc;
-                    acc[String(k)] = v == null ? "" : String(v);
-                    return acc;
-                  }, {})
-                : {};
+            const hasEnvConfig =
+              actualConfig && Object.prototype.hasOwnProperty.call(actualConfig, "env");
+            let parsedEnv: Record<string, string> | undefined;
+            if (hasEnvConfig) {
+              if (actualConfig.env && typeof actualConfig.env === "object" && !Array.isArray(actualConfig.env)) {
+                parsedEnv = Object.entries(actualConfig.env).reduce((acc: Record<string, string>, [k, v]) => {
+                  if (k == null || String(k).trim() === "") return acc;
+                  acc[String(k)] = v == null ? "" : String(v);
+                  return acc;
+                }, {});
+              } else if (actualConfig.env == null) {
+                parsedEnv = {};
+              } else {
+                NotificationsManager.fromBackend("Stdio configuration env must be a JSON object");
+                return;
+              }
+            }
 
             stdioFields = {
               command: actualConfig?.command ? String(actualConfig.command) : undefined,
               args: parsedArgs,
-              env: parsedEnv,
+              ...(parsedEnv !== undefined ? { env: parsedEnv } : {}),
             };
 
             if (!stdioFields.command) {
@@ -469,8 +466,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           }
         } else {
           // Dedicated fields path (command/args + env JSON)
-          let parsedEnv: Record<string, string> = {};
-          if (rawEnvJson) {
+          const hasEnvReplacement = typeof rawEnvJson === "string" && rawEnvJson.trim() !== "";
+          let parsedEnv: Record<string, string> | undefined;
+          if (hasEnvReplacement) {
             try {
               const env = JSON.parse(rawEnvJson);
               if (env && typeof env === "object" && !Array.isArray(env)) {
@@ -498,7 +496,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           stdioFields = {
             command: parsedCommand,
             args: parsedArgs,
-            env: parsedEnv,
+            ...(parsedEnv !== undefined ? { env: parsedEnv } : {}),
           };
         }
       }

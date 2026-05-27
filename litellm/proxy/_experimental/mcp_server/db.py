@@ -65,8 +65,10 @@ def _prepare_mcp_server_data(
     if data.mcp_info is not None:
         data_dict["mcp_info"] = safe_dumps(data.mcp_info)
 
-    # Handle env serialization
-    if data.env is not None:
+    env_was_set = "env" in data.fields_set()
+    if isinstance(data, UpdateMCPServerRequest) and not env_was_set:
+        data_dict.pop("env", None)
+    elif data.env is not None:
         data_dict["env"] = safe_dumps(data.env)
 
     # Handle tool name override serialization
