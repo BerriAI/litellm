@@ -39,8 +39,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
-from litellm.types.llms.openai import (
+from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     CREATE_FILE_REQUESTS_PURPOSE,
+    AsyncCursorPage,
     FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -1377,7 +1378,16 @@ async def list_files(
         _response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
-        if _response is not None and isinstance(_response, OpenAIFileObject):
+        # NOTE: the managed-files hook returns AsyncCursorPage for the list-files
+        # response (see enterprise/litellm_enterprise/proxy/hooks/managed_files.py:
+        # async_post_call_success_hook). Without AsyncCursorPage in this isinstance
+        # tuple the hook return value is discarded, and the unfiltered raw provider
+        # listing leaks back to the caller. The hook also mutates response.data in
+        # place which partially masks this, but breaks the moment any future hook
+        # returns a freshly-constructed page object.
+        if _response is not None and isinstance(
+            _response, (OpenAIFileObject, AsyncCursorPage)
+        ):
             response = _response
 
         ### ALERTING ###
