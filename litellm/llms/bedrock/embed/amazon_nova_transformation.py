@@ -141,6 +141,18 @@ class AmazonNovaEmbeddingConfig:
         if "embeddingDimension" not in embedding_params:
             embedding_params["embeddingDimension"] = 3072
 
+        # If the caller pre-populated `video` but forgot the required
+        # `embeddingMode` (the Bedrock Nova API rejects without it),
+        # fall back to either a top-level `embeddingMode` override in
+        # `inference_params` or AUDIO_VIDEO_COMBINED. The synthesized-
+        # video path below handles its own default; this guards the
+        # user-supplied path.
+        video_block = embedding_params.get("video")
+        if isinstance(video_block, dict) and "embeddingMode" not in video_block:
+            video_block["embeddingMode"] = embedding_params.pop(
+                "embeddingMode", "AUDIO_VIDEO_COMBINED"
+            )
+
         # For text/media input, add basic structure if user hasn't provided text/image/video/audio
         if (
             "text" not in embedding_params
