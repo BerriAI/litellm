@@ -4969,6 +4969,14 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         # Result must be hashable.
         hash(out)
 
+    def test_make_hashable_handles_unhashable_tuple(self):
+        """An *unhashable* tuple (tuple containing a list) must be recursively
+        coerced, not silently dropped to ``repr()``. Addresses Greptile P2
+        review feedback on PR #29014."""
+        out = OpenTelemetry._make_hashable(("name", ["pre_call", "post_call"]))
+        self.assertEqual(out, ("name", ("pre_call", "post_call")))
+        hash(out)
+
     def test_make_hashable_returned_value_is_always_hashable(self):
         """Property: the helper never returns an unhashable value."""
         samples = [
@@ -4976,6 +4984,8 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             (1, 2), frozenset({1, 2}),
             [1, 2, 3], {"a": 1, "b": 2}, {1, 2, 3},
             [{"a": [1, 2]}, ("nested",)],
+            ("name", ["pre_call", "post_call"]),  # tuple-of-list (Greptile P2)
+            (frozenset({1, 2}), "x"),
         ]
         for s in samples:
             out = OpenTelemetry._make_hashable(s)
