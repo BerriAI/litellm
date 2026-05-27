@@ -88,3 +88,51 @@ def test_no_pem_block_passes_through(secret_detector):
     text = "Hello world, no secrets here."
     found = secret_detector.scan_message_for_secrets(text)
     assert found == []
+
+
+PEM_RSA = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n"
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n"
+    "-----END RSA PRIVATE KEY-----"
+)
+
+
+def test_two_complete_blocks_pair_correctly(secret_detector):
+    """Two complete PEM blocks of different armor types must each be
+    expanded to their own block, not swapped by positional pairing."""
+    text = "k1:\n" + PEM + "\nk2:\n" + PEM_RSA + "\nend"
+    found = secret_detector.scan_message_for_secrets(text)
+    values = [s["value"] for s in found if s["type"] == "Private Key"]
+    assert PEM in values
+    assert PEM_RSA in values
+    redacted = text
+    for s in found:
+        redacted = redacted.replace(s["value"], "[REDACTED]")
+    assert "MIIEvQIBADANBgkqhkiG" not in redacted
+    assert "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" not in redacted
+    assert "BEGIN PRIVATE KEY" not in redacted
+    assert "END RSA PRIVATE KEY" not in redacted
+
+
+def test_orphan_begin_does_not_misalign_following_block(secret_detector):
+    """Regression for index-based pairing: an orphan BEGIN header (no
+    matching END) preceding a complete block must not cause the complete
+    block to be assigned to the orphan, leaving the complete block under-
+    redacted."""
+    text = (
+        "Orphan header pasted, no end:\n"
+        "-----BEGIN PRIVATE KEY-----\n"
+        "(user pasted only the armor line)\n"
+        "Then a complete RSA block:\n"
+        + PEM_RSA
+    )
+    found = secret_detector.scan_message_for_secrets(text)
+    assert len(found) >= 1
+    redacted = text
+    for s in found:
+        redacted = redacted.replace(s["value"], "[REDACTED]")
+    assert "BEGIN PRIVATE KEY" not in redacted
+    assert "BEGIN RSA PRIVATE KEY" not in redacted
+    assert "END RSA PRIVATE KEY" not in redacted
+    assert "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" not in redacted
