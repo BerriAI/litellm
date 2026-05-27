@@ -69,7 +69,7 @@ def extract_target_model_names_from_unified_id(
             unified_id = decoded_id
 
         # Extract model names using regex
-        match = re.search(r"target_model_names,([^;]+)", unified_id)
+        match = re.search(r"(?:^|;)target_model_names,([^;]+)", unified_id)
         if match:
             # Split on comma and strip whitespace from each model name
             return [model.strip() for model in match.group(1).split(",")]
@@ -142,7 +142,7 @@ def extract_unified_uuid_from_unified_id(
             unified_id = decoded_id
 
         # Extract UUID
-        match = re.search(r"unified_id,([^;]+)", unified_id)
+        match = re.search(r"(?:^|;)unified_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -178,7 +178,7 @@ def extract_model_id_from_unified_id(
             unified_id = decoded_id
 
         # Extract model ID
-        match = re.search(r"model_id,([^;]+)", unified_id)
+        match = re.search(r"(?:^|;)model_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -215,9 +215,9 @@ def extract_provider_resource_id_from_unified_id(
 
         # Extract resource ID (try multiple patterns for different resource types)
         patterns = [
-            r"resource_id,([^;]+)",
-            r"vector_store_id,([^;]+)",
-            r"file_id,([^;]+)",
+            r"(?:^|;)resource_id,([^;]+)",
+            r"(?:^|;)vector_store_id,([^;]+)",
+            r"(?:^|;)file_id,([^;]+)",
         ]
 
         for pattern in patterns:
