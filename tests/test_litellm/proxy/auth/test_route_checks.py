@@ -2193,7 +2193,6 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     ), f"{route!r} should be classified as an LLM API route"
 
 
-
 # ---------------------------------------------------------------------------
 # LIT-3300: ``/key/generate`` ``key_type`` presets (``llm_api`` /
 # ``management`` / ``read_only``) store a ``LiteLLMRoutes`` bucket NAME on the
