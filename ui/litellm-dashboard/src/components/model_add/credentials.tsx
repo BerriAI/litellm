@@ -51,6 +51,16 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     if (!accessToken) {
       return;
     }
+    // The Edit modal is only mounted after selectedCredential is set via the
+    // pencil-icon onClick handler, so this null case should be unreachable in
+    // practice. Bail out explicitly rather than fall back to values.credential_name
+    // — that fallback would silently reintroduce the LIT-2074 routing bug (URL
+    // path = NEW name -> backend lookup misses the existing row) on any future
+    // refactor that drops the prerequisite. (Greptile review feedback.)
+    if (!selectedCredential) {
+      NotificationsManager.fromBackend("Cannot update credential: no credential selected");
+      return;
+    }
 
     const filter_credential_values = Object.entries(values)
       .filter(([key]) => !restrictedFields.includes(key))
@@ -67,8 +77,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     // Use the *original* credential name in the URL path so the backend lookup hits
     // the existing row even when the user renames it. The new name travels in the
     // request body and the existing backend rename path picks it up from there.
-    const originalName = selectedCredential?.credential_name ?? values.credential_name;
-    await credentialUpdateCall(accessToken, originalName, newCredential);
+    await credentialUpdateCall(accessToken, selectedCredential.credential_name, newCredential);
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
     await refetchCredentials();
