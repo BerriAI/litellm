@@ -163,9 +163,7 @@ def test_app_id_path_encodes_unsafe_characters():
 def test_app_id_path_rejects_dot_segment_app_id():
     config = VertexSearchAPIVectorStoreConfig()
 
-    with pytest.raises(
-        ValueError, match="vertex_app_id cannot be a dot path segment"
-    ):
+    with pytest.raises(ValueError, match="vertex_app_id cannot be a dot path segment"):
         config.get_complete_url(
             api_base=None,
             litellm_params={
@@ -338,9 +336,7 @@ def test_full_call_sequence_matches_proxy_call_shape():
     }
 
     # Step 1: get_complete_url with its own dict copy.
-    url = config.get_complete_url(
-        api_base=None, litellm_params=dict(base_params)
-    )
+    url = config.get_complete_url(api_base=None, litellm_params=dict(base_params))
     assert url == (
         "https://discoveryengine.googleapis.com/v1/"
         "projects/demo-proj/locations/global/"
