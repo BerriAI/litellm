@@ -56,11 +56,13 @@ def _expand_private_key_values(
     expanded: List[Dict[str, Any]] = []
     for secret in detected_secrets:
         if secret.get("type") == "Private Key":
-            for idx, match in enumerate(pem_blocks):
-                if idx not in claimed and secret.get("value") in match.group(0):
-                    secret = {**secret, "value": match.group(0)}
-                    claimed.add(idx)
-                    break
+            header_value = secret.get("value")
+            if isinstance(header_value, str):
+                for idx, match in enumerate(pem_blocks):
+                    if idx not in claimed and header_value in match.group(0):
+                        secret = {**secret, "value": match.group(0)}
+                        claimed.add(idx)
+                        break
         expanded.append(secret)
     return expanded
 
