@@ -7009,11 +7009,20 @@ async def async_data_generator(  # noqa: PLR0915
                         json_payloads = []
                         for line in chunk.splitlines():
                             if line.startswith("data: "):
-                                json_payloads.append(line[len("data: ") :])
+                                payload = line[len("data: ") :]
                             elif line.startswith("data:"):
-                                json_payloads.append(line[len("data:") :])
-                            # event:/comment (: prefix) lines are SSE control
-                            # frames; drop them for non-SSE clients.
+                                payload = line[len("data:") :]
+                            else:
+                                # event:/comment (: prefix) lines are SSE
+                                # control frames; drop them for non-SSE
+                                # clients.
+                                continue
+                            # Drop the SSE [DONE] sentinel if upstream ever
+                            # emits it as a chunk -- it is not valid JSON
+                            # and the non-SSE client detects EOF instead.
+                            if payload.strip() == "[DONE]":
+                                continue
+                            json_payloads.append(payload)
                         if json_payloads:
                             yield "\n".join(json_payloads) + "\n"
                         continue
