@@ -293,6 +293,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -327,6 +328,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -343,6 +345,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.ROUTE.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 

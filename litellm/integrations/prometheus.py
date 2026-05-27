@@ -1997,6 +1997,11 @@ class PrometheusLogger(CustomLogger):
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get(
                 "model_info", {}
             ).get("id")
+            # Best-effort api_provider on the failure path. If routing reached
+            # the LLM provider lookup before failing, custom_llm_provider is set
+            # on litellm_params; otherwise it stays empty and the label is "".
+            _litellm_params = request_data.get("litellm_params", {}) or {}
+            api_provider = _litellm_params.get("custom_llm_provider") or ""
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2016,6 +2021,7 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_provider=api_provider,
                 stream=(
                     str(request_data.get("stream"))
                     if litellm.prometheus_emit_stream_label
