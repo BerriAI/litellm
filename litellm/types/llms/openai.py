@@ -1602,6 +1602,7 @@ class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     content_index: int
     text: str
+    sequence_number: int = 0
 
 
 class RefusalDeltaEvent(BaseLiteLLMOpenAIResponseObject):
