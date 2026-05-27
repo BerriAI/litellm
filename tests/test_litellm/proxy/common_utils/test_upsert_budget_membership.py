@@ -23,6 +23,11 @@ def mock_tx():
     membership = MagicMock()
     membership.update = AsyncMock()
     membership.upsert = AsyncMock()
+    # Stub the ref-count probe used by _upsert_budget_and_membership so the
+    # primary in-place / clone code paths are exercised (rather than the
+    # legacy fallback that fires when .count() is unawaitable). Tests that
+    # need a >1 count override this on the fixture before calling.
+    membership.count = AsyncMock(return_value=1)
 
     # budget “table”
     budget = MagicMock()
