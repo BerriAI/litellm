@@ -39,7 +39,7 @@ def _make_unified_vs_id(
         f"litellm_proxy:vector_store;"
         f"unified_id,{unified_uuid};"
         f"model_id,{model_id};"
-        f"provider_resource_id,{provider_resource_id}"
+        f"resource_id,{provider_resource_id}"
     )
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
