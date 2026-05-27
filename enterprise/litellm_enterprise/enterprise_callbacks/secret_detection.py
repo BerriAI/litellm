@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
@@ -421,6 +422,22 @@ _default_detect_secrets_config = {
 }
 
 
+
+# Matches a complete PEM private-key block (header + base64 body + footer).
+# ``detect-secrets`` PrivateKeyDetector only flags the BEGIN header line as
+# the secret value; a plain ``str.replace(value, "[REDACTED]")`` therefore
+# leaves the base64 body and END footer in the forwarded payload. We expand
+# any detected private-key match to the full block before redaction.
+PRIVATE_KEY_BLOCK_PATTERN = re.compile(
+    r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"
+)
+
+
+def _redact_pem_blocks(text: str) -> str:
+    """Replace every complete PEM private-key block in ``text`` with ``[REDACTED]``."""
+    return PRIVATE_KEY_BLOCK_PATTERN.sub("[REDACTED]", text)
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
@@ -477,6 +494,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         # Covers multimodal list content + Responses-API input.
         def _redact_message_text(text: str) -> str:
             detected_secrets = self.scan_message_for_secrets(text)
+            if any(s["type"] == "Private Key" for s in detected_secrets):
+                text = _redact_pem_blocks(text)
             for secret in detected_secrets:
                 text = text.replace(secret["value"], "[REDACTED]")
             if detected_secrets:
@@ -491,6 +510,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if "prompt" in data:
             if isinstance(data["prompt"], str):
                 detected_secrets = self.scan_message_for_secrets(data["prompt"])
+                if any(s["type"] == "Private Key" for s in detected_secrets):
+                    data["prompt"] = _redact_pem_blocks(data["prompt"])
                 for secret in detected_secrets:
                     data["prompt"] = data["prompt"].replace(
                         secret["value"], "[REDACTED]"
@@ -507,6 +528,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 for idx, item in enumerate(data["prompt"]):
                     if isinstance(item, str):
                         detected_secrets = self.scan_message_for_secrets(item)
+                        if any(s["type"] == "Private Key" for s in detected_secrets):
+                            item = _redact_pem_blocks(item)
                         for secret in detected_secrets:
                             item = item.replace(secret["value"], "[REDACTED]")
                         data["prompt"][idx] = item
