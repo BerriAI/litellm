@@ -22,6 +22,26 @@ from litellm.types.integrations.datadog_cost_management import (
 )
 from litellm.types.utils import StandardLoggingPayload
 
+# Reserved tag keys whose values come from trusted sources (infra env, LiteLLM
+# core payload fields, or proxy-controlled auth metadata). User-supplied
+# request_tags / metadata cannot overwrite these, even when the key is
+# allowlisted via cost_tag_keys, because that would let an authenticated caller
+# spoof cost attribution (e.g. request_tags=["team:victim-team"]).
+_RESERVED_TAG_KEYS: frozenset = frozenset(
+    {
+        "env",
+        "service",
+        "host",
+        "pod_name",
+        "provider",
+        "model",
+        "model_id",
+        "team",
+        "user",
+        "model_group",
+    }
+)
+
 
 class DatadogCostManagementLogger(CustomBatchLogger):
     def __init__(self, cost_tag_keys: Optional[List[str]] = None, **kwargs):
@@ -190,6 +210,8 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             tags["model_group"] = str(metadata["model_group"])
 
         # Allowlist-gated: request_tags (split on `:`) and arbitrary metadata.*.
+        # Reserved keys are hard-blocked here regardless of allowlist membership —
+        # see _RESERVED_TAG_KEYS for the rationale.
         if self.cost_tag_keys:
             allow = set(self.cost_tag_keys)
             for rt in log.get("request_tags") or []:
@@ -197,10 +219,10 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                     continue
                 k, _, v = rt.partition(":")
                 if k in allow and v:
-                    tags[k] = v
+                    self._set_custom_tag(tags, k, v)
             for k, v in metadata.items():
                 if k in allow and v is not None and not isinstance(v, (dict, list)):
-                    tags[k] = str(v)
+                    self._set_custom_tag(tags, k, str(v))
             for nested_key in ("spend_logs_metadata", "requester_metadata"):
                 nested = metadata.get(nested_key)
                 if isinstance(nested, dict):
@@ -210,9 +232,21 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                             and v is not None
                             and not isinstance(v, (dict, list))
                         ):
-                            tags[k] = str(v)
+                            self._set_custom_tag(tags, k, str(v))
 
         return tags
+
+    @staticmethod
+    def _set_custom_tag(tags: Dict[str, str], key: str, value: str) -> None:
+        if key in _RESERVED_TAG_KEYS:
+            verbose_logger.debug(
+                "Datadog Cost Management: dropping user-supplied tag %r=%r — "
+                "key is reserved for trusted cost attribution.",
+                key,
+                value,
+            )
+            return
+        tags[key] = value
 
     @staticmethod
     def _add_tag(tags: Dict[str, str], key: str, value: Any) -> None:

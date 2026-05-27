@@ -330,7 +330,67 @@ async def test_extract_tags_nested_metadata_allowlisted(clean_env):
     )
     tags = logger._extract_tags(log)
     assert tags["platform"] == "web"
-    # Note: the always-on top-level "env" tag (from get_datadog_env) is overwritten
-    # by allowlisted requester_metadata.env. That's the intended override semantic.
-    assert tags["env"] == "prod"
+    # "env" is a reserved trusted dimension — requester_metadata.env must NOT
+    # overwrite the value sourced from get_datadog_env().
+    assert tags["env"] != "prod"
     assert "ignored" not in tags
+
+
+@pytest.mark.asyncio
+async def test_extract_tags_allowlist_cannot_override_reserved_dimensions(clean_env):
+    """
+    Reserved tag keys (env, service, host, pod_name, provider, model, model_id,
+    team, user, model_group) must not be overwritten by user-controlled
+    request_tags or metadata, even when listed in cost_tag_keys.
+    """
+    reserved = [
+        "env",
+        "service",
+        "host",
+        "pod_name",
+        "provider",
+        "model",
+        "model_id",
+        "team",
+        "user",
+        "model_group",
+    ]
+    logger = DatadogCostManagementLogger(cost_tag_keys=reserved)
+
+    metadata_attack = {k: f"attacker-meta-{k}" for k in reserved}
+    metadata_attack["user_api_key_alias"] = "trusted-user"
+    metadata_attack["user_api_key_team_alias"] = "trusted-team"
+    metadata_attack["model_group"] = "trusted-group"
+    metadata_attack["spend_logs_metadata"] = {
+        k: f"attacker-spend-{k}" for k in reserved
+    }
+    metadata_attack["requester_metadata"] = {k: f"attacker-req-{k}" for k in reserved}
+
+    log = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4",
+        model_id="router-id-123",
+        response_cost=0.01,
+        startTime=time.time(),
+        request_tags=[f"{k}:attacker-rt-{k}" for k in reserved],
+        metadata=metadata_attack,
+    )
+
+    tags = logger._extract_tags(log)
+
+    # Canonical FOCUS dims keep their trusted (top-level payload) values.
+    assert tags["provider"] == "openai"
+    assert tags["model"] == "gpt-4"
+    assert tags["model_id"] == "router-id-123"
+
+    # Backwards-compat trusted dims keep their proxy-controlled metadata values.
+    assert tags["user"] == "trusted-user"
+    assert tags["team"] == "trusted-team"
+    assert tags["model_group"] == "trusted-group"
+
+    # No reserved key carries an attacker-supplied prefix from any path.
+    for k in reserved:
+        assert not tags[k].startswith("attacker-"), (
+            f"reserved key {k!r} was overwritten by user-controlled input: "
+            f"{tags[k]!r}"
+        )
