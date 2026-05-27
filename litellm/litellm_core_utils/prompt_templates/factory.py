@@ -2208,10 +2208,7 @@ def _sanitize_empty_text_content(
             message = cast(AllMessageValues, dict(message))  # Make a copy
             if has_tool_calls:
                 # Drop the empty text — the tool_calls field carries the turn.
-                # Anthropic accepts an assistant turn that is just tool_calls.
-                # Deleting the key (vs. setting to None) keeps the message a
-                # valid AllMessageValues without a broad-type cast.
-                message.pop("content", None)
+                message["content"] = None  # type: ignore[typeddict-item]
                 verbose_logger.debug(
                     "_sanitize_empty_text_content: Dropped empty text content "
                     "on assistant message with tool_calls (%s role)",
@@ -2253,6 +2250,12 @@ def _sanitize_empty_text_content(
             new_blocks.append(block)
 
         if changed:
+            # Safety net: if dropping left us with an empty list AND the
+            # message has no sibling tool_calls field to carry the turn,
+            # fall back to the placeholder. Anthropic rejects an empty
+            # content list with the same error as an empty text block.
+            if not new_blocks and not has_tool_calls:
+                new_blocks = [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
             message = cast(AllMessageValues, dict(message))  # Make a copy
             message["content"] = new_blocks  # type: ignore
             verbose_logger.debug(
