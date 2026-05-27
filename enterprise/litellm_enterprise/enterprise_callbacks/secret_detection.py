@@ -41,15 +41,14 @@ _PEM_BLOCK_RE = re.compile(
 def _expand_private_key_values(detected_secrets, original_text):
     """Promote header-only Private Key matches to the full PEM block.
 
-    ``detect_secrets`` is line-based, so a multi-line PEM private key yields
-    a ``secret_value`` of only the ``-----BEGIN ... PRIVATE KEY-----`` armor
-    header. Without expansion, ``str.replace(secret_value, "[REDACTED]")`` at
-    each redact call site would only strike the header line, leaving the
-    base64 body and ``-----END ... PRIVATE KEY-----`` footer to be forwarded
-    downstream. This helper rewrites each ``Private Key`` entry value with
-    the full PEM block found in ``original_text``. Non-Private-Key entries
-    pass through unchanged. If no PEM block is found in ``original_text``
-    the input list is returned untouched.
+    For every ``Private Key`` entry we look up the PEM block in
+    ``original_text`` that actually contains the detected header line and
+    rewrite the entry value with that full block. Pairing by membership
+    rather than by index is safe when the number of detect-secrets entries
+    differs from the number of complete regex matches (for example when an
+    orphan BEGIN header has no matching END). If no complete block
+    contains the detected header the original header-only value is kept
+    untouched. Non-Private-Key entries pass through unchanged.
     """
     if not detected_secrets:
         return detected_secrets
@@ -57,15 +56,20 @@ def _expand_private_key_values(detected_secrets, original_text):
     if not pem_blocks:
         return detected_secrets
     expanded = []
-    idx = 0
     for secret in detected_secrets:
-        if secret.get("type") == "Private Key" and idx < len(pem_blocks):
-            expanded.append({"type": secret["type"], "value": pem_blocks[idx]})
-            idx += 1
+        if secret.get("type") != "Private Key":
+            expanded.append(secret)
+            continue
+        header = secret["value"]
+        containing = next(
+            (block for block in pem_blocks if header in block),
+            None,
+        )
+        if containing is not None:
+            expanded.append({"type": secret["type"], "value": containing})
         else:
             expanded.append(secret)
     return expanded
-
 
 
 _custom_plugins_path = "file://" + os.path.join(
