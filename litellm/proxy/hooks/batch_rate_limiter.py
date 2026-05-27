@@ -402,6 +402,20 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         Safe by default: returns False on any lookup error, so misconfiguration
         never silently disables rate limiting.
+
+        Security contract (operators read this):
+
+            Skipping the input-file retrieval also skips
+            ``_enforce_batch_file_model_access`` - the per-line model
+            allowlist check that prevents a caller from smuggling restricted
+            models inside the JSONL ``body.model`` field. Only set the flag
+            on deployments where you control the upstream (e.g. a custom vLLM
+            deployment that ignores ``body.model`` and serves a single fixed
+            model). For shared/loadbalanced deployments, leave the flag unset
+            so the per-line authorization check runs.
+
+            ``async_pre_call_hook`` emits a WARNING log on every skip so
+            operators can audit the trust decision in production.
         """
         try:
             from litellm.proxy.proxy_server import llm_router
@@ -490,9 +504,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         # audit-log gaps (the internal retrieve does not propagate
         # ``UserApiKeyAuth``), and 404 on base64-encoded file IDs.
         if self._should_skip_input_file_retrieval(data=data):
-            verbose_proxy_logger.debug(
-                "Batch rate limiter: skip_batch_input_file_retrieval is set; "
-                "skipping input-file retrieval and batch rate-limit accounting"
+            verbose_proxy_logger.warning(
+                "Batch rate limiter: skip_batch_input_file_retrieval is set for "
+                "model=%s; skipping input-file retrieval, batch rate-limit "
+                "accounting, AND per-line model allowlist enforcement. Operator "
+                "must trust this deployment.",
+                data.get("model") if isinstance(data, dict) else None,
             )
             return data
 
