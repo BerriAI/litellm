@@ -358,7 +358,9 @@ def anthropic_messages_handler(
     AnthropicMessagesResponse,
     Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    Coroutine[
+        Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]
+    ],
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
