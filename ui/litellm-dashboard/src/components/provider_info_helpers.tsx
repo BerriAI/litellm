@@ -426,9 +426,8 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
         if (
-          litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" &&
-            providerMatchesModelGroup(litellmProvider, custom_llm_provider))
+          typeof litellmProvider === "string" &&
+          providerMatchesModelGroup(litellmProvider, custom_llm_provider)
         ) {
           providerModels.push(key);
         }
