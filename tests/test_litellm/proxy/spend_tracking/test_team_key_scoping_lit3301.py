@@ -264,12 +264,12 @@ def _make_detail_mock_prisma(rows_by_id):
             d = rows_by_id.get(where["request_id"])
             return Row(d) if d else None
 
-        async def query_raw(self, sql, *params):
-            return []
-
     class DB:
         def __init__(self):
             self.litellm_spendlogs = FindUnique()
+
+        async def query_raw(self, sql, *params):
+            return []
 
     class Prisma:
         def __init__(self):
