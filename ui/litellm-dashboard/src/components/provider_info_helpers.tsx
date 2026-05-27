@@ -375,6 +375,44 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
+/**
+ * Returns true iff `litellmProvider` (the value of `litellm_provider` from
+ * `model_prices_and_context_window.json`) belongs to the dropdown for the
+ * provider whose canonical key is `custom_llm_provider`.
+ *
+ * A model belongs to a provider's dropdown when its `litellm_provider` is
+ * either:
+ *  - an exact match (`"anthropic" === "anthropic"`), or
+ *  - the same canonical key followed by `-` or `_` as a sub-category
+ *    delimiter (e.g. `"vertex_ai-anthropic_models"` belongs under
+ *    `vertex_ai`; `"cohere_chat"` belongs under `cohere`).
+ *
+ * Previously this used `String.prototype.includes`, which matched
+ * `custom_llm_provider` as an unanchored substring. That caused
+ * `vertex_ai-anthropic_models` to leak into the Anthropic provider
+ * dropdown (and `vertex_ai-llama_models` into Meta Llama, etc.) - see
+ * LIT-3311.
+ */
+export const providerMatchesModelGroup = (
+  litellmProvider: string,
+  custom_llm_provider: string,
+): boolean => {
+  if (!custom_llm_provider) {
+    return false;
+  }
+  if (litellmProvider === custom_llm_provider) {
+    return true;
+  }
+  if (litellmProvider.length <= custom_llm_provider.length) {
+    return false;
+  }
+  if (!litellmProvider.startsWith(custom_llm_provider)) {
+    return false;
+  }
+  const sep = litellmProvider[custom_llm_provider.length];
+  return sep === "-" || sep === "_";
+};
+
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
   console.log(`Provider key: ${providerKey}`);
@@ -388,8 +426,8 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
         if (
-          litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          typeof litellmProvider === "string" &&
+          providerMatchesModelGroup(litellmProvider, custom_llm_provider)
         ) {
           providerModels.push(key);
         }
