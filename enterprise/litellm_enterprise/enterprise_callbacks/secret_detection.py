@@ -465,24 +465,26 @@ def _expand_private_key_values(
     pem_blocks = _PEM_BLOCK_RE.findall(message_content)
 
     expanded: list = []
-    private_key_emitted = False
+    full_blocks_emitted = False
     for secret in detected_secrets:
         if secret.get("type") != "Private Key":
             expanded.append(secret)
             continue
-        if private_key_emitted:
-            # All PEM blocks in the message have already been emitted from
-            # the first ``Private Key`` header match; additional headers
-            # (one per block when there are multiple) would just duplicate.
-            continue
         if pem_blocks:
-            for block in pem_blocks:
-                expanded.append({"type": "Private Key", "value": block})
-        else:
-            # No full block found — fall back to the header-only entry so the
-            # current behavior (partial redaction of the header) is preserved.
-            expanded.append(secret)
-        private_key_emitted = True
+            # Emit one entry per full PEM block from the FIRST ``Private Key``
+            # match only; subsequent ``Private Key`` entries are dropped
+            # because each pre-existing header match would otherwise
+            # duplicate the same blocks.
+            if not full_blocks_emitted:
+                for block in pem_blocks:
+                    expanded.append({"type": "Private Key", "value": block})
+                full_blocks_emitted = True
+            continue
+        # No full ``BEGIN ... END`` block was found in the message (e.g.
+        # truncated input). Preserve EVERY header-only entry so the existing
+        # per-header redaction still runs for each one — regressing to the
+        # pre-fix behavior is intentional in this fallback path.
+        expanded.append(secret)
     return expanded
 
 
