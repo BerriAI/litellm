@@ -79,6 +79,15 @@ class TestCustomTechnicalKeywords:
         last_default_idx = max(tech.index(d) for d in DEFAULT_TECHNICAL_KEYWORDS)
         assert last_default_idx < z_idx
 
+    def test_empty_technical_keywords_falls_back_to_defaults_symmetrically(self):
+        """Symmetry with code_keywords/reasoning_keywords/simple_keywords:
+        an empty technical_keywords list falls back to defaults (truthy-fallback).
+        """
+        r = _router({"technical_keywords": [], "custom_technical_keywords": ["udp"]})
+        # Defaults still active because empty list is falsy -> falls back.
+        assert "architecture" in r.technical_keywords
+        assert "udp" in r.technical_keywords
+
     def test_empty_list_is_noop(self):
         r = _router({"custom_technical_keywords": []})
         assert list(r.technical_keywords) == list(DEFAULT_TECHNICAL_KEYWORDS)
