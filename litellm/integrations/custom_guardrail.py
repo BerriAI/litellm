@@ -838,6 +838,70 @@ class CustomGuardrail(CustomLogger):
         for key, value in vars(litellm_params).items():
             setattr(self, key, value)
 
+    def _extract_passthrough_messages(
+        self, data: dict
+    ) -> Optional[List[AllMessageValues]]:
+        """Normalize a passthrough request body into ``AllMessageValues`` so
+        guardrails (pre / during / post) can run on ``/bedrock`` and similar
+        passthrough endpoints.
+
+        Supported request shapes today (covers the documented ``/bedrock``
+        passthrough targets — Converse, Converse-Stream, Invoke with
+        Claude/Nova/etc.):
+
+        * Bedrock Converse: ``{"messages":[{"role":"user",
+          "content":[{"text":"…"}]}]}``. Text content blocks are joined
+          to a single string per message.
+        * Bedrock Invoke (Claude / Anthropic messages API):
+          ``{"messages":[{"role":"user","content":"…"}]}`` — content
+          may be a string OR a list of ``{"type":"text","text":"…"}``
+          blocks.
+
+        Returns ``None`` for shapes we don't yet recognize so the caller
+        stays on the existing "no messages" branch rather than silently
+        guessing.
+        """
+        if not isinstance(data, dict):
+            return None
+        inner = data.get("data")
+        if not isinstance(inner, dict):
+            return None
+        raw_messages = inner.get("messages")
+        if not isinstance(raw_messages, list) or not raw_messages:
+            return None
+
+        normalized: List[AllMessageValues] = []
+        for raw in raw_messages:
+            if not isinstance(raw, dict):
+                continue
+            role = raw.get("role")
+            content = raw.get("content")
+            if not isinstance(role, str):
+                continue
+            if isinstance(content, str):
+                # Bedrock Invoke (Claude) — content already a string.
+                normalized.append({"role": role, "content": content})  # type: ignore[misc]
+                continue
+            if isinstance(content, list):
+                texts: List[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    # Bedrock Converse content block: {"text": "…"}
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        texts.append(text)
+                        continue
+                    # Bedrock Invoke (Claude messages API) content block:
+                    # {"type": "text", "text": "…"}
+                    if block.get("type") == "text":
+                        inner_text = block.get("text")
+                        if isinstance(inner_text, str):
+                            texts.append(inner_text)
+                if texts:
+                    normalized.append({"role": role, "content": "".join(texts)})  # type: ignore[misc]
+        return normalized or None
+
     def get_guardrails_messages_for_call_type(
         self, call_type: CallTypes, data: Optional[dict] = None
     ) -> Optional[List[AllMessageValues]]:
@@ -882,6 +946,17 @@ class CustomGuardrail(CustomLogger):
                 responses_api_request=data,
             )
             return cast(List[AllMessageValues], messages)
+
+        #########################################################
+        # /bedrock and similar LLM passthrough endpoints store the
+        # upstream request body under data["data"]. Without this
+        # branch, guardrails registered against /bedrock silently
+        # no-op (get_guardrails_messages_for_call_type returns None,
+        # the pre_call_hook short-circuits with "no messages").
+        # See LIT-3385.
+        #########################################################
+        if call_type == CallTypes.allm_passthrough_route.value:
+            return self._extract_passthrough_messages(data=data)
         return None
 
 
