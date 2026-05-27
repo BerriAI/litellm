@@ -428,7 +428,9 @@ async def test_pem_private_key_full_block_redaction_in_prompt_list():
 
 def test_redact_pem_blocks_helper_is_pure_function():
     """Direct unit test of the helper so a regression in the regex is caught
-    even if the call-site integration is mocked away."""
+    even if the call-site integration is mocked away. The helper returns
+    ``(redacted_text, num_blocks_replaced)`` so callers can log when the
+    regex caught a block that detect-secrets missed."""
     from litellm_enterprise.enterprise_callbacks.secret_detection import (
         _redact_pem_blocks,
     )
@@ -439,9 +441,52 @@ def test_redact_pem_blocks_helper_is_pure_function():
         "ABCDEF\nGHIJKL\n"
         "-----END RSA PRIVATE KEY-----"
     )
-    assert _redact_pem_blocks(pem) == "[REDACTED]"
+    assert _redact_pem_blocks(pem) == ("[REDACTED]", 1)
     # Two blocks in one message
     two = pem + "\nmiddle\n" + pem
-    assert _redact_pem_blocks(two) == "[REDACTED]\nmiddle\n[REDACTED]"
-    # No PEM -> untouched
-    assert _redact_pem_blocks("hello world") == "hello world"
+    assert _redact_pem_blocks(two) == ("[REDACTED]\nmiddle\n[REDACTED]", 2)
+    # No PEM -> untouched, count == 0
+    assert _redact_pem_blocks("hello world") == ("hello world", 0)
+
+
+
+@pytest.mark.asyncio
+async def test_pem_only_catch_logs_warning(monkeypatch, caplog):
+    """When detect-secrets returns no secrets but the regex sweep still
+    redacts a PEM block (e.g., a malformed-but-readable block, or a future
+    detect-secrets version), the guardrail must emit a warning so operators
+    retain visibility into what was scrubbed.
+
+    Regression test for the observability gap flagged in Greptile review of
+    LIT-3292.
+    """
+    import logging
+
+    secret_instance = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide_secrets", event_hook="pre_call"
+    )
+    # Force detect-secrets to report nothing so we test the elif branch.
+    monkeypatch.setattr(
+        secret_instance, "scan_message_for_secrets", lambda text: []
+    )
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "fakebase64bodyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    data = {"messages": [{"role": "user", "content": pem}]}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await secret_instance.async_pre_call_hook(
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake"),
+        )
+    # Body must still be scrubbed even though detect-secrets returned nothing.
+    assert data["messages"][0]["content"].strip() == "[REDACTED]"
+    # And operators must see a warning that the regex caught something.
+    assert any(
+        "PEM private key block" in rec.getMessage()
+        and "not flagged by detect-secrets" in rec.getMessage()
+        for rec in caplog.records
+    ), [r.getMessage() for r in caplog.records]
