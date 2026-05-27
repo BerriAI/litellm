@@ -192,6 +192,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         request_body: Dict[str, Any] = {"query": query, "pageSize": 10}
 
         data_store_specs = litellm_params.get("vertex_data_store_specs")
+        admin_data_store_specs_configured = data_store_specs is not None
         if data_store_specs:
             if not isinstance(data_store_specs, list):
                 raise ValueError(
@@ -206,6 +207,18 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             request_body["dataStoreSpecs"] = data_store_specs
 
         if extra_body:
+            # SECURITY: admin-configured ``vertex_data_store_specs`` is the
+            # authoritative scope for which datastores an engine search may
+            # touch. If the admin has set it, a caller MUST NOT be able to
+            # override or remove it via ``extra_body["dataStoreSpecs"]`` -
+            # that would let an authenticated proxy caller broaden the
+            # search beyond the configured allowlist.
+            if admin_data_store_specs_configured and "dataStoreSpecs" in extra_body:
+                raise ValueError(
+                    "dataStoreSpecs in extra_body is not allowed when the "
+                    "vector store is configured with vertex_data_store_specs "
+                    "- the admin-configured scope is authoritative"
+                )
             request_body.update(extra_body)
 
         #########################################################
