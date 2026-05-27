@@ -947,18 +947,52 @@ class ResponseAPILoggingUtils:
                         response_api_usage.input_tokens_details, "image_tokens", None
                     ),
                 )
-        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        completion_tokens_details: CompletionTokensDetailsWrapper
+        # Always emit a CompletionTokensDetailsWrapper (even when upstream
+        # omits output_tokens_details) so downstream cost / observability code
+        # sees the same shape it would for Chat Completions responses. The
+        # Responses API silently drops output_tokens_details for non-reasoning
+        # models, which previously surfaced as
+        # `completion_tokens_details=None` while `prompt_tokens_details` was
+        # populated, breaking parity with /chat/completions.
+        # See LIT-1771 / GH #15377.
         output_tokens_details = getattr(
             response_api_usage, "output_tokens_details", None
         )
-        if output_tokens_details:
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    output_tokens_details, "reasoning_tokens", None
-                ),
-                image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                text_tokens=getattr(output_tokens_details, "text_tokens", None),
-            )
+        if output_tokens_details is not None:
+            if isinstance(output_tokens_details, dict):
+                completion_tokens_details = CompletionTokensDetailsWrapper(
+                    reasoning_tokens=output_tokens_details.get("reasoning_tokens"),
+                    image_tokens=output_tokens_details.get("image_tokens"),
+                    text_tokens=output_tokens_details.get("text_tokens"),
+                    audio_tokens=output_tokens_details.get("audio_tokens"),
+                    accepted_prediction_tokens=output_tokens_details.get(
+                        "accepted_prediction_tokens"
+                    ),
+                    rejected_prediction_tokens=output_tokens_details.get(
+                        "rejected_prediction_tokens"
+                    ),
+                )
+            else:
+                completion_tokens_details = CompletionTokensDetailsWrapper(
+                    reasoning_tokens=getattr(
+                        output_tokens_details, "reasoning_tokens", None
+                    ),
+                    image_tokens=getattr(output_tokens_details, "image_tokens", None),
+                    text_tokens=getattr(output_tokens_details, "text_tokens", None),
+                    audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
+                    accepted_prediction_tokens=getattr(
+                        output_tokens_details, "accepted_prediction_tokens", None
+                    ),
+                    rejected_prediction_tokens=getattr(
+                        output_tokens_details, "rejected_prediction_tokens", None
+                    ),
+                )
+        else:
+            # Upstream omitted output_tokens_details entirely. Emit an empty
+            # wrapper so the field has the same shape as Chat Completions
+            # (all sub-fields None) rather than `None`.
+            completion_tokens_details = CompletionTokensDetailsWrapper()
 
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
