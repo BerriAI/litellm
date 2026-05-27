@@ -92,9 +92,25 @@ class ComplexityRouter(CustomLogger):
         self.reasoning_keywords = (
             self.config.reasoning_keywords or DEFAULT_REASONING_KEYWORDS
         )
-        self.technical_keywords = (
+        _base_technical_keywords = (
             self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS
         )
+        if self.config.custom_technical_keywords:
+            # Append-not-replace: extend the effective technical keyword list
+            # with caller-provided domain-specific terms. De-duplicate while
+            # preserving order so repeated user entries (or overlap with the
+            # base list) do not double-count during keyword matching.
+            seen = set()
+            merged: List[str] = []
+            for kw in list(_base_technical_keywords) + list(
+                self.config.custom_technical_keywords
+            ):
+                if kw not in seen:
+                    seen.add(kw)
+                    merged.append(kw)
+            self.technical_keywords = merged
+        else:
+            self.technical_keywords = list(_base_technical_keywords)
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
 
         # Pre-compile regex patterns for efficiency
