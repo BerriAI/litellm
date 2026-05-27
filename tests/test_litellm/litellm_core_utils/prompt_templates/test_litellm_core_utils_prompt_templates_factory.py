@@ -2872,3 +2872,55 @@ def test_sanitize_empty_text_assistant_mixed_text_list():
     }
     result = _sanitize_empty_text_content(message)
     assert result["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_anthropic_messages_pt_xml_inserts_placeholder_first_message():
+    """When anthropic_messages_pt_xml receives messages starting with assistant
+    (no user message first), it should insert a placeholder user message with
+    _DEFAULT_EMPTY_CONTENT_MESSAGE (".") to satisfy Anthropic's role alternation."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt_xml,
+        _DEFAULT_EMPTY_CONTENT_MESSAGE,
+    )
+    import litellm
+
+    original_modify = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "assistant", "content": "Hello"},
+        ]
+        result = anthropic_messages_pt_xml(messages)
+        assert len(result) >= 2
+        assert result[0]["role"] == "user"
+        # The placeholder should use _DEFAULT_EMPTY_CONTENT_MESSAGE
+        text_blocks = [
+            b
+            for b in result[0]["content"]
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert any(b["text"] == _DEFAULT_EMPTY_CONTENT_MESSAGE for b in text_blocks)
+    finally:
+        litellm.modify_params = original_modify
+
+
+def test_anthropic_messages_pt_xml_raises_without_modify_params():
+    """When modify_params=False and the first message is not a user message,
+    anthropic_messages_pt_xml should raise an Exception."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt_xml,
+    )
+    import litellm
+
+    original_modify = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "assistant", "content": "Hello"},
+        ]
+        import pytest
+
+        with pytest.raises(Exception, match="Invalid first message"):
+            anthropic_messages_pt_xml(messages)
+    finally:
+        litellm.modify_params = original_modify
