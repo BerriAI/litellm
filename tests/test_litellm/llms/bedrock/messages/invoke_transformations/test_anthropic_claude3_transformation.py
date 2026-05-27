@@ -1497,3 +1497,138 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         custom_llm_provider="bedrock",
     )
     assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# LIT-3393: surface a warning when Bedrock InvokeModel silently strips
+# unsupported context_management edit types so the no-op is visible in logs.
+# ---------------------------------------------------------------------------
+
+
+def _run_filter_with_caplog(optional_params, caplog):
+    """Helper: drive _filter_context_management_for_bedrock_invoke through the
+    public transform path so we exercise the same call site Bedrock requests
+    take in production."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        return cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+
+def test_bedrock_messages_warns_on_dropped_clear_tool_uses_edit(caplog):
+    """LIT-3393: Bedrock InvokeModel does not support clear_tool_uses_20250919.
+    The transform must drop the edit AND log a warning so the silent no-op is
+    observable."""
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_tool_uses_20250919", "keep": 3}]
+        },
+    }
+    result = _run_filter_with_caplog(optional_params, caplog)
+    assert "context_management" not in result
+    warnings = [
+        r for r in caplog.records
+        if r.levelname == "WARNING"
+        and "context_management" in r.getMessage()
+        and "clear_tool_uses_20250919" in r.getMessage()
+    ]
+    assert warnings, (
+        "expected a warning naming clear_tool_uses_20250919 when Bedrock "
+        f"strips it; got records: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_bedrock_messages_does_not_warn_on_internal_clear_thinking_edit(caplog):
+    """clear_thinking_20251015 is LiteLLM-internal (Claude Code sends it every
+    request and the proxy consumes it via thinking injection). Bedrock strips
+    it as before, but we MUST NOT warn — that would create per-request log
+    noise for every Claude Code call."""
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+    result = _run_filter_with_caplog(optional_params, caplog)
+    assert "context_management" not in result
+    noise = [
+        r for r in caplog.records
+        if r.levelname == "WARNING" and "context_management" in r.getMessage()
+    ]
+    assert not noise, (
+        "did not expect a warning for the LiteLLM-internal clear_thinking_20251015 "
+        f"edit type; got: {[r.getMessage() for r in noise]}"
+    )
+
+
+def test_bedrock_messages_warns_only_on_unsupported_when_mixed(caplog):
+    """Mixed list: compact_20260112 is kept (supported), clear_tool_uses_20250919
+    is dropped with a warning, clear_thinking_20251015 is dropped silently."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "clear_thinking_20251015", "keep": "all"},
+                {"type": "clear_tool_uses_20250919", "keep": 3},
+                {"type": "compact_20260112"},
+            ]
+        },
+    }
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-sonnet-4-6-20250929-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    # supported edit survives
+    assert result.get("context_management") == {
+        "edits": [{"type": "compact_20260112"}]
+    }
+    assert "compact-2026-01-12" in result.get("anthropic_beta", [])
+    # warning fires once, names clear_tool_uses_20250919, not clear_thinking_20251015
+    msgs = [
+        r.getMessage() for r in caplog.records
+        if r.levelname == "WARNING" and "context_management" in r.getMessage()
+    ]
+    assert any("clear_tool_uses_20250919" in m for m in msgs), msgs
+    assert not any("clear_thinking_20251015" in m for m in msgs), msgs
+
+
+def test_bedrock_messages_deduplicates_dropped_edit_types_in_warning(caplog):
+    """Repeated unsupported edit types should appear once in the warning."""
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [
+                {"type": "clear_tool_uses_20250919", "keep": 3},
+                {"type": "clear_tool_uses_20250919", "keep": 5},
+                {"type": "some_future_edit_2027"},
+            ]
+        },
+    }
+    result = _run_filter_with_caplog(optional_params, caplog)
+    assert "context_management" not in result
+    msgs = [
+        r.getMessage() for r in caplog.records
+        if r.levelname == "WARNING" and "context_management" in r.getMessage()
+    ]
+    assert len(msgs) == 1, f"expected exactly one warning, got {msgs}"
+    # both unique types named, no duplicate
+    assert "clear_tool_uses_20250919" in msgs[0]
+    assert "some_future_edit_2027" in msgs[0]
+    assert msgs[0].count("clear_tool_uses_20250919") == 1
