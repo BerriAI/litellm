@@ -197,6 +197,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 raise ValueError(
                     "vertex_data_store_specs must be a list of DataStoreSpec dicts"
                 )
+            for i, spec in enumerate(data_store_specs):
+                if not isinstance(spec, dict):
+                    raise ValueError(
+                        f"vertex_data_store_specs[{i}] must be a DataStoreSpec dict, "
+                        f"got {type(spec).__name__}"
+                    )
             request_body["dataStoreSpecs"] = data_store_specs
 
         if extra_body:
