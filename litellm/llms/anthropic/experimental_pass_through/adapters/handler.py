@@ -294,7 +294,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # translates this to the provider's native continuation flags
         # (continue_final_message=True for vLLM).
         messages = completion_kwargs.get("messages", [])
-        if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "assistant":
+        if (
+            messages
+            and isinstance(messages[-1], dict)
+            and messages[-1].get("role") == "assistant"
+        ):
             # Only stamp if not already set and message has non-empty content
             if messages[-1].get("prefix") is None and messages[-1].get("content"):
                 messages[-1]["prefix"] = True
@@ -368,7 +372,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # (Bug #28568/#28562: response.id must match spend_logs.request_id)
             litellm_call_id = None
             if hasattr(completion_response, "_hidden_params"):
-                litellm_call_id = completion_response._hidden_params.get("litellm_call_id")
+                litellm_call_id = completion_response._hidden_params.get(
+                    "litellm_call_id"
+                )
             if not litellm_call_id and hasattr(completion_response, "litellm_call_id"):
                 litellm_call_id = completion_response.litellm_call_id
 
@@ -472,7 +478,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # (Bug #28568/#28562: response.id must match spend_logs.request_id)
             litellm_call_id = None
             if hasattr(completion_response, "_hidden_params"):
-                litellm_call_id = completion_response._hidden_params.get("litellm_call_id")
+                litellm_call_id = completion_response._hidden_params.get(
+                    "litellm_call_id"
+                )
             if not litellm_call_id and hasattr(completion_response, "litellm_call_id"):
                 litellm_call_id = completion_response.litellm_call_id
 

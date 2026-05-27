@@ -27,16 +27,26 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 class ConcreteConfig(BaseConfig):
     """Minimal concrete subclass for testing BaseConfig methods."""
+
     def get_error_class(self, error_code, status_code):
         return Exception
+
     def get_supported_openai_params(self, model):
         return []
-    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+
+    def map_openai_params(
+        self, non_default_params, optional_params, model, drop_params
+    ):
         return optional_params
-    def transform_request(self, model, messages, optional_params, litellm_params, headers):
+
+    def transform_request(
+        self, model, messages, optional_params, litellm_params, headers
+    ):
         return {"model": model, "messages": messages, **optional_params}
+
     def transform_response(self, model, response, model_encoded):
         return response
+
     def validate_environment(self, model, messages, optional_params, headers):
         return True
 
@@ -403,7 +413,9 @@ class TestHandlerLitellmCallIdExtraction:
     """Bug #28568/#28562: Handler must extract litellm_call_id from response
     and pass it to the translator for spend log correlation."""
 
-    def _make_completion_response(self, hidden_params=None, call_id_attr=None, no_call_id_attr=False):
+    def _make_completion_response(
+        self, hidden_params=None, call_id_attr=None, no_call_id_attr=False
+    ):
         """Create a properly structured mock ModelResponse."""
         import copy
 
@@ -469,8 +481,7 @@ class TestHandlerLitellmCallIdExtraction:
     def test_sync_non_stream_falls_back_to_response_attr(self):
         """Non-stream: fallback to response.litellm_call_id when no _hidden_params."""
         mock_response = self._make_completion_response(
-            hidden_params={},
-            call_id_attr="attr-call-id"
+            hidden_params={}, call_id_attr="attr-call-id"
         )
 
         with patch("litellm.completion", return_value=mock_response):
@@ -496,8 +507,7 @@ class TestHandlerLitellmCallIdExtraction:
     def test_sync_non_stream_uses_original_id_when_no_call_id(self):
         """Non-stream: use original response.id when no litellm_call_id found."""
         mock_response = self._make_completion_response(
-            hidden_params={},
-            no_call_id_attr=True
+            hidden_params={}, no_call_id_attr=True
         )
 
         with patch("litellm.completion", return_value=mock_response):
@@ -610,8 +620,7 @@ class TestHandlerLitellmCallIdExtraction:
     async def test_async_handler_falls_back_to_response_attr(self):
         """Async: fallback to response.litellm_call_id when no _hidden_params."""
         mock_response = self._make_completion_response(
-            hidden_params={},
-            call_id_attr="async-attr-call"
+            hidden_params={}, call_id_attr="async-attr-call"
         )
 
         with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:

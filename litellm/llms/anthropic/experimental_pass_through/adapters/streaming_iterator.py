@@ -94,9 +94,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(
-                                self.litellm_call_id or uuid.uuid4()
-                            ),
+                            "id": "msg_{}".format(self.litellm_call_id or uuid.uuid4()),
                             "type": "message",
                             "role": "assistant",
                             "content": [],
@@ -236,9 +234,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     {
                         "type": "message_start",
                         "message": {
-                            "id": "msg_{}".format(
-                                self.litellm_call_id or uuid.uuid4()
-                            ),
+                            "id": "msg_{}".format(self.litellm_call_id or uuid.uuid4()),
                             "type": "message",
                             "role": "assistant",
                             "content": [],
