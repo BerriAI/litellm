@@ -76,6 +76,44 @@ class TestBedrockNovaVideoEmbeddingMode:
         assert video["embeddingMode"] == "AUDIO_VIDEO_SEPARATE"
         assert video["source"]["s3Location"]["uri"] == "s3://x/y.mp4"
 
+    def test_user_supplied_video_without_embedding_mode_gets_default(self):
+        """Pre-populated ``video`` dict missing ``embeddingMode`` still gets
+        the default (regression for the Greptile P2 gap)."""
+        cfg = AmazonNovaEmbeddingConfig()
+        req = cfg._transform_request(
+            input="ignored",
+            inference_params={
+                "embeddingPurpose": "VIDEO_RETRIEVAL",
+                "video": {
+                    "format": "mp4",
+                    "source": {"s3Location": {"uri": "s3://x/y.mp4"}},
+                },
+            },
+            async_invoke_route=False,
+        )
+        video = req["singleEmbeddingParams"]["video"]
+        assert video["embeddingMode"] == "AUDIO_VIDEO_COMBINED"
+
+    def test_user_supplied_video_without_embedding_mode_respects_override(self):
+        """Top-level ``embeddingMode`` override applies to a pre-populated
+        ``video`` dict that omits the field."""
+        cfg = AmazonNovaEmbeddingConfig()
+        req = cfg._transform_request(
+            input="ignored",
+            inference_params={
+                "embeddingPurpose": "VIDEO_RETRIEVAL",
+                "embeddingMode": "AUDIO_VIDEO_SEPARATE",
+                "video": {
+                    "format": "mp4",
+                    "source": {"s3Location": {"uri": "s3://x/y.mp4"}},
+                },
+            },
+            async_invoke_route=False,
+        )
+        video = req["singleEmbeddingParams"]["video"]
+        assert video["embeddingMode"] == "AUDIO_VIDEO_SEPARATE"
+        assert "embeddingMode" not in req["singleEmbeddingParams"]
+
     def test_non_video_paths_unchanged(self):
         cfg = AmazonNovaEmbeddingConfig()
         b64 = base64.b64encode(b"BYTES").decode()
