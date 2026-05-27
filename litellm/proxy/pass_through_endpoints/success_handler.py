@@ -11,7 +11,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import StandardPassThroughResponseObject
-from litellm.utils import executor as thread_pool_executor
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -94,19 +93,8 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         **kwargs,
     ):
-        """Helper function to handle both sync and async logging operations"""
-        # Submit to thread pool for sync logging
-        thread_pool_executor.submit(
-            logging_obj.success_handler,
-            standard_logging_response_object,
-            start_time,
-            end_time,
-            cache_hit,
-            **kwargs,
-        )
-
-        # Handle async logging
-        await logging_obj.async_success_handler(
+        """Log pass-through success via the shared async dispatch path."""
+        await logging_obj.dispatch_success_handlers(
             result=(
                 json.dumps(result)
                 if isinstance(result, dict)

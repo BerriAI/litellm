@@ -7,7 +7,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -145,25 +144,11 @@ class PassThroughStreamingHandler:
                 end_time=end_time,
                 model=model,
             )
-            await litellm_logging_obj.async_success_handler(
+            await litellm_logging_obj.dispatch_success_handlers(
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=False,
-                **kwargs,
-            )
-            if (
-                litellm_logging_obj._should_run_sync_callbacks_for_async_calls()
-                is False
-            ):
-                return
-
-            executor.submit(
-                litellm_logging_obj.success_handler,
-                result=standard_logging_response_object,
-                end_time=end_time,
-                cache_hit=False,
-                start_time=start_time,
                 **kwargs,
             )
         except Exception as e:

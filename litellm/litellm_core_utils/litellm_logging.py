@@ -1612,6 +1612,74 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
+    @staticmethod
+    def _is_sync_litellm_request(litellm_params: dict) -> bool:
+        """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.)."""
+        return (
+            litellm_params.get(CallTypes.acompletion.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses.value, False) is not True
+            and litellm_params.get(CallTypes.aembedding.value, False) is not True
+            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
+            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        )
+
+    def _is_final_streaming_success_emission(self) -> bool:
+        if self.stream is not True:
+            return False
+        return (
+            "async_complete_streaming_response" in self.model_call_details
+            or self.model_call_details.get("complete_streaming_response") is not None
+        )
+
+    def _should_skip_duplicate_final_stream_success_log(self) -> bool:
+        """Skip repeat final-stream exports (per-chunk logging disables has_logged_*)."""
+        if not self._is_final_streaming_success_emission():
+            return False
+        if self.model_call_details.get("has_logged_async_success_final") is True:
+            return True
+        self.model_call_details["has_logged_async_success_final"] = True
+        return False
+
+    async def dispatch_success_handlers(
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        **kwargs,
+    ) -> None:
+        """Route success logging to async and/or sync handlers for this request."""
+        from litellm.litellm_core_utils.thread_pool_executor import executor
+
+        litellm_params = self.model_call_details.get("litellm_params", {}) or {}
+        if self._is_sync_litellm_request(litellm_params):
+            self.success_handler(
+                result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                **kwargs,
+            )
+            return
+
+        await self.async_success_handler(
+            result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
+
+        if self._should_run_sync_callbacks_for_async_calls():
+            executor.submit(
+                self.success_handler,
+                result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                **kwargs,
+            )
+
     def should_run_logging(
         self,
         event_type: Literal[
@@ -2034,13 +2102,7 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
-        )
+        is_sync_request = self._is_sync_litellm_request(litellm_params)
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -2496,9 +2558,12 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
-        if not self.should_run_logging(
-            event_type="async_success"
-        ):  # prevent double logging
+        if self._should_skip_duplicate_final_stream_success_log():
+            return
+        if (
+            not self._is_final_streaming_success_emission()
+            and not self.should_run_logging(event_type="async_success")
+        ):  # prevent double logging (non-streaming)
             return
 
         ## CALCULATE COST FOR BATCH JOBS
@@ -2948,13 +3013,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request = (
-            litellm_params.get(CallTypes.acompletion.value, False) is not True
-            and litellm_params.get(CallTypes.aresponses.value, False) is not True
-            and litellm_params.get(CallTypes.aembedding.value, False) is not True
-            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
-            and litellm_params.get(CallTypes.atranscription.value, False) is not True
-        )
+        is_sync_request = self._is_sync_litellm_request(litellm_params)
 
         try:
             start_time, end_time = self._failure_handler_helper_fn(
@@ -3311,9 +3370,50 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_combined_callback_list(
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
-        if dynamic_success_callbacks is None:
-            return list(global_callbacks)
-        return list(set(dynamic_success_callbacks + global_callbacks))
+        """Merge dynamic and global callbacks; dedupe duplicate list entries only."""
+        combined_callbacks = (dynamic_success_callbacks or []) + list(global_callbacks)
+        deduped_callbacks: List[Any] = []
+        seen_callback_keys = set()
+
+        for callback in combined_callbacks:
+            callback_key = self._get_callback_dedupe_key(callback)
+            if callback_key in seen_callback_keys:
+                continue
+            seen_callback_keys.add(callback_key)
+            deduped_callbacks.append(callback)
+
+        return deduped_callbacks
+
+    @staticmethod
+    def _normalize_callback_slug(raw_name: str) -> str:
+        normalized = (
+            raw_name.lower()
+            .replace("-", "")
+            .replace("_", "")
+            .replace(" ", "")
+            .replace("logger", "")
+        )
+        return normalized
+
+    def _get_callback_dedupe_key(self, callback: Any):
+        """
+        Stable key for duplicate entries in a merged callback *list* only.
+        """
+        if isinstance(callback, str):
+            callback_name = callback.lower()
+            if callback_name in litellm._known_custom_logger_compatible_callbacks:
+                return ("integration", self._normalize_callback_slug(callback_name))
+            return ("string", callback_name)
+
+        if isinstance(callback, CustomLogger):
+            callback_name = getattr(callback, "callback_name", None)
+            identity_source = callback_name or callback.__class__.__name__
+            return ("integration", self._normalize_callback_slug(identity_source))
+
+        if callable(callback):
+            return ("callable", self._get_callback_name(callback))
+
+        return ("object", str(callback))
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """

@@ -38,6 +38,24 @@ from litellm.types.guardrails import GuardrailEventHooks
 # ---------------------------------------------------------------------------
 
 
+def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
+    """Match production entrypoint: ``_run_deferred_stream_guardrails`` uses dispatch."""
+
+    async def dispatch_success_handlers(
+        result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+    ):
+        await async_success_fn(
+            result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
+
+    mock_logging_obj.dispatch_success_handlers = dispatch_success_handlers
+    mock_logging_obj.async_success_handler = async_success_fn
+
+
 class PostCallGuardrail(CustomGuardrail):
     """A post-call guardrail."""
 
@@ -454,7 +472,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         tracking_guardrail = TrackingGuardrail()
         tracking_logger = TrackingLogger()
@@ -511,7 +529,7 @@ class TestDeferredStreamingClosure:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class ModifyingGuardrail(CustomGuardrail):
             def __init__(self):
@@ -573,7 +591,7 @@ class TestDeferredStreamingClosure:
             nonlocal logging_called
             logging_called = True
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = BlockingGuardrail()
 
@@ -621,7 +639,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = TransientErrorGuardrail()
 
@@ -656,7 +674,7 @@ class TestDeferredStreamingClosure:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class TestGuardrail(CustomGuardrail):
             def __init__(self):
@@ -739,7 +757,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = ApplyGuardrailType()
 
@@ -792,7 +810,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = IteratorHookGuardrail()
 
@@ -847,7 +865,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = InspectingGuardrail()
 
@@ -914,7 +932,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail_a = TaggedGuardrail("guardrail-a")
         guardrail_b = TaggedGuardrail("guardrail-b")
@@ -962,7 +980,7 @@ class TestDeferredStreamingClosure:
             nonlocal logging_called
             logging_called = True
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         def exploding_merge(data, llm_router):
             raise RuntimeError("Simulated init failure")
@@ -1054,7 +1072,7 @@ class TestFireDeferredStreamLogging:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class InfoWritingGuardrail(CustomGuardrail):
             def __init__(self):
