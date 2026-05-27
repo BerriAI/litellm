@@ -44,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -1123,6 +1124,9 @@ async def bedrock_proxy_route(
         _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    # SigV4 signs an exact payload; pass-through must send prepped.body, not json.dumps
+    # of a dict that hooks may mutate (logging_obj, metadata, etc.).
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
     received_value = await endpoint_func(
         request,
         fastapi_response,
@@ -1873,7 +1877,15 @@ async def _base_vertex_proxy_route(
     is_streaming_request = False
     if "stream" in str(updated_url):
         is_streaming_request = True
-        target += "?alt=sse"
+        # Only default to ?alt=sse when the client did NOT specify a response
+        # format. The google-genai SDK calls streamGenerateContent without
+        # ?alt= and expects raw JSON chunks; forcing alt=sse for those clients
+        # breaks SDK parsing. When the client passes ?alt=, the value is
+        # already forwarded by the pass-through layer via request.query_params,
+        # so we do not need to inject anything here.
+        client_alt = request.query_params.get("alt") if request.query_params else None
+        if not client_alt:
+            target += "?alt=sse"
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
