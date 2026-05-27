@@ -245,3 +245,31 @@ def test_pre_call_hook_redacts_two_same_type_pem_blocks():
     assert "AAAAAAAAAAAA" not in out, "first key body leaked"
     assert "ZZZZZZZZZZZZ" not in out, "second key body leaked"
     assert out.count("[REDACTED]") >= 2
+
+
+# ---------------------------------------------------------------------------
+# Audit logging: _redact_full_pem_blocks emits a warning when it actually fires
+# ---------------------------------------------------------------------------
+
+
+def test_redact_full_pem_blocks_logs_when_it_fires(caplog):
+    """When the defensive sweep actually replaces a block (i.e. detect-secrets
+    didn't flag it), a warning is emitted so the audit trail matches the rest
+    of the guardrail. Silent divergence from the configured detectors would
+    be a security surprise (Greptile feedback)."""
+    import logging
+    caplog.set_level(logging.WARNING)
+    out = _redact_full_pem_blocks(f"hi\n{_SAMPLE_PEM}\nbye")
+    assert "[REDACTED]" in out
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("defensive PEM-block sweep" in m for m in msgs), msgs
+
+
+def test_redact_full_pem_blocks_no_log_when_passthrough(caplog):
+    """When the sweep doesn't replace anything, no warning is emitted."""
+    import logging
+    caplog.set_level(logging.WARNING)
+    out = _redact_full_pem_blocks("nothing to redact here")
+    assert out == "nothing to redact here"
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not any("defensive PEM-block sweep" in m for m in msgs)
