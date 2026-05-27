@@ -43,7 +43,10 @@ def test_create_vertex_url_openapi_vs_deployed_endpoint(
 
 
 def test_model_id_in_json_body_heuristic() -> None:
-    assert _vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning") is True
+    assert (
+        _vertex_model_garden_model_id_in_json_body("xai/grok-4.1-fast-reasoning")
+        is True
+    )
     assert _vertex_model_garden_model_id_in_json_body("5464397967697903616") is False
 
 
@@ -146,10 +149,8 @@ async def _invoke_model_garden_completion(
 async def test_user_supplied_api_base_passes_through_unchanged(
     clean_vertex_env, _reset_litellm_http_client_cache
 ):
-    """Regression test for b439b66f49: a user-supplied api_base must reach the
-    OpenAI-like handler unchanged, with only its own '/chat/completions' suffix
-    appended. The pre-fix code routed through _check_custom_proxy and mutated
-    the URL with a ':verb' segment, corrupting custom Vertex MG endpoints."""
+    """A user-supplied api_base must reach the OpenAI-like handler unchanged,
+    with only its own '/chat/completions' suffix appended."""
     user_api_base = "https://my-endpoint.example.com/v1"
     mock_http_handler = await _invoke_model_garden_completion(
         model="vertex_ai/openai/5464397967697903616",
