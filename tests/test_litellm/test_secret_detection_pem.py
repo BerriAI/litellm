@@ -57,7 +57,9 @@ def test_expand_preserves_non_private_key_secrets():
         {"type": "AWS Access Key", "value": "AKIAIOSFODNN7EXAMPLE"},
         {"type": "Private Key", "value": _PKCS8_BEGIN},
     ]
-    text = f"key={_SAMPLE_PEM}"
+    # PEM block on its own line(s) — the line-oriented parser requires the
+    # BEGIN marker to be line-anchored, matching what detect-secrets sees.
+    text = f"key=\n{_SAMPLE_PEM}\n"
     result = _expand_private_key_values(detected, text)
     assert result[0] == {"type": "AWS Access Key", "value": "AKIAIOSFODNN7EXAMPLE"}
     assert result[1]["value"] == _SAMPLE_PEM
