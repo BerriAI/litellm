@@ -2178,50 +2178,93 @@ def _sanitize_empty_text_content(
 ) -> AllMessageValues:
     """
     Case C: Sanitize empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
-    - Handles both string content and list-of-blocks content (rewriting only
-      the empty text blocks in place; non-text blocks like images are left
-      untouched).
+    - Replace empty or whitespace-only text content with a placeholder message
+      when it would otherwise leave the message with no content for Anthropic.
+    - Handles both string content and list-of-blocks content. Non-text blocks
+      (tool_use, tool_result, image, etc.) are left untouched.
 
-    Returns:
-        The message with sanitized content if needed, otherwise the original message
+    Key behavior: if the message already carries non-text content (a content
+    list with tool_use/tool_result/image blocks, OR a message with
+    `tool_calls`), empty text is *dropped* instead of rewritten to the
+    placeholder. Otherwise the placeholder is emitted so Anthropic does not
+    reject the request for an empty text block.
+
+    This prevents the placeholder string from leaking into rendered chat output
+    on the next turn for clients (e.g. opencode) that round-trip the assistant
+    message back into the conversation history when the only assistant content
+    on the turn was a tool call.
     """
     if message.get("role") not in ["user", "assistant"]:
         return message
 
     content = message.get("content")
+    # An assistant message may carry tool calls in a sibling field (the OpenAI
+    # shape) — if so, an empty text body is fine, the model already "said"
+    # something via the tool call.
+    has_tool_calls = bool(message.get("tool_calls"))
 
     if isinstance(content, str):
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
-            verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
-            )
+            if has_tool_calls:
+                # Drop the empty text — the tool_calls field carries the turn.
+                # Anthropic accepts an assistant turn that is just tool_calls.
+                # Deleting the key (vs. setting to None) keeps the message a
+                # valid AllMessageValues without a broad-type cast.
+                message.pop("content", None)
+                verbose_logger.debug(
+                    "_sanitize_empty_text_content: Dropped empty text content "
+                    "on assistant message with tool_calls (%s role)",
+                    message.get("role"),
+                )
+            else:
+                message["content"] = _EMPTY_TEXT_PLACEHOLDER
+                verbose_logger.debug(
+                    f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
+                )
         return message
 
     if isinstance(content, list):
-        # Walk the blocks and rewrite any empty text blocks. We rewrite (rather
-        # than drop) so callers don't end up with an entirely empty content
-        # list, which Anthropic also rejects.
-        new_blocks: List[Any] = []
-        rewrote_any = False
+        # Decide drop-vs-rewrite: if the content list carries any non-text
+        # block (tool_use, tool_result, image, document, etc.), drop empty text
+        # blocks — the message still has substance. Only rewrite to the
+        # placeholder when dropping would leave Anthropic with an empty list.
+        def _is_text_block(b):
+            return isinstance(b, dict) and b.get("type") == "text"
+
+        has_non_text_block = any(not _is_text_block(b) for b in content)
+        drop_empty = has_non_text_block or has_tool_calls
+
+        new_blocks = []
+        changed = False
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
+            if _is_text_block(block):
                 text = block.get("text")
                 if not isinstance(text, str) or not text or not text.strip():
+                    if drop_empty:
+                        # Drop the empty text block entirely.
+                        changed = True
+                        continue
                     new_block = dict(block)
                     new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
                     new_blocks.append(new_block)
-                    rewrote_any = True
+                    changed = True
                     continue
             new_blocks.append(block)
 
-        if rewrote_any:
+        if changed:
+            # Safety net: if dropping left us with an empty list AND the
+            # message has no sibling tool_calls field to carry the turn,
+            # fall back to the placeholder. Anthropic rejects an empty
+            # content list with the same error as an empty text block.
+            if not new_blocks and not has_tool_calls:
+                new_blocks = [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
             message = cast(AllMessageValues, dict(message))  # Make a copy
             message["content"] = new_blocks  # type: ignore
             verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text block(s) in {message.get('role')} message"
+                "_sanitize_empty_text_content: %s empty text block(s) in %s message",
+                "Dropped" if drop_empty else "Replaced",
+                message.get("role"),
             )
 
     return message
@@ -3997,7 +4040,7 @@ def _convert_to_bedrock_tool_call_invoke(
         for tool in tool_calls:
             if "function" in tool:
                 tool_id = tool["id"]
-                name = tool["function"].get("name", "")
+                name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
                 arguments = tool["function"].get("arguments", "")
 
                 if not arguments or not arguments.strip():
@@ -5323,16 +5366,10 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
-    """
-    Replaces any invalid characters in the input tool name with underscores
-    and ensures the resulting string is a valid identifier for Bedrock tools
-    """
+    """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
     def replace_invalid(char):
-        """
-        Bedrock tool names only supports alpha-numeric characters and underscores
-        """
-        if char.isalnum() or char == "_":
+        if char.isalnum() or char in ("_", "-"):
             return char
         return "_"
 
@@ -5492,7 +5529,7 @@ def _bedrock_tools_pt(
             raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
-        # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+        # Bedrock tool names must satisfy pattern: [a-zA-Z][a-zA-Z0-9_-]*
         name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description

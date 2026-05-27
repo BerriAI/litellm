@@ -431,3 +431,261 @@ class TestMessageSanitization:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestEmptyTextWithNonTextContent:
+    """
+    Regression tests for LIT-3055: the placeholder string must NOT be inserted
+    when the message already carries non-text content (tool_use / tool_result /
+    image blocks, or a sibling `tool_calls` field on an assistant message).
+    """
+
+    PLACEHOLDER = "[System: Empty message content sanitised to satisfy protocol]"
+
+    def setup_method(self):
+        litellm.modify_params = True
+
+    def test_assistant_list_with_tool_use_drops_empty_text_block(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": ""},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "bash",
+                    "input": {"command": "ls"},
+                },
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        text_blocks = [b for b in out["content"] if isinstance(b, dict) and b.get("type") == "text"]
+        for b in text_blocks:
+            assert self.PLACEHOLDER not in (b.get("text") or "")
+        assert out["content"] == [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "bash",
+                "input": {"command": "ls"},
+            }
+        ]
+
+    def test_assistant_empty_string_with_tool_calls_drops_text(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": "{}"},
+                }
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        # Either the key is removed (preferred — keeps the TypedDict valid) or
+        # explicitly None. Both signal "no content" to downstream callers.
+        assert out.get("content") in (None,)
+        assert "content" not in out or out["content"] is None
+        assert out["tool_calls"][0]["id"] == "call_1"
+
+    def test_user_list_with_tool_result_drops_empty_text(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": "completed",
+                },
+                {"type": "text", "text": ""},
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        assert len(out["content"]) == 1
+        assert out["content"][0]["type"] == "tool_result"
+
+    def test_user_list_with_image_drops_empty_text(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "   "},
+                {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        assert len(out["content"]) == 1
+        assert out["content"][0]["type"] == "image_url"
+
+    def test_all_empty_text_blocks_still_get_placeholder(self):
+        """Backward compat: when every content block is empty text, keep the
+        prior behavior of rewriting to the placeholder."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "   "},
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        assert all(b["text"] == self.PLACEHOLDER for b in out["content"])
+
+    def test_plain_empty_user_string_still_gets_placeholder(self):
+        """Backward compat: bare empty user string with no tool_calls still
+        becomes the placeholder (Anthropic would otherwise reject)."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        out = _sanitize_empty_text_content({"role": "user", "content": ""})
+        assert out["content"] == self.PLACEHOLDER
+
+    def test_anthropic_messages_pt_does_not_leak_placeholder_with_tool_use(self):
+        """End-to-end: anthropic_messages_pt must not emit the placeholder
+        when the assistant turn already has tool_use blocks."""
+        import json as _json
+
+        messages = [
+            {"role": "user", "content": "run ls"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "bash",
+                        "input": {"command": "ls"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "file.txt",
+                    }
+                ],
+            },
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+        )
+        as_text = _json.dumps(result)
+        assert self.PLACEHOLDER not in as_text, (
+            "placeholder leaked into outgoing payload: " + as_text
+        )
+
+    def test_anthropic_messages_pt_no_leak_openai_shape_tool_calls(self):
+        """End-to-end OpenAI-shape: assistant with empty string content and a
+        tool_calls field."""
+        import json as _json
+
+        messages = [
+            {"role": "user", "content": "run ls"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": "{\"command\": \"ls\"}",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "file.txt",
+            },
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+        )
+        as_text = _json.dumps(result)
+        assert self.PLACEHOLDER not in as_text, (
+            "placeholder leaked into outgoing payload: " + as_text
+        )
+
+
+    def test_empty_list_with_tool_calls_drops_text(self):
+        """
+        Edge case (LIT-3055 Greptile feedback): if the content list contains
+        only empty text blocks but the message has a sibling tool_calls field,
+        the empty text is dropped — content=[] is acceptable here because
+        tool_calls carries the turn.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": ""}],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": "{}"},
+                }
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        # Drop happened; tool_calls carries the turn.
+        assert out["content"] == []
+        assert out["tool_calls"][0]["id"] == "call_1"
+
+    def test_empty_text_only_list_without_tool_calls_keeps_placeholder(self):
+        """
+        Safety net: if the message has no tool_calls and only empty text blocks
+        (no non-text siblings), keep the existing rewrite-to-placeholder
+        behavior so Anthropic does not reject for an empty content list.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "  "},
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        assert all(
+            isinstance(b, dict)
+            and b.get("type") == "text"
+            and b["text"] == self.PLACEHOLDER
+            for b in out["content"]
+        )
+        assert len(out["content"]) == 2
+
