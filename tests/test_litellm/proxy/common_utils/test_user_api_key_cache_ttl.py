@@ -119,3 +119,23 @@ class TestUserApiKeyCacheTTLHonoured:
             model_type=Dummy,
         )
         assert 295 <= _ttl_stored(cache, "sk-hash-model") <= 305
+    def test_pipeline_promotes_configured_over_default_sentinel(self):
+        cache = _make_configured_cache(300.0)
+        asyncio.run(
+            cache.async_set_cache_pipeline(
+                cache_list=[("p1", "v1"), ("p2", "v2")],
+                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            )
+        )
+        for k in ("p1", "p2"):
+            assert 295 <= _ttl_stored(cache, k) <= 305
+
+    def test_pipeline_explicit_non_default_ttl_is_passthrough(self):
+        cache = _make_configured_cache(300.0)
+        asyncio.run(
+            cache.async_set_cache_pipeline(
+                cache_list=[("p1", "v1")],
+                ttl=120,
+            )
+        )
+        assert 115 <= _ttl_stored(cache, "p1") <= 125

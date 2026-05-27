@@ -197,11 +197,17 @@ class UserApiKeyCache(DualCache):
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
+
+        Honours the same ``user_api_key_cache_ttl`` sentinel-promotion semantics
+        as ``async_set_cache`` -- a batch writer passing the
+        ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` sentinel against a
+        configured cache gets the operator-configured TTL.
         """
         normalized = [
             (key, CacheCodec.serialize(value, model_type=None))
             for key, value in cache_list
         ]
+        self._resolve_management_object_ttl(kwargs)
         return await super().async_set_cache_pipeline(
             cache_list=normalized, local_only=local_only, **kwargs
         )
