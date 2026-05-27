@@ -15,6 +15,7 @@ These tests exercise:
 2. `async_data_generator` strips SSE framing AND omits the `data: [DONE]`
    sentinel when the client did not request SSE; both are kept otherwise.
 """
+
 import os
 import sys
 from unittest.mock import AsyncMock, patch
@@ -169,6 +170,7 @@ async def test_strip_sse_when_client_did_not_request_sse():
     assert "data: " not in body, f"unexpected SSE prefix: {body!r}"
     assert "[DONE]" not in body, f"unexpected [DONE]: {body!r}"
     import json
+
     lines = [ln for ln in body.split("\n") if ln.strip()]
     assert len(lines) == 2, f"expected 2 JSON lines, got {lines!r}"
     parsed = [json.loads(ln) for ln in lines]
