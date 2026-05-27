@@ -73,3 +73,30 @@ async def test_aresponses_populates_litellm_overhead_time_ms():
     assert isinstance(
         overhead, (int, float)
     ) and overhead >= 0, f"litellm_overhead_time_ms not a non-negative number: {overhead!r}"
+
+
+def test_responses_populates_litellm_overhead_time_ms_sync():
+    """Same as the async test, but exercising the sync ``litellm.responses``
+    code path through ``HTTPHandler.post`` (now decorated with
+    ``@track_llm_api_timing`` so the sync handler also records timing).
+    """
+    os.environ.setdefault("OPENAI_API_KEY", "sk-fake")
+
+    def fake_send(self, request, **_kwargs):
+        # Simulate a small but measurable upstream latency.
+        time.sleep(0.05)
+        return httpx.Response(
+            200, json=_fake_response_body(), request=request
+        )
+
+    with patch.object(httpx.Client, "send", fake_send):
+        response = litellm.responses(model="openai/gpt-4o", input="hi")
+
+    hidden = getattr(response, "_hidden_params", None) or {}
+    assert (
+        "litellm_overhead_time_ms" in hidden
+    ), f"litellm_overhead_time_ms missing; hidden keys={sorted(hidden.keys())}"
+    overhead = hidden["litellm_overhead_time_ms"]
+    assert isinstance(
+        overhead, (int, float)
+    ) and overhead >= 0, f"litellm_overhead_time_ms not a non-negative number: {overhead!r}"
