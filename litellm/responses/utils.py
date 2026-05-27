@@ -960,34 +960,24 @@ class ResponseAPILoggingUtils:
             response_api_usage, "output_tokens_details", None
         )
         if output_tokens_details is not None:
-            if isinstance(output_tokens_details, dict):
-                completion_tokens_details = CompletionTokensDetailsWrapper(
-                    reasoning_tokens=output_tokens_details.get("reasoning_tokens"),
-                    image_tokens=output_tokens_details.get("image_tokens"),
-                    text_tokens=output_tokens_details.get("text_tokens"),
-                    audio_tokens=output_tokens_details.get("audio_tokens"),
-                    accepted_prediction_tokens=output_tokens_details.get(
-                        "accepted_prediction_tokens"
-                    ),
-                    rejected_prediction_tokens=output_tokens_details.get(
-                        "rejected_prediction_tokens"
-                    ),
-                )
-            else:
-                completion_tokens_details = CompletionTokensDetailsWrapper(
-                    reasoning_tokens=getattr(
-                        output_tokens_details, "reasoning_tokens", None
-                    ),
-                    image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                    text_tokens=getattr(output_tokens_details, "text_tokens", None),
-                    audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
-                    accepted_prediction_tokens=getattr(
-                        output_tokens_details, "accepted_prediction_tokens", None
-                    ),
-                    rejected_prediction_tokens=getattr(
-                        output_tokens_details, "rejected_prediction_tokens", None
-                    ),
-                )
+            # `output_tokens_details` is always an `OutputTokensDetails` pydantic
+            # model by the time we get here (`ResponseAPIUsage(**usage_input)`
+            # coerces nested dicts via pydantic), so `getattr` reads are
+            # sufficient.
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=getattr(
+                    output_tokens_details, "reasoning_tokens", None
+                ),
+                image_tokens=getattr(output_tokens_details, "image_tokens", None),
+                text_tokens=getattr(output_tokens_details, "text_tokens", None),
+                audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
+                accepted_prediction_tokens=getattr(
+                    output_tokens_details, "accepted_prediction_tokens", None
+                ),
+                rejected_prediction_tokens=getattr(
+                    output_tokens_details, "rejected_prediction_tokens", None
+                ),
+            )
         else:
             # Upstream omitted output_tokens_details entirely. Emit an empty
             # wrapper so the field has the same shape as Chat Completions
