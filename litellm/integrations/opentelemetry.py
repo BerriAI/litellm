@@ -3308,3 +3308,4 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             key=PREPROCESSING_DURATION_MS_ATTRIBUTE,
             value=duration_ms,
         )
+
