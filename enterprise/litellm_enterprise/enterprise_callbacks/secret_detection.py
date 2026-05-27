@@ -124,7 +124,7 @@ def _expand_private_key_values(
     Because detect-secrets de-duplicates by secret value, multiple PEM
     blocks that share the same BEGIN header (e.g. two ``-----BEGIN PRIVATE
     KEY-----`` blocks in the same message) collapse to a single entry in
-    *detected_secrets*.  In addition, ``_PEM_BLOCK_RE`` is intentionally
+    *detected_secrets*.  In addition, ``_find_pem_blocks`` is intentionally
     broader than detect-secrets's built-in matcher and may catch blocks
     (e.g. ``BEGIN OPENSSH PRIVATE KEY``) that detect-secrets never flagged.
     To make sure every block is redacted, after expansion we add a
