@@ -33,9 +33,12 @@ Homepage = "https://litellm.ai"
 Repository = "https://github.com/BerriAI/litellm"
 Documentation = "https://docs.litellm.ai"
 
-# Optional extras retain exact pins because they are consumed by Docker images
-# where exact reproducibility matters. The core SDK uses ranges so downstream
-# consumers can coexist with other packages without forced downgrades.
+# Exact reproducibility for Docker/CI comes from `uv.lock`. The constraints
+# here exist to keep adopters' resolvers (`pip install litellm[proxy]`) from
+# drifting onto untested versions. Default to `==`; use a range only when a
+# previously-transitive dep is being lifted to a direct constraint, so we
+# don't narrow downstream coexistence more than necessary.
+# The core SDK (`[project] dependencies`) uses ranges for the same reason.
 [project.optional-dependencies]
 proxy = [
     "gunicorn==23.0.0",
