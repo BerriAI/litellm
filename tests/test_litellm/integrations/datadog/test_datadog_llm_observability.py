@@ -1205,6 +1205,28 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
 # returns the existing cached logger.
 # ---------------------------------------------------------------------------
 
+
+def _cancel_pending_periodic_flush_tasks(cls):
+    """
+    Cancel every pending asyncio task whose frame-local `self` is an instance
+    of cls.  Used by the LIT-3315 regression tests to avoid leaking the
+    background periodic_flush coroutine across the test suite (which would
+    otherwise raise "Task was destroyed but it is pending" warnings at
+    loop teardown and could fire a flush attempt against DataDog with the
+    fake credentials during a later test).
+    """
+    for t in asyncio.all_tasks():
+        coro = getattr(t, "get_coro", lambda: None)()
+        if coro is None:
+            continue
+        frame = getattr(coro, "cr_frame", None)
+        if frame is None:
+            continue
+        s = frame.f_locals.get("self")
+        if isinstance(s, cls):
+            t.cancel()
+
+
 @pytest.mark.asyncio
 async def test_init_custom_logger_datadog_llm_obs_returns_singleton(monkeypatch):
     """
@@ -1256,6 +1278,14 @@ async def test_init_custom_logger_datadog_llm_obs_returns_singleton(monkeypatch)
             f"{len(ddobs_in_cache)} (regression of LIT-3315 leak)"
         )
     finally:
+        # Cancel the periodic_flush task spawned by the DataDogLLMObsLogger
+        # constructor before restoring the in-memory cache, so we do not leak
+        # a coroutine into subsequent tests (which would otherwise emit
+        # "Task was destroyed but it is pending" at teardown or fire a real
+        # flush attempt against DataDog with the fake credentials).
+        _cancel_pending_periodic_flush_tasks(DataDogLLMObsLogger)
+        for _ in range(3):
+            await asyncio.sleep(0)
         litellm_logging._in_memory_loggers.clear()
         litellm_logging._in_memory_loggers.extend(saved)
 
@@ -1267,6 +1297,15 @@ async def test_init_custom_logger_datadog_llm_obs_no_periodic_flush_task_leak(mo
     __init__.  Before the LIT-3315 fix, N calls leaked N tasks bound to stale
     logger instances.  After the fix, the singleton guard short-circuits and
     we end up with exactly one periodic_flush task per process.
+
+    Counting newly scheduled tasks works by introspecting each task's
+    coroutine frame for a `self` binding to DataDogLLMObsLogger.  A coroutine
+    that has never been given control by the event loop has a `cr_frame`
+    whose `f_locals` does not yet contain `self`, so we yield to the loop
+    enough times after each init to let every newly scheduled task reach its
+    first `await asyncio.sleep(...)` inside `periodic_flush`.  Otherwise the
+    counter could miss tasks and the assertion would pass vacuously.  See
+    Greptile review on PR #29025.
     """
     monkeypatch.setenv("DD_API_KEY", "fake")
     monkeypatch.setenv("DD_SITE", "datadoghq.com")
@@ -1291,22 +1330,65 @@ async def test_init_custom_logger_datadog_llm_obs_no_periodic_flush_task_leak(mo
                 n += 1
         return n
 
+    async def yield_until_tasks_started(min_count, max_yields=50):
+        """
+        Yield to the event loop until at least min_count DataDogLLMObs flush
+        tasks are visible to the introspector, or until we hit max_yields.
+        Closes the "<= 1 passes vacuously" gap flagged in Greptile review.
+        """
+        for _ in range(max_yields):
+            if count_flush_tasks_for(DataDogLLMObsLogger) >= min_count:
+                return
+            await asyncio.sleep(0)
+
     saved = list(litellm_logging._in_memory_loggers)
     litellm_logging._in_memory_loggers.clear()
     try:
         baseline = count_flush_tasks_for(DataDogLLMObsLogger)
-        for _ in range(5):
+
+        # First init: make sure a periodic_flush task is actually scheduled
+        # AND visible to the introspector before we proceed.  If this never
+        # becomes visible, the test surfaces that explicitly rather than
+        # letting the later assertion pass vacuously.
+        _init_custom_logger_compatible_class(
+            "datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        await yield_until_tasks_started(baseline + 1)
+        assert count_flush_tasks_for(DataDogLLMObsLogger) - baseline == 1, (
+            "Expected the first DataDogLLMObs init to schedule exactly one "
+            "periodic_flush task visible to the introspector; saw "
+            f"{count_flush_tasks_for(DataDogLLMObsLogger) - baseline}. "
+            "If this test is meaningless on this Python version the "
+            "introspection probe needs to be revisited."
+        )
+
+        # Now make 4 additional inits.  With the fix every one of these
+        # should be a singleton-cache hit and schedule no new task.  Yield
+        # the loop a few times each call to let any newly scheduled task
+        # become visible to the introspector before we count.
+        for _ in range(4):
             _init_custom_logger_compatible_class(
                 "datadog_llm_observability",
                 internal_usage_cache=None,
                 llm_router=None,
             )
-            await asyncio.sleep(0)
+            for _ in range(5):
+                await asyncio.sleep(0)
+
         after = count_flush_tasks_for(DataDogLLMObsLogger)
-        assert (after - baseline) <= 1, (
-            f"Expected at most one new DataDogLLMObs periodic_flush task, "
-            f"but {after - baseline} were scheduled across 5 inits (LIT-3315 leak)"
+        assert (after - baseline) == 1, (
+            f"Expected exactly one new DataDogLLMObs periodic_flush task "
+            f"after 5 inits (1 from the first call, 0 from the 4 cache "
+            f"hits) but saw {after - baseline} new tasks (LIT-3315 leak)."
         )
     finally:
+        # Cancel the periodic_flush task spawned by the constructor before
+        # restoring _in_memory_loggers so we do not leak the coroutine into
+        # subsequent tests.
+        _cancel_pending_periodic_flush_tasks(DataDogLLMObsLogger)
+        for _ in range(3):
+            await asyncio.sleep(0)
         litellm_logging._in_memory_loggers.clear()
         litellm_logging._in_memory_loggers.extend(saved)
