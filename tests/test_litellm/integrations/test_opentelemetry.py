@@ -4830,6 +4830,166 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
 
 
+
+class TestOpenTelemetryEmitOnceListValuedScope(unittest.TestCase):
+    """Regression tests for LIT-3299 / issue #28486.
+
+    ``_emit_once`` previously crashed with ``TypeError: unhashable type: 'list'``
+    when any scope element was a ``list`` — the most common real-world trigger
+    is a guardrail configured with a list-valued ``mode`` (e.g.
+    ``["pre_call", "post_call"]``) which gets passed straight through
+    ``_create_guardrail_span`` as a scope element.
+
+    The fix normalizes every scope element through ``_make_hashable`` so the
+    dedupe key is always buildable, while preserving dedupe semantics: two
+    structurally equal scope inputs collapse to the same slot.
+    """
+
+    def test_emit_once_with_list_scope_does_not_crash(self):
+        """The original bug: a list scope must not crash."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(
+            otel._emit_once(
+                kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"]
+            )
+        )
+
+    def test_emit_once_with_list_scope_dedupes(self):
+        """A list scope must dedupe — same list -> True then False."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        mode = ["pre_call", "post_call"]
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g", 1.0, mode))
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, mode),
+            "Repeat call with identical list scope must dedupe",
+        )
+
+    def test_emit_once_with_equal_but_distinct_list_dedupes(self):
+        """Two equal lists (different Python objects, same contents) must
+        collapse to the same dedupe slot."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"]),
+            "Structurally equal list scopes must dedupe to the same slot",
+        )
+
+    def test_emit_once_with_different_list_scope_each_emits(self):
+        """Two distinct list contents must each emit once."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, ["pre_call"]),
+            "Distinct list contents must each emit once",
+        )
+
+    def test_emit_once_with_dict_scope_does_not_crash(self):
+        """dict scope is also unhashable — ``_make_hashable`` handles it."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(
+            otel._emit_once(kwargs, "scope", {"k1": "v1", "k2": "v2"})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "scope", {"k2": "v2", "k1": "v1"}),
+            "Equal dicts (any key order) must dedupe — sorted normalization",
+        )
+
+    def test_emit_once_with_set_scope_does_not_crash(self):
+        """set scope is also unhashable — normalized to frozenset."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(otel._emit_once(kwargs, "scope", {"a", "b"}))
+        self.assertFalse(
+            otel._emit_once(kwargs, "scope", {"b", "a"}),
+            "Equal sets must dedupe regardless of insertion order",
+        )
+
+    def test_emit_once_with_nested_unhashable_scope_does_not_crash(self):
+        """Nested combinations (list of dicts containing sets) must work."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        nested = [{"hosts": ["a", "b"]}, {"tags": {"x", "y"}}]
+        self.assertTrue(otel._emit_once(kwargs, "scope", nested))
+        self.assertFalse(
+            otel._emit_once(kwargs, "scope", nested),
+            "Repeat call with nested unhashable scope must dedupe",
+        )
+
+    def test_emit_once_hashable_scope_unchanged(self):
+        """Existing hashable scopes (str, int, float, tuple, None) keep their
+        old behavior — no behavior change for the common case."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        self.assertTrue(otel._emit_once(kwargs, "success", "block-code", 1.0, None))
+        self.assertFalse(otel._emit_once(kwargs, "success", "block-code", 1.0, None))
+
+    def test_make_hashable_static_helper_contract(self):
+        """``_make_hashable`` is a pure helper — verify it produces hashable
+        equivalents for every container type and is structure-preserving."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        mh = OpenTelemetry._make_hashable
+        self.assertEqual(mh(["a", "b"]), ("a", "b"))
+        self.assertEqual(mh({"b": 2, "a": 1}), (("a", 1), ("b", 2)))
+        self.assertEqual(mh({"a", "b"}), frozenset({"a", "b"}))
+        self.assertEqual(
+            mh([{"a": [1, 2]}]),
+            ((("a", (1, 2)),),),
+        )
+        self.assertEqual(mh("plain"), "plain")
+        self.assertEqual(mh(42), 42)
+        self.assertEqual(mh(None), None)
+        self.assertEqual(mh(("x", 1)), ("x", 1))
+        for value in [
+            ["a", "b"],
+            {"a": 1},
+            {"a", "b"},
+            [{"a": [1, 2]}, {"b": {3, 4}}],
+        ]:
+            hash(mh(value))
+
+    def test_make_hashable_falls_back_to_repr_for_exotic_unhashable(self):
+        """Exotic objects that are neither known containers nor hashable get
+        replaced by their repr — the dedupe key still builds instead of crashing
+        the request. Verified with a custom unhashable type."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        class _Weird:
+            __hash__ = None
+            def __repr__(self):
+                return "<Weird>"
+
+        w = _Weird()
+        result = OpenTelemetry._make_hashable(w)
+        self.assertEqual(result, "<Weird>")
+        hash(result)
+
+
 class TestOpenTelemetryHttpStatusCodeAttribute(unittest.TestCase):
     """PR 1: the failure recorder also exposes the HTTP status under the
     OTel-standard ``http.response.status_code`` (as an int), while keeping the
