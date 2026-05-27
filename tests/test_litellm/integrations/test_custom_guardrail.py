@@ -1190,3 +1190,157 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestIsGuardrailIntervention:
+    """LIT-3253: HTTPException(403) raised by guardrail block paths
+    (litellm_content_filter, akto) must be classified as ``guardrail_intervened``
+    (intentional block), not ``guardrail_failed_to_respond`` (API/transport
+    failure). 5xx upstream failures are unchanged.
+    """
+
+    def _make_guardrail(self):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _FakeGuardrail(CustomGuardrail):
+            def __init__(self):
+                self.guardrail_name = "litellm_content_filter"
+                self.event_hook = None
+                self.optional_params = {}
+                self.default_on = True
+                self.guardrail_id = None
+                self.guardrail = None
+                self.mask_request_content = False
+                self.mask_response_content = False
+                self.mask_request = False
+                self.mask_response = False
+                self.config_file_path = None
+                self.guardrail_mode = "pre_call"
+                self.guardrail_info = None
+                self.start_time = None
+
+        return _FakeGuardrail()
+
+    def test_http_400_is_intervention(self):
+        from fastapi import HTTPException
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        assert CustomGuardrail._is_guardrail_intervention(
+            HTTPException(status_code=400, detail="content policy")
+        ) is True
+
+    def test_http_403_is_intervention(self):
+        """LIT-3253 regression: 403 from content_filter / akto block path must
+        be an intervention, not a failure.
+        """
+        from fastapi import HTTPException
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        assert CustomGuardrail._is_guardrail_intervention(
+            HTTPException(status_code=403, detail="Blocked by Akto Guardrails")
+        ) is True
+
+    def test_http_500_is_not_intervention(self):
+        """Upstream API failures stay classified as guardrail_failed_to_respond."""
+        from fastapi import HTTPException
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        assert CustomGuardrail._is_guardrail_intervention(
+            HTTPException(status_code=500, detail="upstream timeout")
+        ) is False
+
+    def test_http_503_is_not_intervention(self):
+        from fastapi import HTTPException
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        assert CustomGuardrail._is_guardrail_intervention(
+            HTTPException(status_code=503, detail="guardrail provider down")
+        ) is False
+
+    def test_process_error_marks_403_as_intervened(self):
+        """End-to-end via ``_process_error``: a 403 from a block path now writes
+        ``guardrail_intervened`` into ``StandardLoggingGuardrailInformation`` —
+        the field downstream Langfuse / OTEL / Prometheus / spend logs / policy
+        builder consume.
+        """
+        from fastapi import HTTPException
+
+        g = self._make_guardrail()
+        rd = {"litellm_metadata": {}, "metadata": {}}
+        try:
+            g._process_error(
+                e=HTTPException(status_code=403, detail="Blocked by Akto Guardrails"),
+                request_data=rd,
+                start_time=0.0,
+                end_time=0.0,
+                duration=0.0,
+                event_type=None,
+            )
+        except HTTPException:
+            pass
+
+        info = None
+        for v in rd.values():
+            if isinstance(v, dict) and "standard_logging_guardrail_information" in v:
+                info = v["standard_logging_guardrail_information"]
+                break
+        if isinstance(info, list):
+            info = info[-1] if info else None
+
+        assert info is not None
+        assert info["guardrail_status"] == "guardrail_intervened"
+
+    def test_process_error_marks_400_as_intervened(self):
+        from fastapi import HTTPException
+
+        g = self._make_guardrail()
+        rd = {"litellm_metadata": {}, "metadata": {}}
+        try:
+            g._process_error(
+                e=HTTPException(status_code=400, detail="content policy"),
+                request_data=rd,
+                start_time=0.0,
+                end_time=0.0,
+                duration=0.0,
+                event_type=None,
+            )
+        except HTTPException:
+            pass
+        info = None
+        for v in rd.values():
+            if isinstance(v, dict) and "standard_logging_guardrail_information" in v:
+                info = v["standard_logging_guardrail_information"]
+                break
+        if isinstance(info, list):
+            info = info[-1] if info else None
+        assert info is not None
+        assert info["guardrail_status"] == "guardrail_intervened"
+
+    def test_process_error_marks_500_as_failed_to_respond(self):
+        """Upstream / API failures still surface as failures — we did not
+        regress that path.
+        """
+        from fastapi import HTTPException
+
+        g = self._make_guardrail()
+        rd = {"litellm_metadata": {}, "metadata": {}}
+        try:
+            g._process_error(
+                e=HTTPException(status_code=500, detail="upstream timeout"),
+                request_data=rd,
+                start_time=0.0,
+                end_time=0.0,
+                duration=0.0,
+                event_type=None,
+            )
+        except HTTPException:
+            pass
+        info = None
+        for v in rd.values():
+            if isinstance(v, dict) and "standard_logging_guardrail_information" in v:
+                info = v["standard_logging_guardrail_information"]
+                break
+        if isinstance(info, list):
+            info = info[-1] if info else None
+        assert info is not None
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
