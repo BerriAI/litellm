@@ -5224,25 +5224,54 @@ class TestRecordExceptionOnSpanNormalizationMatrix(unittest.TestCase):
         assert span.attributes["http.response.status_code"] == 401
 
     def test_error_str_fallback_with_exception_object(self):
+        """When error_information is None but error_str is set, the
+        error_str field must win over str(exception). The two are
+        distinct strings here to prove the source of the stamped message."""
+
         class WeirdError(RuntimeError):
             pass
 
         try:
-            raise WeirdError("legacy payload")
+            # str(exception) is a different message from error_str; the test
+            # passes only if the implementation prefers error_str.
+            raise WeirdError("exception-side message")
         except WeirdError as exc:
             captured = exc
         kwargs = {
             "exception": captured,
             "standard_logging_object": {
                 "error_information": None,
-                "error_str": "legacy payload",
+                "error_str": "slp-side error_str message",
             },
         }
         span = self._record_and_get_span(kwargs)
-        assert span.attributes["error.message"] == "legacy payload"
-        assert span.attributes["exception.message"] == "legacy payload"
+        assert span.attributes["error.message"] == "slp-side error_str message"
+        assert span.attributes["exception.message"] == ("slp-side error_str message")
         assert span.attributes["error.type"] == "WeirdError"
         assert span.attributes["exception.type"] == "WeirdError"
+
+    def test_pure_error_str_no_exception_object(self):
+        """Pure error_str source — no exception, no error_information.
+        This is the older-payload edge case where the only signal we have is
+        the formatted message string. Both keysets must still get the message;
+        type/stack_trace remain absent because neither source supplies them."""
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "old payload only carried this",
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.message"] == "old payload only carried this"
+        assert span.attributes["exception.message"] == ("old payload only carried this")
+        # No exception class -> no error.type / exception.type.
+        assert "error.type" not in span.attributes
+        assert "exception.type" not in span.attributes
+        # No traceback source at all.
+        assert "error.stack_trace" not in span.attributes
+        assert "exception.stacktrace" not in span.attributes
+        # No OTEL exception event either (record_exception was not called).
+        assert not any(e.name == "exception" for e in span.events)
 
     def test_partial_error_information_falls_back_to_exception_class(self):
         class MyProviderError(Exception):
