@@ -31,12 +31,19 @@ test.describe("MCP Servers", () => {
     await formModal.locator('input[id="url"]').fill("https://e2e-fake-mcp.test.local/mcp");
 
     // Authentication: None
-    const authField = formModal.locator(".ant-form-item", { hasText: /auth type/i }).first();
+    // The auth_type Form.Item has no label prop (create_mcp_server.tsx:795), so
+    // it can't be anchored by label text. Scope via the enclosing Collapse
+    // panel ("Authentication") instead — that anchor is stable even if the
+    // placeholder copy changes.
+    const authSection = formModal.locator(".ant-collapse-item", { hasText: /^Authentication/ });
+    const authField = authSection.locator(".ant-form-item").first();
     await authField.locator(".ant-select").click();
     await page.locator(".ant-select-dropdown:visible").getByText("None", { exact: true }).click();
 
     // Submit
     await formModal.getByRole("button", { name: /^Add MCP Server$/ }).click();
+
+    // No teardown needed — the e2e runner spins up a fresh DB per invocation.
 
     // Success toast and the new row in the table
     await expect(page.getByText("MCP Server created successfully").first())
