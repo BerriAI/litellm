@@ -130,10 +130,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
         return self._augment_message_delta_usage(merged_chunk)
 
+    def _ensure_context_management_attached(
+        self, message_delta_chunk: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach ``context_management`` to a ``message_delta`` chunk if
+        ``self.applied_edits`` is non-empty and the chunk does not already
+        carry it. Returns the (possibly new) chunk dict.
+
+        Centralizing this guard ensures every ``message_delta`` emission
+        path (merge-with-usage and direct-flush-of-held) consistently
+        surfaces ``applied_edits`` to the client.
+        """
+        if not self.applied_edits or "context_management" in message_delta_chunk:
+            return message_delta_chunk
+        augmented = message_delta_chunk.copy()
+        augmented["context_management"] = ContextManagementResponse(
+            applied_edits=list(self.applied_edits)
+        )
+        return augmented
+
     def _augment_message_delta_usage(
         self, message_delta_chunk: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Attach polyfill compaction iteration usage to the final message_delta."""
+        """Attach polyfill compaction iteration usage to the final message_delta.
+
+        Also defensively re-attaches ``context_management`` so the direct
+        held-chunk flush path stays in sync with the merge path's guarantee
+        when ``self.applied_edits`` is non-empty.
+        """
+        message_delta_chunk = self._ensure_context_management_attached(
+            message_delta_chunk
+        )
         if self.iterations_usage is None:
             return message_delta_chunk
         usage = message_delta_chunk.get("usage")
@@ -433,7 +460,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.error(
                 "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
             )
-            raise StopAsyncIteration
+            raise StopIteration
 
     async def __anext__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
