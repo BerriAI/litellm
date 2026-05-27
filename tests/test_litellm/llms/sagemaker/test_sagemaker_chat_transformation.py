@@ -189,3 +189,83 @@ def test_sign_request_request_data_wins_over_optional_params():
     assert out_headers["X-Amzn-SageMaker-Inference-Component"] == "component-from-extra-body"
     assert "model_id" not in request_data
     assert "model_id" not in optional_params
+
+
+
+# ----------------------------------------------------------------------
+# Whitespace / empty-string handling (parity between both hooks)
+# ----------------------------------------------------------------------
+
+
+def test_validate_env_whitespace_model_id_is_ignored():
+    """Whitespace-only ``model_id`` is treated the same as absent: no header
+    is added, and the key is popped so it cannot leak into the body."""
+    config = SagemakerChatConfig()
+    optional_params = {"model_id": "   "}
+    out = config.validate_environment(
+        headers={},
+        model="my-endpoint",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    assert "X-Amzn-SageMaker-Inference-Component" not in out
+    assert "model_id" not in optional_params
+
+
+def test_validate_env_model_id_is_trimmed():
+    """Surrounding whitespace is trimmed before the header is written."""
+    config = SagemakerChatConfig()
+    optional_params = {"model_id": "  component-trim  "}
+    out = config.validate_environment(
+        headers={},
+        model="my-endpoint",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    assert out["X-Amzn-SageMaker-Inference-Component"] == "component-trim"
+
+
+def test_sign_request_whitespace_model_id_in_request_data_is_ignored():
+    """Whitespace-only ``model_id`` arriving via ``extra_body`` -> ``request_data``
+    is treated the same as absent: no header is added and ``request_data``
+    keeps its other fields intact (with ``model_id`` removed)."""
+    config = SagemakerChatConfig()
+    request_data = {
+        "model": "my-endpoint",
+        "messages": [],
+        "model_id": "   ",
+    }
+    optional_params = {}
+    with patch.object(SagemakerChatConfig, "_sign_request", _stub_sign_passthrough):
+        out_headers, _ = config.sign_request(
+            headers={},
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base="https://example/endpoints/my-endpoint/invocations",
+        )
+    assert "X-Amzn-SageMaker-Inference-Component" not in out_headers
+    assert "model_id" not in request_data
+    assert request_data == {"model": "my-endpoint", "messages": []}
+
+
+def test_sign_request_model_id_in_request_data_is_trimmed():
+    """Surrounding whitespace on the ``extra_body`` ``model_id`` is trimmed
+    before being written to the header."""
+    config = SagemakerChatConfig()
+    request_data = {
+        "model": "my-endpoint",
+        "messages": [],
+        "model_id": "  component-trim  ",
+    }
+    optional_params = {}
+    with patch.object(SagemakerChatConfig, "_sign_request", _stub_sign_passthrough):
+        out_headers, _ = config.sign_request(
+            headers={},
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base="https://example/endpoints/my-endpoint/invocations",
+        )
+    assert out_headers["X-Amzn-SageMaker-Inference-Component"] == "component-trim"
+    assert "model_id" not in request_data
