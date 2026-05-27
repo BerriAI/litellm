@@ -42,6 +42,9 @@ async def test_s3_vectors_ingestion_uses_vector_store_embedding_model():
         )
         assert embeddings == [[0.1, 0.2, 0.3]]
 
+        # Scope the next assertion to dimension auto-detection. It must call
+        # aembedding with the selected model instead of returning the default
+        # S3 vector dimension without probing the embedding model.
         mock_aembedding.reset_mock()
         mock_aembedding.return_value = SimpleNamespace(
             data=[{"embedding": [0.1, 0.2, 0.3]}]
