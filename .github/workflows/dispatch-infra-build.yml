@@ -20,6 +20,9 @@ jobs:
       SOURCE_REF: refs/heads/litellm_internal_staging
       SOURCE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
       SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SOURCE_REPO: ${{ github.repository }}
+      SOURCE_ACTOR: ${{ github.actor }}
+      SOURCE_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
@@ -33,12 +36,12 @@ jobs:
         run: |
           jq -n \
             --arg event_type "$EVENT_TYPE" \
-            --arg source_repo "${{ github.repository }}" \
+            --arg source_repo "$SOURCE_REPO" \
             --arg source_ref "$SOURCE_REF" \
             --arg source_sha "$SOURCE_SHA" \
             --arg source_short_sha "${SOURCE_SHA::7}" \
-            --arg source_actor "${{ github.actor }}" \
-            --arg source_run_id "${{ github.run_id }}" \
+            --arg source_actor "$SOURCE_ACTOR" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
             --arg source_run_url "$SOURCE_RUN_URL" \
             '{
               event_type: $event_type,
