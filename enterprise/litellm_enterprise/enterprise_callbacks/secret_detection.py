@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
@@ -21,6 +22,22 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 GUARDRAIL_NAME = "hide_secrets"
+
+
+# Regex matching a full PEM private-key block (BEGIN/END pair with body in
+# between). detect-secrets' PrivateKeyDetector only returns the BEGIN header
+# line as the secret value, so a naive ``text.replace(secret_value, ...)``
+# leaves the base64 body and the END footer in the message. We sweep the
+# whole block in a first pass before the per-secret replacement loop so the
+# body and END footer are scrubbed alongside the header.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
+)
+
+
+def _redact_pem_blocks(text: str) -> str:
+    """Replace every full PEM private-key block in ``text`` with ``[REDACTED]``."""
+    return _PEM_BLOCK_RE.sub("[REDACTED]", text)
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -477,6 +494,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         # Covers multimodal list content + Responses-API input.
         def _redact_message_text(text: str) -> str:
             detected_secrets = self.scan_message_for_secrets(text)
+            # detect-secrets' PrivateKeyDetector only returns the BEGIN header
+            # line as the secret value, so a per-secret ``str.replace`` would
+            # leave the base64 body and the END footer in the message. Scrub
+            # any full PEM block first so the body + footer go with the
+            # header, then run the normal per-secret loop to handle the
+            # non-PEM secret types.
+            text = _redact_pem_blocks(text)
             for secret in detected_secrets:
                 text = text.replace(secret["value"], "[REDACTED]")
             if detected_secrets:
@@ -491,6 +515,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if "prompt" in data:
             if isinstance(data["prompt"], str):
                 detected_secrets = self.scan_message_for_secrets(data["prompt"])
+                # Scrub any full PEM block first so body + END footer are
+                # removed alongside the BEGIN header.
+                data["prompt"] = _redact_pem_blocks(data["prompt"])
                 for secret in detected_secrets:
                     data["prompt"] = data["prompt"].replace(
                         secret["value"], "[REDACTED]"
@@ -507,6 +534,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 for idx, item in enumerate(data["prompt"]):
                     if isinstance(item, str):
                         detected_secrets = self.scan_message_for_secrets(item)
+                        # Scrub any full PEM block first so body + END footer
+                        # are removed alongside the BEGIN header.
+                        item = _redact_pem_blocks(item)
                         for secret in detected_secrets:
                             item = item.replace(secret["value"], "[REDACTED]")
                         data["prompt"][idx] = item
