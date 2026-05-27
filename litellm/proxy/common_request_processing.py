@@ -1280,9 +1280,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data["_litellm_client_requested_model"] = (
-                        requested_model_from_client
-                    )
+                    self.data[
+                        "_litellm_client_requested_model"
+                    ] = requested_model_from_client
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1378,10 +1378,8 @@ class ProxyBaseLLMRequestProcessing:
                     if route_type == "agenerate_content_stream":
                         client_alt = request.query_params.get("alt") or ""
                         if client_alt != "sse":
-                            selected_data_generator = (
-                                ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(
-                                    selected_data_generator
-                                )
+                            selected_data_generator = ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(
+                                selected_data_generator
                             )
                             return await create_response(
                                 generator=selected_data_generator,
@@ -2086,7 +2084,7 @@ class ProxyBaseLLMRequestProcessing:
                     continue
                 if not line.startswith("data:"):
                     continue
-                payload = line[len("data:"):].strip()
+                payload = line[len("data:") :].strip()
                 if not payload or payload == "[DONE]":
                     # ``[DONE]`` is an SSE-only sentinel; JSON-streaming
                     # clients terminate on connection close.
@@ -2236,9 +2234,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
