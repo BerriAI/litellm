@@ -1,0 +1,9 @@
+model_list:
+  - model_name: nvidia-llama
+    litellm_params:
+      model: nvidia_nim/meta/llama-3.1-8b-instruct
+      api_key: "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"
+      api_base: "https://integrate.api.nvidia.com/v1"
+
+general_settings:
+  master_key: "sk-abdo"
