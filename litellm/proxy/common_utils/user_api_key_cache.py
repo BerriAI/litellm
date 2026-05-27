@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -135,6 +136,7 @@ class UserApiKeyCache(DualCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
+        self._promote_management_ttl(kwargs)
         return super().set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
@@ -142,9 +144,51 @@ class UserApiKeyCache(DualCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
+        self._promote_management_ttl(kwargs)
         return await super().async_set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
+
+    def _promote_management_ttl(self, kwargs: dict) -> None:
+        """Honour ``general_settings.user_api_key_cache_ttl`` for management-object writes.
+
+        Every management-object writer in ``litellm/proxy/auth/auth_checks.py``,
+        ``litellm/proxy/auth/handle_jwt.py``, and the MCP server manager passes
+        ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` explicitly. Because
+        ``DualCache.async_set_cache`` only applies ``self.default_in_memory_ttl``
+        when ``ttl`` is absent from kwargs, the operator-configured
+        ``user_api_key_cache_ttl`` (wired up at startup via ``update_cache_ttl``)
+        is silently shadowed by the management constant. See LIT-3338.
+
+        When the caller passes that exact constant AND ``default_in_memory_ttl``
+        has been configured to a different value, promote the configured default
+        so the operator setting wins. Non-management call sites that pass their
+        own ``ttl=<n>`` for unrelated reasons are unaffected: only the exact
+        management constant triggers promotion.
+
+        Note on the in-memory vs Redis backend split: the parent
+        ``DualCache.async_set_cache`` forwards the same ``ttl`` kwarg to both the
+        in-memory backend and the Redis backend, so promoting ``ttl`` here causes
+        the same value to be stamped on both. In the current proxy startup
+        (``proxy_server.py``) ``user_api_key_cache.update_cache_ttl`` is called
+        with the same value for ``default_in_memory_ttl`` and ``default_redis_ttl``,
+        so the two backends always agree and there is no observable difference.
+        If a divergent configuration is ever introduced, the Redis TTL for
+        management objects will continue to track ``default_in_memory_ttl`` here —
+        a follow-up change to ``DualCache`` (per-backend TTL kwargs) would be
+        required to honour both independently, which is out of scope for this fix.
+        """
+        explicit_ttl = kwargs.get("ttl")
+        if explicit_ttl is None:
+            return
+        if explicit_ttl != DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL:
+            return
+        configured = self.default_in_memory_ttl
+        if configured is None:
+            return
+        if configured == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL:
+            return
+        kwargs["ttl"] = configured
 
     async def async_set_cache_pipeline(  # type: ignore[override]
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -152,11 +196,17 @@ class UserApiKeyCache(DualCache):
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
+
+        Honour ``general_settings.user_api_key_cache_ttl`` for management-object writes
+        on the pipeline path too, so a future writer that switches from
+        ``async_set_cache`` to the pipeline does not silently lose the operator-configured
+        TTL. See ``_promote_management_ttl``.
         """
         normalized = [
             (key, CacheCodec.serialize(value, model_type=None))
             for key, value in cache_list
         ]
+        self._promote_management_ttl(kwargs)
         return await super().async_set_cache_pipeline(
             cache_list=normalized, local_only=local_only, **kwargs
         )
