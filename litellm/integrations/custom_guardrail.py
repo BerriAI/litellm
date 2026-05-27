@@ -887,17 +887,16 @@ class CustomGuardrail(CustomLogger):
                 for block in content:
                     if not isinstance(block, dict):
                         continue
-                    # Bedrock Converse content block: {"text": "…"}
+                    # Both Bedrock Converse blocks ({"text": "…"}) and Bedrock
+                    # Invoke / Claude messages-API text blocks
+                    # ({"type": "text", "text": "…"}) put the user text under
+                    # the same top-level "text" key, so a single check covers
+                    # both shapes.  Non-text blocks (toolUse, image, document,
+                    # …) intentionally fall through — they don't carry text
+                    # the guardrail needs to inspect.
                     text = block.get("text")
                     if isinstance(text, str):
                         texts.append(text)
-                        continue
-                    # Bedrock Invoke (Claude messages API) content block:
-                    # {"type": "text", "text": "…"}
-                    if block.get("type") == "text":
-                        inner_text = block.get("text")
-                        if isinstance(inner_text, str):
-                            texts.append(inner_text)
                 if texts:
                     normalized.append({"role": role, "content": "".join(texts)})  # type: ignore[misc]
         return normalized or None
