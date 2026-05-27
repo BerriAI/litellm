@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DailyData } from "../types";
+import { mergeResultsByDate } from "../utils/mergeDailyResults";
 
 export interface PaginationProgress {
   currentPage: number;
@@ -164,7 +165,10 @@ export function usePaginatedDailyActivity({
 
         if (isStale()) return;
 
-        setData(firstPage);
+        setData({
+          results: mergeResultsByDate(firstPage.results),
+          metadata: firstPage.metadata,
+        });
 
         const totalPages = firstPage.metadata?.total_pages || 1;
 
@@ -212,7 +216,7 @@ export function usePaginatedDailyActivity({
           const isBatchBoundary = (page - 1) % RENDER_BATCH_SIZE === 0;
           if (isLastPage || isBatchBoundary) {
             setData({
-              results: accumulatedResults,
+              results: mergeResultsByDate(accumulatedResults),
               metadata: accumulatedMetadata,
             });
             setProgress({ currentPage: page, totalPages });
