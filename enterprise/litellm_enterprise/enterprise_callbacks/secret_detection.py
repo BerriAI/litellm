@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
@@ -421,6 +422,82 @@ _default_detect_secrets_config = {
 }
 
 
+
+# PEM private-key blocks are multi-line, but ``detect-secrets`` is strictly
+# line-based: ``PrivateKeyDetector`` returns only the ``-----BEGIN ... PRIVATE
+# KEY-----`` armor header as the matched ``secret_value``. The downstream
+# ``str.replace(secret["value"], "[REDACTED]")`` call sites therefore only
+# strike that single line and forward the base64 body + ``-----END`` footer
+# verbatim. To redact the full key without rewriting every call site, expand
+# any ``Private Key`` entry to span the complete PEM block found in the
+# original message before the existing replace loop runs.
+#
+# Supports the standard armor variants: ``PRIVATE KEY``, ``RSA PRIVATE KEY``,
+# ``EC PRIVATE KEY``, ``DSA PRIVATE KEY``, ``ENCRYPTED PRIVATE KEY`` and
+# ``OPENSSH PRIVATE KEY``.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"
+)
+
+
+def _expand_private_key_values(
+    message_content: str, detected_secrets: list
+) -> list:
+    """Replace each ``Private Key`` entry's header-only ``value`` with the full
+    PEM block from ``message_content``. Non-``Private Key`` secrets are
+    returned unchanged and in original order.
+
+    If multiple PEM blocks appear in the same message, one entry is emitted per
+    block so every block is covered by the existing replace loop. If a header
+    was flagged but no complete ``-----BEGIN ... -----END`` block was found
+    (e.g. truncated input), the original header-line entry is kept so the
+    existing behavior is preserved.
+    """
+    if not detected_secrets:
+        return detected_secrets
+
+    has_private_key = any(
+        s.get("type") == "Private Key" for s in detected_secrets
+    )
+    if not has_private_key:
+        return detected_secrets
+
+    pem_blocks = _PEM_BLOCK_RE.findall(message_content)
+
+    expanded: list = []
+    full_blocks_emitted = False
+    for secret in detected_secrets:
+        if secret.get("type") != "Private Key":
+            expanded.append(secret)
+            continue
+        if not pem_blocks:
+            # No full ``BEGIN ... END`` block was found anywhere in the
+            # message (e.g. truncated input on every detected header).
+            # Preserve EVERY header-only entry so the existing per-header
+            # redaction still runs for each one.
+            expanded.append(secret)
+            continue
+        # At least one full PEM block was found. Emit those once (from the
+        # first ``Private Key`` match). For each subsequent ``Private Key``
+        # entry, dedupe only if its header substring is already contained in
+        # one of the emitted blocks; otherwise it corresponds to a separate
+        # truncated header in the same message and must be preserved so its
+        # BEGIN line still gets the existing header-only redaction.
+        if not full_blocks_emitted:
+            for block in pem_blocks:
+                expanded.append({"type": "Private Key", "value": block})
+            full_blocks_emitted = True
+            continue
+        header_value = secret.get("value") or ""
+        if any(header_value in block for block in pem_blocks):
+            # The header is part of a block we already redact in full.
+            continue
+        # This header belongs to a separate truncated PEM in the same message
+        # — keep it so its BEGIN line still gets per-header redaction.
+        expanded.append(secret)
+    return expanded
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
@@ -452,6 +529,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets.append(
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
+
+        # ``detect-secrets`` is line-based: ``PrivateKeyDetector`` only flags
+        # the BEGIN-header line, leaving the base64 body + END footer in place
+        # when downstream callers do ``str.replace(secret["value"], ...)``.
+        # Expand each ``Private Key`` entry to the full PEM block so the
+        # existing replace loop strikes header + body + footer (LIT-3292).
+        detected_secrets = _expand_private_key_values(
+            message_content, detected_secrets
+        )
 
         return detected_secrets
 
