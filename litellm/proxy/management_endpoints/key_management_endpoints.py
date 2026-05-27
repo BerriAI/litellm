@@ -1305,16 +1305,29 @@ async def _validate_caller_can_assign_key_org(
     # 2. transitive membership via a team owned by that org.
     # `LiteLLM_UserTable.teams` is a String[] column of team_ids the user
     # belongs to (kept in sync by `/team/member_add`).
+    #
+    # Look up each team via ``get_team_object`` so we get the per-team
+    # ``user_api_key_cache`` hit rather than a fresh DB query — same pattern
+    # the surrounding code uses for any team lookup. In the typical case
+    # ``teams`` has 1-5 entries and is fully cache-resident.
     team_ids = list(getattr(user_row, "teams", None) or [])
     if team_ids:
-        team_rows = await prisma_client.db.litellm_teamtable.find_many(
-            where={
-                "team_id": {"in": team_ids},
-                "organization_id": organization_id,
-            },
-        )
-        if team_rows:
-            return
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        for tid in team_ids:
+            try:
+                team_obj = await get_team_object(
+                    team_id=tid,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+            except Exception:
+                # Stale team_id on the user row (team deleted etc.) — just
+                # skip and let the loop fall through to the 403 below.
+                continue
+            if getattr(team_obj, "organization_id", None) == organization_id:
+                return
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
