@@ -1445,6 +1445,43 @@ if MCP_AVAILABLE:
                     spend_meta["tool_count_total"] = len(all_tools)
                     spend_meta["per_server_tool_counts"] = per_server_tool_counts
 
+                # LIT-1774: Surface list_mcp_tools metadata on the StandardLoggingPayload
+                # via mcp_tool_call_metadata so external callbacks (Langfuse, Datadog,
+                # OTEL, etc.) can attribute the event to the MCP server(s) and tool
+                # counts without having to crack open spend_logs_metadata.
+                _list_tools_server_names: List[str] = []
+                for _srv in allowed_mcp_servers:
+                    if _srv is None:
+                        continue
+                    _srv_name = (
+                        getattr(_srv, "server_name", None)
+                        or getattr(_srv, "alias", None)
+                        or getattr(_srv, "name", None)
+                    )
+                    if isinstance(_srv_name, str) and _srv_name:
+                        _list_tools_server_names.append(_srv_name)
+
+                list_tools_mcp_metadata: StandardLoggingMCPToolCall = (
+                    StandardLoggingMCPToolCall(
+                        name=CallTypes.list_mcp_tools.value,
+                        arguments={"requested_mcp_servers": mcp_servers},
+                        mcp_server_name=(
+                            ",".join(_list_tools_server_names)
+                            if _list_tools_server_names
+                            else None
+                        ),
+                        namespaced_tool_name=None,
+                        result={
+                            "allowed_server_count": len(allowed_mcp_servers),
+                            "tool_count_total": len(all_tools),
+                            "per_server_tool_counts": per_server_tool_counts,
+                        },
+                    )
+                )
+                litellm_logging_obj.model_call_details[
+                    "mcp_tool_call_metadata"
+                ] = list_tools_mcp_metadata
+
                 end_time = datetime.now()
                 try:
                     await litellm_logging_obj.async_success_handler(
