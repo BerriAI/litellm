@@ -2360,11 +2360,13 @@ async def apply_guardrail(
                 "apply_guardrail: async_failure_handler failed"
             )
         try:
-            await proxy_logging_obj.post_call_failure_hook(
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=data,
             )
+            if transformed_exception is not None:
+                e = transformed_exception
         except Exception:
             verbose_proxy_logger.exception(
                 "apply_guardrail: post_call_failure_hook failed"
