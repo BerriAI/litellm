@@ -5186,9 +5186,7 @@ class TestOpenTelemetryEmitOnceUnhashableScope(unittest.TestCase):
     def test_list_scope_distinct_contents_dont_collide(self):
         otel = OpenTelemetry()
         kwargs = self._kwargs()
-        self.assertTrue(
-            otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call"])
-        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call"]))
         self.assertTrue(
             otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]),
             "Distinct list content must be a distinct scope",
@@ -5254,9 +5252,7 @@ class TestOpenTelemetryMakeHashable(unittest.TestCase):
         self.assertEqual(OpenTelemetry._make_hashable(t), t)
 
     def test_list_to_tuple(self):
-        self.assertEqual(
-            OpenTelemetry._make_hashable(["a", "b", "c"]), ("a", "b", "c")
-        )
+        self.assertEqual(OpenTelemetry._make_hashable(["a", "b", "c"]), ("a", "b", "c"))
 
     def test_nested_list(self):
         self.assertEqual(
