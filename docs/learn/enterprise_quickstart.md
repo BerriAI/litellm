@@ -12,7 +12,7 @@ Use this guide if you are on an **Enterprise trial** to evaluate LiteLLM as a un
 
 :::info
 
-- **Free trial**: [7-day enterprise license](https://www.litellm.ai/enterprise#trial)
+- **Free trial**: [30-day enterprise license](https://www.litellm.ai/enterprise#trial)
 - **Talk to us**: [Book a demo](https://enterprise.litellm.ai/demo)
 - **SSO is free for up to 5 users.** Beyond that, an enterprise license is required.
 - **Full feature catalog**: [Enterprise](/docs/enterprise)
@@ -32,7 +32,7 @@ All gateway and budget tests share one deployment and one org/team/key. Do this 
 - Docker + Docker Compose
 - **Postgres** — required for Admin UI, virtual keys, MCP/Agent registries, and budget tracking
 - An LLM provider API key (OpenAI, Azure, Anthropic, etc.)
-- Your **Enterprise license key** from the [7-day trial](https://www.litellm.ai/enterprise#trial)
+- Your **Enterprise license key** 
 
 ### Deploy with Docker Compose
 
@@ -81,17 +81,6 @@ Open `http://localhost:4000/` — Swagger should show **"Enterprise Edition"** i
 Open the Admin UI at `http://localhost:4000/ui` and sign in with your master key.
 
 </TabItem>
-<TabItem value="cloud" label="LiteLLM Cloud">
-
-LiteLLM Cloud is fully managed — we run the proxy and Postgres.
-
-- **Request access**: [Book a demo](https://enterprise.litellm.ai/demo) or contact your LiteLLM account team
-- **Compliance**: SOC 2 Type 2 and ISO 27001 — [Data Security](/docs/data_security)
-- **Regions**: [Supported data regions](/docs/data_security#supported-data-regions-for-litellm-cloud)
-
-Enterprise features are pre-enabled. Use the Admin UI URL your account team provides — no `LITELLM_LICENSE` needed.
-
-</TabItem>
 </Tabs>
 
 ### Shared tenant setup
@@ -100,16 +89,17 @@ Complete these steps in the Admin UI before starting the gateway tracks.
 
 | Step | Action | Why |
 | ---- | ------ | --- |
-| 1 | Create an **Organization** and a **Team** | RBAC baseline for the PoC |
-| 2 | Set **team `max_budget`** (e.g. `$10`, duration `30d`) | Validates team-level spend envelope |
-| 3 | Create a **team-scoped virtual key** with model access | All gateway tests use this key, not the master key |
-| 4 | Note the **team ID** and **virtual key** in a scratchpad | Reused in Sections 1–4 |
+| 1 | Create an **Organization** and a **Team** | Organizations are used as top-level entities (Department of Computer Science), which contain multiple Teams (Robotics Club, Frontend Engineering team) |
+| 2 | Invite **Internal Users** | Add multiple users within a team and to govern spend |
+| 2 | Set **team `max_budget`** (e.g. `$10`, duration `30d`) | Creates a hard spend envelope early so you can verify budget enforcement and over-budget behavior after running LLM calls. |
+| 3 | Create a **team-scoped virtual key** with model access | Give admins and internal users access to team models and enforce budgets. Track spend for individual teams. |
+
 
 → [Multi-tenant Architecture](/docs/proxy/multi_tenant_architecture) · [Virtual Keys](/docs/proxy/virtual_keys)
 
 ---
 
-## 1. Validate LLM Gateway
+## 1. LLM Gateway
 
 Prove LiteLLM routes LLM requests through your virtual key, tracks spend, and enforces RBAC.
 
