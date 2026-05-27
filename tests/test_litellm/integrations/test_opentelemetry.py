@@ -4830,7 +4830,6 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         )
 
 
-
 class TestOpenTelemetryEmitOnceListValuedScope(unittest.TestCase):
     """Regression tests for LIT-3299 / issue #28486.
 
@@ -4852,9 +4851,7 @@ class TestOpenTelemetryEmitOnceListValuedScope(unittest.TestCase):
         otel = OpenTelemetry()
         kwargs = {"litellm_params": {"metadata": {}}}
         self.assertTrue(
-            otel._emit_once(
-                kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"]
-            )
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, ["pre_call", "post_call"])
         )
 
     def test_emit_once_with_list_scope_dedupes(self):
@@ -4905,9 +4902,7 @@ class TestOpenTelemetryEmitOnceListValuedScope(unittest.TestCase):
 
         otel = OpenTelemetry()
         kwargs = {"litellm_params": {"metadata": {}}}
-        self.assertTrue(
-            otel._emit_once(kwargs, "scope", {"k1": "v1", "k2": "v2"})
-        )
+        self.assertTrue(otel._emit_once(kwargs, "scope", {"k1": "v1", "k2": "v2"}))
         self.assertFalse(
             otel._emit_once(kwargs, "scope", {"k2": "v2", "k1": "v1"}),
             "Equal dicts (any key order) must dedupe — sorted normalization",
@@ -4981,6 +4976,7 @@ class TestOpenTelemetryEmitOnceListValuedScope(unittest.TestCase):
 
         class _Weird:
             __hash__ = None
+
             def __repr__(self):
                 return "<Weird>"
 
