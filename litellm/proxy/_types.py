@@ -2493,6 +2493,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_daily_spend_aggregation: Optional[bool] = Field(
+        default=False,
+        description=(
+            "If True, the proxy skips all daily spend aggregation writes "
+            "(per-team, per-tag, per-end-user, per-user, per-agent, per-org). "
+            "Use this when you do not rely on the Usage dashboard and pipe "
+            "analytics to your own datastore via custom callbacks. Relieves "
+            "Redis pressure (litellm_daily_*_spend_update_buffer keys) and "
+            "in-memory DailySpendUpdateQueue growth. Can also be enabled via "
+            "the LITELLM_DISABLE_DAILY_SPEND_AGGREGATION env var."
+        ),
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
