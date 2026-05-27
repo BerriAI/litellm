@@ -880,7 +880,7 @@ class CustomGuardrail(CustomLogger):
                 continue
             if isinstance(content, str):
                 # Bedrock Invoke (Claude) — content already a string.
-                normalized.append({"role": role, "content": content})  # type: ignore[arg-type]
+                normalized.append({"role": role, "content": content})  # type: ignore[misc,arg-type]
                 continue
             if isinstance(content, list):
                 texts: List[str] = []
@@ -898,7 +898,7 @@ class CustomGuardrail(CustomLogger):
                     if isinstance(text, str):
                         texts.append(text)
                 if texts:
-                    normalized.append({"role": role, "content": "".join(texts)})  # type: ignore[arg-type]
+                    normalized.append({"role": role, "content": "".join(texts)})  # type: ignore[misc,arg-type]
         return normalized or None
 
     def get_guardrails_messages_for_call_type(
