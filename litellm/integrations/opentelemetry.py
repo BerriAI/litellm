@@ -592,6 +592,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=key,
                         value=value,
                     )
+            # Propagate team_id / team_alias from the parent SERVER span so
+            # service-level child spans (db/redis/auth/pre-call/...) are
+            # team-filterable end-to-end, not just the root.
+            self._copy_team_attributes_from_parent_span(
+                parent_span=parent_otel_span,
+                target_span=service_logging_span,
+            )
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -656,6 +663,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
+            # Propagate team_id / team_alias from the parent SERVER span
+            # (see async_service_success_hook for context).
+            self._copy_team_attributes_from_parent_span(
+                parent_span=parent_otel_span,
+                target_span=service_logging_span,
+            )
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -1212,6 +1225,43 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and proxy_span.is_recording()
         ):
             self._set_team_attributes_from_kwargs(proxy_span, kwargs)
+
+
+    def _copy_team_attributes_from_parent_span(
+        self,
+        parent_span: Optional[Span],
+        target_span: Span,
+    ) -> None:
+        """Copy ``metadata.user_api_key_team_id`` / ``metadata.user_api_key_team_alias``
+        from a parent span (typically the proxy SERVER span, already team-stamped
+        by ``_set_team_attributes_on_proxy_span_from_kwargs``) onto a child span
+        created in the service / pre-call hook path, where the caller passes only
+        ``parent_otel_span`` and not ``user_api_key_dict`` / ``kwargs``.
+
+        Reads the attributes off the live SDK span via ``parent_span.attributes``
+        (a ``MappingProxyType`` on ``opentelemetry.sdk.trace._Span``). Silently
+        no-ops if the parent is None, is not an SDK span (e.g. ``NonRecordingSpan``),
+        or does not expose ``attributes``.
+
+        Empty strings are skipped via ``_set_team_attributes_on_span``, which
+        treats them as absent -- a master-key request whose parent span has
+        ``user_api_key_team_id=""`` does not pollute child spans with empties.
+        """
+        if parent_span is None:
+            return
+        parent_attrs = getattr(parent_span, "attributes", None)
+        if not parent_attrs:
+            return
+        try:
+            team_id = parent_attrs.get("metadata.user_api_key_team_id")
+            team_alias = parent_attrs.get("metadata.user_api_key_team_alias")
+        except Exception:
+            return
+        self._set_team_attributes_on_span(
+            span=target_span,
+            team_id=team_id if isinstance(team_id, str) else None,
+            team_alias=team_alias if isinstance(team_alias, str) else None,
+        )
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
