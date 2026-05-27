@@ -4,7 +4,8 @@ Test the Bedrock guardrail apply_guardrail functionality
 
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -14,6 +15,38 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailResponse
+
+
+@contextmanager
+def _mock_proxy_logging():
+    """Patch the proxy-server globals that apply_guardrail imports at call time."""
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=None)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock(return_value=None)
+    mock_logging_obj.async_failure_handler = AsyncMock(return_value=None)
+    mock_logging_obj.success_handler = MagicMock(return_value=None)
+    mock_logging_obj.failure_handler = MagicMock(return_value=None)
+    mock_logging_obj.model_call_details = {}
+
+    with patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing"
+    ) as mock_proc_cls, patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_config", MagicMock()
+    ), patch(
+        "litellm.proxy.proxy_server.version", "0.0.0"
+    ):
+        mock_proc = MagicMock()
+        mock_proc.common_processing_pre_call_logic = AsyncMock(
+            return_value=({}, mock_logging_obj)
+        )
+        mock_proc_cls.return_value = mock_proc
+        yield mock_proxy_logging
 
 
 @pytest.mark.asyncio
@@ -167,7 +200,7 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
     # Mock the guardrail registry
     with patch(
         "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY"
-    ) as mock_registry:
+    ) as mock_registry, _mock_proxy_logging():
         # Mock the make_bedrock_api_request method
         with patch.object(
             guardrail, "make_bedrock_api_request", new_callable=AsyncMock
@@ -194,7 +227,9 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
 
             # Call the endpoint
             response = await apply_guardrail(
-                request=request, user_api_key_dict=user_api_key_dict
+                fastapi_request=Mock(),
+                request=request,
+                user_api_key_dict=user_api_key_dict,
             )
 
             # Verify the response

@@ -2205,7 +2205,9 @@ def _patch_logging_obj_for_guardrail(
     litellm_logging_obj.call_type = "pass_through_endpoint"
     litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
     litellm_logging_obj.model_call_details["messages"] = (
-        request.messages if request.messages else [{"role": "user", "content": request.text}]
+        request.messages
+        if request.messages
+        else [{"role": "user", "content": request.text}]
     )
 
 
@@ -2313,21 +2315,25 @@ async def apply_guardrail(
             )
 
         request_processor = ProxyBaseLLMRequestProcessing(data=data)
-        data, litellm_logging_obj = await request_processor.common_processing_pre_call_logic(
-            request=fastapi_request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_logging_obj=proxy_logging_obj,
-            proxy_config=proxy_config,
-            route_type="apply_guardrail",
+        data, litellm_logging_obj = (
+            await request_processor.common_processing_pre_call_logic(
+                request=fastapi_request,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_logging_obj=proxy_logging_obj,
+                proxy_config=proxy_config,
+                route_type="apply_guardrail",
+            )
         )
 
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
         request_data: dict = {"messages": request.messages} if request.messages else {}
-        _input_type = _resolve_guardrail_input_type(active_guardrail, request.input_type)
+        _input_type = _resolve_guardrail_input_type(
+            active_guardrail, request.input_type
+        )
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
             request_data=request_data,
