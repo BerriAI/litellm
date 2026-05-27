@@ -3,7 +3,9 @@ s3 Bucket Logging Integration
 
 async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
 async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
-NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
+NOTE 1: S3 does not provide a BATCH PUT API endpoint, so each queued
+element is uploaded individually and the batch flush awaits all uploads
+before clearing the queue
 """
 
 import asyncio
@@ -30,6 +32,8 @@ from .custom_batch_logger import CustomBatchLogger
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
+    preserve_events_added_during_flush = True
+
     def __init__(
         self,
         s3_bucket_name: Optional[str] = None,
@@ -318,7 +322,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(
-        self, batch_logging_element: s3BatchLoggingElement
+        self,
+        batch_logging_element: s3BatchLoggingElement,
+        raise_on_error: bool = False,
     ):
         try:
             import hashlib
@@ -427,6 +433,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 response.raise_for_status()
                 break
         except Exception as e:
+            if raise_on_error:
+                raise
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
 
@@ -437,19 +445,44 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         Returns: None
 
-        Raises: Does not raise an exception, will only verbose_logger.exception()
+        Raises: RuntimeError when one or more uploads fail. The parent
+        CustomBatchLogger preserves the failed events for retry.
         """
         verbose_logger.debug(f"s3_v2 logger - sending batch of {len(self.log_queue)}")
         if not self.log_queue:
             return
+
+        log_queue_snapshot = list(self.log_queue)
 
         #########################################################
         #  Flush the log queue to s3
         #  the log queue can be bounded by DEFAULT_S3_BATCH_SIZE
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
-        for payload in self.log_queue:
-            asyncio.create_task(self.async_upload_data_to_s3(payload))
+        results = await asyncio.gather(
+            *(
+                self.async_upload_data_to_s3(payload, raise_on_error=True)
+                for payload in log_queue_snapshot
+            ),
+            return_exceptions=True,
+        )
+        failed_payloads = [
+            payload
+            for payload, result in zip(log_queue_snapshot, results)
+            if isinstance(result, BaseException)
+        ]
+        if failed_payloads:
+            # The base flush handler preserves the current queue when
+            # async_send_batch raises. Replace the flushed snapshot with only
+            # the failed payloads so successful uploads are not duplicated on
+            # the next retry, while events appended during this flush remain.
+            self.log_queue[:] = (
+                failed_payloads + self.log_queue[len(log_queue_snapshot) :]
+            )
+            raise RuntimeError(
+                f"S3 batch upload failed for {len(failed_payloads)} of "
+                f"{len(log_queue_snapshot)} queued events"
+            )
 
     def create_s3_batch_logging_element(
         self,
