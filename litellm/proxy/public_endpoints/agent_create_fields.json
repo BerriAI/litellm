@@ -11,7 +11,7 @@
     "agent_type": "langflow",
     "agent_type_display_name": "LangFlow",
     "description": "Connect to LangFlow AI agents via the LangFlow Platform API",
-    "logo_url": "/ui/assets/logos/langflow.png",
+    "logo_url": "/ui/assets/logos/langflow.svg",
     "model_template": "langflow/{flow_id}",
     "credential_fields": [
       {

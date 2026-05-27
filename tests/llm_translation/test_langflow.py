@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import litellm
+from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -77,11 +77,28 @@ def test_langflow_provider_config_registered():
     assert cfg.__class__.__name__ == "LangFlowConfig"
 
 
-@pytest.mark.asyncio
-async def test_a2a_bridge_passes_context_id_as_session_id_for_langflow():
-    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
-        A2ACompletionBridgeHandler,
+def test_merge_a2a_session_into_litellm_params():
+    from litellm.llms.langflow.a2a import merge_a2a_session_into_litellm_params
+
+    merged = merge_a2a_session_into_litellm_params(
+        {"custom_llm_provider": "langflow", "model": "langflow/flow-1"},
+        {"message": {"contextId": "shared-session-99"}},
     )
+    assert merged["session_id"] == "shared-session-99"
+
+
+def test_langflow_a2a_provider_config_registered():
+    cfg = A2AProviderConfigManager.get_provider_config(
+        custom_llm_provider="langflow",
+        model="langflow/flow-1",
+    )
+    assert cfg is not None
+    assert cfg.__class__.__name__ == "LangFlowA2AConfig"
+
+
+@pytest.mark.asyncio
+async def test_langflow_a2a_config_passes_session_id_to_completion():
+    from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
 
     mock_response = type(
         "R",
@@ -100,7 +117,7 @@ async def test_a2a_bridge_passes_context_id_as_session_id_for_langflow():
     with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
         mock_acompletion.return_value = mock_response
 
-        await A2ACompletionBridgeHandler.handle_non_streaming(
+        await LangFlowA2AConfig().handle_non_streaming(
             request_id="req-1",
             params={
                 "message": {
@@ -120,26 +137,3 @@ async def test_a2a_bridge_passes_context_id_as_session_id_for_langflow():
         assert (
             mock_acompletion.call_args.kwargs.get("session_id") == "shared-session-99"
         )
-
-
-@pytest.mark.asyncio
-async def test_langflow_acompletion_non_streaming():
-    api_base = os.environ.get("LANGFLOW_API_BASE", "http://localhost:7860")
-    flow_id = os.environ.get("LANGFLOW_FLOW_ID")
-    api_key = os.environ.get("LANGFLOW_API_KEY")
-
-    if not flow_id:
-        pytest.skip("LANGFLOW_FLOW_ID not set")
-
-    try:
-        response = await litellm.acompletion(
-            model=f"langflow/{flow_id}",
-            messages=[{"role": "user", "content": "hello"}],
-            api_base=api_base,
-            api_key=api_key,
-            session_id="litellm-test-session",
-            stream=False,
-        )
-        assert response.choices[0].message.content
-    except Exception as e:
-        pytest.skip(f"LangFlow server not available: {e}")

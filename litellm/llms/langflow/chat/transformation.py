@@ -243,9 +243,9 @@ class LangFlowConfig(BaseConfig):
             try:
                 from litellm.utils import token_counter
 
-                prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+                prompt_tokens = token_counter(model=model, messages=messages)
                 completion_tokens = token_counter(
-                    model="gpt-3.5-turbo", text=content, count_response_tokens=True
+                    model=model, text=content, count_response_tokens=True
                 )
                 usage = Usage(
                     prompt_tokens=prompt_tokens,

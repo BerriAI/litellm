@@ -37,6 +37,8 @@ class A2ACompletionBridgeHandler:
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
         api_base: Optional[str] = None,
+        *,
+        _skip_a2a_provider_routing: bool = False,
     ) -> Dict[str, Any]:
         """
         Handle non-streaming A2A request via litellm.acompletion.
@@ -50,25 +52,24 @@ class A2ACompletionBridgeHandler:
         Returns:
             A2A SendMessageResponse dict
         """
-        # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
-        a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider,
-            model=litellm_params.get("model"),
-        )
-
-        # If provider config exists, use it
-        if a2a_provider_config is not None:
-            verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
-
-            response_data = await a2a_provider_config.handle_non_streaming(
-                request_id=request_id,
-                params=params,
-                api_base=api_base,
-                litellm_params=litellm_params,
+        if not _skip_a2a_provider_routing:
+            a2a_provider_config = A2AProviderConfigManager.get_provider_config(
+                custom_llm_provider=custom_llm_provider,
+                model=litellm_params.get("model"),
             )
 
-            return response_data
+            if a2a_provider_config is not None:
+                verbose_logger.info(
+                    f"A2A: Using provider config for {custom_llm_provider}"
+                )
+
+                return await a2a_provider_config.handle_non_streaming(
+                    request_id=request_id,
+                    params=params,
+                    api_base=api_base,
+                    litellm_params=litellm_params,
+                )
 
         # Extract message from params
         message = params.get("message", {})
@@ -108,16 +109,6 @@ class A2ACompletionBridgeHandler:
         }
         completion_params.update(litellm_params_to_add)
 
-        if custom_llm_provider == "langflow":
-            message = params.get("message", {})
-            context_id = (
-                message.get("contextId")
-                if isinstance(message, dict)
-                else getattr(message, "contextId", None)
-            )
-            if context_id and "session_id" not in completion_params:
-                completion_params["session_id"] = context_id
-
         # Call litellm.acompletion
         response = await litellm.acompletion(**completion_params)
 
@@ -139,6 +130,8 @@ class A2ACompletionBridgeHandler:
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
         api_base: Optional[str] = None,
+        *,
+        _skip_a2a_provider_routing: bool = False,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Handle streaming A2A request via litellm.acompletion with stream=True.
@@ -158,28 +151,27 @@ class A2ACompletionBridgeHandler:
         Yields:
             A2A streaming response events
         """
-        # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
-        a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider,
-            model=litellm_params.get("model"),
-        )
-
-        # If provider config exists, use it
-        if a2a_provider_config is not None:
-            verbose_logger.info(
-                f"A2A: Using provider config for {custom_llm_provider} (streaming)"
+        if not _skip_a2a_provider_routing:
+            a2a_provider_config = A2AProviderConfigManager.get_provider_config(
+                custom_llm_provider=custom_llm_provider,
+                model=litellm_params.get("model"),
             )
 
-            async for chunk in a2a_provider_config.handle_streaming(
-                request_id=request_id,
-                params=params,
-                api_base=api_base,
-                litellm_params=litellm_params,
-            ):
-                yield chunk
+            if a2a_provider_config is not None:
+                verbose_logger.info(
+                    f"A2A: Using provider config for {custom_llm_provider} (streaming)"
+                )
 
-            return
+                async for chunk in a2a_provider_config.handle_streaming(
+                    request_id=request_id,
+                    params=params,
+                    api_base=api_base,
+                    litellm_params=litellm_params,
+                ):
+                    yield chunk
+
+                return
 
         # Extract message from params
         message = params.get("message", {})
@@ -224,16 +216,6 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
-
-        if custom_llm_provider == "langflow":
-            message = params.get("message", {})
-            context_id = (
-                message.get("contextId")
-                if isinstance(message, dict)
-                else getattr(message, "contextId", None)
-            )
-            if context_id and "session_id" not in completion_params:
-                completion_params["session_id"] = context_id
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
