@@ -316,7 +316,7 @@ class LangFuseLogger:
             # ``get_litellm_metadata_from_kwargs`` falls back to ``metadata``
             # for the legacy paths and merges spend_logs_metadata from
             # ``metadata`` into ``litellm_metadata`` when both are populated.
-            metadata = get_litellm_metadata_from_kwargs(kwargs) or {}
+            metadata = get_litellm_metadata_from_kwargs(kwargs)
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
