@@ -106,6 +106,17 @@ async def google_stream_generate_content(
         data["model"] = model_name
     data["stream"] = True
 
+    # Capture the client-requested response format. Per the Gemini REST API,
+    # `?alt=sse` opts into SSE-framed chunks; the documented default (omitted,
+    # or `alt=json`) returns raw JSON. The google-genai Python SDK omits `alt`
+    # and expects raw JSON. LiteLLM always streams from upstream with
+    # `alt=sse` so it can parse chunks server-side, then re-frames for the
+    # client based on what the client actually requested.
+    client_requested_alt = request.query_params.get("alt") or "json"
+    data.setdefault("litellm_metadata", {})[
+        "client_requested_stream_format"
+    ] = client_requested_alt
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
