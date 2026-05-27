@@ -486,17 +486,10 @@ async def apply_compact_20260112(
     if warnings:
         applied["warnings"] = warnings
 
-    # Opt-in gate: no summary model configured → no-op.
-    summary_model = _read_summary_model_setting()
-    if summary_model is None:
-        applied["error"] = "summary_model_not_configured"
-        return PolyfillResult(
-            messages=messages,
-            system=system,
-            applied_edits=[applied],
-        )
-
-    # Phase A: slice around any existing compaction block.
+    # Phase A: slice around any existing compaction block. Runs before the
+    # opt-in gate below so that even when summarization is disabled we still
+    # strip Anthropic-only ``compaction`` blocks from messages going to
+    # non-Anthropic backends (which would reject them).
     effective_messages, prior_compaction_block = _slice_around_compaction_block(
         messages
     )
@@ -512,6 +505,17 @@ async def apply_compact_20260112(
         )
 
     downstream_messages = _strip_compaction_blocks(effective_messages)
+
+    # Opt-in gate: no summary model configured → no-op (but still return the
+    # Phase A-sliced/stripped messages so compaction blocks don't leak).
+    summary_model = _read_summary_model_setting()
+    if summary_model is None:
+        applied["error"] = "summary_model_not_configured"
+        return PolyfillResult(
+            messages=downstream_messages,
+            system=augmented_system,
+            applied_edits=[applied],
+        )
 
     # Phase B: threshold check.
     try:

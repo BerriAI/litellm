@@ -175,7 +175,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             {
                 "type": "content_block_start",
                 "index": compaction_index,
-                "content_block": {"type": "compaction"},
+                # Mirror the text-block shape ({"type": "text", "text": ""}):
+                # send an empty ``content`` field so clients that introspect
+                # ``content_block_start`` see the full block schema. The
+                # actual summary text arrives via the ``content_block_delta``
+                # below.
+                "content_block": {"type": "compaction", "content": ""},
             }
         )
         self.chunk_queue.append(
@@ -394,9 +399,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     )
                     self.holding_stop_reason_chunk = None
 
-                if self.holding_chunk is not None:
-                    self.chunk_queue.append(self.holding_chunk)
-                    self.holding_chunk = None
+            # Always flush any buffered content delta, even when usage has
+            # already been merged + emitted: dropping it would silently lose
+            # provider-emitted content, which is worse than the SSE ordering
+            # nit of trailing a content chunk after the final message_delta
+            # (the prior sync ``__next__`` behavior).
+            if self.holding_chunk is not None:
+                self.chunk_queue.append(self.holding_chunk)
+                self.holding_chunk = None
 
             if not self.sent_last_message:
                 self.sent_last_message = True
