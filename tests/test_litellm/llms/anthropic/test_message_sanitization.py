@@ -491,7 +491,10 @@ class TestEmptyTextWithNonTextContent:
             ],
         }
         out = _sanitize_empty_text_content(msg)
-        assert out["content"] is None
+        # Either the key is removed (preferred — keeps the TypedDict valid) or
+        # explicitly None. Both signal "no content" to downstream callers.
+        assert out.get("content") in (None,)
+        assert "content" not in out or out["content"] is None
         assert out["tool_calls"][0]["id"] == "call_1"
 
     def test_user_list_with_tool_result_drops_empty_text(self):
