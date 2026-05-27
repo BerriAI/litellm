@@ -1071,9 +1071,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "compact_20260112"}]
-        },
+        "context_management": {"edits": [{"type": "compact_20260112"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -1084,10 +1082,52 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
+    assert result["max_tokens"] == 4096
+
+
+def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
+    monkeypatch,
+):
+    """
+    Bedrock InvokeModel supports automatic tool call clearing
+    (``clear_tool_uses_20250919``) when paired with the
+    ``context-management-2025-06-27`` anthropic-beta header. The transformation
+    should keep the edit in the body and auto-inject that beta header.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.html
+    """
+    from litellm import anthropic_beta_headers_manager
+    from litellm.types.router import GenericLiteLLMParams
+
+    # Pin to the bundled local config (the source of truth in this repo) instead
+    # of the remote copy fetched from main, which lags this change until merge.
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+    edit = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "input_tokens", "value": 30000},
+        "keep": {"type": "tool_uses", "value": 3},
+    }
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {"edits": [edit]},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("context_management") == {"edits": [edit]}
+    assert "context-management-2025-06-27" in result.get("anthropic_beta", [])
     assert result["max_tokens"] == 4096
 
 
@@ -1118,9 +1158,7 @@ def test_bedrock_messages_filters_unsupported_context_management_edits():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
 
 
