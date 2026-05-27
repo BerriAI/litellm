@@ -7467,10 +7467,12 @@ class ProxyStartupEvent:
         ## sidecar deployment that only sets the env var also avoids
         ## scheduling a job that would drain an empty queue.
         _env_disable = os.environ.get("LITELLM_DISABLE_DAILY_SPEND_AGGREGATION")
-        _env_disabled = (
-            _env_disable is not None
-            and _env_disable.strip().lower() in {"1", "true", "yes", "on"}
-        )
+        _env_disabled = _env_disable is not None and _env_disable.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if (
             not bool(general_settings.get("disable_daily_spend_aggregation", False))
             and not _env_disabled
