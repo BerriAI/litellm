@@ -6,19 +6,75 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
+
+
+# Matches a full PEM private-key block (header + base64 body + footer) across
+# multiple lines.  detect-secrets is line-based and only records the BEGIN
+# header as the secret value; _expand_private_key_values uses this pattern to
+# promote that header-only value to the full block so every str.replace call
+# site redacts the entire key, not just the first line.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+)
+
+
+def _expand_private_key_values(
+    detected_secrets: List[Dict[str, Any]], text: str
+) -> List[Dict[str, Any]]:
+    """Expand any ``Private Key`` entries from the BEGIN-header-only value
+    returned by detect-secrets to the full PEM block found in *text*.
+
+    detect-secrets scans line-by-line, so for PEM keys it records only the
+    ``-----BEGIN ... PRIVATE KEY-----`` armor header as the secret value.
+    This function finds the enclosing PEM block in *text* and replaces the
+    header-only value so downstream ``str.replace`` calls strike the entire
+    key (body + footer) rather than just the first line.
+
+    Each PEM block is claimed at most once -- when a message contains
+    multiple same-type keys the expansion assigns blocks in order of
+    appearance, so every key gets its own distinct full-block value and
+    none are skipped.
+
+    All other secret types pass through unchanged.
+    """
+    pem_blocks = list(_PEM_BLOCK_RE.finditer(text))
+    claimed: set = set()
+    expanded: List[Dict[str, Any]] = []
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key":
+            for idx, match in enumerate(pem_blocks):
+                if idx not in claimed and secret.get("value") in match.group(0):
+                    secret = {**secret, "value": match.group(0)}
+                    claimed.add(idx)
+                    break
+        expanded.append(secret)
+    return expanded
+
+
+def _redact_full_pem_blocks(text: str) -> str:
+    """Final defensive sweep: redact any complete PEM private-key block left
+    in *text* after the normal per-secret replacement pass.
+
+    Belt-and-braces safeguard against detect-secrets returning a partial
+    match, behaviour changes, or missing a key type entirely -- if a
+    complete BEGIN..END armor is still present, replace the whole block.
+    """
+    return _PEM_BLOCK_RE.sub("[REDACTED]", text)
+
 
 GUARDRAIL_NAME = "hide_secrets"
 
@@ -453,7 +509,12 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
 
-        return detected_secrets
+        # detect-secrets is line-based: for PEM private keys it records
+        # only the BEGIN armor header as the secret value. Expand each
+        # Private Key entry to the full PEM block so that downstream
+        # str.replace calls strike the entire key (body + footer), not
+        # just the first line.
+        return _expand_private_key_values(detected_secrets, message_content)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
@@ -484,6 +545,11 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 verbose_proxy_logger.warning(
                     f"Detected and redacted secrets in message: {secret_types}"
                 )
+            # Final defensive sweep against partial PEM matches
+            # (LIT-3292): even if detect-secrets only flagged a
+            # single line of the block, redact any complete BEGIN..END
+            # block that remains.
+            text = _redact_full_pem_blocks(text)
             return text
 
         walk_user_text(data, _redact_message_text)
@@ -500,6 +566,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                     verbose_proxy_logger.warning(
                         f"Detected and redacted secrets in prompt: {secret_types}"
                     )
+                # Final defensive sweep against partial PEM matches (LIT-3292)
+                data["prompt"] = _redact_full_pem_blocks(data["prompt"])
             elif isinstance(data["prompt"], list):
                 # Index back into the list — assigning to ``item`` would only
                 # rebind the loop variable and leave ``data["prompt"]``
@@ -509,6 +577,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                         detected_secrets = self.scan_message_for_secrets(item)
                         for secret in detected_secrets:
                             item = item.replace(secret["value"], "[REDACTED]")
+                        # Final defensive sweep against partial PEM matches
+                        # (LIT-3292): catch any leftover BEGIN..END block.
+                        item = _redact_full_pem_blocks(item)
                         data["prompt"][idx] = item
                         if len(detected_secrets) > 0:
                             secret_types = [
