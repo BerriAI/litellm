@@ -193,3 +193,207 @@ async def test_assign_key_org_blocks_caller_with_no_memberships():
             prisma_client=prisma,
         )
     assert exc_info.value.status_code == 403
+
+
+
+# ---------------------------------------------------------------------------
+# LIT-3214 — _validate_caller_can_assign_key_org transitive team membership
+# ---------------------------------------------------------------------------
+
+
+def _make_prisma_with_user_teams_and_team_orgs(
+    user_id: str,
+    org_memberships: list,
+    team_ids: list,
+    team_org_map: dict,
+):
+    """Build a prisma mock where the user belongs to `team_ids` and each
+    team in `team_org_map` has the given `organization_id`.
+
+    `find_many` returns only teams whose org matches the where filter — same
+    contract as the real prisma client.
+    """
+    prisma = MagicMock()
+
+    user_row = MagicMock()
+    user_row.organization_memberships = [
+        MagicMock(organization_id=org_id) for org_id in org_memberships
+    ]
+    user_row.teams = list(team_ids)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    async def _find_many(where=None, **kwargs):
+        where = where or {}
+        tid_filter = where.get("team_id", {}).get("in", [])
+        org_filter = where.get("organization_id")
+        rows = []
+        for tid in tid_filter:
+            if team_org_map.get(tid) == org_filter:
+                row = MagicMock()
+                row.team_id = tid
+                row.organization_id = org_filter
+                rows.append(row)
+        return rows
+
+    prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=_find_many)
+    return prisma
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_allows_transitive_via_team_membership():
+    """LIT-3214 regression: an internal user who is a member of a team that
+    belongs to ``org-1`` should be able to create a key for that team even if
+    they have NO ``LiteLLM_OrganizationMembership`` row — the enterprise
+    inheritance copies ``organization_id`` from the team and the callsite
+    runs this check.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=[],
+        team_ids=["team-A"],
+        team_org_map={"team-A": "org-1"},
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    await _validate_caller_can_assign_key_org(
+        user_api_key_dict=caller,
+        organization_id="org-1",
+        prisma_client=prisma,
+    )
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_blocks_explicit_other_org_even_with_team_membership():
+    """Security guardrail: even though the caller is a team member of team-A
+    in org-1, they may NOT explicitly target a different org-2 they have no
+    relationship to.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=[],
+        team_ids=["team-A"],
+        team_org_map={"team-A": "org-1"},
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=caller,
+            organization_id="org-2-other",
+            prisma_client=prisma,
+        )
+    assert exc_info.value.status_code == 403
+    assert "org-2-other" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_direct_membership_short_circuits_team_lookup():
+    """Direct org membership wins without hitting the team table."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=["org-1"],
+        team_ids=["team-A"],
+        team_org_map={"team-A": "org-other"},
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    await _validate_caller_can_assign_key_org(
+        user_api_key_dict=caller,
+        organization_id="org-1",
+        prisma_client=prisma,
+    )
+    prisma.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_blocks_caller_with_no_teams_and_no_memberships():
+    """Caller belongs to nothing — both branches miss => 403."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=[],
+        team_ids=[],
+        team_org_map={},
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=caller,
+            organization_id="org-1",
+            prisma_client=prisma,
+        )
+    assert exc_info.value.status_code == 403
+    prisma.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_team_in_different_org_does_not_grant_access():
+    """User is in team-A (org-other). Should NOT be able to target org-1."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=[],
+        team_ids=["team-A"],
+        team_org_map={"team-A": "org-other"},
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=caller,
+            organization_id="org-1",
+            prisma_client=prisma,
+        )
+    assert exc_info.value.status_code == 403
+    prisma.db.litellm_teamtable.find_many.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_user_not_found():
+    """If the user row vanished from the DB, deny — don't NoneType-error."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=caller,
+            organization_id="org-1",
+            prisma_client=prisma,
+        )
+    assert exc_info.value.status_code == 403
