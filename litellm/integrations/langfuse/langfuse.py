@@ -315,12 +315,30 @@ class LangFuseLogger:
             # ``/assistant*``) surface the same ``user_api_key_alias``,
             # ``user_api_key_user_id``, ``user_api_key_team_id`` etc. as the
             # endpoints that still use ``metadata``.
+            #
             # ``get_litellm_metadata_from_kwargs`` prefers ``litellm_metadata``
             # and falls back to ``metadata``; when both are present it merges
-            # the spend-tracking fields into the ``litellm_metadata`` copy.
-            metadata = get_litellm_metadata_from_kwargs(kwargs) or {}
-            # Defensive copy: downstream code pops keys off ``metadata`` /
-            # ``clean_metadata`` and we do not want to mutate the caller dict.
+            # spend-tracking fields (any key containing ``user_api_key``) from
+            # ``metadata`` into ``litellm_metadata`` via
+            # ``add_missing_spend_metadata_to_litellm_metadata``, which mutates
+            # its first argument in-place. To keep our callback side-effect
+            # free (other callbacks and the spend logger read from
+            # ``litellm_params["litellm_metadata"]``), feed the helper a shallow
+            # copy of ``litellm_params`` with shallow copies of both metadata
+            # dicts so any in-place mutation lands on disposable dicts.
+            safe_litellm_params = dict(litellm_params)
+            if isinstance(safe_litellm_params.get("metadata"), dict):
+                safe_litellm_params["metadata"] = dict(safe_litellm_params["metadata"])
+            if isinstance(safe_litellm_params.get("litellm_metadata"), dict):
+                safe_litellm_params["litellm_metadata"] = dict(
+                    safe_litellm_params["litellm_metadata"]
+                )
+            metadata = get_litellm_metadata_from_kwargs(
+                {**kwargs, "litellm_params": safe_litellm_params}
+            ) or {}
+            # Final defensive copy: downstream code pops keys off ``metadata`` /
+            # ``clean_metadata``; the helper may return one of the dicts we
+            # already copied above, but be explicit.
             metadata = dict(metadata)
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
