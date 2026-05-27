@@ -147,11 +147,23 @@ class AmazonNovaEmbeddingConfig:
         # `inference_params` or AUDIO_VIDEO_COMBINED. The synthesized-
         # video path below handles its own default; this guards the
         # user-supplied path.
+        #
+        # Important: `embedding_params = inference_params.copy()` is a
+        # shallow copy, so the nested `video` dict is the *same* object
+        # as `inference_params["video"]`. Mutating it would leak across
+        # batch calls (the litellm embedding loop reuses the same
+        # `inference_params` for every input). Take a fresh dict copy
+        # of the `video` block before mutating. Pop a top-level
+        # `embeddingMode` override (if any) unconditionally so it does
+        # not leak into `singleEmbeddingParams` either.
+        override = embedding_params.pop("embeddingMode", None)
         video_block = embedding_params.get("video")
         if isinstance(video_block, dict) and "embeddingMode" not in video_block:
-            video_block["embeddingMode"] = embedding_params.pop(
-                "embeddingMode", "AUDIO_VIDEO_COMBINED"
+            video_block = dict(video_block)  # shallow copy of the nested dict
+            video_block["embeddingMode"] = (
+                override if override is not None else "AUDIO_VIDEO_COMBINED"
             )
+            embedding_params["video"] = video_block
 
         # For text/media input, add basic structure if user hasn't provided text/image/video/audio
         if (
@@ -179,21 +191,18 @@ class AmazonNovaEmbeddingConfig:
                 elif media_type.startswith("video/"):
                     # Handle video data URLs.
                     # Nova multimodal embeddings require `embeddingMode` on
-                    # the `video` block. When the caller does not pre-
-                    # populate the whole `video` dict via `inference_params`,
-                    # default the mode to AUDIO_VIDEO_COMBINED (the most
-                    # general value in NOVA_EMBEDDING_MODES). Callers can
-                    # override by passing `embeddingMode` as a top-level
-                    # inference param, which is popped off and applied to
-                    # the synthesized block here.
+                    # the `video` block. Default to AUDIO_VIDEO_COMBINED
+                    # (the most general value in NOVA_EMBEDDING_MODES);
+                    # callers can override via a top-level `embeddingMode`
+                    # in `inference_params` (already popped above into
+                    # `override`).
                     video_format = media_type.split("/")[1].lower()
-                    video_embedding_mode = embedding_params.pop(
-                        "embeddingMode", "AUDIO_VIDEO_COMBINED"
-                    )
                     embedding_params["video"] = {
                         "format": video_format,
                         "source": {"bytes": base64_data},
-                        "embeddingMode": video_embedding_mode,
+                        "embeddingMode": (
+                            override if override is not None else "AUDIO_VIDEO_COMBINED"
+                        ),
                     }
                 elif media_type.startswith("audio/"):
                     # Handle audio data URLs
