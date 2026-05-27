@@ -201,3 +201,133 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for LIT-3302
+# (`x-litellm-spend-logs-metadata` header dropped on /v1/messages requests)
+# ---------------------------------------------------------------------------
+
+
+class TestAddMissingSpendMetadataToLitellmMetadata:
+    """Regression coverage for `add_missing_spend_metadata_to_litellm_metadata`.
+
+    The proxy puts spend-tracking + header-derived fields on `metadata`, while
+    some endpoints (e.g. Anthropic `/v1/messages`) also populate
+    `litellm_metadata`. The helper must preserve the proxy-set fields when
+    merging so they reach the spend logs.
+    """
+
+    def test_preserves_spend_logs_metadata_from_request_header(self):
+        """`spend_logs_metadata` (set from `x-litellm-spend-logs-metadata`) must
+        survive a merge when `litellm_metadata` is also present."""
+        from litellm.litellm_core_utils.core_helpers import (
+            add_missing_spend_metadata_to_litellm_metadata,
+        )
+
+        header_attrs = {
+            "billing_uuid": "9af2b4e0-1c11-4d8b-bcb3-1234567890ab",
+            "agent_id": "agent-cogni-7",
+            "agent_owner_id": "owner-disney-42",
+            "request_type": "chat_completion",
+        }
+        metadata = {
+            "user_api_key": "sk-hashed-abc",
+            "user_api_key_alias": "test-key",
+            "spend_logs_metadata": header_attrs,
+        }
+        litellm_metadata = {"user_id": "anthropic-end-user"}
+
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata, metadata
+        )
+
+        assert merged["spend_logs_metadata"] == header_attrs
+        assert merged["user_api_key"] == "sk-hashed-abc"
+        assert merged["user_api_key_alias"] == "test-key"
+        # Original litellm_metadata content stays untouched.
+        assert merged["user_id"] == "anthropic-end-user"
+
+    def test_preserves_other_proxy_header_metadata(self):
+        """`agent_id`, `trace_id`, `session_id`, `requester_ip_address` are all
+        proxy-populated and must also survive the merge."""
+        from litellm.litellm_core_utils.core_helpers import (
+            add_missing_spend_metadata_to_litellm_metadata,
+        )
+
+        metadata = {
+            "user_api_key_team_id": "team-1",
+            "agent_id": "agent-7",
+            "trace_id": "trace-abc",
+            "session_id": "sess-xyz",
+            "requester_ip_address": "10.0.0.1",
+            "spend_logs_metadata": {"foo": "bar"},
+        }
+        litellm_metadata = {"user_id": "u"}
+
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata, metadata
+        )
+
+        for key in (
+            "agent_id",
+            "trace_id",
+            "session_id",
+            "requester_ip_address",
+            "spend_logs_metadata",
+            "user_api_key_team_id",
+        ):
+            assert merged[key] == metadata[key]
+
+    def test_does_not_leak_unrelated_metadata_keys(self):
+        """Client-supplied (request body) keys on `metadata` that are not
+        spend-tracking or proxy-set must NOT clobber `litellm_metadata`."""
+        from litellm.litellm_core_utils.core_helpers import (
+            add_missing_spend_metadata_to_litellm_metadata,
+        )
+
+        metadata = {
+            "user_api_key": "sk-hashed",
+            "user_id": "client-1",  # client-supplied body field
+            "custom_unrelated": "noise",
+        }
+        litellm_metadata = {"user_id": "proxy-set-user"}
+
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata, metadata
+        )
+
+        # user_api_key still copied
+        assert merged["user_api_key"] == "sk-hashed"
+        # client-supplied body fields NOT propagated
+        assert merged["user_id"] == "proxy-set-user"
+        assert "custom_unrelated" not in merged
+
+    def test_get_litellm_metadata_from_kwargs_round_trip(self):
+        """End-to-end: `get_litellm_metadata_from_kwargs` returns the merged dict
+        with `spend_logs_metadata` intact for the LIT-3302 customer scenario."""
+        from litellm.litellm_core_utils.core_helpers import (
+            get_litellm_metadata_from_kwargs,
+        )
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "sk-hashed",
+                    "spend_logs_metadata": {
+                        "billing_uuid": "uuid-1",
+                        "agent_id": "agent-1",
+                        "agent_owner_id": "owner-1",
+                        "request_type": "chat_completion",
+                    },
+                },
+                "litellm_metadata": {
+                    "user_id": "client",  # forces the merge path
+                },
+            }
+        }
+
+        result = get_litellm_metadata_from_kwargs(kwargs)
+        assert "spend_logs_metadata" in result
+        assert result["spend_logs_metadata"]["billing_uuid"] == "uuid-1"
+        assert result["user_api_key"] == "sk-hashed"
