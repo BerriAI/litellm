@@ -2215,7 +2215,6 @@ async def _emit_guardrail_success_logs(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     response: ApplyGuardrailResponse,
-    response_for_logging: dict,
     start_time: datetime,
 ) -> ApplyGuardrailResponse:
     """Fire proxy and LiteLLM success hooks after a successful guardrail run.
@@ -2238,6 +2237,11 @@ async def _emit_guardrail_success_logs(
             response = modified
     except Exception:
         verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
+
+    # Build the logging payload after post_call_success_hook so that logged
+    # data matches what the caller actually receives if the hook modified
+    # the response.
+    response_for_logging = {"response": response.model_dump(exclude_none=True)}
 
     if litellm_logging_obj is not None:
         end_time = datetime.now(timezone.utc)
@@ -2333,7 +2337,6 @@ async def apply_guardrail(
         response = ApplyGuardrailResponse(
             response_text=response_text[0] if response_text else request.text
         )
-        response_for_logging = {"response": response.model_dump(exclude_none=True)}
     except Exception as e:
         try:
             if litellm_logging_obj is not None and not isinstance(e, HTTPException):
@@ -2346,13 +2349,20 @@ async def apply_guardrail(
                     e,
                     traceback.format_exc(),
                 )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "apply_guardrail: async_failure_handler failed"
+            )
+        try:
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=data,
             )
         except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: failure logging failed")
+            verbose_proxy_logger.exception(
+                "apply_guardrail: post_call_failure_hook failed"
+            )
         raise handle_exception_on_proxy(e)
 
     # Success logging outside except so a hook error never triggers failure handlers.
@@ -2362,7 +2372,6 @@ async def apply_guardrail(
         data=data,
         user_api_key_dict=user_api_key_dict,
         response=response,
-        response_for_logging=response_for_logging,
         start_time=start_time,
     )
     return response
