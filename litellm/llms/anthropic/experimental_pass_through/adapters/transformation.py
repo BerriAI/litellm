@@ -91,7 +91,6 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
     AppliedEdit,
-    CompactionBlock,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,

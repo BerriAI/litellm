@@ -11,7 +11,6 @@ from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     strip_empty_text_blocks_from_anthropic_messages,
@@ -21,7 +20,6 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.types.llms.anthropic import AppliedEdit
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
