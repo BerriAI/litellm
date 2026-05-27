@@ -628,3 +628,174 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# ---------------------------------------------------------------------------
+# LIT-3078: gating background health-check DB writes via general_settings
+# ---------------------------------------------------------------------------
+
+
+class _SentinelPrisma:
+    """Truthy stand-in for a configured prisma client. The function under test
+    only checks ``is None``, so any non-None value is sufficient."""
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_default_back_compat(monkeypatch):
+    """Default behavior (flag absent) MUST still dispatch the DB-save coroutine."""
+    from litellm.proxy import proxy_server
+    import litellm.proxy.health_endpoints._health_endpoints as he_mod
+
+    scheduled = []
+
+    async def _fake_save(prisma_client, model_list, healthy, unhealthy, start_time, checked_by=None):
+        scheduled.append({"models": len(model_list), "healthy": len(healthy), "unhealthy": len(unhealthy), "checked_by": checked_by})
+
+    monkeypatch.setattr(he_mod, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    proxy_server._schedule_background_health_check_db_save(
+        prisma_client=_SentinelPrisma(),
+        shared_health_manager=None,
+        model_list=[{"model_name": "gpt-4", "model_info": {"id": "id-1"}, "litellm_params": {"model": "gpt-4"}}],
+        healthy_endpoints=[{"model": "gpt-4"}],
+        unhealthy_endpoints=[],
+    )
+    await asyncio.sleep(0.01)
+    assert len(scheduled) == 1
+    assert scheduled[0]["checked_by"] == "background_health_check"
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_disabled_via_flag(monkeypatch):
+    """With ``disable_background_health_check_db_save: True``, NO DB-save coroutine is dispatched."""
+    from litellm.proxy import proxy_server
+    import litellm.proxy.health_endpoints._health_endpoints as he_mod
+
+    scheduled = []
+
+    async def _fake_save(prisma_client, model_list, healthy, unhealthy, start_time, checked_by=None):
+        scheduled.append(1)
+
+    monkeypatch.setattr(he_mod, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"disable_background_health_check_db_save": True},
+    )
+
+    for _ in range(5):
+        proxy_server._schedule_background_health_check_db_save(
+            prisma_client=_SentinelPrisma(),
+            shared_health_manager=None,
+            model_list=[{"model_name": "gpt-4", "model_info": {"id": "id-1"}, "litellm_params": {"model": "gpt-4"}}],
+            healthy_endpoints=[{"model": "gpt-4"}],
+            unhealthy_endpoints=[],
+        )
+    await asyncio.sleep(0.01)
+    assert scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_flag_false_dispatches(monkeypatch):
+    """Explicit ``disable_background_health_check_db_save: False`` keeps the dispatch."""
+    from litellm.proxy import proxy_server
+    import litellm.proxy.health_endpoints._health_endpoints as he_mod
+
+    scheduled = []
+
+    async def _fake_save(prisma_client, model_list, healthy, unhealthy, start_time, checked_by=None):
+        scheduled.append(1)
+
+    monkeypatch.setattr(he_mod, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"disable_background_health_check_db_save": False},
+    )
+
+    proxy_server._schedule_background_health_check_db_save(
+        prisma_client=_SentinelPrisma(),
+        shared_health_manager=None,
+        model_list=[{"model_name": "gpt-4", "model_info": {"id": "id-1"}, "litellm_params": {"model": "gpt-4"}}],
+        healthy_endpoints=[{"model": "gpt-4"}],
+        unhealthy_endpoints=[],
+    )
+    await asyncio.sleep(0.01)
+    assert scheduled == [1]
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_flag_only_python_true_disables(monkeypatch):
+    """Only the literal Python ``True`` disables. Truthy-but-not-True ("true", 1)
+    must NOT silently disable - config flag is explicit."""
+    from litellm.proxy import proxy_server
+    import litellm.proxy.health_endpoints._health_endpoints as he_mod
+
+    scheduled = []
+
+    async def _fake_save(prisma_client, model_list, healthy, unhealthy, start_time, checked_by=None):
+        scheduled.append(1)
+
+    monkeypatch.setattr(he_mod, "_save_background_health_checks_to_db", _fake_save)
+
+    for not_true in (False, None, 0, "", "true", "True", 1):
+        scheduled.clear()
+        monkeypatch.setattr(
+            proxy_server,
+            "general_settings",
+            {"disable_background_health_check_db_save": not_true},
+        )
+        proxy_server._schedule_background_health_check_db_save(
+            prisma_client=_SentinelPrisma(),
+            shared_health_manager=None,
+            model_list=[{"model_name": "gpt-4", "model_info": {"id": "id-1"}, "litellm_params": {"model": "gpt-4"}}],
+            healthy_endpoints=[{"model": "gpt-4"}],
+            unhealthy_endpoints=[],
+        )
+        await asyncio.sleep(0.01)
+        assert scheduled == [1], f"value={not_true!r} should NOT disable; only Python True does."
+
+    scheduled.clear()
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"disable_background_health_check_db_save": True},
+    )
+    proxy_server._schedule_background_health_check_db_save(
+        prisma_client=_SentinelPrisma(),
+        shared_health_manager=None,
+        model_list=[{"model_name": "gpt-4", "model_info": {"id": "id-1"}, "litellm_params": {"model": "gpt-4"}}],
+        healthy_endpoints=[{"model": "gpt-4"}],
+        unhealthy_endpoints=[],
+    )
+    await asyncio.sleep(0.01)
+    assert scheduled == []
+
+
+def test_schedule_background_health_check_db_save_none_prisma_short_circuits(monkeypatch):
+    """Pre-existing behavior: prisma_client is None -> no-op, regardless of flag."""
+    from litellm.proxy import proxy_server
+    import litellm.proxy.health_endpoints._health_endpoints as he_mod
+
+    scheduled = []
+
+    async def _fake_save(*a, **k):
+        scheduled.append(1)
+
+    monkeypatch.setattr(he_mod, "_save_background_health_checks_to_db", _fake_save)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"disable_background_health_check_db_save": False},
+    )
+
+    proxy_server._schedule_background_health_check_db_save(
+        prisma_client=None,
+        shared_health_manager=None,
+        model_list=[],
+        healthy_endpoints=[],
+        unhealthy_endpoints=[],
+    )
+    assert scheduled == []
+
