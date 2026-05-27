@@ -45,7 +45,7 @@ import ViewUserSpend from "../../view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
-import { mergeResultsByDate } from "../utils/mergeDailyResults";
+import { hasDuplicateDates, mergeResultsByDate } from "../utils/mergeDailyResults";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -431,16 +431,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Dedupe by date BEFORE sorting so the Daily Spend BarChart can never
   // receive multiple rows whose `date` collides (one X-axis label, two+
-  // bars). Belt + suspenders alongside the dedupe inside
-  // `usePaginatedDailyActivity`: also guards the aggregated endpoint and
-  // the backend timezone-window ghost-row case. See LIT-3383.
-  const sortedDailyResults = useMemo(
-    () =>
-      mergeResultsByDate(userSpendData.results).sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-      ),
-    [userSpendData.results],
-  );
+  // bars). Primary dedupe lives in `usePaginatedDailyActivity`; this call
+  // is a defense-in-depth guard for the aggregated endpoint path and the
+  // backend timezone-window ghost-row case, with an O(n) Set-based
+  // short-circuit so we don't allocate a fresh array on already-clean
+  // inputs (the common case once the hook has run). See LIT-3383.
+  const sortedDailyResults = useMemo(() => {
+    const rows = hasDuplicateDates(userSpendData.results)
+      ? mergeResultsByDate(userSpendData.results)
+      : userSpendData.results;
+    return [...rows].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+  }, [userSpendData.results]);
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
