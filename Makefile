@@ -5,7 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	install-dev install-proxy-dev install-test-deps \
+	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
@@ -16,6 +16,7 @@ help:
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
+	@echo "  make install-hooks      - Install local Conventional Commits / Branches git hooks (opt-in)"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
@@ -64,6 +65,9 @@ install-proxy-dev-ci:
 install-test-deps: install-proxy-dev
 	$(UV) sync --frozen --all-groups --all-extras
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
+
+install-hooks:
+	@bash scripts/install_git_hooks.sh
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
