@@ -91,6 +91,13 @@ Documentation lives in the separate [BerriAI/litellm-docs](https://github.com/Be
    - Use provider-specific exception classes
    - Maintain consistent error formats across providers
    - Include proper retry logic and fallback mechanisms
+   - Keep `error.message` low-cardinality. Stable template in `message=`,
+     variable detail (provider response body, request id, model id) belongs
+     on span attributes or the `detail=` kwarg — never inlined into the
+     message. Never embed secrets, prompts, or customer identifiers.
+     See [`ERROR_HANDLING_STANDARDS.md`](ERROR_HANDLING_STANDARDS.md) for
+     the full rules (S1–S4), the provider-attributed error pattern, and
+     the phased rollout plan.
 
 4. **Configuration**:
    - Support both environment variables and programmatic configuration
