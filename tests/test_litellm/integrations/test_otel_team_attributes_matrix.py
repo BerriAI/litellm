@@ -281,5 +281,168 @@ class TestAdminTeamInfoCells(unittest.TestCase):
         self.skipTest("/team/info has no 3xx redirect path (N/A)")
 
 
+
+# ---------------------------------------------------------------------------
+# Service-logger cells: DB / Redis / cache child spans created by
+# ``async_service_success_hook`` / ``async_service_failure_hook``.
+#
+# These spans are siblings of the LLM request inside the proxy SERVER span
+# (parent_otel_span = user_api_key_dict.parent_otel_span). They previously
+# inherited *nothing* from the team-stamped root span, so dashboards
+# filtered by ``metadata.user_api_key_team_id`` lost every DB/Redis span
+# in the trace (LIT-3192).
+# ---------------------------------------------------------------------------
+class TestServiceSpanCells(unittest.TestCase):
+    """Every service-hook span emitted under a team-stamped parent span
+    carries team_id / team_alias."""
+
+    def _team_stamped_parent(self, otel):
+        parent = _server_span(otel)
+        otel._set_team_attributes_on_span(
+            span=parent, team_id=TEAM_ID, team_alias=TEAM_ALIAS
+        )
+        return parent
+
+    def _run_service_success(self, service, call_type):
+        from litellm.types.services import ServiceLoggerPayload
+        otel, exporter = _make_otel()
+        parent = self._team_stamped_parent(otel)
+        now = datetime.now()
+        asyncio.run(
+            otel.async_service_success_hook(
+                payload=ServiceLoggerPayload(
+                    is_error=False, error=None, service=service,
+                    duration=0.05, call_type=call_type, event_metadata=None,
+                ),
+                parent_otel_span=parent, start_time=now, end_time=now,
+                event_metadata=None,
+            )
+        )
+        parent.end()
+        return exporter.get_finished_spans()
+
+    def _run_service_failure(self, service, call_type):
+        from litellm.types.services import ServiceLoggerPayload
+        otel, exporter = _make_otel()
+        parent = self._team_stamped_parent(otel)
+        now = datetime.now()
+        asyncio.run(
+            otel.async_service_failure_hook(
+                payload=ServiceLoggerPayload(
+                    is_error=True, error="timeout", service=service,
+                    duration=0.30, call_type=call_type, event_metadata=None,
+                ),
+                error="timeout", parent_otel_span=parent,
+                start_time=now, end_time=now, event_metadata=None,
+            )
+        )
+        parent.end()
+        return exporter.get_finished_spans()
+
+    @staticmethod
+    def _span_with_service(spans, service_value):
+        """Find a service-hook span by its ``service`` attribute
+        (= ``ServiceTypes.<NAME>.value``).
+
+        The span name itself is the ``ServiceTypes`` enum object, which the
+        OTel SDK stringifies as ``ServiceTypes.DB`` - match by the explicit
+        ``service`` attribute instead, which is always the enum ``.value``.
+        """
+        for s in spans:
+            if s.attributes and s.attributes.get("service") == service_value:
+                return s
+        raise AssertionError(
+            f"No span with service={service_value!r}; saw "
+            f"{[s.attributes.get('service') if s.attributes else None for s in spans]}"
+        )
+
+    def test_db_success_carries_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+        spans = self._run_service_success(ServiceTypes.DB, "spend_logs_insert")
+        _assert_team_attrs(
+            self._span_with_service(spans, "postgres"),
+            where="ServiceTypes.DB success span",
+        )
+
+    def test_db_failure_carries_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+        spans = self._run_service_failure(ServiceTypes.DB, "spend_logs_insert")
+        _assert_team_attrs(
+            self._span_with_service(spans, "postgres"),
+            where="ServiceTypes.DB failure span",
+        )
+
+    def test_redis_success_carries_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+        spans = self._run_service_success(ServiceTypes.REDIS, "redis_get")
+        _assert_team_attrs(
+            self._span_with_service(spans, "redis"),
+            where="ServiceTypes.REDIS success span",
+        )
+
+    def test_redis_failure_carries_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+        spans = self._run_service_failure(ServiceTypes.REDIS, "EVALSHA")
+        _assert_team_attrs(
+            self._span_with_service(spans, "redis"),
+            where="ServiceTypes.REDIS failure span",
+        )
+
+    def test_batch_write_to_db_success_carries_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+        spans = self._run_service_success(
+            ServiceTypes.BATCH_WRITE_TO_DB, "batch_db_write"
+        )
+        _assert_team_attrs(
+            self._span_with_service(spans, "batch_write_to_db"),
+            where="ServiceTypes.BATCH_WRITE_TO_DB success span",
+        )
+
+    def test_parent_without_team_attrs_leaves_child_clean(self):
+        """Un-team-stamped parent (master-key request or externally
+        provided parent span) MUST NOT cause invented values on the child."""
+        from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+        otel, exporter = _make_otel()
+        parent = _server_span(otel)  # no team attrs stamped
+        now = datetime.now()
+        asyncio.run(
+            otel.async_service_success_hook(
+                payload=ServiceLoggerPayload(
+                    is_error=False, error=None, service=ServiceTypes.DB,
+                    duration=0.01, call_type="x", event_metadata=None,
+                ),
+                parent_otel_span=parent, start_time=now, end_time=now,
+                event_metadata=None,
+            )
+        )
+        parent.end()
+        db_span = self._span_with_service(exporter.get_finished_spans(), "postgres")
+        assert db_span.attributes.get(TEAM_ID_ATTR) is None
+        assert db_span.attributes.get(TEAM_ALIAS_ATTR) is None
+
+    def test_propagation_helper_swallows_non_sdk_parent(self):
+        """A NoOpSpan / propagated remote span exposes no ``.attributes``;
+        helper must fall through silently, not raise."""
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+        from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+        otel, _exporter = _make_otel()
+        ctx = SpanContext(
+            trace_id=0x1, span_id=0x2, is_remote=True,
+            trace_flags=TraceFlags(0x1),
+        )
+        nonrec_parent = NonRecordingSpan(ctx)
+        now = datetime.now()
+        asyncio.run(
+            otel.async_service_success_hook(
+                payload=ServiceLoggerPayload(
+                    is_error=False, error=None, service=ServiceTypes.DB,
+                    duration=0.01, call_type="x", event_metadata=None,
+                ),
+                parent_otel_span=nonrec_parent, start_time=now, end_time=now,
+                event_metadata=None,
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
