@@ -135,3 +135,50 @@ class TestBedrockNovaVideoEmbeddingMode:
             async_invoke_route=False,
         )
         assert "text" in txt["singleEmbeddingParams"]
+
+    def test_batch_does_not_leak_embedding_mode_or_mutate_inference_params(self):
+        """
+        Regression for Greptile P2 on PR #29026: batched embedding calls.
+
+        ``embedding()`` calls ``_transform_request`` once per input in the
+        list, passing the *same* ``inference_params`` dict each time. The
+        pre-populated ``video`` block must not be mutated in-place, and a
+        top-level ``embeddingMode`` override must not leak into
+        ``singleEmbeddingParams`` of subsequent batch elements.
+        """
+        import copy
+        cfg = AmazonNovaEmbeddingConfig()
+        inference_params = {
+            "embeddingPurpose": "VIDEO_RETRIEVAL",
+            "embeddingMode": "AUDIO_VIDEO_SEPARATE",
+            "video": {
+                "format": "mp4",
+                "source": {"s3Location": {"uri": "s3://b/v.mp4"}},
+            },
+        }
+        before = copy.deepcopy(inference_params)
+        req1 = cfg._transform_request(input="s3://b/v.mp4", inference_params=inference_params, async_invoke_route=False)
+        req2 = cfg._transform_request(input="s3://b/v.mp4", inference_params=inference_params, async_invoke_route=False)
+        for r in (req1, req2):
+            p = r["singleEmbeddingParams"]
+            assert p["video"]["embeddingMode"] == "AUDIO_VIDEO_SEPARATE"
+            assert "embeddingMode" not in p
+        assert inference_params == before
+
+    def test_batch_data_url_override_does_not_leak(self):
+        """Same as above but for the data-URL synthesis path."""
+        import copy
+        cfg = AmazonNovaEmbeddingConfig()
+        inference_params = {
+            "embeddingPurpose": "VIDEO_RETRIEVAL",
+            "embeddingMode": "AUDIO_VIDEO_SEPARATE",
+        }
+        before = copy.deepcopy(inference_params)
+        req1 = cfg._transform_request(input=_video_data_url(), inference_params=inference_params, async_invoke_route=False)
+        req2 = cfg._transform_request(input=_video_data_url(), inference_params=inference_params, async_invoke_route=False)
+        for r in (req1, req2):
+            p = r["singleEmbeddingParams"]
+            assert p["video"]["embeddingMode"] == "AUDIO_VIDEO_SEPARATE"
+            assert "embeddingMode" not in p
+        assert inference_params == before
+
