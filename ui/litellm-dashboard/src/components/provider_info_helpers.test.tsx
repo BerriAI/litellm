@@ -5,6 +5,7 @@ import {
   getProviderLogoAndName,
   getProviderModels,
   providerLogoMap,
+  providerMatchesModelGroup,
   provider_map,
 } from "./provider_info_helpers";
 
@@ -310,6 +311,118 @@ describe("provider_info_helpers", () => {
       expect(openaiResult).toEqual(["gpt-3.5-turbo"]);
       expect(anthropicResult).toEqual(["claude-3-opus"]);
       expect(groqResult).toContain("groq-model");
+    });
+  });
+
+  describe("providerMatchesModelGroup (LIT-3311)", () => {
+    it("matches an exact provider key", () => {
+      expect(providerMatchesModelGroup("anthropic", "anthropic")).toBe(true);
+      expect(providerMatchesModelGroup("openai", "openai")).toBe(true);
+    });
+
+    it("matches a hyphen-separated sub-category", () => {
+      expect(providerMatchesModelGroup("vertex_ai-anthropic_models", "vertex_ai")).toBe(true);
+      expect(providerMatchesModelGroup("vertex_ai-llama_models", "vertex_ai")).toBe(true);
+      expect(providerMatchesModelGroup("fireworks_ai-embedding-models", "fireworks_ai")).toBe(true);
+    });
+
+    it("matches an underscore-separated sub-category", () => {
+      expect(providerMatchesModelGroup("cohere_chat", "cohere")).toBe(true);
+      expect(providerMatchesModelGroup("bedrock_converse", "bedrock")).toBe(true);
+    });
+
+    it("does NOT match an unanchored substring (the LIT-3311 bug)", () => {
+      expect(providerMatchesModelGroup("vertex_ai-anthropic_models", "anthropic")).toBe(false);
+      expect(providerMatchesModelGroup("vertex_ai-llama_models", "meta_llama")).toBe(false);
+      expect(providerMatchesModelGroup("vertex_ai-mistral_models", "mistral")).toBe(false);
+      expect(providerMatchesModelGroup("vertex_ai-deepseek_models", "deepseek")).toBe(false);
+      expect(providerMatchesModelGroup("vertex_ai-ai21_models", "ai21")).toBe(false);
+      expect(providerMatchesModelGroup("text-completion-openai", "openai")).toBe(false);
+    });
+
+    it("does NOT match when the candidate is shorter than the key", () => {
+      expect(providerMatchesModelGroup("ai", "ai21")).toBe(false);
+    });
+
+    it("does NOT match when the separator is not '-' or '_'", () => {
+      expect(providerMatchesModelGroup("anthropic2", "anthropic")).toBe(false);
+      expect(providerMatchesModelGroup("anthropic.next", "anthropic")).toBe(false);
+    });
+
+    it("returns false on an empty key (defensive)", () => {
+      expect(providerMatchesModelGroup("anything", "")).toBe(false);
+    });
+  });
+
+  describe("getProviderModels - LIT-3311 regressions", () => {
+    const modelMap = {
+      "claude-3-opus-20240229": { litellm_provider: "anthropic" },
+      "claude-3-5-sonnet-20241022": { litellm_provider: "anthropic" },
+      "vertex_ai/claude-3-opus@20240229": {
+        litellm_provider: "vertex_ai-anthropic_models",
+      },
+      "vertex_ai/claude-3-5-sonnet@20240620": {
+        litellm_provider: "vertex_ai-anthropic_models",
+      },
+      "vertex_ai/gemini-1.5-pro": {
+        litellm_provider: "vertex_ai-language-models",
+      },
+      "vertex_ai/llama-3.3-70b": {
+        litellm_provider: "vertex_ai-llama_models",
+      },
+      "vertex_ai/mistral-large": {
+        litellm_provider: "vertex_ai-mistral_models",
+      },
+      "vertex_ai/deepseek-v3": {
+        litellm_provider: "vertex_ai-deepseek_models",
+      },
+      "gpt-4o": { litellm_provider: "openai" },
+      "fireworks_ai/llama-v3p1-405b": { litellm_provider: "fireworks_ai" },
+      "fireworks_ai/nomic-embed-text-v1.5": {
+        litellm_provider: "fireworks_ai-embedding-models",
+      },
+      "cohere/command-r": { litellm_provider: "cohere_chat" },
+      "cohere/embed-english-v3.0": { litellm_provider: "cohere" },
+    };
+
+    it("does not leak vertex_ai-anthropic_models into the Anthropic dropdown", () => {
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toContain("claude-3-opus-20240229");
+      expect(result).toContain("claude-3-5-sonnet-20241022");
+      const leaks = result.filter((m) => m.startsWith("vertex_ai/"));
+      expect(leaks).toEqual([]);
+    });
+
+    it("does not leak vertex_ai-llama_models into the Meta Llama dropdown", () => {
+      const result = getProviderModels(Providers.LLAMA, modelMap);
+      const leaks = result.filter((m) => m.startsWith("vertex_ai/"));
+      expect(leaks).toEqual([]);
+    });
+
+    it("does not leak vertex_ai-mistral_models into the MistralAI dropdown", () => {
+      const result = getProviderModels(Providers.MistralAI, modelMap);
+      const leaks = result.filter((m) => m.startsWith("vertex_ai/"));
+      expect(leaks).toEqual([]);
+    });
+
+    it("does not leak vertex_ai-deepseek_models into the Deepseek dropdown", () => {
+      const result = getProviderModels(Providers.Deepseek, modelMap);
+      const leaks = result.filter((m) => m.startsWith("vertex_ai/"));
+      expect(leaks).toEqual([]);
+    });
+
+    it("keeps vertex_ai-anthropic_models inside the Vertex_AI dropdown", () => {
+      const result = getProviderModels(Providers.Vertex_AI, modelMap);
+      expect(result).toContain("vertex_ai/claude-3-opus@20240229");
+      expect(result).toContain("vertex_ai/claude-3-5-sonnet@20240620");
+      expect(result).toContain("vertex_ai/gemini-1.5-pro");
+      expect(result).toContain("vertex_ai/llama-3.3-70b");
+    });
+
+    it("keeps fireworks_ai-embedding-models inside the Fireworks dropdown", () => {
+      const result = getProviderModels(Providers.FireworksAI, modelMap);
+      expect(result).toContain("fireworks_ai/llama-v3p1-405b");
+      expect(result).toContain("fireworks_ai/nomic-embed-text-v1.5");
     });
   });
 });
