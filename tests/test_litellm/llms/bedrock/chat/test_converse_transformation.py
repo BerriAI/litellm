@@ -310,6 +310,111 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
     assert "thinking" not in optional_params
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "medium", "medium"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
+    ],
+)
+def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
+    model, effort, expected_effort
+):
+    """Adaptive Claude 4.6 / 4.7 on Bedrock Converse routes the tier via ``output_config.effort``."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"]["type"] == "adaptive"
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_forwarded_into_additional_request_fields(model):
+    """``output_config`` rides along inside ``additionalModelRequestFields``."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request_converse(effort):
+    """Unmapped reasoning_effort on Bedrock Converse Anthropic raises BadRequestError."""
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/global.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/eu.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/au.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_max_passes_through_on_sonnet_46_variants(model):
+    """``effort='max'`` flows through for every Bedrock Converse Sonnet 4.6 id."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "max"}
+
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(
@@ -3327,6 +3432,57 @@ def test_transform_request_strips_anthropic_output_config():
     assert "outputConfig" not in result
     additional_fields = result.get("additionalModelRequestFields", {})
     assert "output_config" not in additional_fields
+
+
+def test_converse_drop_params_strips_output_config_for_pre_4_5_anthropic():
+    """``drop_params=True`` strips unsupported ``output_config`` on Bedrock Converse."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {"effort": "low"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional
+
+
+def test_converse_drop_params_keeps_output_config_for_supporting_anthropic():
+    """``drop_params=True`` does not strip on models that support ``output_config``."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
 
 
 def test_transform_response_native_structured_output():

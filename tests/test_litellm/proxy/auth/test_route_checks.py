@@ -53,6 +53,39 @@ def test_non_admin_config_update_route_rejected():
     assert "Your role=internal_user" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "route",
+    ["/compliance/eu-ai-act", "/compliance/gdpr"],
+)
+def test_compliance_routes_open_to_non_admin_roles(role, route):
+    """Compliance routes are stateless validators on caller-supplied log data
+    — both non-admin internal_user roles can call them."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 
@@ -88,6 +121,73 @@ def test_proxy_admin_viewer_config_update_route_rejected():
     assert exc_info.value.status_code == 403
     assert "user not allowed to access this route" in str(exc_info.value.detail)
     assert "role= proxy_admin_viewer" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "blocked_route",
+    [
+        # team write routes that previously fell through the blocklist
+        "/team/block",
+        "/team/unblock",
+        "/team/permissions_update",
+        "/team/permissions_bulk_update",
+        # JWT key mapping write routes
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        # key write routes
+        "/key/bulk_update",
+        # path-parameterized key write routes (suffix match)
+        "/key/abc123/regenerate",
+        "/key/abc123/reset_spend",
+        # baseline coverage of routes that were already blocked
+        "/team/new",
+        "/team/delete",
+        "/key/generate",
+        "/key/delete",
+        "/model/new",
+        "/model/delete",
+    ],
+)
+def test_proxy_admin_viewer_blocked_management_writes(blocked_route):
+    """View-only admins must be denied on every management write route — the
+    fall-through path previously allowed /team/block, /team/unblock,
+    /key/bulk_update, /key/{id}/reset_spend, and the JWT key-mapping routes."""
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks._check_proxy_admin_viewer_access(
+            route=blocked_route,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+    assert blocked_route in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "allowed_read_route",
+    [
+        "/team/info",
+        "/team/list",
+        "/v2/team/list",
+        "/team/permissions_list",
+        "/team/daily/activity",
+        "/user/info",
+        "/user/list",
+        "/key/info",
+        "/key/list",
+        "/model/info",
+        "/jwt/key/mapping/list",
+        "/jwt/key/mapping/info",
+    ],
+)
+def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
+    """View-only admins must still be allowed to read management routes."""
+    # Should not raise
+    RouteChecks._check_proxy_admin_viewer_access(
+        route=allowed_read_route,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={},
+    )
 
 
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
@@ -162,10 +262,164 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
 )
 def test_mcp_management_routes_classified_as_management_not_llm_api(route):
     """MCP server CRUD must be management routes, not llm_api routes, so
-    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI.
+
+    Note: virtual keys with allowed_routes=["llm_api_routes"] can still call
+    *GET* `/v1/mcp/server` and *GET* `/v1/mcp/server/{server_id}` — that
+    carve-out is enforced method-aware inside
+    `is_virtual_key_allowed_to_call_route`, not by adding the paths to
+    `llm_api_routes`. So `is_llm_api_route()` still returns False here and
+    `DISABLE_LLM_API_ENDPOINTS` still does not block these paths.
+    """
 
     assert RouteChecks.is_llm_api_route(route=route) is False
     assert RouteChecks.is_management_route(route=route) is True
+
+
+def _mock_request(method: str) -> Request:
+    request = MagicMock(spec=Request)
+    request.method = method
+    return request
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_get_mcp_server_discovery(route):
+    """
+    Regression test: virtual keys with allowed_routes=["llm_api_routes"] must
+    be able to list/inspect MCP servers via GET /v1/mcp/server[/{server_id}].
+
+    The handlers strip credential-bearing fields via
+    `_sanitize_mcp_server_list_for_virtual_key` when the caller is a
+    restricted virtual key, so GET is safe to expose. The carve-out is
+    method-aware (see below) — non-GET requests to the same paths are
+    rejected at this layer, so admin-only writes remain gated.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request("GET"),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+    ],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, method):
+    """Method-aware: the MCP server discovery carve-out is GET-only.
+
+    POST/PUT/PATCH/DELETE on `/v1/mcp/server[/{server_id}]` are admin-only
+    management writes and must not be reachable via llm_api_routes.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request(method),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Multi-segment admin-only sub-paths must NOT be reachable via
+        # llm_api_routes, even on GET.
+        "/v1/mcp/server/abc-123/approve",
+        "/v1/mcp/server/abc-123/reject",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/abc-123/user-credential",
+    ],
+)
+def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
+    route,
+):
+    """Multi-segment admin-only MCP sub-paths are not reachable via llm_api_routes.
+
+    The discovery carve-out only matches `/v1/mcp/server` and
+    `/v1/mcp/server/{server_id}` (single segment after `/server/`), so any
+    path with additional segments is rejected even when the request is GET.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+            request=_mock_request("GET"),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_spend_logs_v2_classified_as_management_not_llm_api():
+    """Paginated spend logs are a management/spend read route, not an LLM API."""
+
+    assert RouteChecks.is_llm_api_route(route="/spend/logs/v2") is False
+    assert RouteChecks.is_management_route(route="/spend/logs/v2") is True
+
+
+def test_virtual_key_management_routes_allows_spend_logs_v2():
+    """Management virtual keys should be allowed to call the v2 spend logs endpoint."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["management_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/v2",
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
+    """AI API virtual keys should not gain spend-log access."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/spend/logs/v2",
+            valid_token=valid_token,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -1222,6 +1476,7 @@ ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
     "/cost/estimate",
     # Public spend logs / spend tracking routes that admin viewer should read
     "/spend/logs",
+    "/spend/logs/v2",
     "/spend/keys",
     "/spend/users",
     "/spend/tags",
@@ -1794,6 +2049,41 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     [
         LitellmUserRoles.INTERNAL_USER.value,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize("route", ["/tag/list", "/tag/daily/activity"])
+def test_internal_users_can_access_scoped_tag_usage_routes(user_role, route):
+    """
+    Internal users can read tag usage endpoints because the endpoint handlers
+    scope results to the caller's own keys.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=user_role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     ],
 )
@@ -2002,3 +2292,57 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
         )
         for k in registered:
             InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/credentials/by_name/openai",
+        "/credentials/openai",
+        "/credentials/azure",
+        "/credentials/by_name/anthropic",
+        "/model/delete/openai",
+        "/model/delete/anthropic-prod",
+        "/budget/update/bedrock",
+        "/user/delete/gemini-user",
+    ],
+)
+def test_provider_name_substring_not_classified_as_llm_route(route):
+    """
+    Regression: mapped_pass_through_routes used a substring check
+    (`_llm_passthrough_route in route`) so any admin-only path whose URL
+    happened to contain a provider name (openai, anthropic, azure, …) was
+    misclassified as an LLM API route and bypassed the admin gate.
+
+    The fix uses an exact/prefix match so only routes that actually *start*
+    with a passthrough prefix are allowed through.
+    """
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert RouteChecks.is_llm_api_route(route=route) is False, (
+        f"{route!r} should NOT be classified as an LLM API route — "
+        "provider-name substring match bypass"
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/chat/completions",
+        "/openai",
+        "/anthropic/v1/messages",
+        "/anthropic",
+        "/bedrock/invoke",
+        "/azure/openai/deployments/gpt-4/chat/completions",
+        "/gemini/v1/models",
+        "/vertex-ai/predict",
+        "/vertex_ai/predict",
+    ],
+)
+def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
+    """Legitimate passthrough routes must still pass is_llm_api_route."""
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert (
+        RouteChecks.is_llm_api_route(route=route) is True
+    ), f"{route!r} should be classified as an LLM API route"

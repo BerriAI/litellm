@@ -44,6 +44,7 @@ from .common_utils import (
     select_azure_base_url_or_endpoint,
 )
 from .image_generation import get_azure_image_generation_config
+from .image_generation.http_utils import azure_deployment_image_generation_json_body
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -238,7 +239,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
-            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+                model=litellm_params.get("base_model") or model
+            ):
                 data = litellm.AzureOpenAIGPT5Config().transform_request(
                     model=model,
                     messages=messages,
@@ -966,9 +969,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = azure_deployment_image_generation_json_body(api_base, data)
         return await async_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 
@@ -1085,9 +1089,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = azure_deployment_image_generation_json_body(api_base, data)
         return sync_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 

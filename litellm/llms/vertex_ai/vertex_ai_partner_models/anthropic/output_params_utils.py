@@ -11,11 +11,9 @@ keeps the parent module's import surface narrow.
 """
 
 # Keys inside ``output_config`` that Vertex AI Claude does not accept.
-# Today only ``effort`` triggers "Extra inputs are not permitted"; add new
-# entries here as Vertex parity drifts. Keep this list narrow — anything
-# Vertex DOES accept (e.g. ``format`` for structured outputs) must be
-# preserved so callers can rely on Anthropic-native features.
-VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset({"effort"})
+# Add an entry only when a 400 "Extra inputs are not permitted" is
+# reproducible against the live Vertex endpoint.
+VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset()
 
 
 def sanitize_vertex_anthropic_output_params(data: dict) -> None:

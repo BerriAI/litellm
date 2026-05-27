@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
 import { getProxyBaseUrl } from "@/components/networking";
+import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 import { OnboardingFormBody } from "./OnboardingFormBody";
@@ -45,7 +46,12 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
             setClaimError("Failed to start session. Please try again.");
             return;
           }
-          document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+          // Invite signup is a principal-change boundary — the prior admin's
+          // cookies/sessionStorage must be invalidated before the new user's
+          // session is established, otherwise getCookie() can fall back to
+          // the inviter's token.
+          clearTokenCookies();
+          storeLoginToken(data.token);
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`
