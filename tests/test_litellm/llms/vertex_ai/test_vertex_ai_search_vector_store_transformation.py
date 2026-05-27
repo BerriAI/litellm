@@ -174,7 +174,7 @@ def test_transform_search_attaches_data_store_specs():
                 "projects/123/locations/global/collections/default_collection/"
                 "dataStores/ds-b"
             ),
-            "filter": "category: ANY(\"docs\")",
+            "filter": 'category: ANY("docs")',
         },
     ]
     url, body = config.transform_search_vector_store_request(
@@ -222,21 +222,47 @@ def test_transform_search_merges_extra_body():
     assert body["numResultsPerDataStore"] == 5
 
 
-def test_extra_body_data_store_specs_wins_over_litellm_param():
-    """Both knobs set -> extra_body['dataStoreSpecs'] wins."""
+def test_admin_data_store_specs_authoritative_over_extra_body():
+    """SECURITY: admin-configured ``vertex_data_store_specs`` is the
+    authoritative scope - a caller MUST NOT be able to broaden or replace
+    it via ``extra_body['dataStoreSpecs']``. This previously silently
+    allowed a caller-controlled override (Veria 'High: Datastore scope
+    override')."""
     config = VertexSearchAPIVectorStoreConfig()
-    from_param = [{"dataStore": "from-param"}]
-    from_body = [{"dataStore": "from-body"}]
+    from_admin = [{"dataStore": "from-admin"}]
+    from_caller = [{"dataStore": "from-caller"}]
+    with pytest.raises(
+        ValueError,
+        match="dataStoreSpecs in extra_body is not allowed",
+    ):
+        config.transform_search_vector_store_request(
+            vector_store_id="ds-1",
+            query="q",
+            vector_store_search_optional_params={},
+            api_base="https://example/x",
+            litellm_logging_obj=_logger(),
+            litellm_params={"vertex_data_store_specs": from_admin},
+            extra_body={"dataStoreSpecs": from_caller},
+        )
+
+
+def test_extra_body_data_store_specs_allowed_when_admin_did_not_configure():
+    """When the admin did NOT set ``vertex_data_store_specs``, an
+    ``extra_body['dataStoreSpecs']`` from the caller passes through
+    unchanged - the security control only kicks in when there is an
+    admin-configured scope to protect."""
+    config = VertexSearchAPIVectorStoreConfig()
+    from_caller = [{"dataStore": "from-caller"}]
     _, body = config.transform_search_vector_store_request(
         vector_store_id="ds-1",
         query="q",
         vector_store_search_optional_params={},
         api_base="https://example/x",
         litellm_logging_obj=_logger(),
-        litellm_params={"vertex_data_store_specs": from_param},
-        extra_body={"dataStoreSpecs": from_body},
+        litellm_params={},
+        extra_body={"dataStoreSpecs": from_caller},
     )
-    assert body["dataStoreSpecs"] == from_body
+    assert body["dataStoreSpecs"] == from_caller
 
 
 def test_transform_search_query_list_is_space_joined():
