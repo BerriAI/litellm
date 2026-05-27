@@ -288,7 +288,7 @@ rules:
       the `message=` kwarg of a LiteLLM exception. That field is exported
       to OpenTelemetry as `error.message` and high-cardinality values break
       observability backends. Use a stable template for `message=` and pass
-      the full body via `detail=`. See ERROR_HANDLING_STANDARDS.md (S1, S3).
+      the full body via `detail=`. See AGENTS.md#error-handling-standards-observability (S1, S3).
     severity: INFO
     languages: [python]
     paths:
