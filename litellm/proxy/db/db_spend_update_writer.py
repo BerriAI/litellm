@@ -354,7 +354,11 @@ class DBSpendUpdateWriter:
             from litellm.proxy import proxy_server
 
             flag = getattr(proxy_server, "disable_daily_spend_aggregation", False)
-            if flag is True:
+            # Truthy-check on purpose so a YAML int / string ``1`` also works
+            # (a YAML loader can hand us a non-bool truthy value when the
+            # operator writes ``disable_daily_spend_aggregation: 1`` instead
+            # of ``true``).
+            if bool(flag):
                 return True
         except Exception:
             pass
