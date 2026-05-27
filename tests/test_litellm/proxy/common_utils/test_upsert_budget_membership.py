@@ -23,6 +23,11 @@ def mock_tx():
     membership = MagicMock()
     membership.update = AsyncMock()
     membership.upsert = AsyncMock()
+    # Stub the ref-count probe used by _upsert_budget_and_membership so the
+    # primary in-place / clone code paths are exercised (rather than the
+    # legacy fallback that fires when .count() is unawaitable). Tests that
+    # need a >1 count override this on the fixture before calling.
+    membership.count = AsyncMock(return_value=1)
 
     # budget “table”
     budget = MagicMock()
@@ -369,3 +374,151 @@ async def test_upsert_updates_in_place_when_member_has_private_budget(
     )
     mock_tx.litellm_budgettable.create.assert_not_called()
     mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LIT-3359: ref-count clone-on-write when a budget row is shared by more than
+# one membership for ANY reason (not just being the team's declared default).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_clones_when_budget_shared_by_other_memberships(
+    mock_tx, fake_user
+):
+    """
+    Regression for LIT-3359: when ``existing_budget_id`` is the SAME row that
+    multiple ``LiteLLM_TeamMembership`` entries already point at (because a
+    prior backfill / default-rotation / manual cleanup left them sharing one
+    budget row), updating a single member's cap must NOT mutate the shared
+    row in place. We must clone-on-write a private budget for the member
+    being updated and re-link their membership, leaving the other members'
+    caps untouched.
+    """
+    shared_budget_id = "shared-by-3-members-budget-1"
+
+    shared_row = MagicMock()
+    shared_row.model_dump.return_value = {
+        "budget_id": shared_budget_id,
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 250,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": None,
+        "allowed_models": [],
+    }
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=shared_row)
+    mock_tx.litellm_teammembership.count = AsyncMock(return_value=3)
+
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-lit3359",
+        user_id="alice",
+        max_budget=999.0,
+        existing_budget_id=shared_budget_id,
+        user_api_key_dict=fake_user,
+        team_default_budget_id=None,
+    )
+
+    mock_tx.litellm_budgettable.update.assert_not_called()
+    mock_tx.litellm_budgettable.find_unique.assert_awaited_once_with(
+        where={"budget_id": shared_budget_id},
+    )
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+            "max_budget": 999.0,
+            "tpm_limit": 250,
+        },
+        include={"team_membership": True},
+    )
+    new_budget_id = mock_tx.litellm_budgettable.create.return_value.budget_id
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "alice", "team_id": "team-lit3359"}},
+        data={
+            "create": {
+                "user_id": "alice",
+                "team_id": "team-lit3359",
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+            },
+            "update": {
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_inplace_when_sole_owner_of_existing_budget(mock_tx, fake_user):
+    """
+    Perf-preservation companion to the LIT-3359 fix: when the member is the
+    SOLE owner of the existing budget (ref-count == 1) and the row is not
+    the team default, we keep the original cheap in-place ``update`` and
+    skip the clone path entirely.
+    """
+    private_budget_id = "alice-only-budget"
+    mock_tx.litellm_teammembership.count = AsyncMock(return_value=1)
+
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-1",
+        user_id="alice",
+        max_budget=75.0,
+        existing_budget_id=private_budget_id,
+        user_api_key_dict=fake_user,
+        team_default_budget_id="something-else",
+    )
+
+    mock_tx.litellm_teammembership.count.assert_awaited_once_with(
+        where={"budget_id": private_budget_id},
+    )
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": private_budget_id},
+        data={"max_budget": 75.0, "updated_by": fake_user.user_id},
+    )
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_falls_back_to_inplace_when_count_probe_raises(
+    mock_tx, fake_user, caplog
+):
+    """
+    Safety net: if the ref-count probe raises (e.g. on a tx implementation
+    that does not support count on this model), the function must NOT raise
+    and must fall back to the original in-place update behavior. The
+    fallback must log the failure so a regression of the LIT-3359 guard
+    cannot silently persist in production.
+    """
+    import logging
+
+    private_budget_id = "probe-may-fail-budget"
+    mock_tx.litellm_teammembership.count = AsyncMock(
+        side_effect=RuntimeError("tx does not support count() on this model")
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-fallback",
+            user_id="alice",
+            max_budget=42.0,
+            existing_budget_id=private_budget_id,
+            user_api_key_dict=fake_user,
+            team_default_budget_id=None,
+        )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": private_budget_id},
+        data={"max_budget": 42.0, "updated_by": fake_user.user_id},
+    )
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+    assert any(
+        "LIT-3359 ref-count probe failed" in rec.message for rec in caplog.records
+    ), f"expected LIT-3359 log; got: {[r.message for r in caplog.records]}"

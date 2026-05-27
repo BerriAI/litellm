@@ -429,7 +429,9 @@ async def _upsert_budget_and_membership(
             team metadata.team_member_budget_id), if any. When the membership's
             existing_budget_id matches this, we clone-on-write so editing one
             member's budget does not mutate the shared default (and therefore
-            every other member who still points at it).
+            every other member who still points at it). The same clone-on-write
+            path also fires when the existing_budget_id is shared by more than
+            one membership for any other reason (LIT-3359).
 
     If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
@@ -453,7 +455,41 @@ async def _upsert_budget_and_membership(
         and existing_budget_id == team_default_budget_id
     )
 
+    # Ref-count check: even when the membership's existing_budget_id does NOT
+    # match the team's `team_member_budget_id` default, the row can still be
+    # shared by other memberships (e.g. after a default rotation, a manual
+    # cleanup, or the `backfill_team_member_budget_entries` migration that
+    # historically pointed multiple memberships at one budget row). Updating
+    # such a row in place leaks the new limits onto every other member that
+    # still points at it (LIT-3359). Detect the shared state by counting how
+    # many memberships reference this budget_id and clone-on-write whenever
+    # the row has more than one referrer.
+    is_shared_by_refcount = False
     if existing_budget_id is not None and not is_shared_default:
+        try:
+            membership_refcount = await tx.litellm_teammembership.count(
+                where={"budget_id": existing_budget_id}
+            )
+        except Exception as count_err:
+            # If the count probe fails (e.g. on a tx implementation that does
+            # not support count on this model), fall back to the previous
+            # in-place behavior rather than blocking the update — but emit a
+            # log so the silent fallback does not mask a regression of the
+            # LIT-3359 guard in production.
+            verbose_proxy_logger.exception(
+                "LIT-3359 ref-count probe failed for budget_id=%s on team_id=%s, "
+                "falling back to in-place update: %s",
+                existing_budget_id,
+                team_id,
+                count_err,
+            )
+            membership_refcount = 1
+        if membership_refcount > 1:
+            is_shared_by_refcount = True
+
+    is_shared = is_shared_default or is_shared_by_refcount
+
+    if existing_budget_id is not None and not is_shared:
         # Update the existing budget in-place to preserve fields not being changed.
         # Only write fields that the caller explicitly provided (non-None).
         update_data: Dict[str, Any] = {
@@ -481,9 +517,10 @@ async def _upsert_budget_and_membership(
         "updated_by": user_api_key_dict.user_id or "",
     }
 
-    # If we're forking off the shared default, seed the new row with the
-    # default's values so fields the caller did not change carry over.
-    if is_shared_default:
+    # If we're forking off a shared row (the team default OR any other
+    # budget_id shared by multiple memberships), seed the new row with the
+    # shared row's values so fields the caller did not change carry over.
+    if is_shared:
         default_budget_row = await tx.litellm_budgettable.find_unique(
             where={"budget_id": existing_budget_id}
         )
