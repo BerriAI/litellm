@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# .githooks/pre-push — enforce Conventional Branches
+#
+# Validates each local branch being pushed against the Conventional Branches
+# spec:
+#
+#     <type>/<description>
+#
+# where <type> is one of:
+#   feature | bugfix | hotfix | release | chore
+#
+# Bypassed branches (always allowed):
+#   - main
+#   - litellm_internal_staging
+#   - dependabot/*
+#   - gh-readonly-queue/*
+#
+# Skipped refs (always allowed):
+#   - Tag pushes (refs/tags/*)
+#   - Deletions (remote ref provided with no local ref, i.e. local_sha = all-zeros)
+#
+# Bypass:
+#   - Run `git push --no-verify` to skip this hook entirely.
+#
+# Stdin contract (git pre-push):
+#   each line: <local_ref> <local_sha> <remote_ref> <remote_sha>
+#
+# Exit codes:
+#   0 — accepted
+#   1 — rejected (at least one branch name violates the spec)
+set -euo pipefail
+
+zero='0000000000000000000000000000000000000000'
+
+bypass_re='^(main|litellm_internal_staging|dependabot/.*|gh-readonly-queue/.*)$'
+valid_re='^(feature|bugfix|hotfix|release|chore)/[A-Za-z0-9._/\-]+$'
+
+failed=0
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  # Skip empty stdin (no refs to push)
+  [[ -z "$local_ref" ]] && continue
+
+  # Skip deletions: local side is all-zeros
+  [[ "$local_sha" == "$zero" ]] && continue
+
+  # Skip tag pushes
+  case "$local_ref" in
+    refs/tags/*) continue ;;
+  esac
+
+  # We only validate branch refs
+  case "$local_ref" in
+    refs/heads/*) branch="${local_ref#refs/heads/}" ;;
+    *) continue ;;
+  esac
+
+  # Bypass list
+  if [[ "$branch" =~ $bypass_re ]]; then
+    continue
+  fi
+
+  if [[ ! "$branch" =~ $valid_re ]]; then
+    cat >&2 <<EOF
+✖ Branch name "$branch" does not follow Conventional Branches.
+
+  Expected format:
+    <type>/<description>
+
+  Where <type> is one of:
+    feature | bugfix | hotfix | release | chore
+
+  Examples:
+    feature/router-cooldown
+    bugfix/bedrock-empty-tooluse
+    chore/bump-deps
+    hotfix/auth-401
+
+  To bypass this check for a single push:  git push --no-verify
+  See: https://conventional-branch.github.io/
+EOF
+    failed=1
+  fi
+done
+
+exit "$failed"
