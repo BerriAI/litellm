@@ -415,3 +415,35 @@ async def test_assign_key_org_user_not_found():
             prisma_client=prisma,
         )
     assert exc_info.value.status_code == 403
+
+
+
+@pytest.mark.asyncio
+async def test_assign_key_org_skips_stale_team_id_that_no_longer_exists(monkeypatch):
+    """If a team_id in user_row.teams was deleted, get_team_object raises.
+    The helper should skip the stale entry and continue, not 500.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_caller_can_assign_key_org,
+    )
+
+    # team-stale is on the user row but the team table has no such row;
+    # team-real points at org-1.
+    prisma, get_team_mock = _make_prisma_with_user_teams_and_team_orgs(
+        user_id="alice",
+        org_memberships=[],
+        team_ids=["team-stale", "team-real"],
+        team_org_map={"team-real": "org-1"},  # team-stale missing on purpose
+        monkeypatch=monkeypatch,
+    )
+    caller = UserAPIKeyAuth(
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    # Should NOT raise: team-real grants access to org-1.
+    await _validate_caller_can_assign_key_org(
+        user_api_key_dict=caller,
+        organization_id="org-1",
+        prisma_client=prisma,
+    )
+    assert get_team_mock.call_count == 2
