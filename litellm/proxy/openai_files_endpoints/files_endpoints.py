@@ -39,9 +39,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
-from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
+from openai.pagination import AsyncCursorPage
+
+from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
-    AsyncCursorPage,
     FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
