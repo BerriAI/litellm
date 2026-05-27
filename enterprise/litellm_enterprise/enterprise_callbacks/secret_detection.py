@@ -13,7 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -22,13 +22,53 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 
-# Matches a full PEM private-key block (header + base64 body + footer) across
-# multiple lines.  detect-secrets is line-based and only records the BEGIN
-# header as the secret value; _expand_private_key_values uses this pattern to
-# promote that header-only value to the full block so every str.replace call
-# site redacts the entire key, not just the first line.
+# Maximum size (bytes) we are willing to scan between a -----BEGIN PRIVATE
+# KEY----- header and its matching -----END----- footer.  Real PEM private
+# keys (including 4096-bit RSA) fit comfortably under 8 KB; 16 KB gives
+# generous headroom while bounding the linear scan in `_find_pem_blocks`
+# so that a prompt full of unmatched BEGIN armors cannot push the regex
+# engine into pathological behaviour (Veria 2026-05-27 ReDoS comment).
+_PEM_MAX_BLOCK_BODY = 16384
+
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----")
+_PEM_END_RE = re.compile(r"-----END[ A-Z]*PRIVATE KEY-----")
+
+
+def _find_pem_blocks(text: str) -> List[Tuple[int, int, str]]:
+    """Linear, bounded scan for complete ``BEGIN..END PRIVATE KEY`` blocks.
+
+    Returns a list of ``(start, end, full_block_text)`` tuples in order of
+    appearance.  A BEGIN header without a matching END within
+    ``_PEM_MAX_BLOCK_BODY`` bytes is skipped; a later BEGIN may still match
+    its own END.  This O(N) approach replaces an unbounded
+    ``[\s\S]*?`` regex that, in the worst case, could be coerced into
+    quadratic work by a prompt containing many unmatched headers.
+    """
+    blocks: List[Tuple[int, int, str]] = []
+    pos = 0
+    text_len = len(text)
+    while pos < text_len:
+        m = _PEM_BEGIN_RE.search(text, pos)
+        if not m:
+            break
+        end_search_limit = min(m.end() + _PEM_MAX_BLOCK_BODY, text_len)
+        end_m = _PEM_END_RE.search(text, m.end(), end_search_limit)
+        if end_m:
+            blocks.append((m.start(), end_m.end(), text[m.start():end_m.end()]))
+            pos = end_m.end()
+        else:
+            # No matching END within the budget; advance past this BEGIN
+            # and keep scanning.  We deliberately do not retry inside the
+            # skipped window -- a malicious caller could otherwise force
+            # the scanner into O(N*MAX_BODY) work.
+            pos = m.end()
+    return blocks
+
+
+# Backwards-compatible regex kept for tests / external imports; matches the
+# same bounded shape as ``_find_pem_blocks``.
 _PEM_BLOCK_RE = re.compile(
-    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]{0," + str(_PEM_MAX_BLOCK_BODY) + r"}?-----END[ A-Z]*PRIVATE KEY-----"
 )
 
 
@@ -51,16 +91,16 @@ def _expand_private_key_values(
 
     All other secret types pass through unchanged.
     """
-    pem_blocks = list(_PEM_BLOCK_RE.finditer(text))
+    pem_blocks = _find_pem_blocks(text)
     claimed: set = set()
     expanded: List[Dict[str, Any]] = []
     for secret in detected_secrets:
         if secret.get("type") == "Private Key":
             header_value = secret.get("value")
             if isinstance(header_value, str):
-                for idx, match in enumerate(pem_blocks):
-                    if idx not in claimed and header_value in match.group(0):
-                        secret = {**secret, "value": match.group(0)}
+                for idx, (_start, _end, block_text) in enumerate(pem_blocks):
+                    if idx not in claimed and header_value in block_text:
+                        secret = {**secret, "value": block_text}
                         claimed.add(idx)
                         break
         expanded.append(secret)
@@ -75,19 +115,34 @@ def _redact_full_pem_blocks(text: str) -> str:
     match, behaviour changes, or missing a key type entirely -- if a
     complete BEGIN..END armor is still present, replace the whole block.
 
+    Uses the bounded linear scanner (`_find_pem_blocks`) so that a prompt
+    containing many unmatched BEGIN headers cannot push the redactor into
+    pathological work (Veria 2026-05-27 ReDoS comment).
+
     When this sweep actually replaces something the per-secret loop missed,
     emit a warning so the audit trail matches the rest of the guardrail.
     Silent divergence from the configured detectors would be a security
     surprise.
     """
-    new_text, n = _PEM_BLOCK_RE.subn("[REDACTED]", text)
-    if n > 0:
-        verbose_proxy_logger.warning(
-            "hide_secrets: defensive PEM-block sweep redacted %d block(s) "
-            "that the configured detect-secrets plugins did not flag.",
-            n,
-        )
-    return new_text
+    blocks = _find_pem_blocks(text)
+    if not blocks:
+        return text
+    # Rebuild the string in one pass, replacing each block with the
+    # redaction marker.  Iterating in order keeps the math simple.
+    parts = []
+    prev_end = 0
+    for start, end, _block in blocks:
+        parts.append(text[prev_end:start])
+        parts.append("[REDACTED]")
+        prev_end = end
+    parts.append(text[prev_end:])
+    out = "".join(parts)
+    verbose_proxy_logger.warning(
+        "hide_secrets: defensive PEM-block sweep redacted %d block(s) "
+        "that the configured detect-secrets plugins did not flag.",
+        len(blocks),
+    )
+    return out
 
 
 GUARDRAIL_NAME = "hide_secrets"
