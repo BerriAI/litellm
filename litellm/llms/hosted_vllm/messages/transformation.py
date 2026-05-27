@@ -102,6 +102,26 @@ class HostedVLLMAnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             base = base[:-3]
         return f"{base}/v1/messages"
 
+    # Anthropic built-in tool types that vLLM does not support in /v1/messages
+    _UNSUPPORTED_TOOL_TYPES = frozenset({
+        "web_search",
+        "computer",
+        "text_editor",
+        "bash",
+    })
+
+    def _strip_unsupported_tools(self, tools: Optional[List[Dict]]) -> Optional[List[Dict]]:
+        """Remove Anthropic built-in tools (web_search, computer_use, etc.) that
+        vLLM's /v1/messages endpoint does not understand."""
+        if not tools:
+            return tools
+        return [
+            t for t in tools
+            if not isinstance(t, dict)
+            or t.get("type", "") not in self._UNSUPPORTED_TOOL_TYPES
+            and not t.get("type", "").startswith(tuple(f"{p}_" for p in self._UNSUPPORTED_TOOL_TYPES))
+        ]
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -113,6 +133,14 @@ class HostedVLLMAnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         max_tokens = anthropic_messages_optional_request_params.pop("max_tokens", None)
         if max_tokens is None:
             raise ValueError("max_tokens is required for Anthropic /v1/messages API")
+
+        tools = self._strip_unsupported_tools(
+            anthropic_messages_optional_request_params.get("tools")
+        )
+        if tools:
+            anthropic_messages_optional_request_params["tools"] = tools
+        else:
+            anthropic_messages_optional_request_params.pop("tools", None)
 
         return {
             "model": model,

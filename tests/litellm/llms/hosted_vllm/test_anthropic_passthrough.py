@@ -148,6 +148,45 @@ class TestHostedVLLMConfig:
         assert "frequency_penalty" not in payload
         assert "presence_penalty" not in payload
 
+    def test_unsupported_tools_are_stripped(self):
+        """Anthropic built-in tools (web_search, computer_use, etc.) must be
+        removed because vLLM's /v1/messages requires input_schema on every tool."""
+        messages = [{"role": "user", "content": "search the web"}]
+        tools = [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+            {"type": "computer_20250124", "name": "computer"},
+            {"type": "custom", "name": "my_tool", "input_schema": {"type": "object"}},
+        ]
+        optional_params = {"max_tokens": 100, "tools": tools}
+        payload = self.config.transform_anthropic_messages_request(
+            model="qwen",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        # Only the custom tool survives
+        assert payload["tools"] == [
+            {"type": "custom", "name": "my_tool", "input_schema": {"type": "object"}},
+        ]
+
+    def test_tools_key_removed_when_all_stripped(self):
+        """If all tools are unsupported, the tools key should be removed entirely."""
+        messages = [{"role": "user", "content": "hi"}]
+        tools = [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "bash_20250124", "name": "bash"},
+        ]
+        optional_params = {"max_tokens": 100, "tools": tools}
+        payload = self.config.transform_anthropic_messages_request(
+            model="qwen",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert "tools" not in payload
+
     def test_request_payload_missing_max_tokens_raises(self):
         with pytest.raises(ValueError, match="max_tokens is required"):
             self.config.transform_anthropic_messages_request(
