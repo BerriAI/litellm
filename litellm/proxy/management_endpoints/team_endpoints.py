@@ -732,6 +732,50 @@ async def _check_org_team_limits(
     )
 
 
+def _maybe_inherit_caller_limits_for_self_served_team(
+    data: Union[NewTeamRequest, "UpdateTeamRequest"],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    LIT-3254 (Veria #2): when a non-admin caller created a team via
+    `general_settings.allow_user_team_creation`, inherit their personal
+    caps for any field they left unset/empty before downstream validation.
+
+    Specifically:
+    - If the caller has a restricted model list (`user_api_key_dict.models`
+      is non-empty) and `data.models` is missing/empty, copy the caller's
+      list onto the team. Otherwise an empty list silently widens to
+      "all models" on the team and the caller can mint team keys that
+      bypass their personal model restriction.
+    - If the caller has personal TPM / RPM caps and the team has none
+      set, inherit them so per-team keys cannot exceed the caller's
+      throughput cap. Per-team budget is left to admin discretion — the
+      existing `_check_user_team_limits` rejects a *too-large* requested
+      `max_budget` against the caller's max_budget, but we deliberately
+      do NOT auto-populate `max_budget` from the caller because some
+      deployments leave caller budgets unset (None) and we shouldn't
+      give the team an unlimited budget either; admins set per-team
+      budgets via `default_team_settings` or by editing the team.
+
+    Proxy-admin callers are not routed here; they keep full latitude.
+    """
+    # Inherit caller's model list if the team's is unset / empty AND the
+    # caller has a non-empty model restriction list.
+    caller_models = getattr(user_api_key_dict, "models", None) or []
+    if caller_models and not getattr(data, "models", None):
+        data.models = list(caller_models)
+
+    # Inherit caller's TPM cap if the team has no team-wide TPM set.
+    caller_tpm = getattr(user_api_key_dict, "tpm_limit", None)
+    if caller_tpm is not None and getattr(data, "tpm_limit", None) is None:
+        data.tpm_limit = caller_tpm
+
+    # Inherit caller's RPM cap if the team has no team-wide RPM set.
+    caller_rpm = getattr(user_api_key_dict, "rpm_limit", None)
+    if caller_rpm is not None and getattr(data, "rpm_limit", None) is None:
+        data.rpm_limit = caller_rpm
+
+
 async def _check_user_team_limits(
     data: Union[NewTeamRequest, UpdateTeamRequest],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1033,6 +1077,25 @@ async def new_team(  # noqa: PLR0915
             # Only validate user budget/models/tpm/rpm for standalone teams (not org-scoped)
             # For org-scoped teams, validation is done by _check_org_team_limits()
             if data.organization_id is None:
+                # LIT-3254 self-service hardening (Veria #2): when the
+                # `allow_user_team_creation` flag is what let this non-admin
+                # call /team/new (route_checks gate scoped to standalone
+                # teams), the caller must not be able to create a team
+                # whose models/max_budget are wider than their own personal
+                # caps. The existing `_check_user_team_limits` only
+                # validates *explicitly set* fields; an omitted or empty
+                # `models` list would otherwise mean "all models" and
+                # silently widen the caller's scope. Inherit caller's
+                # values for unset fields here so the limit check below
+                # sees a fully-populated request and enforces consistently.
+                _self_serve_enabled = bool(
+                    isinstance(general_settings, dict)
+                    and general_settings.get("allow_user_team_creation", False)
+                )
+                if _self_serve_enabled:
+                    _maybe_inherit_caller_limits_for_self_served_team(
+                        data=data, user_api_key_dict=user_api_key_dict
+                    )
                 await _check_user_team_limits(
                     data=data,
                     user_api_key_dict=user_api_key_dict,
