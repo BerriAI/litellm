@@ -178,9 +178,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         - ``extra_body``: any caller-supplied keys are merged into the request
           body after the defaults are applied (callers can override
           ``pageSize`` or pass other SearchRequest fields like
-          ``numResultsPerDataStore``). An ``extra_body["dataStoreSpecs"]`` entry
-          takes precedence over ``vertex_data_store_specs`` so callers who
-          plumb specs through ``extra_body`` keep working unchanged.
+          ``numResultsPerDataStore``). For security, ``extra_body`` MAY NOT
+          contain ``dataStoreSpecs`` when the admin has configured
+          ``vertex_data_store_specs`` on the vector store - the admin scope
+          is authoritative and callers attempting to override it raise
+          ``ValueError``. ``extra_body["dataStoreSpecs"]`` is only allowed
+          when no admin scope is configured.
         """
         # Convert query to string if it's a list
         if isinstance(query, list):
@@ -193,7 +196,11 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         data_store_specs = litellm_params.get("vertex_data_store_specs")
         admin_data_store_specs_configured = data_store_specs is not None
-        if data_store_specs:
+        if admin_data_store_specs_configured:
+            # Type-check first - an admin that sets ``vertex_data_store_specs``
+            # to a non-list, or to a list containing non-dict entries, has a
+            # config bug and we want a clear ValueError rather than silently
+            # falling through to the truthy-check.
             if not isinstance(data_store_specs, list):
                 raise ValueError(
                     "vertex_data_store_specs must be a list of DataStoreSpec dicts"
@@ -204,15 +211,23 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                         f"vertex_data_store_specs[{i}] must be a DataStoreSpec dict, "
                         f"got {type(spec).__name__}"
                     )
-            request_body["dataStoreSpecs"] = data_store_specs
+            # Only emit the key when there is at least one spec; Discovery
+            # Engine rejects an empty ``dataStoreSpecs`` array. The empty-
+            # list case is still treated as "admin configured a scope" by
+            # the security check below, so callers cannot fill the gap via
+            # ``extra_body`` - this is intentional, it lets an admin assert
+            # "no datastore scope" without ceding control to the caller.
+            if data_store_specs:
+                request_body["dataStoreSpecs"] = data_store_specs
 
         if extra_body:
             # SECURITY: admin-configured ``vertex_data_store_specs`` is the
             # authoritative scope for which datastores an engine search may
-            # touch. If the admin has set it, a caller MUST NOT be able to
-            # override or remove it via ``extra_body["dataStoreSpecs"]`` -
-            # that would let an authenticated proxy caller broaden the
-            # search beyond the configured allowlist.
+            # touch. If the admin has set it (including to an empty list),
+            # a caller MUST NOT be able to override or supply
+            # ``extra_body["dataStoreSpecs"]`` - that would let an
+            # authenticated proxy caller broaden the search beyond the
+            # configured allowlist.
             if admin_data_store_specs_configured and "dataStoreSpecs" in extra_body:
                 raise ValueError(
                     "dataStoreSpecs in extra_body is not allowed when the "
