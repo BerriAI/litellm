@@ -11250,15 +11250,17 @@ async def test_key_info_aggregates_model_spend_from_spend_logs(monkeypatch):
 
     from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
 
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    hashed_token = "hashed_test_token_aggregate"
+    input_key = "sk-test-aggregate"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
-    mock_key_info.token = hashed_token
+    mock_key_info.token = expected_hashed_token
     mock_key_info.model_dump.return_value = {
-        "token": hashed_token,
+        "token": expected_hashed_token,
         "user_id": "user-aggregate",
         "team_id": None,
         "spend": 12.34,
@@ -11271,21 +11273,22 @@ async def test_key_info_aggregates_model_spend_from_spend_logs(monkeypatch):
         return_value=mock_key_info
     )
 
-    mock_prisma_client.db.litellm_spendlogs.group_by = AsyncMock(
+    group_by_mock = AsyncMock(
         return_value=[
             {"model": "claude-3-5-sonnet", "_sum": {"spend": 7.25}},
             {"model": "gpt-4o", "_sum": {"spend": 5.09}},
             {"model": "", "_sum": {"spend": 0.10}},
         ]
     )
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-test-aggregate",
+        api_key=input_key,
     )
 
     result = await info_key_fn(
-        key="sk-test-aggregate",
+        key=input_key,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -11293,6 +11296,7 @@ async def test_key_info_aggregates_model_spend_from_spend_logs(monkeypatch):
         "claude-3-5-sonnet": 7.25,
         "gpt-4o": 5.09,
     }
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
 
 
 @pytest.mark.asyncio
@@ -11304,15 +11308,17 @@ async def test_key_info_model_spend_empty_when_no_logs(monkeypatch):
 
     from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
 
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    hashed_token = "hashed_test_token_empty"
+    input_key = "sk-test-empty"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
-    mock_key_info.token = hashed_token
+    mock_key_info.token = expected_hashed_token
     mock_key_info.model_dump.return_value = {
-        "token": hashed_token,
+        "token": expected_hashed_token,
         "user_id": "user-empty",
         "team_id": None,
         "spend": 0.0,
@@ -11324,19 +11330,21 @@ async def test_key_info_model_spend_empty_when_no_logs(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_key_info
     )
-    mock_prisma_client.db.litellm_spendlogs.group_by = AsyncMock(return_value=[])
+    group_by_mock = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-test-empty",
+        api_key=input_key,
     )
 
     result = await info_key_fn(
-        key="sk-test-empty",
+        key=input_key,
         user_api_key_dict=user_api_key_dict,
     )
 
     assert result["info"]["model_spend"] == {}
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
 
 
 @pytest.mark.asyncio
@@ -11348,16 +11356,18 @@ async def test_key_info_falls_back_when_spend_logs_query_fails(monkeypatch):
 
     from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
 
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    hashed_token = "hashed_test_token_fail"
+    input_key = "sk-test-fail"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
     stored_model_spend = {"stale-model": 99.99}
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
-    mock_key_info.token = hashed_token
+    mock_key_info.token = expected_hashed_token
     mock_key_info.model_dump.return_value = {
-        "token": hashed_token,
+        "token": expected_hashed_token,
         "user_id": "user-fail",
         "team_id": None,
         "spend": 1.0,
@@ -11369,22 +11379,24 @@ async def test_key_info_falls_back_when_spend_logs_query_fails(monkeypatch):
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=mock_key_info
     )
-    mock_prisma_client.db.litellm_spendlogs.group_by = AsyncMock(
+    group_by_mock = AsyncMock(
         side_effect=Exception("simulated DB outage on LiteLLM_SpendLogs")
     )
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-test-fail",
+        api_key=input_key,
     )
 
     result = await info_key_fn(
-        key="sk-test-fail",
+        key=input_key,
         user_api_key_dict=user_api_key_dict,
     )
 
     assert result["info"]["spend"] == 1.0
     assert result["info"]["model_spend"] == stored_model_spend
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
 
 
 @pytest.mark.asyncio

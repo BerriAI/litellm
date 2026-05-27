@@ -3352,13 +3352,14 @@ async def info_key_fn(
         # The verification-token's `model_spend` column is no longer written by the
         # spend-queue pipeline (it carries only a scalar `response_cost` per entity),
         # so compute the per-model breakdown at read time from LiteLLM_SpendLogs,
-        # matching the 30-day window the per-key UI chart uses.
-        if hashed_key is not None:
-            aggregated = await _aggregate_key_model_spend_from_logs(
-                prisma_client, hashed_key
-            )
-            if aggregated is not None:
-                key_info["model_spend"] = aggregated
+        # matching the 30-day window the per-key UI chart uses. By this point
+        # `hashed_key` is non-None: an absent key would have failed `find_unique`
+        # above and tripped the 404 ProxyException.
+        aggregated = await _aggregate_key_model_spend_from_logs(
+            prisma_client, hashed_key  # type: ignore[arg-type]
+        )
+        if aggregated is not None:
+            key_info["model_spend"] = aggregated
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
