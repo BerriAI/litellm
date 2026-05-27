@@ -58,6 +58,21 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # SageMaker multi-model endpoints with InferenceComponents accept the
+        # component name via the X-Amzn-SageMaker-Inference-Component header.
+        # The legacy `sagemaker` completion handler does this in
+        # `litellm/llms/sagemaker/completion/handler.py`; mirror the behavior
+        # here so callers can pass `model_id=...` directly to
+        # `sagemaker_chat/...` without manually adding `extra_headers`.
+        # boto3 doc:
+        # https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
+        model_id = optional_params.pop("model_id", None)
+        # Strip whitespace so a value like " " is treated the same as None:
+        # SageMaker rejects empty / whitespace-only InferenceComponent names.
+        if isinstance(model_id, str):
+            model_id = model_id.strip()
+        if model_id:
+            headers["X-Amzn-SageMaker-Inference-Component"] = model_id
         return headers
 
     def get_complete_url(
@@ -98,6 +113,29 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        # SageMaker endpoints that host multiple Inference Components require
+        # the `X-Amzn-SageMaker-Inference-Component` header (legacy
+        # `sagemaker` completion handler injects it from
+        # `optional_params["model_id"]` -- see
+        # `litellm/llms/sagemaker/completion/handler.py`). We mirror that
+        # here so callers can pass `model_id` either via `extra_body` (which
+        # lands in `request_data` after the BaseLLMHTTPHandler merges it
+        # in) or via the `optional_params` shape used by the completion
+        # handler. Either source moves the value into a header and is
+        # removed from the body so SigV4 signs the exact payload that gets
+        # sent.
+        #
+        # Hooking in `sign_request` rather than `validate_environment` /
+        # `transform_request` is what covers the `extra_body` path, because
+        # `BaseLLMHTTPHandler.completion` merges `extra_body` into
+        # `request_data` *after* the other hooks run.
+        model_id = request_data.pop("model_id", None)
+        if model_id is None:
+            model_id = optional_params.pop("model_id", None)
+        else:
+            optional_params.pop("model_id", None)
+        if model_id is not None:
+            headers["X-Amzn-SageMaker-Inference-Component"] = model_id
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,
