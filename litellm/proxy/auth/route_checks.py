@@ -306,9 +306,7 @@ class RouteChecks:
                 ):
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[
-                            allowed_route
-                        ].value,
+                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
                         route_allowed = True
                         break
