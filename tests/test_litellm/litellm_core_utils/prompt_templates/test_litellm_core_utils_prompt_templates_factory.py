@@ -2797,3 +2797,51 @@ def test_sanitize_empty_text_assistant_with_missing_type_block():
     result = _sanitize_empty_text_content(message)
     # The malformed block should not prevent sanitization from running
     assert result.get("content") is not None
+
+
+def test_sanitize_empty_text_user_all_empty_list():
+    """User messages with a list where ALL text blocks are empty/whitespace
+    should fall back to '.' (the default empty content message)."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == "."
+
+
+def test_sanitize_empty_text_user_mixed_list():
+    """User messages with a mix of non-empty and empty text blocks
+    should drop the empty blocks and keep the non-empty ones."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_sanitize_empty_text_user_non_empty_list():
+    """User messages with all non-empty text blocks should pass through unchanged."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == message["content"]
+
+
+def test_sanitize_empty_text_assistant_none_content():
+    """Assistant messages with content=None should pass through unchanged."""
+    message = {"role": "assistant", "content": None}
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] is None
