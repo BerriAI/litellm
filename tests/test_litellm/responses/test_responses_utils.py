@@ -311,6 +311,73 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.image_tokens == 272
         assert result.completion_tokens_details.text_tokens == 100
 
+    def test_transform_response_api_usage_without_output_tokens_details_lit_1771(self):
+        """Regression test for LIT-1771 / GH #15377.
+
+        When the upstream Responses API response includes ``input_tokens_details``
+        but omits ``output_tokens_details`` (Azure does this for non-reasoning
+        models like ``gpt-4o-mini``), the chat usage transform must still emit a
+        ``CompletionTokensDetailsWrapper`` so the shape matches what
+        ``/chat/completions`` produces. Previously it returned ``None``, which
+        broke downstream code that relied on the wrapper being present.
+        """
+        usage = {
+            "input_tokens": 12,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 204,
+            "total_tokens": 216,
+            # output_tokens_details is intentionally absent
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        # The bug: completion_tokens_details was None even though prompt_tokens_details
+        # was populated. Now it should be a wrapper with all sub-fields None.
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens is None
+        assert result.completion_tokens_details.text_tokens is None
+        assert result.completion_tokens_details.image_tokens is None
+        assert result.completion_tokens_details.audio_tokens is None
+        assert result.completion_tokens_details.accepted_prediction_tokens is None
+        assert result.completion_tokens_details.rejected_prediction_tokens is None
+
+        # prompt_tokens_details should remain wrapped, matching previous behaviour.
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 0
+
+    def test_transform_response_api_usage_with_extended_output_details(self):
+        """Audio / accepted_prediction / rejected_prediction token counts that may
+        appear in ``output_tokens_details`` (mirroring the Chat Completions
+        ``completion_tokens_details`` schema) must be forwarded onto the chat
+        ``CompletionTokensDetailsWrapper``. Previously only reasoning_tokens,
+        image_tokens, and text_tokens were forwarded; the other fields were
+        silently dropped.
+        """
+        usage = {
+            "input_tokens": 12,
+            "input_tokens_details": {"cached_tokens": 5},
+            "output_tokens": 50,
+            "total_tokens": 62,
+            "output_tokens_details": {
+                "reasoning_tokens": 30,
+                "audio_tokens": 5,
+                "accepted_prediction_tokens": 12,
+                "rejected_prediction_tokens": 3,
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 30
+        assert result.completion_tokens_details.audio_tokens == 5
+        assert result.completion_tokens_details.accepted_prediction_tokens == 12
+        assert result.completion_tokens_details.rejected_prediction_tokens == 3
+
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""
         # Setup - hypothetical usage with mixed token types
