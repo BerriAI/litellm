@@ -28,7 +28,12 @@ class XAIRealtime(OpenAIRealtime):
         """xAI uses a different API base URL."""
         return XAI_API_BASE
 
-    def _get_additional_headers(self, api_key: str) -> dict:
+    def _get_additional_headers(
+        self,
+        api_key: str,
+        *,
+        openai_beta_realtime: bool = False,
+    ) -> dict:
         """
         xAI does NOT require the OpenAI-Beta header.
         Only send Authorization header.

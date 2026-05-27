@@ -83,41 +83,100 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
 
-    # query_raw returns list of dicts (pre-aggregated by GROUP BY)
+    # query_raw now returns rollup rows produced by GROUPING SETS, each
+    # tagged with its grouping level via GROUPING_ID(). The dispatcher
+    # places each row directly in its bucket without Python-side summing.
+    # GROUPING_ID values for relevant levels (date, api_key, model,
+    # model_group, custom_llm_provider, mcp, endpoint):
+    #   () grand total                  = 127
+    #   (date)                          =  63
+    #   (date, endpoint)                =  62
+    #   (date, endpoint, api_key)       =  30
+    base = {
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "failed_requests": 0,
+    }
     mock_rows = [
+        # (date, endpoint) — rolls up across api_keys and models
         {
+            **base,
             "date": "2024-01-01",
             "endpoint": "/v1/chat/completions",
-            "api_key": "key-1",
-            "model": "gpt-4",
-            "model_group": None,
-            "custom_llm_provider": "openai",
-            "mcp_namespaced_tool_name": None,
+            "api_key": None,
+            "group_level": 62,
             "spend": 15.0,
             "prompt_tokens": 150,
             "completion_tokens": 75,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
             "api_requests": 2,
             "successful_requests": 2,
-            "failed_requests": 0,
         },
         {
+            **base,
             "date": "2024-01-01",
             "endpoint": "/v1/embeddings",
-            "api_key": "key-2",
-            "model": "text-embedding-ada-002",
-            "model_group": None,
-            "custom_llm_provider": "openai",
-            "mcp_namespaced_tool_name": None,
+            "api_key": None,
+            "group_level": 62,
             "spend": 3.0,
             "prompt_tokens": 30,
             "completion_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
             "api_requests": 1,
             "successful_requests": 1,
-            "failed_requests": 0,
+        },
+        # (date, endpoint, api_key) — populates the per-key sub-bucket
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "key-1",
+            "group_level": 30,
+            "spend": 15.0,
+            "prompt_tokens": 150,
+            "completion_tokens": 75,
+            "api_requests": 2,
+            "successful_requests": 2,
+        },
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/embeddings",
+            "api_key": "key-2",
+            "group_level": 30,
+            "spend": 3.0,
+            "prompt_tokens": 30,
+            "completion_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+        },
+        # (date) — per-date totals
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": None,
+            "api_key": None,
+            "group_level": 63,
+            "spend": 18.0,
+            "prompt_tokens": 180,
+            "completion_tokens": 75,
+            "api_requests": 3,
+            "successful_requests": 3,
+        },
+        # () — grand total
+        {
+            **base,
+            "date": None,
+            "endpoint": None,
+            "api_key": None,
+            "group_level": 127,
+            "spend": 18.0,
+            "prompt_tokens": 180,
+            "completion_tokens": 75,
+            "api_requests": 3,
+            "successful_requests": 3,
         },
     ]
 
@@ -449,24 +508,43 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
 
-    # query_raw returns list of dicts (pre-aggregated by GROUP BY)
+    # GROUPING SETS rollup rows. The api_key metadata lookup is driven
+    # by any non-NULL api_key in the result set, so the (date, endpoint,
+    # api_key) row at level 30 is what ensures get_api_key_metadata is
+    # called for "deleted-key-hash".
+    base = {
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "failed_requests": 0,
+    }
     mock_rows = [
         {
+            **base,
             "date": "2024-01-01",
             "endpoint": "/v1/chat/completions",
-            "api_key": "deleted-key-hash",
-            "model": "gpt-4",
-            "model_group": None,
-            "custom_llm_provider": "openai",
-            "mcp_namespaced_tool_name": None,
+            "api_key": None,
+            "group_level": 62,
             "spend": 10.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
             "api_requests": 1,
             "successful_requests": 1,
-            "failed_requests": 0,
+        },
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "deleted-key-hash",
+            "group_level": 30,
+            "spend": 10.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "api_requests": 1,
+            "successful_requests": 1,
         },
     ]
 

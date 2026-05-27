@@ -225,10 +225,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
-    ) -> Dict[str, Any]:
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         arguments = getattr(tool_call.function, "arguments", None)
         if not arguments:
-            return {}
+            return None, "missing arguments"
 
         parsed_arguments: Any = {}
         try:
@@ -236,22 +236,24 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 parsed_arguments = json.loads(arguments)
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
-        except json.JSONDecodeError as exc:
+            else:
+                return None, "arguments must be a JSON object"
+        except (json.JSONDecodeError, TypeError) as exc:
             verbose_proxy_logger.warning(
                 "Tool Permission Guardrail: Failed to decode arguments for tool %s: %s",
                 tool_call.function.name,
                 exc,
             )
-            return {}
+            return None, "arguments could not be parsed"
 
         if isinstance(parsed_arguments, dict):
-            return parsed_arguments
+            return parsed_arguments, None
 
         verbose_proxy_logger.debug(
-            "Tool Permission Guardrail: Ignoring non-dict arguments for tool %s",
+            "Tool Permission Guardrail: Rejecting non-dict arguments for tool %s",
             tool_call.function.name,
         )
-        return {}
+        return None, "arguments must be a JSON object"
 
     def _collect_argument_paths(
         self,
@@ -331,10 +333,21 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 continue
 
             if rule.allowed_param_patterns and should_check_params:
-                arguments = self._parse_tool_call_arguments(tool_call)
+                arguments, parse_error = self._parse_tool_call_arguments(tool_call)
+                if parse_error:
+                    default_message = f"Tool '{tool_identifier}' {parse_error} required by rule '{rule.id}'"
+                    message = self.render_violation_message(
+                        default=default_message,
+                        context={"tool_name": tool_identifier, "rule_id": rule.id},
+                    )
+                    return False, rule.id, message
                 if not arguments:
-                    last_pattern_failure_msg = f"Tool '{tool_identifier}' is missing arguments required by rule '{rule.id}'"
-                    continue
+                    default_message = f"Tool '{tool_identifier}' is missing arguments required by rule '{rule.id}'"
+                    message = self.render_violation_message(
+                        default=default_message,
+                        context={"tool_name": tool_identifier, "rule_id": rule.id},
+                    )
+                    return False, rule.id, message
 
                 patterns_match, failure_message = self._patterns_match_for_rule(
                     arguments=arguments,
@@ -365,6 +378,33 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         return is_allowed, None, message
 
+    @staticmethod
+    def _get_mapping_value(item: Any, key: str) -> Any:
+        if isinstance(item, dict):
+            return item.get(key)
+        return getattr(item, key, None)
+
+    @staticmethod
+    def _legacy_function_call_id(choice_index: int) -> str:
+        return f"legacy_function_call_{choice_index}"
+
+    def _legacy_function_call_to_tool_call(
+        self, function_call: Any, choice_index: int
+    ) -> Optional[ChatCompletionMessageToolCall]:
+        if function_call is None:
+            return None
+
+        function_name = self._get_mapping_value(function_call, "name")
+        arguments = self._get_mapping_value(function_call, "arguments") or ""
+        if not function_name:
+            return None
+
+        return ChatCompletionMessageToolCall(
+            id=self._legacy_function_call_id(choice_index),
+            type="function",
+            function={"name": function_name, "arguments": arguments},
+        )
+
     def _extract_tool_calls_from_response(
         self, response: ModelResponse
     ) -> List[ChatCompletionMessageToolCall]:
@@ -379,12 +419,71 @@ class ToolPermissionGuardrail(CustomGuardrail):
         """
         tool_calls = []
 
-        for choice in response.choices:
+        for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
                 for tool in choice.message.tool_calls or []:
                     tool_calls.append(tool)
+                legacy_tool_call = self._legacy_function_call_to_tool_call(
+                    getattr(choice.message, "function_call", None), choice_index
+                )
+                if legacy_tool_call is not None:
+                    tool_calls.append(legacy_tool_call)
 
         return tool_calls
+
+    def _get_request_tool_name(self, tool: Any) -> tuple[Optional[str], Optional[str]]:
+        tool_type = self._get_mapping_value(tool, "type")
+        if tool_type != "function":
+            return None, tool_type
+
+        function = self._get_mapping_value(tool, "function")
+        tool_name = self._get_mapping_value(function, "name")
+        return tool_name, tool_type
+
+    def _get_legacy_function_name(self, function: Any) -> Optional[str]:
+        return self._get_mapping_value(function, "name")
+
+    def _get_named_tool_choice(self, data: dict) -> Optional[str]:
+        tool_choice = data.get("tool_choice")
+        if not tool_choice or tool_choice in ("auto", "none", "required"):
+            return None
+        if isinstance(tool_choice, str):
+            return tool_choice
+        if self._get_mapping_value(tool_choice, "type") != "function":
+            return None
+        return self._get_mapping_value(
+            self._get_mapping_value(tool_choice, "function"), "name"
+        )
+
+    def _get_named_function_call(self, data: dict) -> Optional[str]:
+        function_call = data.get("function_call")
+        if not function_call or function_call in ("auto", "none"):
+            return None
+        if isinstance(function_call, str):
+            return function_call
+        return self._get_mapping_value(function_call, "name")
+
+    def _collect_request_tools(self, data: dict) -> List[tuple[str, Optional[str]]]:
+        request_tools: List[tuple[str, Optional[str]]] = []
+
+        for tool in data.get("tools") or []:
+            tool_name, tool_type = self._get_request_tool_name(tool)
+            if tool_name is not None:
+                request_tools.append((tool_name, tool_type))
+
+        for function in data.get("functions") or []:
+            function_name = self._get_legacy_function_name(function)
+            if function_name is not None:
+                request_tools.append((function_name, "function"))
+
+        for forced_tool_name in (
+            self._get_named_tool_choice(data),
+            self._get_named_function_call(data),
+        ):
+            if forced_tool_name is not None:
+                request_tools.append((forced_tool_name, "function"))
+
+        return request_tools
 
     def _modify_request_with_permission_errors(
         self,
@@ -410,19 +509,32 @@ class ToolPermissionGuardrail(CustomGuardrail):
         for tool_use in denied_tool_names:
             error_tool_names.add(tool_use)
 
-        # Modify the tools
         tools: Optional[List[ChatCompletionToolParam]] = data.get("tools")
-        if tools is None:
-            return data
-
-        new_tools = []
-        for tool in tools:
-            if tool["type"] != "function":
-                continue
-            tool_name: str = tool["function"]["name"]
-            if tool_name not in error_tool_names:
+        if tools is not None:
+            new_tools = []
+            for tool in tools:
+                tool_name, tool_type = self._get_request_tool_name(tool)
+                if tool_type == "function" and tool_name in error_tool_names:
+                    continue
                 new_tools.append(tool)
-        data["tools"] = new_tools
+            data["tools"] = new_tools
+
+        functions = data.get("functions")
+        if functions is not None:
+            data["functions"] = [
+                function
+                for function in functions
+                if self._get_legacy_function_name(function) not in error_tool_names
+            ]
+
+        named_tool_choice = self._get_named_tool_choice(data)
+        if named_tool_choice in error_tool_names:
+            data["tool_choice"] = "none"
+
+        named_function_call = self._get_named_function_call(data)
+        if named_function_call in error_tool_names:
+            data["function_call"] = "none"
+
         return data
 
     def _create_permission_error_result(
@@ -472,7 +584,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             error_results[tool_use.id] = error_result
 
         # Modify the response content
-        for choice in response.choices:
+        for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
                 filtered_tool_calls = []
                 error_messages = []
@@ -489,6 +601,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 choice.message.tool_calls = (
                     filtered_tool_calls if filtered_tool_calls else None
                 )
+
+                legacy_tool_call = self._legacy_function_call_to_tool_call(
+                    getattr(choice.message, "function_call", None), choice_index
+                )
+                if legacy_tool_call is not None:
+                    legacy_error_result = error_results.get(legacy_tool_call.id)
+                    if legacy_error_result is not None:
+                        choice.message.function_call = None
+                        error_messages.append(legacy_error_result.content)
 
                 # Add error messages to content
                 if error_messages:
@@ -519,21 +640,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        new_tools: Optional[List[ChatCompletionToolParam]] = data.get("tools")
-        if new_tools is None:
+        new_tools = self._collect_request_tools(data)
+        if not new_tools:
             verbose_proxy_logger.warning(
-                "Tool Permission Guardrail: not running guardrail. No tools in data"
+                "Tool Permission Guardrail: not running guardrail. No tools or functions in data"
             )
             return data
 
         # Check permissions for each tool
         denied_tool_names = []
-        for tool in new_tools:
-            if tool["type"] != "function":
-                continue
-            tool_name: str = tool["function"]["name"]
-            tool_type: Optional[str] = tool.get("type")
-
+        for tool_name, tool_type in new_tools:
             is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:

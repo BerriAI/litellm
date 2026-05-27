@@ -42,10 +42,12 @@ import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import SearchToolSelector from "../SearchTools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
+import MyUserTab from "./MyUserTab";
 import {
   getTeamInfoDefaultTab,
   getTeamInfoVisibleTabs,
@@ -60,6 +62,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -69,6 +72,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
     allowed_models?: string[] | null;
   };
 }
@@ -115,6 +119,7 @@ export interface TeamData {
       vector_stores: string[];
       agents?: string[];
       agent_access_groups?: string[];
+      search_tools?: string[];
     };
     team_member_budget_table: {
       max_budget: number;
@@ -497,6 +502,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             (n) => !(values.guardrails || []).includes(n),
           );
 
+      // Non-proxy-admins can't set allowed_passthrough_routes; preserve the
+      // stored value so an unrelated save can't wipe it.
+      const passthroughRoutesMetadata = is_proxy_admin
+        ? { allowed_passthrough_routes: values.allowed_passthrough_routes || [] }
+        : info.metadata?.allowed_passthrough_routes
+          ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
+          : {};
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -510,6 +523,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
+          ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
@@ -590,6 +604,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
+      if (Array.isArray(values.object_permission_search_tools)) {
+        updateData.object_permission.search_tools = values.object_permission_search_tools;
+      }
+
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
@@ -644,10 +662,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { team_info: info } = teamData;
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
-  const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
-  const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
-    (n: string) => !globalGuardrailNames.has(n),
+  const optedOutGlobals = new Set<string>(
+    Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : [],
   );
+  const nonGlobalOptIns: string[] = (
+    Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []
+  ).filter((n: string) => !globalGuardrailNames.has(n));
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [
@@ -806,8 +826,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <GuardrailSettingsView
                     globalGuardrailNames={globalGuardrailNames}
-                    teamGuardrails={info.metadata?.guardrails || []}
-                    optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                    teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+                    optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
                     killSwitchOn={initialKillSwitchOn}
                     variant="inline"
                   />
@@ -850,6 +870,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 />
               </Grid>
             ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.MY_USER,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+            children: <MyUserTab teamId={teamId} />,
           },
           {
             key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
@@ -918,6 +943,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       models: info.models,
                       tpm_limit: info.tpm_limit,
                       rpm_limit: info.rpm_limit,
+                      object_permission_search_tools: info.object_permission?.search_tools || [],
                       modelLimits: Array.from(
                         new Set([
                           ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -944,7 +970,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
+                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, allowed_passthrough_routes, ...rest }) => rest)(info.metadata),
                           null,
                           2,
                         )
@@ -969,6 +995,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       },
                       access_group_ids: info.access_group_ids || [],
                       default_team_member_models: info.default_team_member_models || [],
+                      allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
                     }}
                     layout="vertical"
                   >
@@ -1321,12 +1348,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <PassThroughRoutesSelector
-                        onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                        value={form.getFieldValue("allowed_passthrough_routes")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select pass through routes"
-                      />
+                      <Tooltip
+                        title={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set allowed pass through routes"
+                            : !is_proxy_admin
+                              ? "Only proxy admins can set allowed pass through routes"
+                              : ""
+                        }
+                        placement="top"
+                      >
+                        <PassThroughRoutesSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                          value={form.getFieldValue("allowed_passthrough_routes")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select pass through routes"
+                          disabled={!premiumUser || !is_proxy_admin}
+                        />
+                      </Tooltip>
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
@@ -1370,6 +1409,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder="Select agents or access groups (optional)"
                       />
                     </Form.Item>
+
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Search Tool Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <Form.Item
+                          label="Allowed Search Tools"
+                          name="object_permission_search_tools"
+                          tooltip="Select which search tools this team can access. Leave empty to allow all search tools."
+                        >
+                          <SearchToolSelector
+                            onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                            value={form.getFieldValue("object_permission_search_tools")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select search tools (optional, empty = all allowed)"
+                          />
+                        </Form.Item>
+                      </AccordionBody>
+                    </Accordion>
 
                     <Form.Item label="Organization" name="organization_id">
                       <Select
@@ -1584,8 +1643,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <GuardrailSettingsView
                       globalGuardrailNames={globalGuardrailNames}
-                      teamGuardrails={info.metadata?.guardrails || []}
-                      optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                      teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+                      optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
                       killSwitchOn={initialKillSwitchOn}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
@@ -1606,6 +1665,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </pre>
                       </div>
                     )}
+
                   </div>
                 )}
               </Card>

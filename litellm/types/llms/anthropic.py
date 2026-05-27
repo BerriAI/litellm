@@ -330,7 +330,11 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     content: Union[
         str,
         Iterable[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ],
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
@@ -389,6 +393,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
         AnthropicOutputConfig
     ]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
+    reasoning_effort: Optional[str]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

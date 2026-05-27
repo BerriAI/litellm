@@ -1,0 +1,52 @@
+# Example proxy config for the adaptive router (v0).
+#
+# Wires one logical router ("smart-cheap-router") that adaptively picks between
+# two real deployments ("fast" and "smart") based on per-session feedback signals.
+#
+# How to use from a client:
+#   POST /v1/chat/completions { "model": "smart-cheap-router", ... }
+#   Add { "metadata": { "litellm_session_id": "<your-session-id>" } } to enable
+#   sticky-session routing within a conversation.
+#
+# Required env vars: OPENAI_API_KEY, DATABASE_URL.
+
+model_list:
+  # ---- The adaptive router "control" deployment -------------------------
+  # `model_name` is what clients call. `available_models` lists the underlying
+  # deployments the router is allowed to pick from (must match other model_name
+  # entries in this list).
+  - model_name: smart-cheap-router
+    litellm_params:
+      model: auto_router/adaptive_router # required prefix -- triggers adaptive-router init
+      adaptive_router_config:
+        available_models: ["fast", "smart"]
+        weights:
+          quality: 0.7
+          cost: 0.3
+
+  # ---- Underlying deployments the router picks from ---------------------
+  - model_name: fast
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      input_cost_per_token: 0.00000015
+    model_info:
+      adaptive_router_preferences:
+        quality_tier: 2
+        strengths: []
+
+  - model_name: smart
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      input_cost_per_token: 0.0000050
+    model_info:
+      adaptive_router_preferences:
+        quality_tier: 3
+        strengths: ["code_generation", "technical_design", "analytical_reasoning"]
+
+litellm_settings:
+  drop_params: True
+
+general_settings:
+  master_key: sk-1234 # REPLACE in production

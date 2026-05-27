@@ -1331,14 +1331,14 @@ def test_gemini_function_args_preserve_unicode():
     assert "José" in arguments_str
 
 
-def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
+def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
     """
-    Test that Anthropic thinking parameters are correctly transformed to Gemini 3 thinkingLevel
-    instead of thinkingBudget.
+    Test that Anthropic thinking parameters for Gemini 3+ follow provider defaults
+    unless force-low behavior is explicitly enabled.
 
     For Gemini 3+ models (gemini-3-flash, gemini-3-pro, gemini-3-flash-preview):
-    - Should use thinkingLevel instead of thinkingBudget
-    - budget_tokens should map to thinkingLevel
+    - Should not force thinkingLevel by default
+    - Should still set includeThoughts correctly
 
     Related issue: https://github.com/BerriAI/litellm/issues/XXXX
     """
@@ -1347,72 +1347,109 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
     )
     from litellm.types.llms.anthropic import AnthropicThinkingParam
 
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = False
+
     # Test 1: Anthropic thinking enabled with budget_tokens for Gemini 3 model
     thinking_param: AnthropicThinkingParam = {
         "type": "enabled",
         "budget_tokens": 10000,
     }
+    try:
+        result = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
 
-    result = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param,
-        model="gemini-3-flash",
+        # For Gemini 3, should not force thinkingLevel by default
+        assert (
+            "thinkingLevel" not in result
+        ), "Should not force thinkingLevel for Gemini 3"
+        assert (
+            "thinkingBudget" not in result
+        ), "Should NOT have thinkingBudget for Gemini 3"
+        assert result["includeThoughts"] is True
+
+        # Test 2: Anthropic thinking disabled for Gemini 3
+        thinking_param_disabled: AnthropicThinkingParam = {
+            "type": "disabled",
+            "budget_tokens": None,
+        }
+
+        result_disabled = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_disabled,
+            model="gemini-3-pro-preview",
+        )
+
+        assert result_disabled.get("includeThoughts") is False
+        assert (
+            "thinkingLevel" not in result_disabled
+            or result_disabled.get("thinkingLevel") is None
+        )
+
+        # Test 3: Budget tokens = 0 for Gemini 3
+        thinking_param_zero: AnthropicThinkingParam = {
+            "type": "enabled",
+            "budget_tokens": 0,
+        }
+
+        result_zero = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_zero,
+            model="gemini-3-flash",
+        )
+
+        assert result_zero["includeThoughts"] is False
+        assert (
+            "thinkingLevel" not in result_zero
+            or result_zero.get("thinkingLevel") is None
+        )
+
+        # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
+        result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash-preview",
+        )
+
+        assert "thinkingLevel" not in result_gemini3flashpreview
+        assert "thinkingBudget" not in result_gemini3flashpreview
+        assert result_gemini3flashpreview["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
+
+
+def test_anthropic_thinking_param_to_gemini_3_force_low_feature_flag():
+    """
+    Test that Gemini 3 thinkingLevel forced mapping is available behind a feature flag.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
     )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
 
-    # For Gemini 3, should use thinkingLevel, not thinkingBudget
-    assert "thinkingLevel" in result, "Should have thinkingLevel for Gemini 3"
-    assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
-    assert result["includeThoughts"] is True
-    assert result["thinkingLevel"] in [
-        "minimal",
-        "low",
-    ], "thinkingLevel should be 'minimal' or 'low'"
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = True
 
-    # Test 2: Anthropic thinking disabled for Gemini 3
-    thinking_param_disabled: AnthropicThinkingParam = {
-        "type": "disabled",
-        "budget_tokens": None,
-    }
-
-    result_disabled = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param_disabled,
-        model="gemini-3-pro-preview",
-    )
-
-    assert result_disabled.get("includeThoughts") is False
-    assert (
-        "thinkingLevel" not in result_disabled
-        or result_disabled.get("thinkingLevel") is None
-    )
-
-    # Test 3: Budget tokens = 0 for Gemini 3
-    thinking_param_zero: AnthropicThinkingParam = {
+    thinking_param: AnthropicThinkingParam = {
         "type": "enabled",
-        "budget_tokens": 0,
+        "budget_tokens": 10000,
     }
 
-    result_zero = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param_zero,
-        model="gemini-3-flash",
-    )
+    try:
+        result_flash = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
+        assert result_flash["thinkingLevel"] == "minimal"
+        assert result_flash["includeThoughts"] is True
 
-    assert result_zero["includeThoughts"] is False
-    assert (
-        "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
-    )
-
-    # Test 4: Fiercefalcon model (Gemini 3 Flash checkpoint) should use thinkingLevel
-    result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param,
-        model="gemini-3-flash-preview",
-    )
-
-    assert (
-        "thinkingLevel" in result_gemini3flashpreview
-    ), "Should have thinkingLevel for gemini-3-flash-preview"
-    assert (
-        "thinkingBudget" not in result_gemini3flashpreview
-    ), "Should NOT have thinkingBudget for gemini-3-flash-preview"
-    assert result_gemini3flashpreview["includeThoughts"] is True
+        result_pro = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-pro-preview",
+        )
+        assert result_pro["thinkingLevel"] == "low"
+        assert result_pro["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
 
 
 def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
@@ -1465,7 +1502,7 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
 def test_anthropic_thinking_param_via_map_openai_params():
     """
     Test that the thinking parameter is correctly transformed through the full map_openai_params flow
-    for Gemini 3 models, resulting in thinkingConfig with thinkingLevel.
+    for Gemini 3 models, without forcing thinkingLevel by default.
 
     This tests the full integration from Anthropic API format to Gemini format.
     """
@@ -1492,10 +1529,12 @@ def test_anthropic_thinking_param_via_map_openai_params():
         drop_params=False,
     )
 
-    # Check that thinkingConfig was created with thinkingLevel
+    # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert "thinkingLevel" in thinking_config, "Should have thinkingLevel for Gemini 3"
+    assert (
+        "thinkingLevel" not in thinking_config
+    ), "Should not force thinkingLevel for Gemini 3 by default"
     assert (
         "thinkingBudget" not in thinking_config
     ), "Should NOT have thinkingBudget for Gemini 3"
@@ -1566,13 +1605,49 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
 
 
-def test_gemini_image_size_limit_exceeded():
+def test_gemini_image_size_limit_exceeded(monkeypatch):
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
 
     This validates that the 50MB default limit prevents downloading very large images
     that could cause memory issues and pod crashes.
+
+    The image fetch is mocked (mirroring the LargeImageClient pattern in
+    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    deterministically exercises the size-limit rejection path without any
+    external network dependency.
     """
+    from httpx import Request, Response
+
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    class LargeImageClient:
+        """Returns a response whose Content-Length exceeds the 50MB limit."""
+
+        def get(self, url, follow_redirects=True):
+            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(size_bytes),
+                },
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
+                request=Request("GET", url),
+            )
+
+    # Bypass SSRF validation (which would resolve DNS / hit the network) and
+    # route straight to our mocked client.
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
+
     messages = [
         {
             "role": "user",
@@ -1580,7 +1655,7 @@ def test_gemini_image_size_limit_exceeded():
                 {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg",
+                    "image_url": "https://example.com/large-image.jpg",
                 },
             ],
         }

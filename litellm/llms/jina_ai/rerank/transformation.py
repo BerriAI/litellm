@@ -1,5 +1,5 @@
 """
-Transformation logic from Cohere's /v1/rerank format to Jina AI's  `/v1/rerank` format. 
+Transformation logic from Cohere's /v1/rerank format to Jina AI's  `/v1/rerank` format.
 
 Why separate file? Make it easy to see how transformation works
 
@@ -74,7 +74,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return cleaned_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: Dict, headers: Dict
+        self,
+        model: str,
+        optional_rerank_params: Dict,
+        headers: Dict,
+        litellm_params: Optional[dict] = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 

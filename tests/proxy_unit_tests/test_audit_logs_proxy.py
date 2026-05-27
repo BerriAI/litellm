@@ -45,13 +45,129 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm.proxy.management_helpers.audit_logs import (
+    create_audit_log_for_update,
+    get_audit_log_changed_by,
+)
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 from unittest.mock import patch, AsyncMock
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
+
+
+def test_get_audit_log_changed_by_prefers_authenticated_user():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="authenticated-user",
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="spoofed-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "authenticated-user"
+    )
+
+
+def test_get_audit_log_changed_by_honors_header_with_admin_opt_in():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="service-account",
+        metadata={"allow_litellm_changed_by_header": True},
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "delegated-user"
+    )
+
+
+def test_get_audit_log_changed_by_honors_header_with_team_opt_in():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="service-account",
+        team_metadata={"allow_litellm_changed_by_header": True},
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "delegated-user"
+    )
+
+
+def test_get_audit_log_changed_by_ignores_header_without_opt_in_when_user_id_missing():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="spoofed-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "proxy-admin"
+    )
+
+
+def test_get_audit_log_changed_by_honors_header_with_opt_in_when_user_id_missing():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"allow_litellm_changed_by_header": True},
+    )
+
+    assert (
+        get_audit_log_changed_by(
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+        )
+        == "delegated-user"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_internal_user_audit_log_uses_changed_by_helper():
+    from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="service-account",
+        metadata={"allow_litellm_changed_by_header": True},
+    )
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch(
+            "litellm.proxy.hooks.user_management_event_hooks.create_audit_log_for_update",
+            new_callable=AsyncMock,
+        ) as mock_create_audit_log_for_update,
+    ):
+        await UserManagementEventHooks.create_internal_user_audit_log(
+            user_id="target-user",
+            action="updated",
+            litellm_changed_by="delegated-user",
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name="proxy-admin",
+            before_value='{"before": true}',
+            after_value='{"after": true}',
+        )
+
+    request_data = mock_create_audit_log_for_update.await_args.kwargs["request_data"]
+    assert request_data.changed_by == "delegated-user"
+    assert request_data.changed_by_api_key == "test-key"
+    assert request_data.object_id == "target-user"
+    assert request_data.action == "updated"
 
 
 @pytest.mark.asyncio

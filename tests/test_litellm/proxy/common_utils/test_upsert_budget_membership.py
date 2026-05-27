@@ -268,3 +268,104 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
             },
         },
     )
+
+
+# TEST: clone-on-write when membership still points at the team's shared default budget
+@pytest.mark.asyncio
+async def test_upsert_clones_when_pointing_at_shared_default(mock_tx, fake_user):
+    """
+    When a member's existing budget_id is the same row as the team's shared
+    default member budget, updating that member's budget must NOT mutate the
+    shared row. Instead we should create a new private budget for this member
+    (seeded with the default's values) and re-link the membership to it.
+    """
+    shared_default_id = "team-default-budget-1"
+
+    # Default budget row in the DB: $200 cap, daily reset, 500 tpm.
+    default_row = MagicMock()
+    default_row.model_dump.return_value = {
+        "budget_id": shared_default_id,
+        "max_budget": 200.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 500,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=default_row)
+
+    # Caller is changing only this member's max_budget.
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-shared",
+        user_id="user-shared",
+        max_budget=50.0,
+        existing_budget_id=shared_default_id,
+        user_api_key_dict=fake_user,
+        team_default_budget_id=shared_default_id,
+    )
+
+    # Must NOT touch the shared default row in place.
+    mock_tx.litellm_budgettable.update.assert_not_called()
+
+    # Must create a new private budget seeded with the default's values,
+    # with the caller's max_budget overriding the cloned default.
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+            "max_budget": 50.0,  # caller wins
+            "tpm_limit": 500,  # cloned from default
+            "budget_duration": "1d",  # cloned from default
+        },
+        include={"team_membership": True},
+    )
+
+    # Membership must be re-linked to the new private budget.
+    new_budget_id = mock_tx.litellm_budgettable.create.return_value.budget_id
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-shared", "team_id": "team-shared"}},
+        data={
+            "create": {
+                "user_id": "user-shared",
+                "team_id": "team-shared",
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+            },
+            "update": {
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+            },
+        },
+    )
+
+
+# TEST: when team default exists but member already has their own budget, in-place update
+@pytest.mark.asyncio
+async def test_upsert_updates_in_place_when_member_has_private_budget(
+    mock_tx, fake_user
+):
+    """
+    If the member's budget_id is different from the team's shared default
+    (i.e. they already have a private budget), we should keep the current
+    in-place behavior and not allocate a new row.
+    """
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-mixed",
+        user_id="user-private",
+        max_budget=75.0,
+        existing_budget_id="private-budget-xyz",
+        user_api_key_dict=fake_user,
+        team_default_budget_id="team-default-budget-1",
+    )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "private-budget-xyz"},
+        data={
+            "max_budget": 75.0,
+            "updated_by": fake_user.user_id,
+        },
+    )
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.upsert.assert_not_called()

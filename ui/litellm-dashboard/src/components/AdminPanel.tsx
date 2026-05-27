@@ -21,6 +21,7 @@ import { useBaseUrl } from "./constants";
 import NotificationsManager from "./molecules/notifications_manager";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "./networking";
 import SCIMConfig from "./SCIM";
+import LoggingSettings from "./Settings/AdminSettings/LoggingSettings/LoggingSettings";
 import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
 import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
@@ -361,6 +362,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         </Space>
       ),
       children: <UISettings />,
+    },
+    {
+      key: "logging-settings",
+      label: "Logging Settings",
+      children: <LoggingSettings />,
     },
     {
       key: "hashicorp-vault",

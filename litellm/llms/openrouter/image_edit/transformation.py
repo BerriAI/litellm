@@ -116,6 +116,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         if not api_key:

@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
@@ -349,7 +351,6 @@ if TYPE_CHECKING:
         get_num_retries_from_retry_policy,
         reset_retry_policy,
     )
-    from litellm.secret_managers.main import get_secret
 
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -381,6 +382,8 @@ if TYPE_CHECKING:
         ChatCompletionToolCallFunctionChunk,
     )
     from litellm.types.router import LiteLLM_Params
+
+from litellm.secret_managers.main import get_secret
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -2243,10 +2246,50 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     return enc
 
 
-def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+def decode(
+    model="",
+    tokens: List[int] = [],
+    custom_tokenizer: Optional[dict] = None,
+    skip_special_tokens: bool = True,
+):
+    """
+    Decodes token ids using the selected tokenizer.
+
+    Args:
+        skip_special_tokens: For HuggingFace tokenizers, keep the historical
+            LiteLLM round-trip behavior by omitting special tokens by default.
+            Set to False to inspect decoded BOS/EOS tokens.
+    """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        if skip_special_tokens:
+            tokens = _strip_huggingface_special_token_ids(
+                tokenizer_json["tokenizer"], tokens
+            )
+        dec = tokenizer_json["tokenizer"].decode(
+            tokens, skip_special_tokens=skip_special_tokens
+        )
+        return dec
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
+
+
+def _strip_huggingface_special_token_ids(
+    tokenizer: Tokenizer, tokens: List[int]
+) -> List[int]:
+    try:
+        added_tokens_decoder = tokenizer.get_added_tokens_decoder()
+    except Exception:
+        return tokens
+
+    special_token_ids = {
+        token_id
+        for token_id, added_token in added_tokens_decoder.items()
+        if getattr(added_token, "special", False)
+    }
+    if not special_token_ids:
+        return tokens
+    return [token for token in tokens if token not in special_token_ids]
 
 
 def create_pretrained_tokenizer(
@@ -2890,6 +2933,13 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             except Exception:
                 existing_model = {}
                 model_cost_key = key
+        # ``get_model_info`` returns ``litellm_provider: None`` when the
+        # provider is unknown (e.g. custom deployments registered via
+        # ``Router.add_deployment``). Persisting that None into
+        # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
+        # custom pricing on subsequent cost lookups.
+        if existing_model.get("litellm_provider") is None:
+            existing_model.pop("litellm_provider", None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -3300,6 +3350,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+        # Provider-only params (e.g. Cohere input_type) are not in
+        # OPENAI_EMBEDDING_PARAMS, so embedding_pre_process drops them from
+        # non_default_params before map_openai_params. Restore only those extras
+        # from passed_params — skip OPENAI_EMBEDDING_PARAMS to avoid duplicating
+        # values already mapped (e.g. dimensions -> output_dimension).
+        if supported_params:
+            for param in supported_params:
+                if param in OPENAI_EMBEDDING_PARAMS:
+                    continue
+                if (
+                    param in passed_params
+                    and passed_params[param] is not None
+                    and param not in optional_params
+                ):
+                    optional_params[param] = passed_params[param]
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
@@ -3976,16 +4041,23 @@ def get_optional_params(  # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     safety_identifier: Optional[str] = None,
+    base_model: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
+    # Remove base_model from passed_params so it doesn't interfere with
+    # non_default_params / _check_valid_arg — it's a routing hint, not an
+    # OpenAI param.
+    passed_params.pop("base_model", None)
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
     ]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+            base_model=base_model,
         )
     non_default_params = pre_process_non_default_params(
         passed_params=passed_params,
@@ -4048,7 +4120,7 @@ def get_optional_params(  # noqa: PLR0915
         sys.modules[__name__], "get_supported_openai_params"
     )
     supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
+        model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(
@@ -4365,6 +4437,10 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+            if bedrock_route == "claude_platform":
+                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
+                    passed_params=passed_params, optional_params=optional_params
+                )
     elif custom_llm_provider == "cloudflare":
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
@@ -4655,22 +4731,27 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+        _azure_detection_model = base_model or model
+        if litellm.AzureOpenAIO1Config().is_o_series_model(
+            model=_azure_detection_model
+        ):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+            model=_azure_detection_model
+        ):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
@@ -4692,7 +4773,7 @@ def get_optional_params(  # noqa: PLR0915
             optional_params = litellm.AzureOpenAIConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 api_version=api_version,  # type: ignore
                 drop_params=(
                     drop_params
@@ -4935,6 +5016,33 @@ def _get_order_filtered_deployments(
 
         return filtered_deployments
     return healthy_deployments
+
+
+def _get_excluded_filtered_deployments(
+    healthy_deployments: List[Dict],
+    excluded_deployment_ids: Optional[Iterable[str]] = None,
+) -> List:
+    """
+    Filter out deployments whose `model_info.id` appears in `excluded_deployment_ids`.
+
+    Used by weighted-routing failover so a single logical request can re-pick
+    across the remaining deployments in the same model group after one of them
+    has failed.
+
+    If the filter would leave no deployments, an empty list is returned so the
+    caller raises its usual no-deployments error and the weighted-failover
+    helper falls through to the cross-group fallback path. Returning the
+    original unfiltered list here would re-include the just-failed deployment.
+    """
+    if not excluded_deployment_ids:
+        return healthy_deployments
+
+    excluded_set = set(excluded_deployment_ids)
+    return [
+        d
+        for d in healthy_deployments
+        if (d.get("model_info") or {}).get("id") not in excluded_set
+    ]
 
 
 def _get_model_region(
@@ -5313,6 +5421,16 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
 # Global case-insensitive lookup map for model_cost (built eagerly at module import)
 _model_cost_lowercase_map: Optional[Dict[str, str]] = None
 
+# Monotonic counter bumped on every model_cost mutation. Consumers that
+# memoize derived state (e.g. provider-specific indices) can include this
+# value in their cache key so they invalidate even when key add+remove or
+# in-place value replacement leaves len/id unchanged.
+_model_cost_mutation_generation: int = 0
+
+
+def get_model_cost_mutation_generation() -> int:
+    return _model_cost_mutation_generation
+
 
 def _invalidate_model_cost_lowercase_map() -> None:
     """Invalidate the case-insensitive lookup map for model_cost.
@@ -5320,8 +5438,9 @@ def _invalidate_model_cost_lowercase_map() -> None:
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
     Also clears related LRU caches that depend on model_cost data.
     """
-    global _model_cost_lowercase_map
+    global _model_cost_lowercase_map, _model_cost_mutation_generation
     _model_cost_lowercase_map = None
+    _model_cost_mutation_generation += 1
 
     # Clear LRU caches that depend on model_cost data
     get_model_info.cache_clear()
@@ -5425,9 +5544,15 @@ def _get_model_info_from_model_cost(key: str) -> dict:
 def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) -> bool:
     """
     Check if the model info provider matches the custom provider.
+
+    A missing ``litellm_provider`` key and a ``litellm_provider`` set to
+    ``None`` both mean "no specific provider constraint" and are treated
+    as a wildcard match. ``register_model`` may persist ``None`` here via
+    ``get_model_info`` when a deployment is registered without a provider,
+    so normalising the two cases keeps custom pricing applied consistently.
     """
     if custom_llm_provider and (
-        "litellm_provider" in model_info
+        model_info.get("litellm_provider") is not None
         and model_info["litellm_provider"] != custom_llm_provider
     ):
         if custom_llm_provider == "vertex_ai" and model_info[
@@ -5893,8 +6018,17 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_none_reasoning_effort=_model_info.get(
                     "supports_none_reasoning_effort", None
                 ),
+                supports_minimal_reasoning_effort=_model_info.get(
+                    "supports_minimal_reasoning_effort", None
+                ),
+                supports_low_reasoning_effort=_model_info.get(
+                    "supports_low_reasoning_effort", None
+                ),
                 supports_xhigh_reasoning_effort=_model_info.get(
                     "supports_xhigh_reasoning_effort", None
+                ),
+                supports_max_reasoning_effort=_model_info.get(
+                    "supports_max_reasoning_effort", None
                 ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
@@ -5903,6 +6037,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
@@ -6520,6 +6655,7 @@ def validate_environment(  # noqa: PLR0915
             or model in litellm.open_ai_text_completion_models
             or model in litellm.open_ai_embedding_models
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8010,6 +8146,35 @@ def validate_openai_optional_params(
     return stop
 
 
+@lru_cache(maxsize=1)
+def _get_bundled_model_cost_map() -> Dict[str, Any]:
+    try:
+        model_cost_path = resources.files("litellm").joinpath(
+            "model_prices_and_context_window_backup.json"
+        )
+        return json.loads(model_cost_path.read_text())
+    except Exception:
+        return {}
+
+
+def _get_model_cost_entry_for_provider_config(
+    model: str,
+    provider: LlmProviders,
+) -> Dict[str, Any]:
+    candidate_keys = (model, f"{provider.value}/{model}")
+    for model_key in candidate_keys:
+        model_info = litellm.model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+
+    bundled_model_cost = _get_bundled_model_cost_map()
+    for model_key in candidate_keys:
+        model_info = bundled_model_cost.get(model_key)
+        if model_info is not None:
+            return model_info
+    return {}
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -8028,10 +8193,8 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
-            LlmProviders.AZURE: (
-                lambda model: ProviderConfigManager._get_azure_config(model),
-                True,
-            ),
+            # AZURE is handled as a special case in get_provider_chat_config()
+            # so that base_model can be threaded through for model-type detection.
             LlmProviders.AZURE_AI: (
                 lambda model: ProviderConfigManager._get_azure_ai_config(model),
                 True,
@@ -8171,11 +8334,19 @@ class ProviderConfigManager:
         }
 
     @staticmethod
-    def _get_azure_config(model: str) -> BaseConfig:
-        """Get Azure config based on model type."""
-        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+    def _get_azure_config(model: str, base_model: Optional[str] = None) -> BaseConfig:
+        """Get Azure config based on model type.
+
+        When *base_model* is provided (e.g. ``"azure/gpt-5.2"``), it is used
+        for model-type detection instead of *model* (the deployment name).
+        This allows non-standard deployment names like ``"azure/foo"`` to be
+        routed through the correct config when the user specifies the true
+        underlying model via ``base_model``.
+        """
+        detection_model = base_model or model
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=detection_model):
             return litellm.AzureOpenAIO1Config()
-        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=detection_model):
             return litellm.AzureOpenAIGPT5Config()
         return litellm.AzureOpenAIConfig()
 
@@ -8233,13 +8404,18 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
-        model: str, provider: LlmProviders
+        model: str,
+        provider: LlmProviders,
+        base_model: Optional[str] = None,
     ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
 
         Uses O(1) dictionary lookup for fast provider resolution.
         Python classes take priority over JSON (they have custom overrides).
+
+        For Azure, *base_model* (when set) drives model-type detection so that
+        non-standard deployment names still route to the correct config.
         """
         # Handle OpenAI special cases (O-series and GPT-5 models)
         if provider == LlmProviders.OPENAI:
@@ -8247,6 +8423,12 @@ class ProviderConfigManager:
                 return litellm.openaiOSeriesConfig
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
+
+        # Handle Azure before the generic map so base_model can be threaded through
+        if provider == LlmProviders.AZURE:
+            return ProviderConfigManager._get_azure_config(
+                model=model, base_model=base_model
+            )
 
         # Initialize provider config map lazily (avoids circular imports)
         if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:
@@ -8299,6 +8481,10 @@ class ProviderConfigManager:
             return litellm.InfinityEmbeddingConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambaNovaEmbeddingConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            from litellm.llms.oci.embed.transformation import OCIEmbedConfig
+
+            return OCIEmbedConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
@@ -8318,6 +8504,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.embed.transformation import (
+                DashScopeEmbeddingConfig,
+            )
+
+            return DashScopeEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
@@ -8350,10 +8542,6 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
-        elif litellm.LlmProviders.OCI == provider:
-            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
-
-            return OCIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8397,6 +8585,12 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.rerank.transformation import (
+                DashScopeRerankConfig,
+            )
+
+            return DashScopeRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8404,6 +8598,17 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAnthropicMessagesConfig]:
+        return ProviderConfigManager._get_provider_anthropic_messages_config_cached(
+            model=model, provider=provider
+        )
+
+    @staticmethod
+    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+    def _get_provider_anthropic_messages_config_cached(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        model_lower = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
@@ -8413,14 +8618,14 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.azure_ai.anthropic.messages_transformation import (
                     AzureAnthropicMessagesConfig,
                 )
@@ -8432,6 +8637,12 @@ class ProviderConfigManager:
             )
 
             return MinimaxMessagesConfig()
+        elif litellm.LlmProviders.DEEPSEEK == provider:
+            from litellm.llms.deepseek.messages.transformation import (
+                DeepSeekAnthropicMessagesConfig,
+            )
+
+            return DeepSeekAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -8439,6 +8650,19 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAudioTranscriptionConfig]:
+        model_cost_entry = _get_model_cost_entry_for_provider_config(
+            model=model,
+            provider=provider,
+        )
+        if (
+            litellm.LlmProviders.AZURE == provider
+            and model_cost_entry.get("audio_transcription_config") == "azure_speech"
+        ):
+            from litellm.llms.azure.audio_transcription.transformation import (
+                AzureSpeechAudioTranscriptionConfig,
+            )
+
+            return AzureSpeechAudioTranscriptionConfig()
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
@@ -8472,12 +8696,24 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SCALEWAY == provider:
+            from litellm.llms.scaleway.audio_transcription.transformation import (
+                ScalewayAudioTranscriptionConfig,
+            )
+
+            return ScalewayAudioTranscriptionConfig()
         elif litellm.LlmProviders.MISTRAL == provider:
             from litellm.llms.mistral.audio_transcription.transformation import (
                 MistralAudioTranscriptionConfig,
             )
 
             return MistralAudioTranscriptionConfig()
+        elif litellm.LlmProviders.NVIDIA_RIVA == provider:
+            from litellm.llms.nvidia_riva.audio_transcription.transformation import (
+                NvidiaRivaAudioTranscriptionConfig,
+            )
+
+            return NvidiaRivaAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8940,6 +9176,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
+        elif LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.image_generation import (
+                get_dashscope_image_generation_config,
+            )
+
+            return get_dashscope_image_generation_config(model)
         return None
 
     @staticmethod
@@ -9109,6 +9351,18 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
+
+        if provider == litellm.LlmProviders.REDUCTO:
+            from litellm.llms.reducto.ocr.transformation import (
+                ReductoParseLegacyConfig,
+                ReductoParseV3Config,
+            )
+
+            if model == "parse-v3":
+                return ReductoParseV3Config()
+            if model == "parse-legacy":
+                return ReductoParseLegacyConfig()
+            return None
 
         MistralOCRConfig = getattr(sys.modules[__name__], "MistralOCRConfig")
         PROVIDER_TO_CONFIG_MAP = {
@@ -9409,6 +9663,49 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     }  # model-specific params - pass them straight to the model/provider
 
     return non_default_params
+
+
+def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
+
+
+def strip_reasoning_summary_aliases_from_optional_params(
+    optional_params: dict,
+) -> Tuple[dict, Optional[Any]]:
+    """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
+    op = dict(optional_params)
+    rs_val = op.pop("reasoningSummary", None)
+    snake_rs_val = op.pop("reasoning_summary", None)
+    if rs_val is None:
+        rs_val = snake_rs_val
+    eb = op.get("extra_body")
+    if isinstance(eb, dict):
+        eb = dict(eb)
+        eb_rs_val = eb.pop("reasoningSummary", None)
+        eb_snake_rs_val = eb.pop("reasoning_summary", None)
+        if rs_val is None:
+            rs_val = eb_rs_val
+            if rs_val is None:
+                rs_val = eb_snake_rs_val
+        if eb:
+            op["extra_body"] = eb
+        else:
+            op.pop("extra_body", None)
+    return op, rs_val
 
 
 def get_non_default_transcription_params(kwargs: dict) -> dict:

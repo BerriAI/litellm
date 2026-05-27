@@ -5,8 +5,10 @@ from typing import Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
+    SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS,
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_JOB_NAME,
+    SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES,
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -74,6 +76,7 @@ class SpendLogCleanup:
         """
         total_deleted = 0
         run_count = 0
+        consecutive_failures = 0
         while True:
             if run_count > SPEND_LOG_RUN_LOOPS:
                 verbose_proxy_logger.info(
@@ -82,18 +85,50 @@ class SpendLogCleanup:
                 break
             # Step 1: Find logs and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
-            deleted_result = await prisma_client.db.execute_raw(
-                """
-                DELETE FROM "LiteLLM_SpendLogs"
-                WHERE "request_id" IN (
-                    SELECT "request_id" FROM "LiteLLM_SpendLogs"
-                    WHERE "startTime" < $1::timestamptz
-                    LIMIT $2
+            try:
+                deleted_result = await prisma_client.db.execute_raw(
+                    """
+                    DELETE FROM "LiteLLM_SpendLogs"
+                    WHERE "request_id" IN (
+                        SELECT "request_id" FROM "LiteLLM_SpendLogs"
+                        WHERE "startTime" < $1::timestamptz
+                        LIMIT $2
+                    )
+                    """,
+                    cutoff_date,
+                    self.batch_size,
                 )
-                """,
-                cutoff_date,
-                self.batch_size,
-            )
+            except Exception as batch_exc:
+                # A single batch failure (e.g. Prisma/DB timeout) must not abort
+                # the whole run — subsequent batches may still succeed.
+                consecutive_failures += 1
+                verbose_proxy_logger.exception(
+                    "Spend log cleanup batch failed "
+                    "(run_count=%d, consecutive_failures=%d, batch_size=%d, "
+                    "cutoff=%s, total_deleted_so_far=%d): %s: %s",
+                    run_count,
+                    consecutive_failures,
+                    self.batch_size,
+                    cutoff_date.isoformat(),
+                    total_deleted,
+                    type(batch_exc).__name__,
+                    batch_exc,
+                )
+                if (
+                    consecutive_failures
+                    >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES
+                ):
+                    verbose_proxy_logger.error(
+                        "Aborting spend log cleanup after %d consecutive batch "
+                        "failures; total deleted before abort: %d",
+                        consecutive_failures,
+                        total_deleted,
+                    )
+                    break
+                await asyncio.sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
+                continue
+
+            consecutive_failures = 0
 
             deleted_count = 0
             if isinstance(deleted_result, int):
@@ -168,7 +203,13 @@ class SpendLogCleanup:
             verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
+            # .exception() captures the traceback; str(e) alone on a Prisma/DB
+            # timeout is often empty and gives operators no signal to diagnose.
+            verbose_proxy_logger.exception(
+                "Error during spend log cleanup: %s: %s",
+                type(e).__name__,
+                e,
+            )
             return  # Return after error handling
         finally:
             # Only release the lock if it was actually acquired

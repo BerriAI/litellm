@@ -230,6 +230,23 @@ class TestOpenAIContainerTransformation:
         assert url == f"{api_base}/{container_id}"
         assert params == {}  # No query params for retrieve
 
+    def test_transform_container_retrieve_request_encodes_path_traversal(self):
+        """Test container IDs are treated as a single upstream path segment."""
+        api_base = "https://api.openai.com/v1/containers"
+
+        url, params = self.config.transform_container_retrieve_request(
+            container_id="../../vector_stores?x=1#frag",
+            api_base=api_base,
+            litellm_params={},
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://api.openai.com/v1/containers/..%2F..%2Fvector_stores%3Fx%3D1%23frag"
+        )
+        assert params == {}
+
     def test_transform_container_retrieve_response(self):
         """Test container retrieve response transformation."""
         # Mock HTTP response

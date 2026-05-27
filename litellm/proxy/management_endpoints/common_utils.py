@@ -1,5 +1,8 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from fastapi import HTTPException, status
+from pydantic import BaseModel
+
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import (
@@ -14,6 +17,7 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view as _user_has_admin_view,  # noqa: F401  re-exported
 )
 from litellm.proxy.utils import _premium_user_check
 
@@ -22,11 +26,63 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
-def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    )
+def require_caller_user_id_for_non_admin(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> str:
+    """Return the caller's user_id, or raise 403 if missing.
+
+    Non-admin analytics endpoints scope queries by the caller's own user_id.
+    Service-account keys are deliberately created with user_id=None
+    (key_management_endpoints.py forces ``data.user_id = None`` at key
+    creation). Without this guard, that None value flows through to the
+    daily-activity builder, which treats ``entity_id is None`` as "no filter"
+    and returns every tenant's data.
+
+    Callers must check is_admin first; this helper is only valid on the
+    non-admin scoping branch.
+    """
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "Service-account keys cannot query user analytics. "
+                    "Use a user-bound key, or call as a proxy admin."
+                )
+            },
+        )
+    return user_api_key_dict.user_id
+
+
+def _check_passthrough_routes_caller_permission(
+    data: BaseModel,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
+    `metadata`) — it short-circuits the role-based route gate, so keys and teams
+    must be gated identically.
+    """
+    # view-only admins excluded by design; blocked upstream from writes anyway
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if getattr(data, "allowed_passthrough_routes", None):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."
+            },
+        )
+    metadata = getattr(data, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."
+            },
+        )
 
 
 def _is_user_team_admin(
@@ -355,6 +411,7 @@ async def _upsert_budget_and_membership(
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
     allowed_models: Optional[List[str]] = None,
+    team_default_budget_id: Optional[str] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -368,6 +425,11 @@ async def _upsert_budget_and_membership(
         tpm_limit: Tokens per minute limit for the team member
         rpm_limit: Requests per minute limit for the team member
         allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
+        team_default_budget_id: The team's shared default member budget id (from
+            team metadata.team_member_budget_id), if any. When the membership's
+            existing_budget_id matches this, we clone-on-write so editing one
+            member's budget does not mutate the shared default (and therefore
+            every other member who still points at it).
 
     If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
@@ -385,7 +447,13 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    if existing_budget_id is not None:
+    is_shared_default = (
+        existing_budget_id is not None
+        and team_default_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+    )
+
+    if existing_budget_id is not None and not is_shared_default:
         # Update the existing budget in-place to preserve fields not being changed.
         # Only write fields that the caller explicitly provided (non-None).
         update_data: Dict[str, Any] = {
@@ -405,11 +473,40 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    # No existing budget — create a new one and link it to the membership.
+    # Either there is no existing budget, OR the membership is still pointing
+    # at the team's shared default member budget. In both cases we create a
+    # NEW private budget for this user and (re)link the membership to it.
     create_data: Dict[str, Any] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
     }
+
+    # If we're forking off the shared default, seed the new row with the
+    # default's values so fields the caller did not change carry over.
+    if is_shared_default:
+        default_budget_row = await tx.litellm_budgettable.find_unique(
+            where={"budget_id": existing_budget_id}
+        )
+        if default_budget_row is not None:
+            default_budget_dict = default_budget_row.model_dump()
+            for field in (
+                "max_budget",
+                "soft_budget",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "model_max_budget",
+                "budget_duration",
+                "allowed_models",
+            ):
+                value = default_budget_dict.get(field)
+                if value is None:
+                    continue
+                if isinstance(value, list) and len(value) == 0:
+                    continue
+                create_data[field] = value
+
+    # Caller-provided values take precedence over the cloned defaults.
     if max_budget is not None:
         create_data["max_budget"] = max_budget
     if tpm_limit is not None:

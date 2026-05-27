@@ -6,12 +6,15 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from typing import Any, Optional, cast
 
-from litellm._logging import _redact_string
+from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....litellm_core_utils.realtime_streaming import (
+    RealTimeStreaming,
+    client_sent_openai_beta_realtime_header,
+)
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
 
@@ -33,21 +36,24 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         return "https://api.openai.com/"
 
-    def _get_additional_headers(self, api_key: str) -> dict:
+    def _get_additional_headers(
+        self,
+        api_key: str,
+        *,
+        openai_beta_realtime: bool = False,
+    ) -> dict:
         """
-        Get additional headers beyond Authorization.
-        Override this in subclasses to customize headers (e.g., remove OpenAI-Beta).
+        Headers for the upstream OpenAI Realtime WebSocket.
 
-        Args:
-            api_key: API key for authentication
-
-        Returns:
-            Dictionary of additional headers
+        When the client sent ``OpenAI-Beta: realtime=v1`` on the proxy WebSocket,
+        ``openai_beta_realtime`` is True and the same header is forwarded upstream
+        so the legacy beta API is used. GA clients omit that header on the client
+        connection and must send GA-shaped ``session.update`` payloads.
         """
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "OpenAI-Beta": "realtime=v1",
-        }
+        headers: dict = {"Authorization": f"Bearer {api_key}"}
+        if openai_beta_realtime:
+            headers["OpenAI-Beta"] = "realtime=v1"
+        return headers
 
     def _get_ssl_config(self, url: str) -> Any:
         """
@@ -120,8 +126,16 @@ class OpenAIRealtime(OpenAIChatCompletion):
             # Get provider-specific SSL configuration
             ssl_config = self._get_ssl_config(url)
 
-            # Get provider-specific headers
-            headers = self._get_additional_headers(api_key)
+            openai_beta_realtime = client_sent_openai_beta_realtime_header(websocket)
+            if not openai_beta_realtime:
+                verbose_logger.debug(
+                    "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
+                    "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
+                    "to the WebSocket headers sent to the LiteLLM proxy."
+                )
+            headers = self._get_additional_headers(
+                api_key, openai_beta_realtime=openai_beta_realtime
+            )
 
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(

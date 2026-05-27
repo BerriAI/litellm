@@ -1,5 +1,5 @@
 """
-Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format. 
+Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -132,6 +132,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         # Convert OptionalRerankParams to dict as expected by parent class
         if optional_rerank_params is None:

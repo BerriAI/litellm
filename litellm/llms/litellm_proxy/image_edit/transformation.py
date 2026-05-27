@@ -8,7 +8,12 @@ class LiteLLMProxyImageEditConfig(OpenAIImageEditConfig):
     """Configuration for image edit requests routed through LiteLLM Proxy."""
 
     def validate_environment(
-        self, headers: dict, model: str, api_key: Optional[str] = None
+        self,
+        headers: dict,
+        model: str,
+        api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         headers.update({"Authorization": f"Bearer {api_key}"})

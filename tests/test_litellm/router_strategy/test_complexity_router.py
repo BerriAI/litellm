@@ -7,7 +7,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 import os
 import sys
 from typing import Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -828,3 +828,222 @@ class TestRouterComplexityDeploymentMethods:
         )
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
+
+
+class TestAsyncPreRoutingHookMultiFormat:
+    """Test async_pre_routing_hook with multiple input formats."""
+
+    @pytest.mark.asyncio
+    async def test_should_route_with_chat_completions_messages(self, complexity_router):
+        """Test routing with standard chat completions messages."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+        )
+        assert result is not None
+        assert result.model is not None
+        assert result.messages is not None
+
+    @pytest.mark.asyncio
+    async def test_should_route_with_responses_api_string_input(
+        self, complexity_router
+    ):
+        """Test routing with Responses API string input via handler dispatch."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+        from litellm.types.utils import CallTypes
+
+        mock_mappings = {CallTypes.responses: OpenAIResponsesHandler}
+
+        with patch(
+            "litellm.llms.load_guardrail_translation_mappings",
+            return_value=mock_mappings,
+        ):
+            result = await complexity_router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"input": "What is the capital of France?"},
+                messages=None,
+                input="What is the capital of France?",
+            )
+
+        assert result is not None
+        assert result.model is not None
+        # messages should be None since the original request didn't have messages
+        assert result.messages is None
+
+    @pytest.mark.asyncio
+    async def test_should_route_with_responses_api_list_input(self, complexity_router):
+        """Test routing with Responses API list input via handler dispatch."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+        from litellm.types.utils import CallTypes
+
+        mock_mappings = {CallTypes.responses: OpenAIResponsesHandler}
+
+        list_input = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {
+                "role": "user",
+                "content": "Write a Python function to sort a list using merge sort",
+            },
+        ]
+
+        with patch(
+            "litellm.llms.load_guardrail_translation_mappings",
+            return_value=mock_mappings,
+        ):
+            result = await complexity_router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"input": list_input},
+                messages=None,
+                input=list_input,
+            )
+
+        assert result is not None
+        assert result.model is not None
+        assert result.messages is None
+
+    @pytest.mark.asyncio
+    async def test_should_use_route_based_inference(self, complexity_router):
+        """Test that route-based call type inference is used when available."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+        from litellm.types.utils import CallTypes
+
+        mock_mappings = {CallTypes.responses: OpenAIResponsesHandler}
+
+        with patch(
+            "litellm.llms.load_guardrail_translation_mappings",
+            return_value=mock_mappings,
+        ):
+            result = await complexity_router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={
+                    "input": "Roll 2d4+1",
+                    "litellm_metadata": {
+                        "user_api_key_request_route": "/v1/responses",
+                    },
+                },
+                messages=None,
+            )
+
+        assert result is not None
+        assert result.model is not None
+
+    @pytest.mark.asyncio
+    async def test_should_return_none_when_no_messages_or_input(
+        self, complexity_router
+    ):
+        """Test that None is returned when neither messages nor input is available."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input=None,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_should_prefer_original_messages_over_conversion(
+        self, complexity_router
+    ):
+        """Test that original messages are used when both messages and input are available."""
+        messages = [{"role": "user", "content": "What is 2+2?"}]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"input": "This should be ignored"},
+            messages=messages,
+        )
+        assert result is not None
+        assert result.messages == messages
+
+    @pytest.mark.asyncio
+    async def test_should_include_instructions_in_classification(
+        self, complexity_router
+    ):
+        """Test that Responses API instructions influence classification via system message."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+        from litellm.types.utils import CallTypes
+
+        mock_mappings = {CallTypes.responses: OpenAIResponsesHandler}
+
+        with patch(
+            "litellm.llms.load_guardrail_translation_mappings",
+            return_value=mock_mappings,
+        ):
+            result = await complexity_router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={
+                    "input": "Write merge sort",
+                    "instructions": "You are an expert Python developer. Use advanced algorithms and optimize for performance.",
+                },
+                messages=None,
+            )
+
+        assert result is not None
+        assert result.model is not None
+
+
+class TestExtractUserMessageAndSystemPrompt:
+    """Test the _extract_user_message_and_system_prompt static method."""
+
+    def test_should_extract_user_message(self):
+        """Test extraction of the last user message."""
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "user", "content": "How are you?"},
+        ]
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
+            messages
+        )
+        assert user_msg == "How are you?"
+        assert sys_prompt == "You are helpful."
+
+    def test_should_handle_no_user_message(self):
+        """Test when there is no user message."""
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
+            messages
+        )
+        assert user_msg is None
+        assert sys_prompt == "You are helpful."
+
+    def test_should_handle_multipart_content(self):
+        """Test extraction from multipart content messages."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.png"},
+                    },
+                ],
+            }
+        ]
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
+            messages
+        )
+        assert user_msg == "Describe this image"
+        assert sys_prompt is None
+
+    def test_should_handle_empty_messages(self):
+        """Test with empty messages list."""
+        user_msg, sys_prompt = ComplexityRouter._extract_user_message_and_system_prompt(
+            []
+        )
+        assert user_msg is None
+        assert sys_prompt is None

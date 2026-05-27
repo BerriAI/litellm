@@ -16,6 +16,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _resolve_team_allowed_mcp_servers,
     _set_object_permission,
     validate_key_mcp_servers_against_team,
+    validate_key_search_tools_against_team,
 )
 
 
@@ -453,3 +454,52 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
+
+
+# ---- Tests for validate_key_search_tools_against_team ----
+
+
+def _make_team_obj_search(team_id="team-1", search_tools=None):
+    mock_team = MagicMock()
+    mock_team.team_id = team_id
+    if search_tools is not None:
+        mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+        mock_team.object_permission.search_tools = search_tools
+    else:
+        mock_team.object_permission = None
+    return mock_team
+
+
+@pytest.mark.asyncio
+async def test_validate_search_tools_no_key_request():
+    await validate_key_search_tools_against_team(
+        object_permission=None,
+        team_obj=_make_team_obj_search(search_tools=["t1"]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_search_tools_team_unrestricted():
+    """Empty team search allowlist means unrestricted — key subset check skipped."""
+    await validate_key_search_tools_against_team(
+        object_permission={"search_tools": ["any-tool"]},
+        team_obj=_make_team_obj_search(search_tools=[]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_search_tools_subset_ok():
+    await validate_key_search_tools_against_team(
+        object_permission={"search_tools": ["t1"]},
+        team_obj=_make_team_obj_search(search_tools=["t1", "t2"]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_search_tools_raises_when_not_subset():
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_search_tools_against_team(
+            object_permission={"search_tools": ["bad"]},
+            team_obj=_make_team_obj_search(search_tools=["t1"]),
+        )
+    assert exc.value.status_code == 403

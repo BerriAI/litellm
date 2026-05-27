@@ -2119,6 +2119,103 @@ async def test_streaming_unmask_path_bytes_passthrough():
     assert chunks[0] == byte_chunk
 
 
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_unknown_events_passthrough():
+    """
+    Regression test: /v1/responses-style event objects (neither bytes nor
+    ModelResponseStream) must be preserved in order and not dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    events = [
+        FakeResponsesEvent("response.created"),
+        FakeResponsesEvent("response.output_text.delta"),
+        FakeResponsesEvent("response.completed"),
+    ]
+
+    async def mock_stream():
+        for event in events:
+            yield event
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Preserve exact objects and ordering so clients receive full event lifecycle.
+    assert received == events
+    assert [e.type for e in received] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
+    """
+    Regression test for mixed stream shape:
+    a buffered ModelResponseStream chunk followed by unknown responses-style
+    events should be preserved, and masking skip should be visible via warnings.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    model_chunk = ModelResponseStream(
+        id="chatcmpl-mixed-1",
+        choices=[],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+    )
+    response_completed = FakeResponsesEvent("response.completed")
+
+    async def mock_stream():
+        yield model_chunk
+        yield response_completed
+
+    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    received = []
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
+    ) as mock_logger:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            received.append(chunk)
+
+        # Preserve original ordering across mixed stream types.
+        assert received == [model_chunk, response_completed]
+
+        # Two warnings are expected:
+        # 1) mixed stream detected + unmasked flush
+        # 2) passthrough mode skipped output masking
+        assert mock_logger.warning.call_count == 2
+        warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
+        assert any("mixed stream detected" in msg for msg in warning_messages)
+        assert any("unknown event objects" in msg for msg in warning_messages)
+
+
 # ---------------------------------------------------------------------------
 # Fix 4: apply_guardrail unmask path for input_type="response"
 # ---------------------------------------------------------------------------

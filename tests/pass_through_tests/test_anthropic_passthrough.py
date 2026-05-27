@@ -333,7 +333,7 @@ async def test_anthropic_messages_streaming_cost_injection():
     }
 
     payload = {
-        "model": "claude-4-sonnet-20250514",
+        "model": "claude-haiku-4-5-20251001",
         "max_tokens": 10,
         "stream": True,
         "messages": [{"role": "user", "content": "Say 'Hi'"}],
