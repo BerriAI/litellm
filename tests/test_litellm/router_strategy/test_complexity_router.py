@@ -1095,16 +1095,27 @@ class TestCustomTechnicalKeywords:
         ) + len(unique_new)
 
     def test_overlap_dedupes(self, mock_router_instance):
+        """Repeated entries or overlap with defaults are de-duplicated."""
         from litellm.router_strategy.complexity_router.config import (
             DEFAULT_TECHNICAL_KEYWORDS,
         )
+        custom = ["http", "kafka", "kafka", "redis"]
         router = self._make_router(
             mock_router_instance,
-            custom_technical_keywords=["http", "kafka", "kafka", "redis"],
+            custom_technical_keywords=custom,
         )
+        # Compute expected unique additions explicitly so the assertion stays
+        # correct even if DEFAULT_TECHNICAL_KEYWORDS later gains one of these
+        # terms. Mirrors the dedup logic in ComplexityRouter.__init__.
+        seen = set(DEFAULT_TECHNICAL_KEYWORDS)
+        unique_new = []
+        for kw in custom:
+            if kw not in seen:
+                seen.add(kw)
+                unique_new.append(kw)
         assert (
             len(router.technical_keywords)
-            == len(DEFAULT_TECHNICAL_KEYWORDS) + 2
+            == len(DEFAULT_TECHNICAL_KEYWORDS) + len(unique_new)
         )
         assert router.technical_keywords.count("kafka") == 1
         assert router.technical_keywords.count("redis") == 1
