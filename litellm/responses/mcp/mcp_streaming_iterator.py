@@ -218,6 +218,7 @@ def create_mcp_call_events(
         output_item_done_event = OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=0,
+            sequence_number=sequence_start + 4,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": item_id,
