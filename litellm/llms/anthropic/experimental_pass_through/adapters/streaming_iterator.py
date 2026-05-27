@@ -614,9 +614,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     )
                     self.holding_stop_reason_chunk = None
 
-                if self.holding_chunk is not None:
-                    self.chunk_queue.append(self.holding_chunk)
-                    self.holding_chunk = None
+            # Always flush any buffered content delta, even when usage has
+            # already been merged + emitted: dropping it would silently lose
+            # provider-emitted content, which is worse than the SSE ordering
+            # nit of trailing a content chunk after the final message_delta
+            # (the prior async ``__anext__`` behavior).
+            if self.holding_chunk is not None:
+                self.chunk_queue.append(self.holding_chunk)
+                self.holding_chunk = None
 
             if not self.sent_last_message:
                 self.sent_last_message = True
