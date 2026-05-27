@@ -916,6 +916,48 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
+    @staticmethod
+    def _make_hashable(value: object) -> object:
+        """Recursively coerce ``value`` to a hashable form for use in dedupe keys.
+
+        ``_emit_once`` builds a tuple from arbitrary caller-supplied ``scope``
+        parts and uses it as a ``dict`` key. Some of those parts come from
+        free-form payloads (e.g. ``guardrail_mode``) and can legitimately be
+        a list (``["pre_call", "post_call"]``), a dict, or a set — all of
+        which are unhashable in Python and would otherwise raise
+        ``TypeError: unhashable type`` and turn every request into HTTP 500.
+
+        The coercion is conservative:
+          * ``list`` / ``tuple`` -> tuple of recursively-hashable elements
+          * ``set`` / ``frozenset`` -> ``frozenset`` of recursively-hashable elements
+          * ``dict`` -> ``frozenset`` of ``(key, value)`` pairs, both made hashable
+          * everything else: returned as-is if already hashable; falls back to
+            ``repr(value)`` if even that fails (so we never propagate the crash).
+        """
+        try:
+            hash(value)
+            if isinstance(value, tuple):
+                return tuple(OpenTelemetry._make_hashable(v) for v in value)
+            if isinstance(value, frozenset):
+                return frozenset(OpenTelemetry._make_hashable(v) for v in value)
+            return value
+        except TypeError:
+            pass
+
+        if isinstance(value, list):
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, set):
+            return frozenset(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, dict):
+            return frozenset(
+                (OpenTelemetry._make_hashable(k), OpenTelemetry._make_hashable(v))
+                for k, v in value.items()
+            )
+        try:
+            return repr(value)
+        except Exception:
+            return f"<unhashable:{type(value).__name__}>"
+
     def _emit_once(self, kwargs: dict, *scope: object) -> bool:
         """Return True the first time this handler is asked to emit a span
         for the given (handler, scope) on this kwargs; False on repeats.
@@ -958,7 +1000,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        # Recursively normalize each scope element to a hashable form so
+        # callers can safely pass list/dict/set-valued attributes (e.g. a
+        # list-valued ``guardrail_mode`` like ``["pre_call", "post_call"]``)
+        # without crashing this dedupe path with TypeError: unhashable type.
+        # See LIT-3299 / GH #28486.
+        dedupe_key = (
+            self.__class__.__name__,
+            id(self),
+            *(self._make_hashable(part) for part in scope),
+        )
         if spans_logged.get(dedupe_key) is True:
             return False
 
