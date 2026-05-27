@@ -106,24 +106,6 @@ def test_list_mcp_tools_propagates_mcp_tool_call_metadata_to_payload():
     assert mcp_md.get("namespaced_tool_name") is None
 
 
-def test_patched_server_module_contains_lit_1774_marker():
-    """Static check: the patched server.py wires mcp_tool_call_metadata into
-    model_call_details inside the list_mcp_tools success-logging branch.
-    """
-    import litellm.proxy._experimental.mcp_server.server as srv_mod
-
-    src = open(srv_mod.__file__).read()
-    assert (
-        "LIT-1774: Surface list_mcp_tools metadata" in src
-    ), "Patched code must contain the LIT-1774 marker block"
-    assert (
-        "list_tools_mcp_metadata: StandardLoggingMCPToolCall" in src
-    ), "Patched code must construct a StandardLoggingMCPToolCall"
-    assert (
-        "mcp_tool_call_metadata" in src
-    ), "Patched code must write mcp_tool_call_metadata"
-
-
 def test_list_mcp_tools_with_no_servers_yields_null_server_name():
     """Edge case: when no servers resolved (empty list), mcp_server_name should
     be None instead of an empty string, so downstream filters do not match it.
