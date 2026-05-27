@@ -360,7 +360,10 @@ class DBSpendUpdateWriter:
             pass
         env_val = os.environ.get("LITELLM_DISABLE_DAILY_SPEND_AGGREGATION")
         if env_val is not None and env_val.strip().lower() in {
-            "1", "true", "yes", "on",
+            "1",
+            "true",
+            "yes",
+            "on",
         }:
             return True
         return False
