@@ -141,18 +141,45 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
+# Proxy-set metadata fields (populated by the proxy, not the client request body) that
+# must survive the merge from `metadata` -> `litellm_metadata` when both containers exist.
+# Keep in sync with `LitellmMetadataFromRequestHeaders` and `add_litellm_metadata_from_request_headers`.
+_PROXY_SET_METADATA_KEYS_TO_PRESERVE: tuple = (
+    "spend_logs_metadata",
+    "agent_id",
+    "trace_id",
+    "session_id",
+    "requester_ip_address",
+)
+
+
 def add_missing_spend_metadata_to_litellm_metadata(
     litellm_metadata: dict, metadata: dict
 ) -> dict:
     """
-    Helper to get litellm metadata for spend tracking
+    Helper to get litellm metadata for spend tracking.
 
-    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    PATCH for the case where both `litellm_metadata` and `metadata` are present in the
+    request kwargs. The proxy populates spend-tracking and header-derived fields onto
+    `metadata`; if `litellm_metadata` also exists (e.g. when a request body carries
+    Anthropic-style provider `metadata`), those fields would otherwise be dropped when
+    downstream code reads `litellm_metadata` only.
+
+    Preserves:
+    - any key on `metadata` that contains the substring `user_api_key` (proxy auth fields)
+    - well-known proxy-set keys from request headers / proxy auth
+      (`spend_logs_metadata`, `agent_id`, `trace_id`, `session_id`, `requester_ip_address`)
+
+    Existing `litellm_metadata` values are overwritten so the proxy-set view wins, matching
+    the prior `user_api_key*` behavior. Client-supplied keys on `litellm_metadata` that
+    are not in either preserve set are left untouched.
     """
     potential_spend_tracking_metadata_substring = "user_api_key"
     for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
+        if (
+            potential_spend_tracking_metadata_substring in key
+            or key in _PROXY_SET_METADATA_KEYS_TO_PRESERVE
+        ):
             litellm_metadata[key] = value
     return litellm_metadata
 
