@@ -928,7 +928,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         unhashable type: 'list'`` (returning HTTP 500).
 
         Conversions:
-          - ``list``                -> ``tuple``     (preserves order)
+          - ``list``                -> ``tuple``     (preserves order, recursive)
+          - ``tuple``               -> ``tuple``     (recursive, in case any
+                                                      element is itself
+                                                      unhashable e.g. a list)
           - ``set`` / ``frozenset`` -> ``frozenset`` (order-independent)
           - ``dict``                -> ``tuple`` of ``(key, value)`` pairs
                                       sorted by ``repr(key)`` so equivalent
@@ -937,7 +940,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                       normalize without crashing.
           - everything else         -> returned unchanged (already-hashable
                                       scalars: ``None``, ``str``, ``int``,
-                                      ``float``, ``bool``, ``tuple``, ...).
+                                      ``float``, ``bool``, ...).
 
         The conversion is structural and equality-preserving for the common
         case (``list`` and its equivalent ``tuple`` collapse to the same
@@ -945,15 +948,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         if isinstance(value, list):
             return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, tuple):
+            # Tuples are already hashable iff every element is hashable; a
+            # tuple containing e.g. a list would still fail. Normalize each
+            # element so a tuple-of-lists is also safe.
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
         if isinstance(value, (set, frozenset)):
             return frozenset(OpenTelemetry._make_hashable(v) for v in value)
         if isinstance(value, dict):
             return tuple(
                 sorted(
-                    (
-                        (k, OpenTelemetry._make_hashable(v))
-                        for k, v in value.items()
-                    ),
+                    ((k, OpenTelemetry._make_hashable(v)) for k, v in value.items()),
                     key=lambda kv: repr(kv[0]),
                 )
             )
