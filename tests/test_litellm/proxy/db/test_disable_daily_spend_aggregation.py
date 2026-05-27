@@ -168,21 +168,24 @@ def test_should_skip_helper_default_is_false(monkeypatch):
     "flag_value,expected_skip",
     [
         (True, True),
-        (1, True),          # YAML int 1
-        ("yes", True),      # truthy non-bool python value
+        (1, True),  # YAML int 1
+        ("yes", True),  # truthy non-bool python value
         (False, False),
         (0, False),
         ("", False),
         (None, False),
     ],
 )
-def test_should_skip_helper_accepts_truthy_non_bool(monkeypatch, flag_value, expected_skip):
+def test_should_skip_helper_accepts_truthy_non_bool(
+    monkeypatch, flag_value, expected_skip
+):
     """Truthy non-bool values (YAML int 1, string '1') still trip the guard."""
     monkeypatch.delenv("LITELLM_DISABLE_DAILY_SPEND_AGGREGATION", raising=False)
     import litellm.proxy.proxy_server as ps
 
-    monkeypatch.setattr(ps, "disable_daily_spend_aggregation", flag_value, raising=False)
+    monkeypatch.setattr(
+        ps, "disable_daily_spend_aggregation", flag_value, raising=False
+    )
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
     assert DBSpendUpdateWriter()._should_skip_daily_aggregation() is expected_skip
-
