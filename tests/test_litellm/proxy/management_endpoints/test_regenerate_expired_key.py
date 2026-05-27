@@ -195,3 +195,91 @@ async def test_lit2569_regenerate_non_expiring_key_unchanged():
     assert "expires" not in written, (
         "non-expiring key was given an expires by the LIT-2569 branch"
     )
+
+
+@pytest.mark.asyncio
+async def test_lit2569_regenerate_expired_key_with_string_expires_parses_iso():
+    """Covers the defensive `isinstance(_existing_expires, str)` branch:
+    if Prisma surfaces ``expires`` as an ISO-8601 string instead of a
+    datetime, the auto-extend logic must still fire."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+
+    now = datetime.now(timezone.utc)
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+        created_at=now - timedelta(days=31),
+        # ISO-8601 string with trailing Z, the shape datetime.fromisoformat()
+        # used to choke on prior to py3.11. The branch normalizes "Z" to "+00:00".
+        expires=(now - timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+    )
+
+    written = await _run_regenerate(existing_key, RegenerateKeyRequest())
+    new_expires = written.get("expires")
+    assert new_expires is not None, (
+        "expected auto-extend to fire when expires is provided as an ISO string"
+    )
+    assert new_expires > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_lit2569_regenerate_expired_key_tz_naive_expires_treated_as_utc():
+    """Defensive branch: if either ``expires`` or ``created_at`` is
+    timezone-naive (legacy rows / SQLite-backed installs), the helper
+    must coerce to UTC so the ``< now`` comparison is well-defined."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+
+    now = datetime.now(timezone.utc)
+    # Construct expires/created_at without tzinfo
+    expires_naive = (now - timedelta(days=1)).replace(tzinfo=None)
+    created_naive = (now - timedelta(days=31)).replace(tzinfo=None)
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+        created_at=created_naive,
+        expires=expires_naive,
+    )
+
+    written = await _run_regenerate(existing_key, RegenerateKeyRequest())
+    new_expires = written.get("expires")
+    assert new_expires is not None
+    assert new_expires > datetime.now(timezone.utc)
+    delta = new_expires - datetime.now(timezone.utc)
+    assert timedelta(days=29) < delta < timedelta(days=31)
+
+
+@pytest.mark.asyncio
+async def test_lit2569_regenerate_expired_key_missing_created_at_falls_back_to_30d():
+    """Defensive branch: if ``created_at`` is missing on the row (very
+    old keys that pre-date that column), the helper falls back to a
+    30-day lifetime so the regenerated key is still usable."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+
+    now = datetime.now(timezone.utc)
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+        created_at=None,
+        expires=now - timedelta(days=1),
+    )
+
+    written = await _run_regenerate(existing_key, RegenerateKeyRequest())
+    new_expires = written.get("expires")
+    assert new_expires is not None
+    delta = new_expires - datetime.now(timezone.utc)
+    # 30-day fallback (within tolerance)
+    assert timedelta(days=29) < delta < timedelta(days=31), (
+        f"Expected 30d fallback, got {delta}"
+    )
