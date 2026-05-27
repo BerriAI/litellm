@@ -448,6 +448,100 @@ async def test_reload_servers_excludes_templates_from_query(monkeypatch):
     assert manager.registry == {}
 
 
+# ── extra branch coverage: parsing / serialization helpers ──────────────────
+
+
+def test_parse_admin_variables_accepts_pydantic_models():
+    from litellm.proxy._types import MCPVariable
+
+    g, u = _u("parse_admin_variables")(
+        [
+            MCPVariable(name="G", value="v", scope="global"),
+            MCPVariable(name="U", scope="user", description="d"),
+        ]
+    )
+    assert g == {"G": "v"}
+    assert u == [{"name": "U", "description": "d"}]
+
+
+def test_parse_admin_variables_skips_non_dict_non_model_entries():
+    g, u = _u("parse_admin_variables")(["a string", 123, ("tuple",)])
+    assert g == {}
+    assert u == []
+
+
+def test_interpolate_variables_empty_value_is_returned_as_is():
+    assert _u("interpolate_variables")("", {"A": "x"}) == ""
+
+
+def test_deserialize_json_list_variants():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _deserialize_json_list,
+    )
+
+    assert _deserialize_json_list(None) is None
+    assert _deserialize_json_list("") is None
+    assert _deserialize_json_list([]) is None
+    assert _deserialize_json_list('[{"name": "A"}]') == [{"name": "A"}]
+    assert _deserialize_json_list("not-json") is None
+    assert _deserialize_json_list('{"not": "a list"}') is None
+    assert _deserialize_json_list([{"name": "B"}]) == [{"name": "B"}]
+    assert _deserialize_json_list(123) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_static_headers_global_vars_without_static_headers():
+    """Variables present but no static_headers → returns the empty headers as-is."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="s",
+        name="s",
+        transport="http",
+        url="https://example.com",
+        static_headers=None,
+        variables=[{"name": "G", "value": "v", "scope": "global"}],
+    )
+    result = await manager._resolve_static_headers_with_variables(
+        server, user_api_key_auth=None
+    )
+    assert not result
+
+
+def test_prepare_mcp_server_data_serializes_variables():
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+    from litellm.proxy._types import MCPVariable, NewMCPServerRequest
+
+    req = NewMCPServerRequest(
+        transport="http",
+        url="https://example.com",
+        variables=[MCPVariable(name="G", value="v", scope="global")],
+    )
+    data = _prepare_mcp_server_data(req)
+    assert isinstance(data["variables"], str)
+    assert "G" in data["variables"]
+
+
+def test_decode_user_variables_handles_bad_blobs(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import db as _db
+
+    # decrypt returns None -> {}
+    monkeypatch.setattr(_db, "decrypt_value_helper", lambda **k: None)
+    assert _db._decode_user_variables("x") == {}
+
+    # decrypt returns non-JSON -> {}
+    monkeypatch.setattr(_db, "decrypt_value_helper", lambda **k: "not-json{")
+    assert _db._decode_user_variables("x") == {}
+
+    # decrypt returns valid JSON that is not a dict -> {}
+    monkeypatch.setattr(_db, "decrypt_value_helper", lambda **k: "[1, 2, 3]")
+    assert _db._decode_user_variables("x") == {}
+
+
 # ── DB helpers: per-user variables ─────────────────────────────────────────
 
 _SALT_KEY = "test-salt-key-for-variables-tests-1234"
