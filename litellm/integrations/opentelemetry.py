@@ -944,9 +944,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         except TypeError:
             pass
 
-        if isinstance(value, list):
+        if isinstance(value, (list, tuple)):
             return tuple(OpenTelemetry._make_hashable(v) for v in value)
-        if isinstance(value, set):
+        if isinstance(value, (set, frozenset)):
             return frozenset(OpenTelemetry._make_hashable(v) for v in value)
         if isinstance(value, dict):
             return frozenset(
