@@ -1458,7 +1458,9 @@ LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
 # Duration for the EXPERIMENTAL_UI_LOGIN flow. Same format as LITELLM_UI_SESSION_DURATION ("10m", "1h", "2h", etc.).
 # Defaults to 10 minutes to preserve the historical short-lived security default; operators can extend session
 # length without touching the standard UI login flow. Malformed or non-positive values fall back to 10 minutes.
-EXPERIMENTAL_UI_LOGIN_SESSION_DURATION = os.getenv("EXPERIMENTAL_UI_LOGIN_SESSION_DURATION", "10m")
+EXPERIMENTAL_UI_LOGIN_SESSION_DURATION = os.getenv(
+    "EXPERIMENTAL_UI_LOGIN_SESSION_DURATION", "10m"
+)
 EXPERIMENTAL_UI_LOGIN_SESSION_DURATION_FALLBACK_SECONDS = 600  # 10 minutes
 
 ########################### DB CRON JOB NAMES ###########################
