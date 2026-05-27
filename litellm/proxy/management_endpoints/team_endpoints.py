@@ -1093,7 +1093,15 @@ async def new_team(  # noqa: PLR0915
                     isinstance(general_settings, dict)
                     and general_settings.get("allow_user_team_creation", False)
                 )
-                if _self_serve_enabled:
+                # Only apply inheritance to callers who entered this code path
+                # via the self-service route gate (route_checks scopes that to
+                # INTERNAL_USER + /team/new). Org admins can already create
+                # standalone teams via `org_admin_allowed_routes`; we must not
+                # silently change their behavior when the flag is enabled.
+                if (
+                    _self_serve_enabled
+                    and user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+                ):
                     _maybe_inherit_caller_limits_for_self_served_team(
                         data=data, user_api_key_dict=user_api_key_dict
                     )
