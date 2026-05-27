@@ -19,7 +19,7 @@ import type {
  * user thinks of as one day. We avoid that by collapsing every row into a
  * single bar with this label.
  */
-export const SINGLE_DAY_TIME_LABEL = "Today";
+export const SINGLE_DAY_TIME_LABEL = "12 AM";
 
 const ZERO_METRICS: SpendMetrics = {
   spend: 0,
