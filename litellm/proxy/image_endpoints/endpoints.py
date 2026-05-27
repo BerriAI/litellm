@@ -27,7 +27,6 @@ import io
 from fastapi import UploadFile
 
 
-MAX_IMAGE_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
 _CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 
@@ -38,23 +37,14 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
     The UploadFile is closed after reading to release the underlying
     SpooledTemporaryFile resources and prevent memory accumulation.
-
-    Raises HTTP 413 if the file exceeds MAX_IMAGE_UPLOAD_SIZE_BYTES to prevent
-    OOM under high concurrency with large image payloads.
+    Chunked reading avoids large peak allocations under high concurrency.
     """
     try:
         buffer = io.BytesIO()
-        total_bytes = 0
         while True:
             chunk = await upload.read(_CHUNK_SIZE)
             if not chunk:
                 break
-            total_bytes += len(chunk)
-            if total_bytes > MAX_IMAGE_UPLOAD_SIZE_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"Image file exceeds maximum allowed size of {MAX_IMAGE_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB",
-                )
             buffer.write(chunk)
         buffer.seek(0)
         buffer.name = upload.filename
