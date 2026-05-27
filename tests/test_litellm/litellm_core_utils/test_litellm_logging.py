@@ -812,6 +812,55 @@ def test_get_combined_callback_list_keeps_distinct_callbacks(logging_obj):
     assert callbacks == ["datadog", "prometheus", "langfuse_otel"]
 
 
+def test_get_combined_callback_list_keeps_distinct_custom_logger_instances(logging_obj):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DataDogLogger(CustomLogger):
+        pass
+
+    first = DataDogLogger()
+    second = DataDogLogger()
+
+    callbacks = logging_obj.get_combined_callback_list(
+        dynamic_success_callbacks=[first, second],
+        global_callbacks=[],
+    )
+
+    assert callbacks == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_skips_duplicate_final_stream_dispatch(
+    logging_obj,
+):
+    logging_obj.stream = True
+    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+    result = ModelResponse()
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_success_handlers(result=result)
+        await logging_obj.dispatch_success_handlers(result=result)
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+    mock_submit.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_skips_duplicate_final_stream_emission(logging_obj):
     logging_obj.model_call_details["async_complete_streaming_response"] = (

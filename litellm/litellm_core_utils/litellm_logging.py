@@ -1631,6 +1631,14 @@ class Logging(LiteLLMLoggingBaseClass):
             or self.model_call_details.get("complete_streaming_response") is not None
         )
 
+    def _is_streaming_final_success_dispatch_context(self, result=None) -> bool:
+        if self.stream is not True:
+            return False
+        if self._is_final_streaming_success_emission():
+            return True
+        # Assembled response passed to dispatch before model_call_details is updated.
+        return result is not None
+
     def _should_skip_duplicate_final_stream_success_log(self) -> bool:
         """Skip repeat final-stream exports (per-chunk logging disables has_logged_*)."""
         if not self._is_final_streaming_success_emission():
@@ -1640,19 +1648,35 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["has_logged_async_success_final"] = True
         return False
 
+    def _should_skip_duplicate_final_stream_dispatch(self, result=None) -> bool:
+        """Skip a second ``dispatch_success_handlers`` for the same final stream."""
+        if not self._is_streaming_final_success_dispatch_context(result):
+            return False
+        if (
+            self.model_call_details.get("has_dispatched_final_stream_success_handlers")
+            is True
+        ):
+            return True
+        self.model_call_details["has_dispatched_final_stream_success_handlers"] = True
+        return False
+
     async def dispatch_success_handlers(
         self,
         result=None,
         start_time=None,
         end_time=None,
         cache_hit=None,
+        prefer_async_handlers: bool = False,
         **kwargs,
     ) -> None:
         """Route success logging to async and/or sync handlers for this request."""
         from litellm.litellm_core_utils.thread_pool_executor import executor
 
+        if self._should_skip_duplicate_final_stream_dispatch(result):
+            return
+
         litellm_params = self.model_call_details.get("litellm_params", {}) or {}
-        if self._is_sync_litellm_request(litellm_params):
+        if self._is_sync_litellm_request(litellm_params) and not prefer_async_handlers:
             self.success_handler(
                 result,
                 start_time=start_time,
@@ -1669,6 +1693,9 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             **kwargs,
         )
+
+        if prefer_async_handlers:
+            return
 
         if self._should_run_sync_callbacks_for_async_calls():
             executor.submit(
@@ -3372,11 +3399,39 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> List:
         """Merge dynamic and global callbacks; dedupe duplicate list entries only."""
         combined_callbacks = (dynamic_success_callbacks or []) + list(global_callbacks)
+
+        string_integration_slugs: set[str] = set()
+        for callback in combined_callbacks:
+            if isinstance(callback, str):
+                slug = self._integration_slug_from_callback(callback)
+                if slug is not None:
+                    string_integration_slugs.add(slug)
+
         deduped_callbacks: List[Any] = []
-        seen_callback_keys = set()
+        seen_callback_keys: set[Any] = set()
+        object_claimed_integration_slugs: set[str] = set()
 
         for callback in combined_callbacks:
-            callback_key = self._get_callback_dedupe_key(callback)
+            integration_slug = self._integration_slug_from_callback(callback)
+
+            if isinstance(callback, str) and integration_slug is not None:
+                callback_key = ("integration", integration_slug)
+            elif isinstance(callback, CustomLogger) and integration_slug is not None:
+                if (
+                    integration_slug in string_integration_slugs
+                    and integration_slug not in object_claimed_integration_slugs
+                ):
+                    object_claimed_integration_slugs.add(integration_slug)
+                    callback_key = ("integration", integration_slug)
+                else:
+                    callback_key = ("instance", id(callback))
+            elif isinstance(callback, str):
+                callback_key = ("string", callback.lower())
+            elif callable(callback):
+                callback_key = ("callable", self._get_callback_name(callback))
+            else:
+                callback_key = ("object", str(callback))
+
             if callback_key in seen_callback_keys:
                 continue
             seen_callback_keys.add(callback_key)
@@ -3395,25 +3450,26 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return normalized
 
-    def _get_callback_dedupe_key(self, callback: Any):
-        """
-        Stable key for duplicate entries in a merged callback *list* only.
-        """
+    def _integration_slug_from_callback(self, callback: Any) -> Optional[str]:
+        raw_name: Optional[str] = None
         if isinstance(callback, str):
-            callback_name = callback.lower()
-            if callback_name in litellm._known_custom_logger_compatible_callbacks:
-                return ("integration", self._normalize_callback_slug(callback_name))
-            return ("string", callback_name)
+            raw_name = callback.lower()
+        elif isinstance(callback, CustomLogger):
+            raw_name = (
+                getattr(callback, "callback_name", None) or callback.__class__.__name__
+            ).lower()
 
-        if isinstance(callback, CustomLogger):
-            callback_name = getattr(callback, "callback_name", None)
-            identity_source = callback_name or callback.__class__.__name__
-            return ("integration", self._normalize_callback_slug(identity_source))
+        if raw_name is None:
+            return None
 
-        if callable(callback):
-            return ("callable", self._get_callback_name(callback))
+        if raw_name in litellm._known_custom_logger_compatible_callbacks:
+            return self._normalize_callback_slug(raw_name)
 
-        return ("object", str(callback))
+        normalized = self._normalize_callback_slug(raw_name)
+        for known_callback in litellm._known_custom_logger_compatible_callbacks:
+            if self._normalize_callback_slug(known_callback) == normalized:
+                return normalized
+        return None
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """

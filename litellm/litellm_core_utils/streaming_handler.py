@@ -2214,6 +2214,7 @@ class CustomStreamWrapper:
                             cache_hit=cache_hit,
                             start_time=None,
                             end_time=None,
+                            prefer_async_handlers=True,
                         )
                     )
 

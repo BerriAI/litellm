@@ -1723,21 +1723,7 @@ class ProxyBaseLLMRequestProcessing:
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error in deferred streaming async logging: %s",
-                    e,
-                )
-
-            try:
-                executor.submit(
-                    captured_logging_obj.success_handler,
-                    _response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Error in deferred streaming sync logging: %s",
+                    "Error in deferred streaming success logging: %s",
                     e,
                 )
 
