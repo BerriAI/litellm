@@ -1218,7 +1218,7 @@ def _build_synthetic_response_events(
     # event types now declare `sequence_number: int = 0` (default), which
     # would otherwise serialize as 0 for most events and break the strict
     # monotonic ordering guarantee expected by some Responses API clients.
-    for idx, event in enumerate(events):
+    for idx, event in enumerate(events, start=1):
         try:
             event.sequence_number = idx
         except (AttributeError, ValueError):
