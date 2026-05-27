@@ -50,62 +50,13 @@ make help
 
 That's it! Your local development environment is ready.
 
-### Optional: Install commit + branch hooks
-
-LiteLLM ships opt-in git hooks that enforce two community specs:
-
-* [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) on commit subjects
-* [Conventional Branches](https://conventional-branch.github.io/) on branch names you push
-
-Install them once per clone:
+To install the optional Conventional Commits + Conventional Branches git hooks, run:
 
 ```bash
 make install-hooks
 ```
 
-This sets `core.hooksPath` to `.githooks/` in this repo only — your global git config is not touched.
-
-**Commit subject format**
-
-```
-<type>[optional scope][!]: <description>
-```
-
-Where `<type>` is one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Examples:
-
-```
-feat(router): add cooldown for upstream 5xx
-fix(bedrock): handle empty toolUse blocks
-docs: clarify proxy install
-chore!: drop python 3.8 support
-```
-
-**Branch name format**
-
-```
-<type>/<description>
-```
-
-Where `<type>` is one of: `feature`, `bugfix`, `hotfix`, `release`, `chore`. Examples:
-
-```
-feature/router-cooldown
-bugfix/bedrock-empty-tooluse
-chore/bump-deps
-```
-
-The following branch names are always allowed and bypass the check: `main`, `litellm_internal_staging`, `dependabot/*`, and `gh-readonly-queue/*`.
-
-**Escape hatch.** If you need to bypass the hooks for a single commit or push, pass `--no-verify`:
-
-```bash
-git commit --no-verify -m "..."
-git push --no-verify
-```
-
-Even if you skip the local hooks, the **Conventional Commits** GitHub Actions check still validates the PR title — squash-merge uses the PR title as the commit message.
-
-
+Bypass for a single commit/push: `git commit --no-verify` / `git push --no-verify`.
 
 ### 2. Development Workflow
 
