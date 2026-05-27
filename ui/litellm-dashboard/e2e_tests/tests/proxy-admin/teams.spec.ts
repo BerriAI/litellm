@@ -139,10 +139,11 @@ test.describe("Proxy Admin - Teams", () => {
     const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
     const seededModels = ["fake-openai-gpt-4", "fake-anthropic-claude"];
     const restore = async () => {
-      await request.post("http://localhost:4000/team/update", {
+      const res = await request.post("http://localhost:4000/team/update", {
         headers: { Authorization: `Bearer ${masterKey}` },
         data: { team_id: E2E_TEAM_CRUD_ID, models: seededModels },
       });
+      expect(res.ok(), `restore failed: ${res.status()} ${await res.text()}`).toBeTruthy();
     };
     await restore();
 
