@@ -481,77 +481,93 @@ class DBSpendUpdateWriter:
             )
 
         if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_user_transaction(
-                    payload=payload_copy,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+            await self._dispatch_daily_aggregation_writes(
+                payload_copy=payload_copy,
+                org_id=org_id,
+            )
 
-        if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_end_user_transaction(
-                    payload=payload_copy,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+    async def _dispatch_daily_aggregation_writes(
+        self,
+        *,
+        payload_copy: SpendLogsPayload,
+        org_id: Optional[str],
+    ) -> None:
+        """Run the six per-day aggregation writers.
 
-        if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_agent_transaction(
-                    payload=payload_copy,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+        Extracted from ``_batch_database_updates`` so the parent method stays
+        under the ruff PLR0915 statement budget after the
+        ``disable_daily_spend_aggregation`` short-circuit was added (LIT-3332).
+        Each writer remains wrapped in its own ``try``/``except`` so a single
+        failure does not block the others.
+        """
+        from litellm.proxy.proxy_server import prisma_client
 
-        if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_team_transaction(
-                    payload=payload_copy,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+        try:
+            await self.add_spend_log_transaction_to_daily_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
 
-        if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_org_transaction(
-                    payload=payload_copy,
-                    org_id=org_id,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+        try:
+            await self.add_spend_log_transaction_to_daily_end_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
 
-        if not skip_daily_aggregation:
-            try:
-                await self.add_spend_log_transaction_to_daily_tag_transaction(
-                    payload=payload_copy,
-                    prisma_client=prisma_client,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
-                    traceback.format_exc(),
-                )
+        try:
+            await self.add_spend_log_transaction_to_daily_agent_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_team_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_org_transaction(
+                payload=payload_copy,
+                org_id=org_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
+                traceback.format_exc(),
+            )
 
     async def _update_key_db(
         self,
