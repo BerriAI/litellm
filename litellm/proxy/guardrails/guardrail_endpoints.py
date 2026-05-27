@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from litellm.proxy.common_utils.path_utils import safe_join
@@ -2190,6 +2190,7 @@ async def test_custom_code_guardrail(
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
+    fastapi_request: Request,
     request: ApplyGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -2198,7 +2199,27 @@ async def apply_guardrail(
 
     This endpoint allows testing guardrails by applying them to custom text inputs.
     """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.litellm_core_utils.thread_pool_executor import (
+        executor as thread_pool_executor,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
     from litellm.proxy.utils import handle_exception_on_proxy
+    import traceback
+
+    data: dict = {
+        "guardrail_name": request.guardrail_name,
+        "input": [request.text],
+        "messages": request.messages or [],
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    litellm_logging_obj = None
+    start_time = datetime.now(timezone.utc)
 
     try:
         active_guardrail: Optional[CustomGuardrail] = (
@@ -2211,6 +2232,29 @@ async def apply_guardrail(
                 status_code=404,
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
+
+        request_processor = ProxyBaseLLMRequestProcessing(data=data)
+        data, litellm_logging_obj = (
+            await request_processor.common_processing_pre_call_logic(
+                request=fastapi_request,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_logging_obj=proxy_logging_obj,
+                proxy_config=proxy_config,
+                route_type="apply_guardrail",
+            )
+        )
+
+        # Langfuse reads input/output for pass_through_endpoint call_type only.
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.call_type = "pass_through_endpoint"
+            litellm_logging_obj.model_call_details["call_type"] = (
+                "pass_through_endpoint"
+            )
+            litellm_logging_obj.model_call_details["messages"] = [
+                {"role": "user", "content": request.text}
+            ]
 
         request_data: dict = {}
         if request.messages:
@@ -2237,10 +2281,51 @@ async def apply_guardrail(
         )
         response_text = guardrailed_inputs.get("texts", [])
 
-        return ApplyGuardrailResponse(
+        response = ApplyGuardrailResponse(
             response_text=response_text[0] if response_text else request.text
         )
+        response_for_logging = {
+            "response": response.model_dump(exclude_none=True),
+        }
+
+        await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        end_time = datetime.now(timezone.utc)
+        if litellm_logging_obj is not None:
+            await litellm_logging_obj.async_success_handler(
+                result=response_for_logging,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+            thread_pool_executor.submit(
+                litellm_logging_obj.success_handler,
+                response_for_logging,
+                start_time,
+                end_time,
+                False,
+            )
+
+        return response
     except Exception as e:
+        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+            await litellm_logging_obj.async_failure_handler(
+                exception=e,
+                traceback_exception=traceback.format_exc(),
+            )
+            thread_pool_executor.submit(
+                litellm_logging_obj.failure_handler,
+                e,
+                traceback.format_exc(),
+            )
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         raise handle_exception_on_proxy(e)
 
 
