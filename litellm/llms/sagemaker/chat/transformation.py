@@ -134,7 +134,14 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             model_id = optional_params.pop("model_id", None)
         else:
             optional_params.pop("model_id", None)
-        if model_id is not None:
+        # Mirror the same strip-and-truthiness guard `validate_environment`
+        # applies: SageMaker rejects empty / whitespace-only
+        # InferenceComponent names, so a value like " " should be treated
+        # the same as None regardless of which call shape supplied it
+        # (`extra_body` vs `optional_params`).
+        if isinstance(model_id, str):
+            model_id = model_id.strip()
+        if model_id:
             headers["X-Amzn-SageMaker-Inference-Component"] = model_id
         return self._sign_request(
             service_name="sagemaker",
