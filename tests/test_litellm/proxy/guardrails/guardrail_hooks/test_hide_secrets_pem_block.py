@@ -5,7 +5,7 @@ line that ``detect-secrets`` exposes as the matched secret value.
 import os
 import sys
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 ENT = os.path.join(ROOT, "enterprise")
 if ENT not in sys.path:
     sys.path.insert(0, ENT)
