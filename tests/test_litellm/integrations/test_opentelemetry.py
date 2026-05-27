@@ -5211,10 +5211,16 @@ class TestRecordExceptionOnSpanNormalizationMatrix(unittest.TestCase):
         assert span.attributes["error.message"] == "bad key"
         assert span.attributes["error.code"] == "401"
         assert span.attributes["error.llm_provider"] == "openai"
-        assert span.attributes["error.stack_trace"] == "Traceback (most recent call last)..."
+        assert (
+            span.attributes["error.stack_trace"]
+            == "Traceback (most recent call last)..."
+        )
         assert span.attributes["exception.type"] == "AuthenticationError"
         assert span.attributes["exception.message"] == "bad key"
-        assert span.attributes["exception.stacktrace"] == "Traceback (most recent call last)..."
+        assert (
+            span.attributes["exception.stacktrace"]
+            == "Traceback (most recent call last)..."
+        )
         assert span.attributes["http.response.status_code"] == 401
 
     def test_error_str_fallback_with_exception_object(self):
@@ -5296,8 +5302,13 @@ class TestRecordExceptionOnSpanNormalizationMatrix(unittest.TestCase):
     def test_no_inputs_is_noop(self):
         span = self._record_and_get_span({})
         for attr in (
-            "error.type", "error.message", "error.code", "error.stack_trace",
-            "exception.type", "exception.message", "exception.stacktrace",
+            "error.type",
+            "error.message",
+            "error.code",
+            "error.stack_trace",
+            "exception.type",
+            "exception.message",
+            "exception.stacktrace",
             "http.response.status_code",
         ):
             assert attr not in span.attributes
@@ -5321,4 +5332,3 @@ class TestRecordExceptionOnSpanNormalizationMatrix(unittest.TestCase):
         span = self._record_and_get_span(kwargs)
         assert span.attributes["error.code"] == "401"
         assert isinstance(span.attributes["error.code"], str)
-
