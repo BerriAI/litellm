@@ -5142,3 +5142,240 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestServiceHookTeamAttributePropagation(unittest.TestCase):
+    """LIT-3192: team_id / team_alias must propagate from the parent SERVER span
+    onto every child span emitted by async_service_success_hook /
+    async_service_failure_hook so team-filtered observability dashboards cover
+    every service-level child span, not just the root."""
+
+    LITELLM_PROXY_REQUEST_SPAN_NAME = "litellm_request"
+
+    def _otel(self):
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer("litellm.test")
+        return otel, exporter
+
+    def _make_parent_span(self, otel, team_id, team_alias):
+        parent = otel.tracer.start_span(self.LITELLM_PROXY_REQUEST_SPAN_NAME)
+        if team_id is not None:
+            parent.set_attribute("metadata.user_api_key_team_id", team_id)
+        if team_alias is not None:
+            parent.set_attribute("metadata.user_api_key_team_alias", team_alias)
+        return parent
+
+    def _service_span_attrs(self, exporter, service_value):
+        spans = [s for s in exporter.get_finished_spans() if s.name == service_value]
+        assert len(spans) == 1, (
+            f"expected one {service_value!r} span, got {len(spans)}"
+        )
+        return dict(spans[0].attributes or {})
+
+    def _run(self, coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+
+    def _make_payload(self, service):
+        from litellm.types.services import ServiceLoggerPayload
+
+        return ServiceLoggerPayload(
+            is_error=False,
+            error=None,
+            service=service,
+            duration=0.05,
+            call_type="test_call",
+            event_metadata=None,
+        )
+
+    @parameterized.expand([
+        ("PROXY_PRE_CALL",),
+        ("DB",),
+        ("REDIS",),
+        ("AUTH",),
+        ("ROUTER",),
+        ("BATCH_WRITE_TO_DB",),
+        ("POD_LOCK_MANAGER",),
+    ])
+    def test_success_hook_stamps_team_attrs_on_every_service_type(self, name):
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = self._otel()
+        parent = self._make_parent_span(otel, "team-7", "alias-7")
+        service = getattr(ServiceTypes, name)
+        payload = self._make_payload(service)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=50)
+        self._run(otel.async_service_success_hook(
+            payload=payload,
+            parent_otel_span=parent,
+            start_time=start,
+            end_time=end,
+            event_metadata=None,
+        ))
+        attrs = self._service_span_attrs(exporter, service.value)
+        assert attrs.get("metadata.user_api_key_team_id") == "team-7", attrs
+        assert attrs.get("metadata.user_api_key_team_alias") == "alias-7", attrs
+
+    def test_failure_hook_stamps_team_attrs(self):
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = self._otel()
+        parent = self._make_parent_span(otel, "team-9", "alias-9")
+        payload = self._make_payload(ServiceTypes.DB)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=20)
+        self._run(otel.async_service_failure_hook(
+            payload=payload,
+            error="boom",
+            parent_otel_span=parent,
+            start_time=start,
+            end_time=end,
+            event_metadata=None,
+        ))
+        attrs = self._service_span_attrs(exporter, ServiceTypes.DB.value)
+        assert attrs.get("metadata.user_api_key_team_id") == "team-9"
+        assert attrs.get("metadata.user_api_key_team_alias") == "alias-9"
+        assert attrs.get("error") == "boom"
+
+    def test_empty_string_team_attrs_not_propagated(self):
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = self._otel()
+        parent = self._make_parent_span(otel, "", "")
+        payload = self._make_payload(ServiceTypes.REDIS)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=10)
+        self._run(otel.async_service_success_hook(
+            payload=payload,
+            parent_otel_span=parent,
+            start_time=start,
+            end_time=end,
+        ))
+        attrs = self._service_span_attrs(exporter, ServiceTypes.REDIS.value)
+        assert "metadata.user_api_key_team_id" not in attrs
+        assert "metadata.user_api_key_team_alias" not in attrs
+
+    def test_no_team_attrs_on_parent_is_safe_noop(self):
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = self._otel()
+        parent = otel.tracer.start_span(self.LITELLM_PROXY_REQUEST_SPAN_NAME)
+        payload = self._make_payload(ServiceTypes.AUTH)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=5)
+        self._run(otel.async_service_success_hook(
+            payload=payload,
+            parent_otel_span=parent,
+            start_time=start,
+            end_time=end,
+        ))
+        attrs = self._service_span_attrs(exporter, ServiceTypes.AUTH.value)
+        assert "metadata.user_api_key_team_id" not in attrs
+        assert "metadata.user_api_key_team_alias" not in attrs
+
+    def test_parent_is_none_hook_noop_does_not_emit_span(self):
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = self._otel()
+        payload = self._make_payload(ServiceTypes.DB)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=5)
+        self._run(otel.async_service_success_hook(
+            payload=payload,
+            parent_otel_span=None,
+            start_time=start,
+            end_time=end,
+        ))
+        assert exporter.get_finished_spans() == ()
+
+    def test_non_recording_parent_does_not_crash_hook(self):
+        """A NonRecordingSpan parent has no .attributes; propagation helper must
+        silently no-op (no traceback) regardless of whether the hook emits a
+        child span at all."""
+        from litellm.types.services import ServiceTypes
+        from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+        otel, exporter = self._otel()
+        parent = NonRecordingSpan(SpanContext(
+            trace_id=0x1, span_id=0x2, is_remote=False,
+            trace_flags=TraceFlags(0x01),
+        ))
+        payload = self._make_payload(ServiceTypes.DB)
+        start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = start + timedelta(milliseconds=5)
+        self._run(otel.async_service_success_hook(
+            payload=payload,
+            parent_otel_span=parent,
+            start_time=start,
+            end_time=end,
+        ))
+        for span in exporter.get_finished_spans():
+            attrs = dict(span.attributes or {})
+            assert "metadata.user_api_key_team_id" not in attrs
+            assert "metadata.user_api_key_team_alias" not in attrs
+
+
+class TestCopyTeamAttributesFromParentSpanUnit(unittest.TestCase):
+    """Direct unit tests on the helper itself (no service-hook plumbing)."""
+
+    def _otel(self):
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer("t")
+        return otel, exporter
+
+    def test_helper_copies_team_attrs(self):
+        otel, exporter = self._otel()
+        parent = otel.tracer.start_span("p")
+        parent.set_attribute("metadata.user_api_key_team_id", "abc")
+        parent.set_attribute("metadata.user_api_key_team_alias", "xyz")
+        child = otel.tracer.start_span("c")
+        otel._copy_team_attributes_from_parent_span(parent, child)
+        child.end()
+        parent.end()
+        attrs = next(
+            dict(s.attributes or {})
+            for s in exporter.get_finished_spans()
+            if s.name == "c"
+        )
+        assert attrs["metadata.user_api_key_team_id"] == "abc"
+        assert attrs["metadata.user_api_key_team_alias"] == "xyz"
+
+    def test_helper_with_none_parent_is_noop(self):
+        otel, _exporter = self._otel()
+        child = otel.tracer.start_span("c")
+        otel._copy_team_attributes_from_parent_span(None, child)
+        child.end()
+
+    def test_helper_ignores_non_string_attrs(self):
+        otel, exporter = self._otel()
+        parent = otel.tracer.start_span("p")
+        parent.set_attribute("metadata.user_api_key_team_id", 12345)
+        child = otel.tracer.start_span("c")
+        otel._copy_team_attributes_from_parent_span(parent, child)
+        child.end()
+        parent.end()
+        attrs = next(
+            dict(s.attributes or {})
+            for s in exporter.get_finished_spans()
+            if s.name == "c"
+        )
+        assert "metadata.user_api_key_team_id" not in attrs
