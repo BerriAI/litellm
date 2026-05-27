@@ -994,10 +994,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if isinstance(value, (set, frozenset)):
             return frozenset(OpenTelemetry._make_hashable(v) for v in value)
         if isinstance(value, dict):
-            items = [
-                (k, OpenTelemetry._make_hashable(v))
-                for k, v in value.items()
-            ]
+            items = [(k, OpenTelemetry._make_hashable(v)) for k, v in value.items()]
             # Sort defensively — if keys are non-comparable across types we
             # fall back to a stable string sort so the dedupe key stays
             # deterministic without crashing.
