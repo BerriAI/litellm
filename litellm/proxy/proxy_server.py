@@ -7461,8 +7461,20 @@ class ProxyStartupEvent:
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request.
         ## Skipped entirely when daily spend aggregation is disabled, since
-        ## the queue it drains will always be empty in that case.
-        if general_settings.get("disable_daily_spend_aggregation", False) is False:
+        ## the queue it drains will always be empty in that case.  Honors
+        ## both ``general_settings.disable_daily_spend_aggregation`` and
+        ## the ``LITELLM_DISABLE_DAILY_SPEND_AGGREGATION`` env var, so a
+        ## sidecar deployment that only sets the env var also avoids
+        ## scheduling a job that would drain an empty queue.
+        _env_disable = os.environ.get("LITELLM_DISABLE_DAILY_SPEND_AGGREGATION")
+        _env_disabled = (
+            _env_disable is not None
+            and _env_disable.strip().lower() in {"1", "true", "yes", "on"}
+        )
+        if (
+            not bool(general_settings.get("disable_daily_spend_aggregation", False))
+            and not _env_disabled
+        ):
             tag_spend_update_interval = int(
                 batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
             )
