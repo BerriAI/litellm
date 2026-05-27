@@ -8,7 +8,6 @@ exercises exactly the bash that contributors will run locally.
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
@@ -150,9 +149,11 @@ SHA = "deadbeefcafebabe1234567890abcdef12345678"
         "hotfix/auth-401",
         "release/v1.86.0",
         "chore/bump-deps",
-        # bypass list
+        # bypass list — `litellm_*` covers all long-lived internal branches
         "main",
         "litellm_internal_staging",
+        "litellm_oss_agent_shin_daily_branch",
+        "litellm_release_v1.86.0",
         "dependabot/pip/openai-1.2.3",
         "gh-readonly-queue/main/pr-123",
     ],
@@ -167,7 +168,6 @@ def test_pre_push_accepts_valid(branch):
     "branch",
     [
         "random-branch",
-        "litellm_fix/router",  # legacy in-repo style — explicitly not in bypass
         "Ishaan/foo",
         "feat/foo",  # `feat` is a commit type, not a branch type
         "fix/foo",
