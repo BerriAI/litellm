@@ -15,7 +15,7 @@ async function clearFallbackForPrimary(request: import("@playwright/test").APIRe
   const masterKey = users[Role.ProxyAdmin].password;
   const auth = { Authorization: `Bearer ${masterKey}` };
 
-  const current = await request.get("http://localhost:4000/get/callbacks", { headers: auth });
+  const current = await request.get("http://localhost:4000/get/config/callbacks", { headers: auth });
   if (!current.ok()) return;
   const body = await current.json();
   const router = body?.router_settings ?? {};
@@ -46,26 +46,41 @@ test.describe("Router Settings - Fallbacks", () => {
     // Four tabs: Loadbalancing / Routing Groups / Fallbacks / General — click Fallbacks
     await page.getByRole("tab", { name: "Fallbacks" }).click();
 
-    // Open the Add Fallbacks modal
+    // The model options come from /model_group/info, which AddFallbacks
+    // fires only after the modal mounts. Wait for that response so the
+    // dropdown is populated before we try to pick from it — without this
+    // the test races on CI (local SLOWMO masks the gap).
+    const modelsLoaded = page.waitForResponse(
+      (res) => res.url().includes("/model_group/info") && res.status() === 200,
+      { timeout: 15_000 },
+    );
     await page.getByRole("button", { name: /Add Fallbacks/i }).click();
+    await modelsLoaded;
 
     const modal = page.locator(".ant-modal:visible");
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
-    // The Primary Model Select in FallbackGroupConfig.tsx uses `options=` (not
-    // <Select.Option> children), so options render as `.ant-select-item-option`
-    // without a `title` attribute — match the option text directly.
+    // FallbackGroupConfig.tsx renders both selects with `showSearch`. The
+    // most stable interaction is: click to open + focus, type the model name to
+    // narrow the listbox to a single highlighted option, then press Enter.
+    // Verify each selection landed by watching the dialog's own state transition
+    // (the tab title updates to the picked primary; the fallback chain list
+    // populates) rather than by asserting on the dropdown popup, which sits in
+    // a custom getPopupContainer and is awkward to scope reliably.
     const primarySelect = modal.locator(".ant-select").filter({ hasText: "Select primary model" });
     await primarySelect.click();
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: PRIMARY })
-      .first().click();
+    await page.keyboard.type(PRIMARY);
+    await page.keyboard.press("Enter");
+    await expect(modal.getByRole("tab", { name: PRIMARY })).toBeVisible({ timeout: 10_000 });
 
-    // Fallback Chain — same options-prop pattern; pick the antd item by text.
     const fallbackSelect = modal.locator(".ant-select").filter({ hasText: "Select fallback models" });
     await fallbackSelect.click();
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: FALLBACK })
-      .first().click();
+    await page.keyboard.type(FALLBACK);
+    await page.keyboard.press("Enter");
     await page.keyboard.press("Escape");
+    // The Fallback Chain helper text reads "(N/10 used)"; once it ticks to 1 the
+    // selection has been recorded.
+    await expect(modal.getByText("(1/10 used)")).toBeVisible({ timeout: 10_000 });
 
     // Save
     await modal.getByRole("button", { name: /Save All Configurations/i }).click();
