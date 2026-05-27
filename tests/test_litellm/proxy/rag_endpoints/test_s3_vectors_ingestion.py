@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
@@ -36,11 +36,16 @@ async def test_s3_vectors_ingestion_uses_vector_store_embedding_model():
         )
 
         embeddings = await ingestion.embed(["hello"])
+        dimension = await ingestion._get_dimension_from_embedding_request()
 
-    mock_aembedding.assert_awaited_once_with(
-        model="text-embedding-3-large", input=["hello"]
+    mock_aembedding.assert_has_awaits(
+        [
+            call(model="text-embedding-3-large", input=["hello"]),
+            call(model="text-embedding-3-large", input=["test"]),
+        ]
     )
     assert embeddings == [[0.1, 0.2, 0.3]]
+    assert dimension == 3
 
 
 def test_s3_vectors_ingestion_prefers_top_level_embedding_config():
