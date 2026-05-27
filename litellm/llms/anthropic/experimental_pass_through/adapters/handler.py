@@ -632,7 +632,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         AnthropicMessagesResponse,
         Iterator[bytes],
         AsyncIterator[Any],
-        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+        Coroutine[
+            Any,
+            Any,
+            Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]],
+        ],
     ]:
         """Handle non-Anthropic models using the adapter."""
         if _is_async is True:

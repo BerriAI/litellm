@@ -199,7 +199,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, Iterator[bytes], AsyncIterator[Any]]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
