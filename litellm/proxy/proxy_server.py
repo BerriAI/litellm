@@ -1828,6 +1828,7 @@ proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
+disable_daily_spend_aggregation = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
@@ -3843,7 +3844,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, disable_daily_spend_aggregation, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -4364,6 +4365,16 @@ class ProxyConfig:
             ## DISABLE SPEND LOGS ## - gives a perf improvement
             disable_spend_logs = general_settings.get(
                 "disable_spend_logs", disable_spend_logs
+            )
+            ## DISABLE DAILY SPEND AGGREGATION ##
+            ##   When True, suppresses per-day / per-team / per-tag /
+            ##   per-end-user / per-agent / per-org / per-user aggregation
+            ##   writes. Relieves Redis pressure
+            ##   (litellm_daily_*_spend_update_buffer) and in-memory
+            ##   DailySpendUpdateQueue growth.
+            disable_daily_spend_aggregation = general_settings.get(
+                "disable_daily_spend_aggregation",
+                disable_daily_spend_aggregation,
             )
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
@@ -7448,25 +7459,32 @@ class ProxyStartupEvent:
         )
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
-        ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(
-            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
-        )
-        from litellm.proxy.utils import update_daily_tag_spend
+        ## Reduces QPS as there are more tags for a single request.
+        ## Skipped entirely when daily spend aggregation is disabled, since
+        ## the queue it drains will always be empty in that case.
+        if general_settings.get("disable_daily_spend_aggregation", False) is False:
+            tag_spend_update_interval = int(
+                batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+            )
+            from litellm.proxy.utils import update_daily_tag_spend
 
-        scheduler.add_job(
-            update_daily_tag_spend,
-            "interval",
-            seconds=tag_spend_update_interval,
-            args=[prisma_client, proxy_logging_obj],
-            id="update_daily_tag_spend_job",
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
-        verbose_proxy_logger.info(
-            f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
-            f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
-        )
+            scheduler.add_job(
+                update_daily_tag_spend,
+                "interval",
+                seconds=tag_spend_update_interval,
+                args=[prisma_client, proxy_logging_obj],
+                id="update_daily_tag_spend_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            verbose_proxy_logger.info(
+                f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
+                f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "disable_daily_spend_aggregation=True. Skipping update_daily_tag_spend scheduler job."
+            )
 
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
