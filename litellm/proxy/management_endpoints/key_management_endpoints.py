@@ -30,6 +30,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
+    CLI_JWT_TOKEN_NAME,
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     UI_SESSION_TOKEN_TEAM_ID,
@@ -714,8 +715,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # with an explicit budget cannot grant a key a higher budget than their own.
     # Callers with max_budget=None (unlimited) can delegate any budget.
+    #
+    # Exempt UI/CLI session tokens: their max_budget=0.25 is a cost cap for the
+    # dashboard Test Key pane, not an expression of the user's team authority.
+    _is_session_token = getattr(user_api_key_dict, "key_alias", None) in ("ui-token", CLI_JWT_TOKEN_NAME)
     if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        not _is_session_token
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and _requested_max_budget is not None
         and user_api_key_dict.max_budget is not None
         and _requested_max_budget > user_api_key_dict.max_budget
