@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID } from "../../constants";
+import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ALIAS, E2E_TEAM_CRUD_ID } from "../../constants";
 import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
@@ -148,6 +148,59 @@ test.describe("Add Model", () => {
     // Verify the model name appears in the table body
     const tableBody = page.locator("table tbody");
     await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("Add team-only model via Team-BYOK toggle and verify it appears with the team", async ({ page }) => {
+    // The Team-BYOK switch is gated on `premiumUser` — without a license set
+    // for the proxy under test, the toggle is disabled and this manual-QA
+    // step cannot be exercised.
+    test.skip(
+      !process.env.LITELLM_LICENSE,
+      "LITELLM_LICENSE not set in test env — Team-BYOK switch is disabled",
+    );
+
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    await selectProvider(page, "Cohere");
+
+    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
+    await modelDropdown.click();
+    const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
+    await wildcardOption.click();
+    await page.keyboard.press("Escape");
+
+    const apiKeyInput = page.locator('input[type="password"]').first();
+    await apiKeyInput.fill("sk-any-key-for-team-byok-test");
+
+    // Flip the Team-BYOK switch on (Form.Item label "Team-BYOK Model")
+    const teamByokRow = page.locator(".ant-form-item", { hasText: "Team-BYOK Model" });
+    await teamByokRow.getByRole("switch").click();
+
+    // The Team dropdown appears underneath once the switch is on
+    const teamDropdown = page.getByTestId("team-dropdown");
+    await expect(teamDropdown).toBeVisible({ timeout: 5_000 });
+    await teamDropdown.click();
+    // E2E Team CRUD is seeded — pick it by its ID, which is rendered in the option label
+    await page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ID).first().click();
+
+    await page.getByRole("button", { name: "Add Model" }).last().click();
+
+    await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+    // Verify the model is now in All Models with the team_id attached. The
+    // Models table renders team-scoped models with the team id in the row.
+    await page.getByRole("tab", { name: "All Models" }).click();
+    await page.waitForLoadState("networkidle");
+
+    await page.locator('input[placeholder="Search model names..."]').fill("cohere");
+    await page.waitForTimeout(1000);
+
+    // The Team Alias column renders team_alias (falling back to team_id),
+    // so seeing the seeded alias in the filtered row confirms the team
+    // assignment landed.
+    const tableBody = page.locator("table tbody");
+    await expect(tableBody.getByText(E2E_TEAM_CRUD_ALIAS).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
