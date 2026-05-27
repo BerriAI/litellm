@@ -1913,9 +1913,30 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
+
+        # LIT-3301: a team-scoped virtual key must always be locked to its
+        # own ``team_id``, regardless of the underlying user role and
+        # regardless of what (if anything) the client passed as the
+        # ``team_id`` query parameter. Reject mismatched query params, then
+        # force the filter to the key's team and skip the role-based
+        # scoping branch below (the team filter already covers it).
+        enforced_team_id: Optional[str] = getattr(
+            user_api_key_dict, "team_id", None
+        )
+        if enforced_team_id is not None:
+            if team_id is not None and team_id != enforced_team_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Team virtual key cannot query spend logs for a different team."
+                    },
+                )
+            where_conditions["team_id"] = enforced_team_id
+            where_conditions.pop("user", None)
+
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         permitted_team_ids: Optional[List[str]] = None
-        if not is_admin_view:
+        if enforced_team_id is None and not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
                     prisma_client=prisma_client,
