@@ -11,6 +11,7 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import re
 import tempfile
 from typing import Optional
 
@@ -421,6 +422,70 @@ _default_detect_secrets_config = {
 }
 
 
+
+
+# PEM private-key blocks are multi-line, but ``detect-secrets`` is strictly
+# line-based: ``PrivateKeyDetector`` returns only the ``-----BEGIN ... PRIVATE
+# KEY-----`` armor header as the matched ``secret_value``. The downstream
+# ``str.replace(secret["value"], "[REDACTED]")`` call sites therefore only
+# strike that one line and forward the base64 body + ``-----END`` footer
+# verbatim. To fix that without touching every call site, we expand any
+# ``Private Key`` entry to span the entire PEM block found in the original
+# message text before the replace calls run.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"
+)
+
+
+def _expand_private_key_values(
+    message_content: str, detected_secrets: list
+) -> list:
+    """Replace each ``Private Key`` entry value with the full PEM block from
+    ``message_content``. Non-PEM secrets are returned unchanged.
+
+    If multiple PEM blocks appear in ``message_content`` we emit one entry per
+    block so every block gets redacted by the existing replace loop.
+    Header-only matches that have no corresponding ``-----END`` footer in the
+    text are left as-is, preserving today's header-line redaction behavior for
+    truncated/malformed inputs.
+    """
+    if not detected_secrets:
+        return detected_secrets
+
+    has_private_key = any(s.get("type") == "Private Key" for s in detected_secrets)
+    if not has_private_key:
+        return detected_secrets
+
+    pem_blocks = _PEM_BLOCK_RE.findall(message_content)
+    if not pem_blocks:
+        # Detector flagged a header but no full block exists - leave as-is so
+        # the existing header-line redaction still runs.
+        return detected_secrets
+
+    # De-duplicate while preserving order so we do not emit the same block
+    # multiple times if detect-secrets flagged it from several detectors.
+    seen = set()
+    unique_blocks = []
+    for b in pem_blocks:
+        if b not in seen:
+            seen.add(b)
+            unique_blocks.append(b)
+
+    expanded: list = []
+    consumed_private_key = False
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key" and not consumed_private_key:
+            for block in unique_blocks:
+                expanded.append({"type": "Private Key", "value": block})
+            consumed_private_key = True
+        elif secret.get("type") == "Private Key":
+            # Additional header matches are already covered by per-block entries.
+            continue
+        else:
+            expanded.append(secret)
+    return expanded
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
@@ -452,6 +517,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets.append(
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
+
+        # Expand any ``Private Key`` entry (which ``detect-secrets`` only flags
+        # by its BEGIN-header line) to the full PEM block so the call-site
+        # ``str.replace(secret["value"], ...)`` strikes header + body + footer.
+        detected_secrets = _expand_private_key_values(
+            message_content, detected_secrets
+        )
 
         return detected_secrets
 
