@@ -5240,6 +5240,17 @@ class TestOpenTelemetryEmitOnceUnhashableScope(unittest.TestCase):
         self.assertFalse(otel._emit_once(kwargs, "failure"))
 
 
+    def test_list_and_tuple_scope_dont_collide(self):
+        """``_emit_once`` must treat list and tuple scope with the same
+        contents as distinct scopes."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "g", ["a", "b"]))
+        self.assertTrue(
+            otel._emit_once(kwargs, "g", ("a", "b")),
+            "Tuple scope must not dedupe against a same-content list scope",
+        )
+
 class TestOpenTelemetryMakeHashable(unittest.TestCase):
     """Unit tests for the ``_make_hashable`` helper itself."""
 
@@ -5251,32 +5262,52 @@ class TestOpenTelemetryMakeHashable(unittest.TestCase):
         t = ("a", 1, 2.5)
         self.assertEqual(OpenTelemetry._make_hashable(t), t)
 
-    def test_list_to_tuple(self):
-        self.assertEqual(OpenTelemetry._make_hashable(["a", "b", "c"]), ("a", "b", "c"))
+    def test_list_normalized_with_list_tag(self):
+        """List normalizes to ``(_LIST_TAG, tuple)`` so it is distinguishable
+        from a same-content tuple."""
+        self.assertEqual(
+            OpenTelemetry._make_hashable(["a", "b", "c"]),
+            (OpenTelemetry._LIST_TAG, ("a", "b", "c")),
+        )
 
-    def test_nested_list(self):
+    def test_nested_list_recurses_with_tags(self):
+        """Each nesting level keeps its own list-tag."""
         self.assertEqual(
             OpenTelemetry._make_hashable([["a", "b"], ["c"]]),
-            (("a", "b"), ("c",)),
+            (
+                OpenTelemetry._LIST_TAG,
+                (
+                    (OpenTelemetry._LIST_TAG, ("a", "b")),
+                    (OpenTelemetry._LIST_TAG, ("c",)),
+                ),
+            ),
         )
 
-    def test_set_to_frozenset(self):
+    def test_set_normalized_with_set_tag(self):
         self.assertEqual(
-            OpenTelemetry._make_hashable({"a", "b"}), frozenset({"a", "b"})
+            OpenTelemetry._make_hashable({"a", "b"}),
+            (OpenTelemetry._SET_TAG, frozenset({"a", "b"})),
         )
 
-    def test_dict_to_sorted_tuple_pairs(self):
+    def test_dict_normalized_with_dict_tag(self):
+        """Dicts normalize to ``(_DICT_TAG, sorted_pairs)``; equal dicts
+        produce the same key regardless of insertion order."""
         result = OpenTelemetry._make_hashable({"b": 2, "a": 1})
-        self.assertEqual(result, (("a", 1), ("b", 2)))
+        self.assertEqual(result, (OpenTelemetry._DICT_TAG, (("a", 1), ("b", 2))))
         self.assertEqual(
             OpenTelemetry._make_hashable({"a": 1, "b": 2}),
             OpenTelemetry._make_hashable({"b": 2, "a": 1}),
         )
 
-    def test_tuple_of_unhashables(self):
+    def test_tuple_of_unhashables_normalizes_recursively(self):
+        """A tuple of lists falls through to element-wise normalization;
+        each inner list still carries its own list-tag."""
         self.assertEqual(
             OpenTelemetry._make_hashable((["a"], ["b"])),
-            (("a",), ("b",)),
+            (
+                (OpenTelemetry._LIST_TAG, ("a",)),
+                (OpenTelemetry._LIST_TAG, ("b",)),
+            ),
         )
 
     def test_result_is_hashable(self):
@@ -5299,3 +5330,14 @@ class TestOpenTelemetryMakeHashable(unittest.TestCase):
         result = OpenTelemetry._make_hashable(Weird())
         self.assertEqual(result, "<Weird>")
         _ = {result: True}
+
+    def test_list_and_tuple_are_distinct_keys(self):
+        """A list and a tuple with the same contents are not equal in
+        Python (``[1, 2] != (1, 2)``); the dedupe key must reflect that
+        so callers passing one shape do not silently dedupe against
+        callers passing the other shape."""
+        list_key = OpenTelemetry._make_hashable([1, 2])
+        tuple_key = OpenTelemetry._make_hashable((1, 2))
+        self.assertNotEqual(list_key, tuple_key)
+        d = {list_key: "list", tuple_key: "tuple"}
+        self.assertEqual(len(d), 2)
