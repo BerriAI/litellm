@@ -5181,7 +5181,11 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         return dict(spans[0].attributes or {})
 
     def _run(self, coro):
-        return asyncio.new_event_loop().run_until_complete(coro)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def _make_payload(self, service):
         from litellm.types.services import ServiceLoggerPayload
