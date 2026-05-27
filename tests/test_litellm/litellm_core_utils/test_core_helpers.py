@@ -331,3 +331,67 @@ class TestAddMissingSpendMetadataToLitellmMetadata:
         assert "spend_logs_metadata" in result
         assert result["spend_logs_metadata"]["billing_uuid"] == "uuid-1"
         assert result["user_api_key"] == "sk-hashed"
+
+
+    def test_does_not_overwrite_proxy_set_value_when_litellm_metadata_already_has_it(
+        self,
+    ):
+        """Veria scenario: on `/v1/messages` (and other LITELLM_METADATA_ROUTES)
+        the proxy-trusted values live on `litellm_metadata`. A client can forge
+        body `metadata.<key>` for one of the header-derived keys; the merge must
+        NOT overwrite the real proxy-set value with the forged one."""
+        from litellm.litellm_core_utils.core_helpers import (
+            add_missing_spend_metadata_to_litellm_metadata,
+        )
+
+        # Proxy-set values on litellm_metadata (e.g. /v1/messages)
+        litellm_metadata = {
+            "user_api_key": "sk-hashed",
+            "agent_id": "agent-real-from-proxy",
+            "trace_id": "trace-real",
+            "session_id": "session-real",
+            "requester_ip_address": "10.0.0.1",
+            "spend_logs_metadata": {"billing_uuid": "real-bu"},
+        }
+        # Client-forged values on the body metadata
+        metadata = {
+            "agent_id": "agent-forged",
+            "trace_id": "trace-forged",
+            "session_id": "session-forged",
+            "requester_ip_address": "1.2.3.4",
+            "spend_logs_metadata": {"billing_uuid": "forged-bu"},
+        }
+
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata, metadata
+        )
+
+        # Every proxy-set value is preserved unchanged.
+        assert merged["agent_id"] == "agent-real-from-proxy"
+        assert merged["trace_id"] == "trace-real"
+        assert merged["session_id"] == "session-real"
+        assert merged["requester_ip_address"] == "10.0.0.1"
+        assert merged["spend_logs_metadata"] == {"billing_uuid": "real-bu"}
+
+    def test_preserve_keys_use_setdefault_semantics(self):
+        """Even with only one proxy key already present on litellm_metadata,
+        only that one is left untouched; the others (absent on litellm_metadata)
+        are propagated from metadata."""
+        from litellm.litellm_core_utils.core_helpers import (
+            add_missing_spend_metadata_to_litellm_metadata,
+        )
+
+        litellm_metadata = {"agent_id": "agent-real"}  # only agent_id pre-set
+        metadata = {
+            "agent_id": "forged-agent",
+            "trace_id": "trace-from-metadata",  # not on litellm_metadata
+            "spend_logs_metadata": {"k": "v"},  # not on litellm_metadata
+        }
+
+        merged = add_missing_spend_metadata_to_litellm_metadata(
+            litellm_metadata, metadata
+        )
+
+        assert merged["agent_id"] == "agent-real"  # not overwritten
+        assert merged["trace_id"] == "trace-from-metadata"  # newly copied
+        assert merged["spend_logs_metadata"] == {"k": "v"}  # newly copied
