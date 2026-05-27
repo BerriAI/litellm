@@ -3370,3 +3370,266 @@ async def test_resolve_end_user_reraises_budget_exceeded(
             prisma_client=MagicMock(),
             user_api_key_cache=cache,
         )
+
+
+@pytest.mark.asyncio
+async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
+    """
+    Regression pin for LIT-3244 patch/1.86.0 follow-up.
+
+    `_cache_team_object` is the canonical "refresh this team" primitive.
+    Two cache keys are in play:
+      - "team_id:<id>"    — used by `get_team_object(team_id=...)`,
+                            i.e. API-key auth and JWT-with-team_id_jwt_field
+      - "team_alias:<alias>" — used by `get_team_object_by_alias(team_alias=...)`,
+                               i.e. JWT-with-team_alias_jwt_field
+
+    Invariants this test pins:
+      1. Writes the team_id-keyed entry with the refreshed object (team_id
+         is the table PK — guaranteed unique, safe to write).
+      2. DELETES (does NOT write) the team_alias-keyed entry. `team_alias`
+         has no UNIQUE constraint in schema.prisma, so writing it from
+         this generic refresh path would let a team admin who renames
+         their team to collide with another team's alias silently
+         overwrite the cached team for JWT-by-alias auth (veria-ai
+         review on #28739). Deleting forces the next JWT-by-alias
+         reader through `get_team_object_by_alias`, which enforces
+         len(teams)==1 before populating the cache.
+      3. When team_alias is None, NO alias-key operation happens (no
+         delete of an empty-keyed entry, no spurious write).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    base_team_row = {
+        "team_id": "team-1234",
+        "team_alias": "H-Capacity",
+        "models": ["openai/*", "bedrock-claude-sonnet-4"],
+    }
+
+    # ===== team_alias is set =====
+    team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock()
+    cache.delete_cache = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    await _cache_team_object(
+        team_id="team-1234",
+        team_table=team_table,
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+
+    # (1) team_id-keyed write fires with the refreshed object
+    written_keys = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in cache.async_set_cache.await_args_list
+    ]
+    assert written_keys == ["team_id:team-1234"], (
+        "Only the team_id-keyed write should fire; the alias key must be "
+        "deleted, NOT written. "
+        f"Got writes: {written_keys}"
+    )
+    written_value = (
+        cache.async_set_cache.await_args.kwargs.get("value")
+        or cache.async_set_cache.await_args.args[1]
+    )
+    assert written_value is team_table
+
+    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
+    # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
+    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key="team_alias:H-Capacity"
+    )
+
+    # ===== team_alias is None: no alias-key operation =====
+    aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
+    cache2 = MagicMock()
+    cache2.async_set_cache = AsyncMock()
+    cache2.delete_cache = MagicMock()
+    logging_obj2 = MagicMock()
+    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    await _cache_team_object(
+        team_id="team-no-alias",
+        team_table=aliasless,
+        user_api_key_cache=cache2,
+        proxy_logging_obj=logging_obj2,
+    )
+
+    cache2.delete_cache.assert_not_called()
+    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_not_awaited()
+    written_keys_aliasless = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in cache2.async_set_cache.await_args_list
+    ]
+    assert written_keys_aliasless == ["team_id:team-no-alias"]
+
+
+# Regression tests for LIT-3132 — stale Redis team spend counter
+# https://github.com/BerriAI/litellm/issues/<this PR>
+#
+# When the cross-pod Redis counter `spend:team:{team_id}` reports the team is
+# over its budget but the authoritative `LiteLLM_TeamTable.spend` row is well
+# under the cap, the Redis counter is stale (typically because the reset job
+# committed `team.spend = 0` to Postgres but the Redis write silently failed —
+# Redis unreachable from the reset-job pod, `spend_counter_cache.redis_cache`
+# was None on that pod, etc.). `_team_max_budget_check` must recover by
+# trusting the DB value rather than blocking the team out of its budget.
+@pytest.mark.asyncio
+async def test_team_budget_check_recovers_when_redis_counter_is_stale():
+    """Redis says over-budget but DB says well under → reseed and let through."""
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team-stale-redis",
+        spend=0.144,  # the cached team_object can lag in multi-pod setups;
+                     # we cannot rely on it. The fix re-reads the DB.
+        max_budget=2.0,
+    )
+    valid_token = UserAPIKeyAuth(token="t", team_id="test-team-stale-redis")
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    # Redis reports an over-budget value (stale lifetime accumulation)
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:team:test-team-stale-redis":
+            return 2.5
+        return fallback_spend
+
+    # DB says spend=0.144 (well under max_budget=2.0)
+    async def mock_from_db(prisma_client, counter_key):
+        if counter_key == "spend:team:test-team-stale-redis":
+            return 0.144
+        return None
+
+    mock_prisma = MagicMock()
+    mock_spend_cache = MagicMock()
+    mock_spend_cache.redis_cache = AsyncMock()
+    mock_spend_cache.in_memory_cache = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_cache", mock_spend_cache
+        ),
+        patch(
+            "litellm.proxy.db.spend_counter_reseed.SpendCounterReseed.from_db",
+            mock_from_db,
+        ),
+    ):
+        # Should NOT raise — DB is authoritative and says we are under
+        await _team_max_budget_check(
+            team_object=team_object,
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # Confirms the stale Redis key was deleted so subsequent reads reseed
+    mock_spend_cache.redis_cache.async_delete_cache.assert_awaited_once_with(
+        "spend:team:test-team-stale-redis"
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_budget_check_still_blocks_when_db_confirms_overspend():
+    """Both Redis and DB say over the cap → still raise BudgetExceededError."""
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team-real-overspend",
+        spend=1.5,
+        max_budget=1.0,
+    )
+    valid_token = UserAPIKeyAuth(token="t", team_id="test-team-real-overspend")
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:team:test-team-real-overspend":
+            return 1.5
+        return fallback_spend
+
+    async def mock_from_db(prisma_client, counter_key):
+        # DB also confirms overspend
+        return 1.5
+
+    mock_prisma = MagicMock()
+    mock_spend_cache = MagicMock()
+    mock_spend_cache.redis_cache = AsyncMock()
+    mock_spend_cache.in_memory_cache = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_cache", mock_spend_cache
+        ),
+        patch(
+            "litellm.proxy.db.spend_counter_reseed.SpendCounterReseed.from_db",
+            mock_from_db,
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _team_max_budget_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.max_budget == 1.0
+
+    # No counter delete on a legitimate over-budget path
+    mock_spend_cache.redis_cache.async_delete_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_budget_check_keeps_blocking_when_db_unavailable():
+    """DB read returns None (e.g. Prisma error) → fall back to Redis enforcement."""
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team-db-unavailable",
+        spend=0.0,
+        max_budget=1.0,
+    )
+    valid_token = UserAPIKeyAuth(token="t", team_id="test-team-db-unavailable")
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        return 1.5  # over
+
+    async def mock_from_db(prisma_client, counter_key):
+        return None  # simulate DB unavailable
+
+    mock_prisma = MagicMock()
+    mock_spend_cache = MagicMock()
+    mock_spend_cache.redis_cache = AsyncMock()
+    mock_spend_cache.in_memory_cache = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_cache", mock_spend_cache
+        ),
+        patch(
+            "litellm.proxy.db.spend_counter_reseed.SpendCounterReseed.from_db",
+            mock_from_db,
+        ),
+    ):
+        # DB unavailable → cannot verify staleness → enforce on Redis value
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _team_max_budget_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.current_cost == 1.5
