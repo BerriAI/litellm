@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 from httpx import Headers, Response
@@ -273,17 +273,20 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file content is required")
 
         if purpose == "batch":
-            ## 1. If jsonl, check if there's a model name
-            file_content = self._get_content_from_openai_file(
-                extracted_file_data_content
+            ## 1. If jsonl, sniff only the first row for its model (we don't
+            #     need to parse the full payload here). This keeps peak
+            #     memory ~O(line) instead of ~O(file_size) for very large
+            #     batches -- see LIT-3382.
+            first_entry: Optional[Dict[str, Any]] = next(
+                iter(
+                    self.jsonl_transformation._iter_openai_jsonl_entries(
+                        extracted_file_data_content
+                    )
+                ),
+                None,
             )
-
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content = [
-                json.loads(line) for line in file_content.splitlines() if line.strip()
-            ]
-            if len(openai_jsonl_content) > 0:
-                return self._get_gcs_object_name_from_batch_jsonl(openai_jsonl_content)
+            if first_entry is not None:
+                return self._get_gcs_object_name_from_batch_jsonl([first_entry])
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename = extracted_file_data.get("filename")
@@ -399,21 +402,18 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             extracted_file_data=extracted_file_data,
         ):
-            ## 1. If jsonl, check if there's a model name
-            file_content = self._get_content_from_openai_file(
+            ## 1. If jsonl, stream the transform line-by-line to keep peak
+            #     memory bounded -- see LIT-3382 for the original OOM
+            #     regression on ~1 GB Gemini batch uploads.
+            out_parts: List[str] = []
+            for entry in self.jsonl_transformation._iter_openai_jsonl_entries(
                 extracted_file_data_content
-            )
-
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content = [
-                json.loads(line) for line in file_content.splitlines() if line.strip()
-            ]
-            vertex_jsonl_content = (
-                self._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                    openai_jsonl_content
+            ):
+                vertex_request_body = (
+                    self.jsonl_transformation._build_vertex_request_body(entry)
                 )
-            )
-            return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
+                out_parts.append(json.dumps({"request": vertex_request_body}))
+            return "\n".join(out_parts)
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
         else:
@@ -802,32 +802,148 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
     Transforms OpenAI /v1/files/* requests to VertexAI /v1/files/* requests
     """
 
+    def _iter_openai_jsonl_entries(
+        self, openai_file_content: FileTypes
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        Yields parsed OpenAI batch JSONL entries one at a time without
+        materializing the full list in memory.
+
+        Streams from file-like / PathLike inputs directly so we never have to
+        hold the entire decoded payload AND a ``splitlines`` list AND a
+        parsed-dicts list simultaneously. For ``str`` / ``bytes`` inputs we
+        still fall back to iterating ``splitlines()`` -- those callers already
+        chose to hold the whole payload in memory before calling us.
+
+        Introduced for LIT-3382 (large Gemini batch uploads OOM-killed
+        uvicorn workers because each transform held ~5 simultaneous copies
+        of the JSONL payload).
+        """
+        import io as _io
+
+        if isinstance(openai_file_content, tuple):
+            file_content = openai_file_content[1]
+        else:
+            file_content = openai_file_content
+
+        if hasattr(file_content, "read") and hasattr(file_content, "readline"):
+            try:
+                if hasattr(file_content, "seek"):
+                    file_content.seek(0)
+            except Exception:
+                pass
+            wrapper: Any = file_content
+            detach_after = False
+            if hasattr(file_content, "readinto"):
+                try:
+                    wrapper = _io.TextIOWrapper(
+                        file_content, encoding="utf-8", newline=""
+                    )
+                    detach_after = True
+                except Exception:
+                    wrapper = file_content
+            try:
+                for raw_line in wrapper:
+                    if isinstance(raw_line, bytes):
+                        raw_line = raw_line.decode("utf-8")
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    yield json.loads(line)
+            finally:
+                if detach_after:
+                    try:
+                        wrapper.detach()
+                    except Exception:
+                        pass
+            return
+
+        if isinstance(file_content, PathLike):
+            with open(str(file_content), "r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    yield json.loads(line)
+            return
+
+        if isinstance(file_content, bytes):
+            text = file_content.decode("utf-8")
+        elif isinstance(file_content, str):
+            text = file_content
+        else:
+            text = self._get_content_from_openai_file(openai_file_content)
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            yield json.loads(line)
+
+    def _build_vertex_request_body(
+        self, openai_entry: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Transform a single OpenAI batch JSONL entry to a Vertex AI request
+        body dict (without the outer ``{"request": ...}`` wrapper). Mirrors
+        the per-entry logic of
+        ``_openai_batch_jsonl_entries_to_vertex_wrapped_requests`` but
+        operates on one row at a time so callers can stream the transform.
+        """
+        openai_request_body = openai_entry.get("body") or {}
+        vertex_request_body = _transform_request_body(
+            messages=openai_request_body.get("messages", []),
+            model=openai_request_body.get("model", ""),
+            optional_params=self._map_openai_to_vertex_params(openai_request_body),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+        custom_id = openai_entry.get("custom_id")
+        if custom_id is not None:
+            if "labels" not in vertex_request_body:
+                vertex_request_body["labels"] = {}
+            _set_litellm_batch_custom_id_labels(
+                vertex_request_body["labels"], custom_id
+            )
+        return vertex_request_body
+
     def transform_openai_file_content_to_vertex_ai_file_content(
         self, openai_file_content: Optional[FileTypes] = None
     ) -> Tuple[str, str]:
         """
-        Transforms OpenAI FileContentRequest to VertexAI FileContentRequest
+        Transforms OpenAI FileContentRequest to VertexAI FileContentRequest.
+
+        Streams the transform line-by-line so peak memory stays close to
+        ``input_size + output_size`` instead of ``~5x input_size``. The
+        previous implementation kept three full intermediate copies of the
+        payload (the openai parsed-dicts list, the vertex parsed-dicts list,
+        and the joined output string), which caused LiteLLM workers to OOM
+        and uvicorn to restart when customers (e.g. Tempus) uploaded ~1 GB
+        Gemini batch JSONL files (LIT-3382).
         """
 
         if openai_file_content is None:
             raise ValueError("contents of file are None")
-        # Read the content of the file
-        file_content = self._get_content_from_openai_file(openai_file_content)
 
-        # Split into lines and parse each line as JSON
-        openai_jsonl_content = [
-            json.loads(line) for line in file_content.splitlines() if line.strip()
-        ]
-        vertex_jsonl_content = (
-            self._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
-        vertex_jsonl_string = "\n".join(
-            json.dumps(item) for item in vertex_jsonl_content
-        )
+        first_entry: Optional[Dict[str, Any]] = None
+        out_parts: List[str] = []
+        for entry in self._iter_openai_jsonl_entries(openai_file_content):
+            if first_entry is None:
+                # Capture only the first entry for object_name (needs the model).
+                first_entry = entry
+            vertex_request_body = self._build_vertex_request_body(entry)
+            out_parts.append(json.dumps({"request": vertex_request_body}))
+
+        if first_entry is None:
+            raise ValueError("contents of file are empty")
+
+        vertex_jsonl_string = "\n".join(out_parts)
+        # Free the intermediate list before returning the (already-large)
+        # joined string so peak memory stays bounded.
+        del out_parts
         object_name = self._get_gcs_object_name(
-            openai_jsonl_content=openai_jsonl_content
+            openai_jsonl_content=[first_entry]
         )
         return vertex_jsonl_string, object_name
 
