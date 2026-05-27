@@ -470,20 +470,30 @@ def _expand_private_key_values(
         if secret.get("type") != "Private Key":
             expanded.append(secret)
             continue
-        if pem_blocks:
-            # Emit one entry per full PEM block from the FIRST ``Private Key``
-            # match only; subsequent ``Private Key`` entries are dropped
-            # because each pre-existing header match would otherwise
-            # duplicate the same blocks.
-            if not full_blocks_emitted:
-                for block in pem_blocks:
-                    expanded.append({"type": "Private Key", "value": block})
-                full_blocks_emitted = True
+        if not pem_blocks:
+            # No full ``BEGIN ... END`` block was found anywhere in the
+            # message (e.g. truncated input on every detected header).
+            # Preserve EVERY header-only entry so the existing per-header
+            # redaction still runs for each one.
+            expanded.append(secret)
             continue
-        # No full ``BEGIN ... END`` block was found in the message (e.g.
-        # truncated input). Preserve EVERY header-only entry so the existing
-        # per-header redaction still runs for each one — regressing to the
-        # pre-fix behavior is intentional in this fallback path.
+        # At least one full PEM block was found. Emit those once (from the
+        # first ``Private Key`` match). For each subsequent ``Private Key``
+        # entry, dedupe only if its header substring is already contained in
+        # one of the emitted blocks; otherwise it corresponds to a separate
+        # truncated header in the same message and must be preserved so its
+        # BEGIN line still gets the existing header-only redaction.
+        if not full_blocks_emitted:
+            for block in pem_blocks:
+                expanded.append({"type": "Private Key", "value": block})
+            full_blocks_emitted = True
+            continue
+        header_value = secret.get("value") or ""
+        if any(header_value in block for block in pem_blocks):
+            # The header is part of a block we already redact in full.
+            continue
+        # This header belongs to a separate truncated PEM in the same message
+        # — keep it so its BEGIN line still gets per-header redaction.
         expanded.append(secret)
     return expanded
 
