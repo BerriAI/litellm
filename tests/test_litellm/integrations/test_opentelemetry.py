@@ -5142,3 +5142,222 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestRecordExceptionOnSpanNormalizationMatrix(unittest.TestCase):
+    """LIT-3199: ``_record_exception_on_span`` must normalize error/exception
+    span attributes across every failure source so downstream collectors
+    (Datadog, Tempo, Jaeger, etc.) see a consistent attribute set.
+
+    Matrix dimensions:
+      * input source: exception only / error_information only / error_str
+        fallback / exception+full info / partial error_information / nothing
+      * output check: ``error.*`` (legacy LiteLLM keys) AND ``exception.*``
+        (OTEL semconv keys) are both stamped from the same source-of-truth
+    """
+
+    def _record_and_get_span(self, kwargs):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+
+        otel = OpenTelemetry()
+        span = tracer.start_span("Received Proxy Server Request")
+        otel._record_exception_on_span(span=span, kwargs=kwargs)
+        span.end()
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 1
+        return finished[0]
+
+    def test_exception_only_stamps_both_error_and_exception_attrs(self):
+        """When only an exception object is available (no SLP at all), both
+        the legacy ``error.*`` and the OTEL ``exception.*`` attribute sets
+        must be stamped — previously only the ``exception`` event was
+        emitted and the queryable attrs were missing."""
+
+        class CustomBoom(ValueError):
+            pass
+
+        try:
+            raise CustomBoom("kaboom")
+        except CustomBoom as exc:
+            captured = exc
+        span = self._record_and_get_span({"exception": captured})
+        assert span.attributes["error.type"] == "CustomBoom"
+        assert span.attributes["exception.type"] == "CustomBoom"
+        assert span.attributes["error.message"] == "kaboom"
+        assert span.attributes["exception.message"] == "kaboom"
+        assert "error.stack_trace" in span.attributes
+        assert "exception.stacktrace" in span.attributes
+        assert "CustomBoom" in span.attributes["error.stack_trace"]
+        assert any(e.name == "exception" for e in span.events)
+
+    def test_full_error_information_stamps_both_keysets(self):
+        kwargs = {
+            "exception": ValueError("boom"),
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "401",
+                    "error_class": "AuthenticationError",
+                    "error_message": "bad key",
+                    "llm_provider": "openai",
+                    "traceback": "Traceback (most recent call last)...",
+                }
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.type"] == "AuthenticationError"
+        assert span.attributes["error.message"] == "bad key"
+        assert span.attributes["error.code"] == "401"
+        assert span.attributes["error.llm_provider"] == "openai"
+        assert (
+            span.attributes["error.stack_trace"]
+            == "Traceback (most recent call last)..."
+        )
+        assert span.attributes["exception.type"] == "AuthenticationError"
+        assert span.attributes["exception.message"] == "bad key"
+        assert (
+            span.attributes["exception.stacktrace"]
+            == "Traceback (most recent call last)..."
+        )
+        assert span.attributes["http.response.status_code"] == 401
+
+    def test_error_str_fallback_with_exception_object(self):
+        """When error_information is None but error_str is set, the
+        error_str field must win over str(exception). The two are
+        distinct strings here to prove the source of the stamped message."""
+
+        class WeirdError(RuntimeError):
+            pass
+
+        try:
+            # str(exception) is a different message from error_str; the test
+            # passes only if the implementation prefers error_str.
+            raise WeirdError("exception-side message")
+        except WeirdError as exc:
+            captured = exc
+        kwargs = {
+            "exception": captured,
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "slp-side error_str message",
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.message"] == "slp-side error_str message"
+        assert span.attributes["exception.message"] == ("slp-side error_str message")
+        assert span.attributes["error.type"] == "WeirdError"
+        assert span.attributes["exception.type"] == "WeirdError"
+
+    def test_pure_error_str_no_exception_object(self):
+        """Pure error_str source — no exception, no error_information.
+        This is the older-payload edge case where the only signal we have is
+        the formatted message string. Both keysets must still get the message;
+        type/stack_trace remain absent because neither source supplies them."""
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "old payload only carried this",
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.message"] == "old payload only carried this"
+        assert span.attributes["exception.message"] == ("old payload only carried this")
+        # No exception class -> no error.type / exception.type.
+        assert "error.type" not in span.attributes
+        assert "exception.type" not in span.attributes
+        # No traceback source at all.
+        assert "error.stack_trace" not in span.attributes
+        assert "exception.stacktrace" not in span.attributes
+        # No OTEL exception event either (record_exception was not called).
+        assert not any(e.name == "exception" for e in span.events)
+
+    def test_partial_error_information_falls_back_to_exception_class(self):
+        class MyProviderError(Exception):
+            pass
+
+        kwargs = {
+            "exception": MyProviderError("provider exploded"),
+            "standard_logging_object": {
+                "error_information": {"error_message": "provider exploded"},
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.message"] == "provider exploded"
+        assert span.attributes["error.type"] == "MyProviderError"
+        assert span.attributes["exception.type"] == "MyProviderError"
+        assert "error.code" not in span.attributes
+        assert "http.response.status_code" not in span.attributes
+
+    def test_http_status_only_no_exception(self):
+        """A guardrail / 4xx-on-response path can populate ``error_information``
+        with no Python exception attached. The OTel ``exception`` event won\u2019t
+        fire (no exception to record) but the ``exception.*`` attributes must
+        still be stamped."""
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "403",
+                    "error_class": "GuardrailIntervention",
+                    "error_message": "content blocked",
+                },
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert not any(e.name == "exception" for e in span.events)
+        assert span.attributes["error.type"] == "GuardrailIntervention"
+        assert span.attributes["exception.type"] == "GuardrailIntervention"
+        assert span.attributes["error.message"] == "content blocked"
+        assert span.attributes["exception.message"] == "content blocked"
+        assert span.attributes["error.code"] == "403"
+        assert span.attributes["http.response.status_code"] == 403
+
+    def test_non_numeric_error_code_keeps_legacy_only(self):
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "ContextWindowExceeded",
+                    "error_class": "ContextWindowExceededError",
+                    "error_message": "too long",
+                },
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.code"] == "ContextWindowExceeded"
+        assert "http.response.status_code" not in span.attributes
+        assert span.attributes["exception.type"] == "ContextWindowExceededError"
+
+    def test_no_inputs_is_noop(self):
+        span = self._record_and_get_span({})
+        for attr in (
+            "error.type",
+            "error.message",
+            "error.code",
+            "error.stack_trace",
+            "exception.type",
+            "exception.message",
+            "exception.stacktrace",
+            "http.response.status_code",
+        ):
+            assert attr not in span.attributes
+
+    def test_empty_error_information_falls_back_to_exception(self):
+        kwargs = {
+            "exception": ValueError("via fallback"),
+            "standard_logging_object": {"error_information": {}},
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.type"] == "ValueError"
+        assert span.attributes["error.message"] == "via fallback"
+        assert span.attributes["exception.message"] == "via fallback"
+
+    def test_error_code_remains_string(self):
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": {"error_code": "401"},
+            },
+        }
+        span = self._record_and_get_span(kwargs)
+        assert span.attributes["error.code"] == "401"
+        assert isinstance(span.attributes["error.code"], str)

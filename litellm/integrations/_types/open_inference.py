@@ -438,3 +438,29 @@ class ErrorAttributes:
     The LLM provider where the error occurred (e.g., 'openai', 'anthropic', 'azure').
     Corresponds to StandardLoggingPayloadErrorInformation.llm_provider
     """
+
+
+class ExceptionAttributes:
+    """
+    OTEL semantic-convention attribute names for exception/error info.
+
+    These follow the OpenTelemetry exception semantic conventions
+    (https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-spans/).
+    They mirror :class:`ErrorAttributes` but use the standard ``exception.*``
+    keys that OTEL-aware backends (Datadog, Tempo, Jaeger, etc.) recognise
+    natively.
+
+    Stamped on the span as plain attributes in addition to the ``exception``
+    event written by ``span.record_exception``, so the information is
+    queryable even when no exception object is available (e.g. guardrail
+    rejections, HTTP-status-only errors).
+    """
+
+    EXCEPTION_TYPE = "exception.type"
+    """The type/class of the exception. Mirrors ErrorAttributes.ERROR_TYPE."""
+
+    EXCEPTION_MESSAGE = "exception.message"
+    """The exception message. Mirrors ErrorAttributes.ERROR_MESSAGE."""
+
+    EXCEPTION_STACKTRACE = "exception.stacktrace"
+    """The exception stack trace. Mirrors ErrorAttributes.ERROR_STACK_TRACE."""
