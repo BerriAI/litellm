@@ -913,3 +913,96 @@ async def test_admin_with_identity_records_container_ownership(monkeypatch):
     table.create.assert_awaited_once()
     created_data = table.create.await_args.kwargs["data"]
     assert created_data["created_by"] == "proxy-admin"
+
+
+@pytest.mark.asyncio
+async def test_should_record_containers_from_responses_output_for_service_account(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(team_id="team-1")
+    encoded_container_id = (
+        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
+        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
+    )
+    responses_payload = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [
+                            {
+                                "type": "container_file_citation",
+                                "container_id": encoded_container_id,
+                                "file_id": "cfile_abc",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "_hidden_params": {"custom_llm_provider": "azure"},
+    }
+
+    await ownership.record_container_owners_from_responses_response(
+        response=responses_payload,
+        user_api_key_dict=auth,
+    )
+
+    table.create.assert_awaited_once()
+    created_data = table.create.await_args.kwargs["data"]
+    assert created_data["created_by"] == "team:team-1"
+    assert created_data["unified_object_id"] == encoded_container_id
+
+
+@pytest.mark.asyncio
+async def test_service_account_can_access_container_after_responses_tracking(
+    monkeypatch,
+):
+    encoded_container_id = (
+        "cntr_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmF6dXJlO21vZGVsX2lkOmR"
+        "lZi0xMjM7Y29udGFpbmVyX2lkOmNudHJfbmF0aXZl"
+    )
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(team_id="team-1")
+
+    await ownership.record_container_owners_from_responses_response(
+        response={
+            "output": [
+                {
+                    "type": "code_interpreter_call",
+                    "container_id": encoded_container_id,
+                }
+            ],
+            "_hidden_params": {"custom_llm_provider": "azure"},
+        },
+        user_api_key_dict=auth,
+    )
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id=encoded_container_id,
+        user_api_key_dict=auth,
+        custom_llm_provider="azure",
+    )
+    assert original_id == "cntr_native"
+    assert provider == "azure"
