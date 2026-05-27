@@ -2377,7 +2377,7 @@ async def apply_guardrail(
                 original_exception=e,
                 request_data=data,
             )
-            if transformed_exception is not None:
+            if isinstance(transformed_exception, Exception):
                 e = transformed_exception
         except Exception:
             verbose_proxy_logger.exception(
