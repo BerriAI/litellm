@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeResultsByDate } from "./mergeDailyResults";
+import { hasDuplicateDates, mergeResultsByDate } from "./mergeDailyResults";
 import { DailyData } from "../types";
 
 const emptyMetrics = () => ({
@@ -226,5 +226,123 @@ describe("mergeResultsByDate", () => {
     expect(merged[0].metrics.spend).toBeCloseTo(6.0);
     expect(merged[0].metrics.api_requests).toBe(6);
     expect(merged[0].metrics.successful_requests).toBe(6);
+  });
+
+  it("merges `tags` additively by tag name when both pages carry tags for the same key", () => {
+    const a = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: { ...emptyMetrics(), spend: 1, api_requests: 1 },
+            metadata: {
+              key_alias: "alpha",
+              team_id: null,
+              tags: [
+                { tag: "prod", usage: 3 },
+                { tag: "exp",  usage: 1 },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const b = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: { ...emptyMetrics(), spend: 2, api_requests: 2 },
+            metadata: {
+              key_alias: "alpha",
+              team_id: null,
+              tags: [
+                { tag: "prod",  usage: 4 },
+                { tag: "canary", usage: 5 },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const out = mergeResultsByDate([a, b]);
+    expect(out).toHaveLength(1);
+    const tags = out[0].breakdown.api_keys["sk-1"].metadata.tags!;
+    const tagMap = Object.fromEntries(tags.map((t) => [t.tag, t.usage]));
+    expect(tagMap).toEqual({ prod: 7, exp: 1, canary: 5 });
+    // Sanity: spend is also summed.
+    expect(out[0].breakdown.api_keys["sk-1"].metrics.spend).toBe(3);
+  });
+
+  it("preserves tags when only one side carries them", () => {
+    const a = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: { ...emptyMetrics(), spend: 1 },
+            metadata: { key_alias: "alpha", team_id: null, tags: [{ tag: "prod", usage: 2 }] },
+          },
+        },
+      },
+    });
+    const b = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: { ...emptyMetrics(), spend: 1 },
+            metadata: { key_alias: "alpha", team_id: null },
+          },
+        },
+      },
+    });
+    const out = mergeResultsByDate([a, b]);
+    expect(out[0].breakdown.api_keys["sk-1"].metadata.tags).toEqual([{ tag: "prod", usage: 2 }]);
+  });
+
+  it("does not mutate input tag arrays", () => {
+    const tagsA = [{ tag: "prod", usage: 2 }];
+    const tagsB = [{ tag: "prod", usage: 3 }];
+    const a = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: emptyMetrics(),
+            metadata: { key_alias: "alpha", team_id: null, tags: tagsA },
+          },
+        },
+      },
+    });
+    const b = row("2026-05-27", {
+      breakdown: {
+        ...emptyBreakdown(),
+        api_keys: {
+          "sk-1": {
+            metrics: emptyMetrics(),
+            metadata: { key_alias: "alpha", team_id: null, tags: tagsB },
+          },
+        },
+      },
+    });
+    mergeResultsByDate([a, b]);
+    expect(tagsA).toEqual([{ tag: "prod", usage: 2 }]);
+    expect(tagsB).toEqual([{ tag: "prod", usage: 3 }]);
+  });
+});
+
+describe("hasDuplicateDates", () => {
+  it("returns false for empty or single-row input", () => {
+    expect(hasDuplicateDates([])).toBe(false);
+    expect(hasDuplicateDates([row("2026-05-27")])).toBe(false);
+  });
+
+  it("returns false when every row has a distinct date", () => {
+    expect(hasDuplicateDates([row("2026-05-26"), row("2026-05-27"), row("2026-05-28")])).toBe(false);
+  });
+
+  it("returns true on the first repeat", () => {
+    expect(hasDuplicateDates([row("2026-05-26"), row("2026-05-27"), row("2026-05-26")])).toBe(true);
   });
 });
