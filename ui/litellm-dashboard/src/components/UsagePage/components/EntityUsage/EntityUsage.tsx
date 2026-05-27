@@ -40,6 +40,7 @@ import {
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
 import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
+import { getDailySpendChartData } from "../../utils/dailySpendChart";
 import { valueFormatterSpend } from "../../utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import TopKeyView from "./TopKeyView";
@@ -546,9 +547,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 <Card>
                   <Title>Daily Spend</Title>
                   <BarChart
-                    data={[...spendData.results].sort(
-                      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                    )}
+                    data={getDailySpendChartData(spendData.results, dateValue)}
                     index="date"
                     categories={["metrics.spend"]}
                     colors={["cyan"]}
