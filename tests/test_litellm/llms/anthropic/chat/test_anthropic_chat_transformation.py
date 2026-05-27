@@ -301,6 +301,20 @@ def test_server_tool_use_usage():
     assert usage.server_tool_use.web_search_requests == 1
 
 
+def test_usage_init_with_server_tool_use_dict():
+    """Usage(**dict) should convert server_tool_use from dict to ServerToolUse."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_tool_use={"web_search_requests": 1},
+    )
+    assert usage.server_tool_use.web_search_requests == 1
+    assert usage.server_tool_use.tool_search_requests is None
+
+
 def test_web_search_tool_transformation():
     from litellm.types.llms.openai import OpenAIWebSearchOptions
 

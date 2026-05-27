@@ -1554,7 +1554,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1656,7 +1656,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         )
 
         if server_tool_use is not None:
-            self.server_tool_use = server_tool_use
+            if isinstance(server_tool_use, dict):
+                self.server_tool_use = ServerToolUse(**server_tool_use)
+            else:
+                self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 

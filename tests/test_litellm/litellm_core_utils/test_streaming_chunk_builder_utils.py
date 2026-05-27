@@ -520,7 +520,56 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
-    assert usage.server_tool_use["web_search_requests"] == 2
+    assert usage.server_tool_use.web_search_requests == 2
+
+
+def test_stream_chunk_builder_anthropic_web_search_dict():
+    """server_tool_use as a dict in usage should be converted to ServerToolUse."""
+    # Create a usage object with server_tool_use as a raw dict
+    usage = Usage(
+        completion_tokens=27,
+        prompt_tokens=50,
+        total_tokens=77,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )
+    # Bypass Pydantic validation to set server_tool_use as a dict
+    # (simulates data arriving from raw JSON parsing)
+    object.__setattr__(usage, "server_tool_use", {"web_search_requests": 2})
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-mocked-usage-dict",
+        created=1745513206,
+        model="claude-sonnet-4-5-20250929",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=usage,
+    )
+
+    processor = ChunkProcessor(chunks=[chunk])
+    result = processor.calculate_usage(
+        chunks=[chunk], model="claude-sonnet-4-5-20250929", completion_output=""
+    )
+
+    assert result.server_tool_use.web_search_requests == 2
+    assert isinstance(result.server_tool_use, ServerToolUse)
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
