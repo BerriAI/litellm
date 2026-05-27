@@ -14,14 +14,14 @@ import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
-import type { DiscoverableMCPServer, MCPServer, MCPServerProps, MCPUserEnvVarsStatus, Team } from "./types";
+import type { DiscoverableMCPServer, MCPServer, MCPServerProps, MCPUserVariablesStatus, Team } from "./types";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
-import UserEnvVarsModal from "./UserEnvVarsModal";
-import { listMCPUserEnvVarStatus } from "../networking";
+import UserVariablesModal from "./UserVariablesModal";
+import { listMCPUserVariableStatus } from "../networking";
 
 type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
@@ -113,60 +113,62 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
-  // Per-user env-var fill modal target + bulk status across accessible servers.
-  const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
-  const [envVarStatusByServer, setEnvVarStatusByServer] = useState<Record<string, MCPUserEnvVarsStatus>>({});
+  // Per-user variables fill modal (now global per user) + bulk per-instance
+  // status across accessible servers. Tracking the triggering server lets us
+  // keep opening the modal from a specific card's "Set" button.
+  const [variablesModalServer, setVariablesModalServer] = useState<MCPServer | null>(null);
+  const [variableStatusByServer, setVariableStatusByServer] = useState<Record<string, MCPUserVariablesStatus>>({});
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
 
-  // Single bulk fetch of this user's per-server env-var status. Drives the
+  // Single bulk fetch of this user's per-instance variable status. Drives the
   // red "N user fields missing" footer on each card with no per-row request.
-  const refetchEnvVarStatus = useCallback(async () => {
+  const refetchVariableStatus = useCallback(async () => {
     if (!accessToken) {
-      setEnvVarStatusByServer({});
+      setVariableStatusByServer({});
       return;
     }
     try {
-      const statuses = await listMCPUserEnvVarStatus(accessToken);
-      const map: Record<string, MCPUserEnvVarsStatus> = {};
+      const statuses = await listMCPUserVariableStatus(accessToken);
+      const map: Record<string, MCPUserVariablesStatus> = {};
       for (const s of statuses) {
         map[s.server_id] = s;
       }
-      setEnvVarStatusByServer(map);
+      setVariableStatusByServer(map);
     } catch (err) {
-      console.warn("Failed to load MCP env-var status", err);
+      console.warn("Failed to load MCP variable status", err);
     }
   }, [accessToken]);
 
   useEffect(() => {
-    refetchEnvVarStatus();
-  }, [refetchEnvVarStatus, mcpServers]);
+    refetchVariableStatus();
+  }, [refetchVariableStatus, mcpServers]);
 
   // Per-server list of per-user fields this user still needs to fill in.
   const missingFieldsByServer = useMemo(() => {
     const map: Record<string, string[]> = {};
-    for (const [serverId, status] of Object.entries(envVarStatusByServer)) {
+    for (const [serverId, status] of Object.entries(variableStatusByServer)) {
       map[serverId] = (status.required ?? [])
         .filter((spec) => !spec.is_set)
         .map((spec) => spec.name);
     }
     return map;
-  }, [envVarStatusByServer]);
+  }, [variableStatusByServer]);
 
-  // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
+  // Deep-link via ?fill_variables=<server_id> — the link users follow from the
   // friendly error the proxy returns when a per-user var is missing. Opens the
   // fill modal for the matching server, then strips the param.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!serversWithHealth || serversWithHealth.length === 0) return;
     const params = new URLSearchParams(window.location.search);
-    const targetId = params.get("fill_env_vars");
+    const targetId = params.get("fill_variables");
     if (!targetId) return;
     const match = serversWithHealth.find((s) => s.server_id === targetId);
     if (match) {
-      setEnvVarsModalServer(match);
-      params.delete("fill_env_vars");
+      setVariablesModalServer(match);
+      params.delete("fill_variables");
       const newSearch = params.toString();
       const newUrl =
         window.location.pathname +
@@ -597,7 +599,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           onByokConnect={
                             server.is_byok ? () => setByokModalServer(server) : undefined
                           }
-                          onOpenFillFields={() => setEnvVarsModalServer(server)}
+                          onOpenFillFields={() => setVariablesModalServer(server)}
                           onDelete={
                             isAdminRole(userRole)
                               ? () => handleDelete(server.server_id)
@@ -644,16 +646,15 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         />
       )}
 
-      {/* Per-user env-var fill modal — backed by /v1/mcp/server/{id}/user-env-vars */}
-      <UserEnvVarsModal
-        server={envVarsModalServer}
-        open={!!envVarsModalServer}
+      {/* Per-user variables fill modal — backed by the global /v1/mcp/user/variables */}
+      <UserVariablesModal
+        open={!!variablesModalServer}
         accessToken={accessToken}
-        onClose={() => setEnvVarsModalServer(null)}
+        onClose={() => setVariablesModalServer(null)}
         onSaved={() => {
           // Refresh the bulk status so the red "N user fields missing" footer
           // on each card clears once the user has filled in their values.
-          refetchEnvVarStatus();
+          refetchVariableStatus();
         }}
       />
     </div>

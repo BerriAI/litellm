@@ -12,7 +12,7 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
-import EnvVarsSection from "./EnvVarsSection";
+import VariablesSection from "./VariablesSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -47,14 +47,14 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   }, {});
 };
 
-type EnvVarEntry = { name: string; value: string; scope: "global" | "user"; description?: string };
+type VariableEntry = { name: string; value: string; scope: "global" | "user"; description?: string };
 
-/** Normalize the env_vars form list into the payload shape the backend expects.
+/** Normalize the variables form list into the payload shape the backend expects.
  * Drops empty rows and any with invalid identifiers. */
-const normalizeEnvVars = (list: unknown): EnvVarEntry[] => {
+const normalizeVariables = (list: unknown): VariableEntry[] => {
   if (!Array.isArray(list)) return [];
   const seen = new Set<string>();
-  const out: EnvVarEntry[] = [];
+  const out: VariableEntry[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== "object") continue;
     const name = String((entry as Record<string, unknown>).name ?? "").trim();
@@ -306,7 +306,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
-        env_vars: envVarsList,
+        variables: variablesList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -320,7 +320,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
-      const envVars = normalizeEnvVars(envVarsList);
+      const variables = normalizeVariables(variablesList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -419,12 +419,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         static_headers: staticHeaders,
-        env_vars: envVars,
+        variables: variables,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
       payload.static_headers = staticHeaders;
-      payload.env_vars = envVars;
+      payload.variables = variables;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -1019,9 +1019,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <StdioConfiguration isVisible={transportType === "stdio"} />
           </div>
 
-          {/* Environment Variables Section */}
+          {/* Variables Section */}
           <div className="mt-8">
-            <EnvVarsSection />
+            <VariablesSection />
           </div>
 
           {/* Permission Management / Access Control Section */}

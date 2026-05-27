@@ -15,8 +15,8 @@ const { Text } = Typography;
 
 interface MCPServerCardProps {
   server: MCPServer;
-  // Per-user env-var fields this user still needs to fill in for this server.
-  // Computed by the parent from the bulk /user-env-vars/status response, so
+  // Per-user variable fields this user still needs to fill in for this server.
+  // Computed by the parent from the bulk /user-variables/status response, so
   // the card never issues a per-row request (no N+1).
   missingUserFields?: string[];
   isLoadingHealth?: boolean;

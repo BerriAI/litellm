@@ -1,61 +1,58 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
-import { MCPServer, MCPUserEnvVarsStatus } from "./types";
+import { MCPUserVariablesGlobalStatus } from "./types";
 import {
-  getMCPUserEnvVars,
-  storeMCPUserEnvVars,
+  getMCPUserVariables,
+  storeMCPUserVariables,
 } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text, Title } = Typography;
 
-interface UserEnvVarsModalProps {
-  server: MCPServer | null;
+interface UserVariablesModalProps {
   open: boolean;
   accessToken: string | null;
   onClose: () => void;
-  onSaved?: (status: MCPUserEnvVarsStatus) => void;
+  onSaved?: (status: MCPUserVariablesGlobalStatus) => void;
 }
 
 /**
- * User-facing modal for filling in per-user MCP environment variables.
+ * User-facing modal for filling in per-user MCP variables.
  *
- * Backed by GET / POST ``/v1/mcp/server/{id}/user-env-vars``. Each field
- * the admin marked as ``scope=user`` shows up with the admin-supplied
- * description as the placeholder.
+ * Backed by the GLOBAL (per-user, not per-server) endpoints
+ * GET / POST ``/v1/mcp/user/variables``. Each field the admin marked as
+ * ``scope=user`` shows up with the admin-supplied description as the
+ * placeholder. The contract is write-only: the backend never returns the
+ * stored value, only whether it ``is_set``.
  */
-const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
-  server,
+const UserVariablesModal: React.FC<UserVariablesModalProps> = ({
   open,
   accessToken,
   onClose,
   onSaved,
 }) => {
   const [form] = Form.useForm();
-  const [status, setStatus] = useState<MCPUserEnvVarsStatus | null>(null);
+  const [status, setStatus] = useState<MCPUserVariablesGlobalStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    if (!open || !server || !accessToken) {
+    if (!open || !accessToken) {
       return;
     }
     let cancelled = false;
     setIsLoading(true);
     (async () => {
       try {
-        const fetched = await getMCPUserEnvVars(accessToken, server.server_id);
+        const fetched = await getMCPUserVariables(accessToken);
         if (cancelled) return;
         setStatus(fetched);
-        const initial: Record<string, string> = {};
-        for (const spec of fetched?.required ?? []) {
-          initial[spec.name] = spec.value ?? "";
-        }
-        form.setFieldsValue(initial);
+        // Values are write-only — never prefill from the backend.
+        form.resetFields();
       } catch (err) {
         if (!cancelled) {
           NotificationsManager.fromBackend(
-            `Failed to load env vars: ${err instanceof Error ? err.message : String(err)}`,
+            `Failed to load variables: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       } finally {
@@ -65,31 +62,34 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, server, accessToken, form]);
+  }, [open, accessToken, form]);
 
   const handleSave = async (values: Record<string, string>) => {
-    if (!server || !accessToken) return;
+    if (!accessToken) return;
     setIsSaving(true);
     try {
+      // Only send non-empty fields (write-only contract; blank means "keep").
       const trimmed: Record<string, string> = {};
       for (const [k, v] of Object.entries(values)) {
-        trimmed[k] = (v ?? "").trim();
+        const value = (v ?? "").trim();
+        if (value !== "") {
+          trimmed[k] = value;
+        }
       }
-      const saved = await storeMCPUserEnvVars(accessToken, server.server_id, trimmed);
+      const saved = await storeMCPUserVariables(accessToken, trimmed);
       setStatus(saved);
       NotificationsManager.success("Credentials saved");
       if (onSaved) onSaved(saved);
       onClose();
     } catch (err) {
       NotificationsManager.fromBackend(
-        `Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to save variables: ${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
       setIsSaving(false);
     }
   };
 
-  const displayName = server?.server_name || server?.alias || server?.server_id || "MCP Server";
   const required = status?.required ?? [];
 
   return (
@@ -108,7 +108,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
             <Tag color="blue">Per-user</Tag>
           </div>
           <Text type="secondary" className="text-xs">
-            {displayName}
+            These values apply to every MCP server that requires them.
           </Text>
         </div>
       }
@@ -122,13 +122,13 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
           <Alert
             type="info"
             showIcon
-            message="No per-user fields configured for this server."
+            message="No per-user fields are required."
           />
         ) : (
           <>
             <Text className="text-sm text-gray-600 block">
-              These values are private to you. Your admin configured this MCP
-              server to require these per-user credentials:
+              These values are private to you. Your admin configured these
+              per-user credentials:
             </Text>
             <Form
               form={form}
@@ -146,10 +146,18 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
                     </span>
                   }
                   extra={spec.description || undefined}
-                  rules={[{ required: true, message: `${spec.name} is required` }]}
+                  rules={
+                    spec.is_set
+                      ? undefined
+                      : [{ required: true, message: `${spec.name} is required` }]
+                  }
                 >
                   <Input.Password
-                    placeholder={spec.description || `Enter your ${spec.name}`}
+                    placeholder={
+                      spec.is_set
+                        ? "•••••• (set)"
+                        : spec.description || `Enter your ${spec.name}`
+                    }
                     visibilityToggle
                   />
                 </Form.Item>
@@ -170,4 +178,4 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
   );
 };
 
-export default UserEnvVarsModal;
+export default UserVariablesModal;

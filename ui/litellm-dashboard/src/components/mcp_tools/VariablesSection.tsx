@@ -14,21 +14,21 @@ const SCOPE_OPTIONS = [
 ];
 
 /**
- * Form section for admin-configured MCP environment variables.
+ * Form section for admin-configured MCP variables.
  *
  * Each row has: name | value | scope. Variables can be interpolated into
  * Static Headers via ${NAME}. ``scope=global`` (shown as "Instance") values
  * are used as-is. ``scope=user`` (shown as "Per-user") values are filled in
  * by each user via the MCP Gateway dashboard.
  *
- * The parent form reads the ``env_vars`` field from the form values.
+ * The parent form reads the ``variables`` field from the form values.
  */
-const EnvVarsSection: React.FC = () => {
+const VariablesSection: React.FC = () => {
   return (
     <div className="rounded-lg border border-dashed border-purple-300 bg-purple-50 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Text strong className="text-sm">
-          Environment Variables
+          Variables
         </Text>
         <Tooltip
           title={
@@ -53,7 +53,7 @@ const EnvVarsSection: React.FC = () => {
         </code>
       </Text>
 
-      <Form.List name="env_vars">
+      <Form.List name="variables">
         {(fields, { add, remove }) => (
           <div className="space-y-2">
             {fields.length > 0 && (
@@ -119,7 +119,7 @@ const EnvVarsSection: React.FC = () => {
               icon={<PlusOutlined />}
               block
             >
-              Add Environment Variable
+              Add Variable
             </Button>
           </div>
         )}
@@ -135,7 +135,7 @@ const ValueField: React.FC<{
   value?: string;
   onChange?: (v: string) => void;
 }> = ({ fieldName, value, onChange }) => {
-  const scope = Form.useWatch(["env_vars", fieldName, "scope"]);
+  const scope = Form.useWatch(["variables", fieldName, "scope"]);
   const isPerUser = scope === "user";
   return (
     <Input
@@ -148,4 +148,4 @@ const ValueField: React.FC<{
   );
 };
 
-export default EnvVarsSection;
+export default VariablesSection;

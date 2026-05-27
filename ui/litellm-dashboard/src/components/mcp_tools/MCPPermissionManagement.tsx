@@ -42,10 +42,10 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }));
         form.setFieldValue("static_headers", staticHeaders);
       }
-      if (Array.isArray(mcpServer.env_vars) && mcpServer.env_vars.length > 0) {
+      if (Array.isArray(mcpServer.variables) && mcpServer.variables.length > 0) {
         form.setFieldValue(
-          "env_vars",
-          mcpServer.env_vars.map((entry) => ({
+          "variables",
+          mcpServer.variables.map((entry) => ({
             name: entry.name,
             value: entry.value ?? "",
             scope: entry.scope ?? "global",

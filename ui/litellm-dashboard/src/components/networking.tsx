@@ -10014,18 +10014,22 @@ export const listMCPUserCredentials = async (
 };
 
 // ============================================================
-// MCP per-user env vars (/v1/mcp/server/{id}/user-env-vars)
+// MCP per-user variables
+// Global per-user (/v1/mcp/user/variables), write-only contract.
+// Per-instance status list (/v1/mcp/user-variables/status).
 // ============================================================
 
-import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  MCPUserVariablesGlobalStatus,
+  MCPUserVariablesStatus,
+} from "./mcp_tools/types";
 
-export const getMCPUserEnvVars = async (
+export const getMCPUserVariables = async (
   accessToken: string,
-  serverId: string,
-): Promise<MCPUserEnvVarsStatus | null> => {
+): Promise<MCPUserVariablesGlobalStatus | null> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
+    ? `${proxyBaseUrl}/v1/mcp/user/variables`
+    : `/v1/mcp/user/variables`;
   const response = await fetch(url, {
     method: "GET",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
@@ -10034,14 +10038,13 @@ export const getMCPUserEnvVars = async (
   return response.json();
 };
 
-export const storeMCPUserEnvVars = async (
+export const storeMCPUserVariables = async (
   accessToken: string,
-  serverId: string,
   values: Record<string, string>,
-): Promise<MCPUserEnvVarsStatus> => {
+): Promise<MCPUserVariablesGlobalStatus> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
+    ? `${proxyBaseUrl}/v1/mcp/user/variables`
+    : `/v1/mcp/user/variables`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -10056,35 +10059,34 @@ export const storeMCPUserEnvVars = async (
     const message =
       typeof detail === "string"
         ? detail
-        : (detail as { error?: string })?.error || "Failed to save env vars";
+        : (detail as { error?: string })?.error || "Failed to save variables";
     throw new Error(message);
   }
   return response.json();
 };
 
-export const clearMCPUserEnvVars = async (
+export const clearMCPUserVariables = async (
   accessToken: string,
-  serverId: string,
-): Promise<MCPUserEnvVarsStatus> => {
+): Promise<MCPUserVariablesGlobalStatus> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
+    ? `${proxyBaseUrl}/v1/mcp/user/variables`
+    : `/v1/mcp/user/variables`;
   const response = await fetch(url, {
     method: "DELETE",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
   });
   if (!response.ok) {
-    throw new Error("Failed to clear env vars");
+    throw new Error("Failed to clear variables");
   }
   return response.json();
 };
 
-export const listMCPUserEnvVarStatus = async (
+export const listMCPUserVariableStatus = async (
   accessToken: string,
-): Promise<MCPUserEnvVarsStatus[]> => {
+): Promise<MCPUserVariablesStatus[]> => {
   const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/user-env-vars/status`
-    : `/v1/mcp/user-env-vars/status`;
+    ? `${proxyBaseUrl}/v1/mcp/user-variables/status`
+    : `/v1/mcp/user-variables/status`;
   const response = await fetch(url, {
     method: "GET",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },

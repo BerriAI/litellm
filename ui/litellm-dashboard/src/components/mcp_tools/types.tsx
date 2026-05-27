@@ -230,38 +230,50 @@ export interface MCPServer {
   token_storage_ttl_seconds?: number | null;
 
   /**
-   * Admin-configured env vars interpolated into static_headers via ${NAME}.
+   * Admin-configured variables interpolated into static_headers via ${NAME}.
    * Stored as a list so the UI can preserve admin-entered ordering.
    */
-  env_vars?: MCPEnvVar[] | null;
+  variables?: MCPVariable[] | null;
+
+  /** Template/instance classification for the server. */
+  kind?: "template" | "instance" | null;
+  template_id?: string | null;
 }
 
-/** One environment variable entry on an MCP server. */
-export type MCPEnvVarScope = "global" | "user";
+/** One variable entry on an MCP server. */
+export type MCPVariableScope = "global" | "user";
 
-export interface MCPEnvVar {
+export interface MCPVariable {
   name: string;
   /** For scope="global": the value used in interpolation.
    *  For scope="user": optional placeholder/description shown to users. */
   value: string;
-  scope: MCPEnvVarScope;
+  scope: MCPVariableScope;
   description?: string | null;
 }
 
-/** One required per-user env var slot returned by the user-env-vars endpoint. */
-export interface MCPUserEnvVarSpec {
+/** One required per-user variable slot returned by the user-variables endpoint. */
+export interface MCPUserVariableSpec {
   name: string;
   description?: string | null;
+  /** Never populated by the backend now (write-only contract). */
   value?: string | null;
   is_set: boolean;
 }
 
-/** Per-server per-user env var status returned by the API. */
-export interface MCPUserEnvVarsStatus {
+/** Per-instance per-user variable status returned by the API. */
+export interface MCPUserVariablesStatus {
   server_id: string;
   server_name?: string | null;
   alias?: string | null;
-  required: MCPUserEnvVarSpec[];
+  required: MCPUserVariableSpec[];
+  missing_count: number;
+  setup_url?: string | null;
+}
+
+/** Global (per-user, not per-server) variable status returned by the API. */
+export interface MCPUserVariablesGlobalStatus {
+  required: MCPUserVariableSpec[];
   missing_count: number;
   setup_url?: string | null;
 }
