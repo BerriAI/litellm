@@ -511,6 +511,11 @@ async def apply_compact_20260112(
     summary_model = _read_summary_model_setting()
     if summary_model is None:
         applied["error"] = "summary_model_not_configured"
+        if prior_compaction_block is not None:
+            # Prior context lives in ``augmented_system`` (compaction summary
+            # prefix); reduce to the latest user question to avoid re-sending
+            # stale post-compaction turns the summary already covers.
+            downstream_messages = _select_last_user_question(effective_messages)
         return PolyfillResult(
             messages=downstream_messages,
             system=augmented_system,
