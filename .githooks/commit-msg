@@ -56,7 +56,9 @@ esac
 #   <type>(<optional scope>)?!?: <subject text>
 # Allow alphanumeric + dash + dot + underscore + slash inside the scope to
 # accommodate scopes like `bedrock-converse`, `proxy/auth`, `v1.messages`.
-re='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/\-]+\))?!?: .+'
+# Note: hyphen sits at the END of the bracket expression to remain POSIX-portable
+# (`\-` inside `[...]` is not portable across BSD / macOS regex engines).
+re='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: .+'
 
 if [[ "$subject" =~ $re ]]; then
   exit 0
