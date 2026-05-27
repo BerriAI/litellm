@@ -43,6 +43,24 @@ function addMetrics(a: SpendMetrics, b: SpendMetrics): SpendMetrics {
   return out;
 }
 
+/**
+ * Merge two `tag: { tag, usage }[]` arrays by `tag` name, summing `usage`.
+ * If only one side has tags, that side wins; if both are absent, returns
+ * undefined to preserve the original shape.
+ */
+function mergeTags(
+  a: { tag: string; usage: number }[] | undefined,
+  b: { tag: string; usage: number }[] | undefined,
+): { tag: string; usage: number }[] | undefined {
+  if (!a && !b) return undefined;
+  if (!a) return b!.map((t) => ({ ...t }));
+  if (!b) return a.map((t) => ({ ...t }));
+  const totals = new Map<string, number>();
+  for (const t of a) totals.set(t.tag, (totals.get(t.tag) ?? 0) + (t.usage ?? 0));
+  for (const t of b) totals.set(t.tag, (totals.get(t.tag) ?? 0) + (t.usage ?? 0));
+  return Array.from(totals, ([tag, usage]) => ({ tag, usage }));
+}
+
 function mergeKeyMetricWithMetadata(
   a: KeyMetricWithMetadata | undefined,
   b: KeyMetricWithMetadata,
@@ -53,7 +71,7 @@ function mergeKeyMetricWithMetadata(
       metadata: {
         key_alias: b.metadata?.key_alias ?? null,
         team_id: b.metadata?.team_id ?? null,
-        tags: b.metadata?.tags ? [...b.metadata.tags] : undefined,
+        tags: b.metadata?.tags ? b.metadata.tags.map((t) => ({ ...t })) : undefined,
       },
     };
   }
@@ -62,7 +80,9 @@ function mergeKeyMetricWithMetadata(
     metadata: {
       key_alias: a.metadata.key_alias ?? b.metadata?.key_alias ?? null,
       team_id: a.metadata.team_id ?? b.metadata?.team_id ?? null,
-      tags: b.metadata?.tags ?? a.metadata.tags,
+      // Tags carry a per-(date, key) usage counter, so additive-by-tag-name
+      // preserves earlier pages instead of silently dropping them.
+      tags: mergeTags(a.metadata.tags, b.metadata?.tags),
     },
   };
 }
@@ -158,6 +178,22 @@ const EMPTY_BREAKDOWN = (): BreakdownMetrics => ({
  *
  * Pure & deterministic; no-op on already-deduped input.
  */
+/**
+ * Fast O(n) check: returns true if any two rows share a `date`. Useful as a
+ * pre-flight guard for callers that want to avoid materialising a fresh
+ * deduped array on already-clean inputs (e.g. the view-layer
+ * `sortedDailyResults` `useMemo`, where the hook already deduped).
+ */
+export function hasDuplicateDates(results: DailyData[]): boolean {
+  if (results.length < 2) return false;
+  const seen = new Set<string>();
+  for (const row of results) {
+    if (seen.has(row.date)) return true;
+    seen.add(row.date);
+  }
+  return false;
+}
+
 export function mergeResultsByDate(results: DailyData[]): DailyData[] {
   if (results.length < 2) return results.slice();
   const byDate = new Map<string, DailyData>();
