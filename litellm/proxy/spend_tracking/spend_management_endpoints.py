@@ -1913,9 +1913,28 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
+
+        # LIT-3301: a team-scoped virtual key must always be locked to its
+        # own ``team_id``, regardless of the underlying user role and
+        # regardless of what (if anything) the client passed as the
+        # ``team_id`` query parameter. Reject mismatched query params, then
+        # force the filter to the key's team and skip the role-based
+        # scoping branch below (the team filter already covers it).
+        enforced_team_id: Optional[str] = getattr(user_api_key_dict, "team_id", None)
+        if enforced_team_id is not None:
+            if team_id is not None and team_id != enforced_team_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Team virtual key cannot query spend logs for a different team."
+                    },
+                )
+            where_conditions["team_id"] = enforced_team_id
+            where_conditions.pop("user", None)
+
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         permitted_team_ids: Optional[List[str]] = None
-        if not is_admin_view:
+        if enforced_team_id is None and not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
                     prisma_client=prisma_client,
@@ -2279,6 +2298,11 @@ async def view_spend_logs(  # noqa: PLR0915
     ):
         user_id = user_api_key_dict.user_id
 
+    # LIT-3301: a team-scoped virtual key must only see its own team's logs,
+    # regardless of the underlying user role. Propagate ``team_id`` from the
+    # calling key into every filter assembled below.
+    enforced_team_id: Optional[str] = getattr(user_api_key_dict, "team_id", None)
+
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
@@ -2310,6 +2334,10 @@ async def view_spend_logs(  # noqa: PLR0915
                     "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
+
+            # LIT-3301: enforce team scope for team virtual keys.
+            if enforced_team_id is not None:
+                filter_query["team_id"] = enforced_team_id  # type: ignore[assignment]
 
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
@@ -2395,6 +2423,9 @@ async def view_spend_logs(  # noqa: PLR0915
 
         else:
             scoped_filter: Dict[str, Any] = {}
+            # LIT-3301: enforce team scope for team virtual keys.
+            if enforced_team_id is not None:
+                scoped_filter["team_id"] = enforced_team_id
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
@@ -3184,14 +3215,16 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw("""
+    response = await prisma_client.db.query_raw(
+        """
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """)
+        """
+    )
 
     return response
 
@@ -3496,17 +3529,35 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
 
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
-    Safely determine if the current user has admin view permissions.
-    Defaults to False on any exception.
+    Safely determine if the current request should receive proxy-admin scope
+    when querying spend logs / spend resources.
+
+    A request is admin-scoped only when BOTH:
+    1. The underlying user has the PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY role.
+    2. The calling virtual key is NOT bound to a team (``team_id is None``).
+
+    Team-scoped virtual keys (``user_api_key_dict.team_id`` set) must always be
+    treated as team-scoped, even when the user that minted the key has the
+    proxy-admin role. This prevents a team key from reading other teams' spend
+    logs via the admin-bypass branch in ``view_spend_logs`` /
+    ``ui_view_spend_logs`` / other spend endpoints.
+
+    Defaults to ``False`` on any exception.
     """
     try:
         user_role = getattr(user_api_key_dict, "user_role", None)
         if user_role is None:
             return False
-        return user_role in (
+        if user_role not in (
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        )
+        ):
+            return False
+        # A team virtual key never gets cross-team admin scope, even when the
+        # underlying user is a proxy admin.
+        if getattr(user_api_key_dict, "team_id", None) is not None:
+            return False
+        return True
     except Exception:
         return False
 
@@ -3568,6 +3619,13 @@ async def _assert_user_can_view_request_id(
     Verify the requesting non-admin user is allowed to view this spend-log row.
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
+
+    LIT-3301: if the calling key is team-scoped (``user_api_key_dict.team_id``
+    set), the row's ``team_id`` MUST match. The same-user fallback below does
+    NOT apply for team keys, because a team virtual key minted by an admin
+    would otherwise be able to retrieve message/response payloads for any log
+    owned by that admin outside of the key's team.
+
     Raises HTTP 403 if not.
     """
     row = await prisma_client.db.litellm_spendlogs.find_unique(
@@ -3576,6 +3634,21 @@ async def _assert_user_can_view_request_id(
     )
     if row is None:
         return
+
+    calling_team_id = getattr(user_api_key_dict, "team_id", None)
+    if calling_team_id is not None:
+        # A team virtual key may only inspect rows for its own team. No
+        # same-user fallback for team keys.
+        if row.team_id == calling_team_id:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Not authorized to view spend log for request_id={}".format(
+                    request_id
+                )
+            },
+        )
 
     if row.user is not None and row.user == user_api_key_dict.user_id:
         return
