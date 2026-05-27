@@ -306,3 +306,142 @@ async def test_chat_completion_request_with_redaction():
         {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
     ]
     pass
+
+
+@pytest.mark.asyncio
+async def test_pem_private_key_full_block_redaction_in_message():
+    """LIT-3292: detect-secrets PrivateKeyDetector returns only the
+    `-----BEGIN ... PRIVATE KEY-----` header line as the secret value, so a
+    naive `str.replace(secret_value, "[REDACTED]")` leaves the base64 body
+    and `-----END ... PRIVATE KEY-----` footer in the message. The guardrail
+    must strip the whole PEM block, not just the header line.
+    """
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "fakebase64bodyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        "fakebase64bodyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    secret_instance = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide_secrets", event_hook="pre_call"
+    )
+    data = {
+        "messages": [
+            {"role": "user", "content": f"please review this key:\n{pem}\nthanks"}
+        ]
+    }
+    await secret_instance.async_pre_call_hook(
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake"),
+    )
+    content = data["messages"][0]["content"]
+    assert "[REDACTED]" in content
+    # Full block must be gone: no header, no body, no footer line.
+    assert "-----BEGIN" not in content
+    assert "-----END" not in content
+    assert "fakebase64bodyA" not in content
+    assert "fakebase64bodyB" not in content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "header",
+    [
+        "RSA PRIVATE KEY",
+        "EC PRIVATE KEY",
+        "DSA PRIVATE KEY",
+        "OPENSSH PRIVATE KEY",
+        "PRIVATE KEY",
+        "ENCRYPTED PRIVATE KEY",
+    ],
+)
+async def test_pem_private_key_full_block_redaction_all_pem_variants(header):
+    """LIT-3292: all PEM private-key flavours (RSA / EC / DSA / OPENSSH /
+    PKCS#8 / encrypted PKCS#8) must be redacted as a whole block."""
+    pem = (
+        f"-----BEGIN {header}-----\n"
+        "fakebase64bodyCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n"
+        f"-----END {header}-----"
+    )
+    secret_instance = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide_secrets", event_hook="pre_call"
+    )
+    data = {"messages": [{"role": "user", "content": pem}]}
+    await secret_instance.async_pre_call_hook(
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake"),
+    )
+    content = data["messages"][0]["content"]
+    assert content.strip() == "[REDACTED]", content
+
+
+@pytest.mark.asyncio
+async def test_pem_private_key_full_block_redaction_in_prompt_str():
+    """The PEM full-block sweep must also cover the legacy `data['prompt']`
+    string branch (completion-style requests)."""
+    pem = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "fakebase64bodyDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD\n"
+        "-----END PRIVATE KEY-----"
+    )
+    secret_instance = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide_secrets", event_hook="pre_call"
+    )
+    data = {"prompt": f"key follows: {pem}"}
+    await secret_instance.async_pre_call_hook(
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake"),
+    )
+    assert "fakebase64body" not in data["prompt"]
+    assert "[REDACTED]" in data["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_pem_private_key_full_block_redaction_in_prompt_list():
+    """The PEM full-block sweep must also cover the `data['prompt']` list
+    branch (some legacy / multi-prompt completion shapes)."""
+    pem = (
+        "-----BEGIN EC PRIVATE KEY-----\n"
+        "fakebase64bodyEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE\n"
+        "-----END EC PRIVATE KEY-----"
+    )
+    secret_instance = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide_secrets", event_hook="pre_call"
+    )
+    data = {"prompt": ["clean string", f"key follows: {pem}"]}
+    await secret_instance.async_pre_call_hook(
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-fake"),
+    )
+    assert "fakebase64body" not in data["prompt"][1]
+    assert "[REDACTED]" in data["prompt"][1]
+    assert data["prompt"][0] == "clean string"
+
+
+def test_redact_pem_blocks_helper_is_pure_function():
+    """Direct unit test of the helper so a regression in the regex is caught
+    even if the call-site integration is mocked away."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _redact_pem_blocks,
+    )
+
+    # Single block
+    pem = (
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "ABCDEF\nGHIJKL\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    assert _redact_pem_blocks(pem) == "[REDACTED]"
+    # Two blocks in one message
+    two = pem + "\nmiddle\n" + pem
+    assert _redact_pem_blocks(two) == "[REDACTED]\nmiddle\n[REDACTED]"
+    # No PEM -> untouched
+    assert _redact_pem_blocks("hello world") == "hello world"
