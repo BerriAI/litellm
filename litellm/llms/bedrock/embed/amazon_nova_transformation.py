@@ -165,11 +165,23 @@ class AmazonNovaEmbeddingConfig:
                         "source": {"bytes": base64_data},
                     }
                 elif media_type.startswith("video/"):
-                    # Handle video data URLs
+                    # Handle video data URLs.
+                    # Nova multimodal embeddings require `embeddingMode` on
+                    # the `video` block. When the caller does not pre-
+                    # populate the whole `video` dict via `inference_params`,
+                    # default the mode to AUDIO_VIDEO_COMBINED (the most
+                    # general value in NOVA_EMBEDDING_MODES). Callers can
+                    # override by passing `embeddingMode` as a top-level
+                    # inference param, which is popped off and applied to
+                    # the synthesized block here.
                     video_format = media_type.split("/")[1].lower()
+                    video_embedding_mode = embedding_params.pop(
+                        "embeddingMode", "AUDIO_VIDEO_COMBINED"
+                    )
                     embedding_params["video"] = {
                         "format": video_format,
                         "source": {"bytes": base64_data},
+                        "embeddingMode": video_embedding_mode,
                     }
                 elif media_type.startswith("audio/"):
                     # Handle audio data URLs
