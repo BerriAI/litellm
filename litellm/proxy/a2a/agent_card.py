@@ -59,7 +59,6 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "provider",
     "documentationUrl",
     "securitySchemes",
-    "securityRequirements",
     "security",
     "supportsAuthenticatedExtendedCard",
     "signatures",
@@ -160,9 +159,10 @@ def merge_agent_card(
     ]
 
     base["securitySchemes"] = deepcopy(LITELLM_SECURITY_SCHEMES)
-    base["securityRequirements"] = deepcopy(LITELLM_SECURITY_REQUIREMENTS)
-    # Drop the upstream's per-call ``security`` selector — the proxy enforces
-    # its own scheme regardless of what upstream required.
-    base.pop("security", None)
+    # Use the standard A2A/OpenAPI ``security`` field for requirements, not
+    # the non-standard ``securityRequirements`` alias. The upstream's own
+    # ``security`` selector is overwritten here because the proxy enforces its
+    # own scheme regardless of what upstream required.
+    base["security"] = deepcopy(LITELLM_SECURITY_REQUIREMENTS)
 
     return {key: value for key, value in base.items() if key in _ALLOWED_TOP_LEVEL_KEYS}

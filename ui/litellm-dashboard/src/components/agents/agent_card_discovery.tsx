@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -26,9 +26,13 @@ import {
 
 import {
   DiscoveredAgentCard,
-  DiscoveryMode,
   discoverAgentCardCall,
 } from "../networking";
+import {
+  selectionsFromSavedAgentCard,
+  selectionsFromUpstreamCard,
+  skillId,
+} from "./agent_discovery_utils";
 
 const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;
@@ -44,27 +48,14 @@ export interface DiscoveredAgentCardSelection {
   upstream_url: string;
 }
 
-/**
- * What the parent wants the discovery endpoint to do. When the parent can
- * derive this from form state (e.g. agent type = LangGraph + assistant_id +
- * api_base), it owns the values; the component just relays them. Different
- * upstreams use different URL conventions, so the mode matters.
- */
-export interface DiscoveryRequestPlan {
-  /** Base URL to send to the proxy. */
-  url: string;
-  /** Which dispatch path the proxy should use. */
-  discovery_mode: DiscoveryMode;
-  /** Mode-specific params (e.g. ``{assistant_id}`` for LangGraph). */
-  params?: Record<string, any>;
-  /** Human-readable rendering of the URL the proxy will ultimately fetch.
-   *  Shown in the UI so the admin can see what we'll hit. */
-  display_url?: string;
-}
+export type { DiscoveryRequestPlan } from "./agent_discovery_utils";
+import type { DiscoveryRequestPlan } from "./agent_discovery_utils";
 
 interface AgentCardDiscoveryProps {
   accessToken: string | null;
-  onApply: (selection: DiscoveredAgentCardSelection) => void;
+  /** Called whenever the upstream card or the user's selections change. Pass
+   *  ``null`` when discovery is cleared or fails so the parent can reset. */
+  onApply: (selection: DiscoveredAgentCardSelection | null) => void;
   /**
    * Parent-supplied discovery plan. When provided the component uses these
    * values verbatim and hides its free-form URL input — the parent is the
@@ -73,32 +64,19 @@ interface AgentCardDiscoveryProps {
    * input that defaults to ``well_known_fallback`` mode.
    */
   discoveryRequest?: DiscoveryRequestPlan;
+  /** When editing an existing agent, the card stored in the DB. Upstream
+   *  discovery lists everything available; only skills/capabilities present
+   *  here are pre-selected. */
+  savedAgentCard?: DiscoveredAgentCard | null;
 }
 
 const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
-
-const skillId = (skill: any, idx: number): string =>
-  skill?.id ?? skill?.name ?? `skill-${idx}`;
-
-/**
- * Mirrors the proxy-side `_ALLOWED_CAPABILITY_KEYS` allowlist. Keep these in
- * sync — anything we surface here that the proxy strips would look like a
- * silent drop to the admin.
- */
-const filterCapabilitiesForUI = (
-  capabilities: Record<string, any> | undefined,
-): Record<string, any> => {
-  if (!capabilities) return {};
-  return ALLOWED_CAPABILITY_KEYS.reduce<Record<string, any>>((acc, key) => {
-    if (key in capabilities) acc[key] = Boolean(capabilities[key]);
-    return acc;
-  }, {});
-};
 
 const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   accessToken,
   onApply,
   discoveryRequest,
+  savedAgentCard,
 }) => {
   // When the parent drives discovery, ``manualUrl`` is unused — the URL
   // comes from ``discoveryRequest.url`` directly. When the parent hasn't
@@ -119,16 +97,24 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   >({});
 
   const resetSelections = (fresh: DiscoveredAgentCard) => {
-    setEditedName(fresh.name ?? "");
-    setEditedDescription(fresh.description ?? "");
-    const skills = fresh.skills ?? [];
-    setSelectedSkillIds(new Set(skills.map((s, i) => skillId(s, i))));
-    setSelectedCapabilities(filterCapabilitiesForUI(fresh.capabilities));
+    const initial = savedAgentCard
+      ? selectionsFromSavedAgentCard(fresh, savedAgentCard)
+      : selectionsFromUpstreamCard(fresh);
+    setEditedName(initial.editedName);
+    setEditedDescription(initial.editedDescription);
+    setSelectedSkillIds(initial.selectedSkillIds);
+    setSelectedCapabilities(initial.selectedCapabilities);
   };
 
-  const handleDiscover = async () => {
+  const onApplyRef = useRef(onApply);
+  onApplyRef.current = onApply;
+  const discoverRequestIdRef = useRef(0);
+  const lastSyncedSelectionRef = useRef<string | null>(null);
+
+  const handleDiscover = useCallback(async () => {
     if (!accessToken) {
       setError("No access token available");
+      onApplyRef.current(null);
       return;
     }
     const trimmed = effectiveUrl.trim();
@@ -138,9 +124,12 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
           ? "Fill in the agent's connection details above first"
           : "Enter the agent's base URL first",
       );
+      setCard(null);
+      onApplyRef.current(null);
       return;
     }
 
+    const requestId = ++discoverRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -154,15 +143,49 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
             }
           : undefined,
       );
+      if (requestId !== discoverRequestIdRef.current) return;
+      lastSyncedSelectionRef.current = null;
       setCard(response.agent_card);
       resetSelections(response.agent_card);
     } catch (e: any) {
+      if (requestId !== discoverRequestIdRef.current) return;
       setError(e?.message ? String(e.message) : "Failed to discover agent card");
       setCard(null);
+      lastSyncedSelectionRef.current = null;
+      onApplyRef.current(null);
     } finally {
-      setLoading(false);
+      if (requestId === discoverRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [accessToken, discoveryRequest, effectiveUrl, isParentDriven]);
+
+  // Auto-discover when the URL (or parent plan) becomes available.
+  useEffect(() => {
+    if (!accessToken) return;
+    const trimmed = effectiveUrl.trim();
+    if (!trimmed) {
+      setCard(null);
+      setError(null);
+      lastSyncedSelectionRef.current = null;
+      onApplyRef.current(null);
+      return;
+    }
+
+    const debounceMs = isParentDriven ? 0 : 400;
+    const timer = window.setTimeout(() => {
+      void handleDiscover();
+    }, debounceMs);
+    return () => window.clearTimeout(timer);
+  }, [
+    accessToken,
+    effectiveUrl,
+    isParentDriven,
+    discoveryRequest?.url,
+    discoveryRequest?.discovery_mode,
+    discoveryRequest?.params,
+    handleDiscover,
+  ]);
 
   const toggleSkill = (id: string, checked: boolean) => {
     setSelectedSkillIds((prev) => {
@@ -173,8 +196,8 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     });
   };
 
-  const handleApply = () => {
-    if (!card) return;
+  const buildSelection = useCallback((): DiscoveredAgentCardSelection | null => {
+    if (!card) return null;
     const skills = card.skills ?? [];
     const filteredSkills = skills.filter((s, i) =>
       selectedSkillIds.has(skillId(s, i)),
@@ -188,12 +211,30 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       capabilities: { ...selectedCapabilities },
     };
 
-    onApply({
+    return {
       raw_card: card,
       selected_card,
       upstream_url: effectiveUrl.trim(),
-    });
-  };
+    };
+  }, [
+    card,
+    editedDescription,
+    editedName,
+    effectiveUrl,
+    selectedCapabilities,
+    selectedSkillIds,
+  ]);
+
+  // Keep the parent form in sync as the user edits selections — no extra
+  // "apply" click needed before hitting Next.
+  useEffect(() => {
+    if (!card) return;
+    const selection = buildSelection();
+    const serialized = JSON.stringify(selection);
+    if (lastSyncedSelectionRef.current === serialized) return;
+    lastSyncedSelectionRef.current = serialized;
+    onApplyRef.current(selection);
+  }, [buildSelection, card]);
 
   const skillCount = card?.skills?.length ?? 0;
   const selectedSkillCount = selectedSkillIds.size;
@@ -428,11 +469,6 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
             </Panel>
           </Collapse>
 
-          <div className="flex justify-end mt-4">
-            <Button type="primary" onClick={handleApply}>
-              Use these selections
-            </Button>
-          </div>
         </div>
       )}
     </div>

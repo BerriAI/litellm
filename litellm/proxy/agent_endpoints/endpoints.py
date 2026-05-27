@@ -48,6 +48,8 @@ def _build_merged_agent_card(
     *,
     agent_id: str,
     http_request: Request,
+    agent_name: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Apply the LiteLLM-fronting merge to ``upstream_card`` for ``agent_id``."""
     proxy_base = _proxy_base_url(http_request)
@@ -55,6 +57,8 @@ def _build_merged_agent_card(
         upstream_card,
         proxy_url=f"{proxy_base}/a2a/{agent_id}",
         proxy_base_url=proxy_base,
+        name=agent_name,
+        description=description,
     )
 
 
@@ -378,6 +382,8 @@ async def create_agent(
             request.get("agent_card_params"),
             agent_id=new_agent_id,
             http_request=http_request,
+            agent_name=request.get("agent_name"),
+            description=(request.get("agent_card_params") or {}).get("description"),
         )
         merged_request: AgentConfig = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 
@@ -580,6 +586,8 @@ async def update_agent(
             request.get("agent_card_params"),
             agent_id=agent_id,
             http_request=http_request,
+            agent_name=request.get("agent_name"),
+            description=(request.get("agent_card_params") or {}).get("description"),
         )
         merged_request: AgentConfig = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 
@@ -686,6 +694,8 @@ async def patch_agent(
                 request.get("agent_card_params"),
                 agent_id=agent_id,
                 http_request=http_request,
+                agent_name=request.get("agent_name"),
+                description=(request.get("agent_card_params") or {}).get("description"),
             )
             patch_payload = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 

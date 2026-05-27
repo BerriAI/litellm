@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
 import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
@@ -10,6 +10,10 @@ import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_f
 import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
 import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
+import AgentCardDiscovery, {
+  DiscoveredAgentCardSelection,
+} from "./agent_card_discovery";
+import { buildDiscoveryRequest } from "./agent_discovery_utils";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -31,6 +35,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   const [form] = Form.useForm();
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
+  const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] =
+    useState<DiscoveredAgentCardSelection | null>(null);
 
   useEffect(() => {
     const fetchMetadata = async () => {
@@ -93,6 +99,85 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   }, [agentTypeMetadata, agent]);
 
   const selectedAgentTypeInfo = agentTypeMetadata.find(t => t.agent_type === detectedAgentType);
+  const watchedFormValues = Form.useWatch([], form);
+
+  const discoveryRequest = useMemo(
+    () =>
+      buildDiscoveryRequest(
+        detectedAgentType,
+        watchedFormValues || {},
+        selectedAgentTypeInfo,
+      ),
+    [watchedFormValues, selectedAgentTypeInfo, detectedAgentType],
+  );
+
+  const overlayDiscoveredCardParams = (
+    agentData: Record<string, any>,
+  ): Record<string, any> => {
+    if (!appliedDiscoveredSelection) return agentData;
+    const discovered = appliedDiscoveredSelection.selected_card;
+    return {
+      ...agentData,
+      agent_card_params: {
+        ...agentData.agent_card_params,
+        name: discovered.name ?? agentData.agent_card_params?.name,
+        description:
+          discovered.description ?? agentData.agent_card_params?.description,
+        ...(Array.isArray(discovered.skills) && {
+          skills: discovered.skills,
+        }),
+        ...(discovered.capabilities && {
+          capabilities: discovered.capabilities,
+        }),
+        ...(Array.isArray(discovered.defaultInputModes) &&
+          discovered.defaultInputModes.length > 0 && {
+            defaultInputModes: discovered.defaultInputModes,
+          }),
+        ...(Array.isArray(discovered.defaultOutputModes) &&
+          discovered.defaultOutputModes.length > 0 && {
+            defaultOutputModes: discovered.defaultOutputModes,
+          }),
+        ...(discovered.provider && { provider: discovered.provider }),
+        ...(discovered.iconUrl && { iconUrl: discovered.iconUrl }),
+        ...(discovered.documentationUrl && {
+          documentationUrl: discovered.documentationUrl,
+        }),
+      },
+    };
+  };
+
+  const handleApplyDiscoveredCard = (
+    selection: DiscoveredAgentCardSelection | null,
+  ) => {
+    setAppliedDiscoveredSelection(selection);
+    if (!selection) return;
+    const { selected_card } = selection;
+    const skills = (selected_card.skills ?? []).map((s) => ({
+      id: s.id ?? "",
+      name: s.name ?? "",
+      description: s.description ?? "",
+      tags: s.tags ?? [],
+      examples: s.examples ?? [],
+    }));
+
+    const fieldsToSet: Record<string, any> = {
+      name: selected_card.name,
+      description: selected_card.description,
+      streaming: Boolean(selected_card.capabilities?.streaming),
+      skills,
+      iconUrl: selected_card.iconUrl,
+      documentationUrl: selected_card.documentationUrl,
+    };
+
+    const urlCredentialKeys = (selectedAgentTypeInfo?.credential_fields ?? [])
+      .map((f) => f.key)
+      .filter((key) => /(^|_)(url|api_base|endpoint)$/i.test(key));
+    for (const key of urlCredentialKeys) {
+      fieldsToSet[key] = selection.upstream_url;
+    }
+
+    form.setFieldsValue(fieldsToSet);
+  };
 
   const handleUpdate = async (values: any) => {
     if (!accessToken || !agent) return;
@@ -105,12 +190,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
         updateData = buildAgentDataFromForm(values, agent);
       } else if (selectedAgentTypeInfo) {
         updateData = buildDynamicAgentData(values, selectedAgentTypeInfo);
-        // Preserve the agent_name from form
         updateData.agent_name = values.agent_name;
       } else {
         updateData = buildAgentDataFromForm(values, agent);
       }
-      
+
+      if (appliedDiscoveredSelection) {
+        updateData = overlayDiscoveredCardParams(updateData);
+      }
+
       await patchAgentCall(accessToken, agentId, updateData);
       MessageManager.success("Agent updated successfully");
       setIsEditing(false);
@@ -278,7 +366,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                 <div className="flex justify-between items-center mb-4">
                   <Title>Agent Settings</Title>
                   {!isEditing && (
-                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                    <TremorButton
+                      onClick={() => {
+                        setAppliedDiscoveredSelection(null);
+                        setIsEditing(true);
+                      }}
+                    >
+                      Edit Settings
+                    </TremorButton>
                   )}
                 </div>
 
@@ -298,6 +393,17 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                       <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
                     ) : (
                     <AgentFormFields showAgentName={true} />
+                    )}
+
+                    {discoveryRequest && (
+                      <div className="mt-4">
+                        <AgentCardDiscovery
+                          accessToken={accessToken}
+                          onApply={handleApplyDiscoveredCard}
+                          discoveryRequest={discoveryRequest}
+                          savedAgentCard={agent.agent_card_params ?? null}
+                        />
+                      </div>
                     )}
 
                     <Divider />
@@ -321,6 +427,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
 
                     <div className="flex justify-end gap-2 mt-6">
                       <AntButton onClick={() => {
+                        setAppliedDiscoveredSelection(null);
                         setIsEditing(false);
                         fetchAgentInfo();
                       }}>

@@ -30,7 +30,6 @@ def _full_upstream_card() -> dict:
         "defaultInputModes": ["text", "audio"],
         "defaultOutputModes": ["text"],
         "securitySchemes": {"upstreamKey": {"type": "apiKey"}},
-        "securityRequirements": [{"upstreamKey": []}],
         "security": [{"upstreamKey": []}],
         "provider": {"organization": "UpstreamCo", "url": "https://upstream.example"},
         "iconUrl": "https://upstream.example/icon.png",
@@ -97,8 +96,8 @@ def test_replaces_security_schemes_and_requirements():
         _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
     )
     assert merged["securitySchemes"] == LITELLM_SECURITY_SCHEMES
-    assert merged["securityRequirements"] == LITELLM_SECURITY_REQUIREMENTS
-    assert "security" not in merged
+    assert merged["security"] == LITELLM_SECURITY_REQUIREMENTS
+    assert "securityRequirements" not in merged
 
 
 def test_emits_supported_interfaces_pointing_at_proxy():
