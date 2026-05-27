@@ -291,3 +291,101 @@ class TestUIViewSpendLogsTeamScope:
         assert ok and exc is None
         where = prisma.db.litellm_spendlogs.count.call_args.kwargs.get("where", {})
         assert "team_id" not in where
+
+
+
+# -----------------------------------------------------------------------------
+# _assert_user_can_view_request_id team_id enforcement (LIT-3301 Veria follow-up)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAssertUserCanViewRequestId:
+    """``_assert_user_can_view_request_id`` must reject any row whose
+    ``team_id`` does not match the calling team-scoped key's ``team_id``,
+    regardless of whether the row's ``user`` matches the underlying user
+    (which is how an admin-minted team key would have bypassed scope before
+    LIT-3301; flagged by Veria as a High-severity gap)."""
+
+    @staticmethod
+    def _make_prisma(row):
+        prisma = MagicMock()
+        prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
+        return prisma
+
+    @staticmethod
+    def _row(*, user, team_id):
+        r = MagicMock()
+        r.user = user
+        r.team_id = team_id
+        return r
+
+    async def test_team_key_blocks_other_team_row_even_when_same_user(self) -> None:
+        """The exact gap Veria called out: a team-A virtual key minted by an
+        admin must NOT see request-id rows for other teams' logs that happen
+        to share ``row.user == user_api_key_dict.user_id``."""
+        from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            _assert_user_can_view_request_id,
+        )
+
+        team_uak = UserAPIKeyAuth(
+            api_key="sk-team-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin-1",
+            team_id="team-A",
+        )
+        # Row belongs to team-B but the row.user is the same admin who minted
+        # the team-A key. Previously this would have returned early via the
+        # same-user fallback.
+        prisma = self._make_prisma(self._row(user="admin-1", team_id="team-B"))
+        with pytest.raises(HTTPException) as exc:
+            await _assert_user_can_view_request_id(
+                prisma_client=prisma,
+                user_api_key_dict=team_uak,
+                request_id="r-1",
+            )
+        assert exc.value.status_code == 403
+
+    async def test_team_key_allows_own_team_row(self) -> None:
+        from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            _assert_user_can_view_request_id,
+        )
+
+        team_uak = UserAPIKeyAuth(
+            api_key="sk-team-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin-1",
+            team_id="team-A",
+        )
+        prisma = self._make_prisma(self._row(user="someone-else", team_id="team-A"))
+        # Should not raise.
+        from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            _assert_user_can_view_request_id,
+        )
+
+        await _assert_user_can_view_request_id(
+            prisma_client=prisma,
+            user_api_key_dict=team_uak,
+            request_id="r-2",
+        )
+
+    async def test_team_key_blocks_row_with_no_team(self) -> None:
+        """A row with ``team_id=None`` cannot be inspected by a team key."""
+        from litellm.proxy.spend_tracking.spend_management_endpoints import (
+            _assert_user_can_view_request_id,
+        )
+
+        team_uak = UserAPIKeyAuth(
+            api_key="sk-team-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin-1",
+            team_id="team-A",
+        )
+        prisma = self._make_prisma(self._row(user="admin-1", team_id=None))
+        with pytest.raises(HTTPException) as exc:
+            await _assert_user_can_view_request_id(
+                prisma_client=prisma,
+                user_api_key_dict=team_uak,
+                request_id="r-3",
+            )
+        assert exc.value.status_code == 403
