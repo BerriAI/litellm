@@ -2191,3 +2191,175 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     assert (
         RouteChecks.is_llm_api_route(route=route) is True
     ), f"{route!r} should be classified as an LLM API route"
+
+
+
+# ---------------------------------------------------------------------------
+# LIT-3300: ``/key/generate`` ``key_type`` presets (``llm_api`` /
+# ``management`` / ``read_only``) store a ``LiteLLMRoutes`` bucket NAME on the
+# token (e.g. ``allowed_routes=["management_routes"]``). The second-pass route
+# gate in ``non_proxy_admin_allowed_routes_check`` previously compared the
+# raw bucket name against the request path, so virtual keys created with these
+# presets returned 401 Unauthorized on routes the bucket actually covers.
+# ---------------------------------------------------------------------------
+
+
+def _ticket_3300_token(allowed_routes):
+    """Token shape produced by ``handle_key_type``: no ``user_id`` (Proxy
+    Admin issued the key without an explicit owner), no ``user_role`` — so
+    ``_is_user_proxy_admin`` is False and the call falls all the way through
+    to the ``valid_token.allowed_routes`` fallback under test.
+    """
+    return UserAPIKeyAuth(
+        api_key="hashed-token",
+        allowed_routes=allowed_routes,
+        user_role=None,
+        user_id=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+        "/team/list",
+        "/v2/team/list",
+        "/team/new",
+        "/team/update",
+        "/user/new",
+        "/user/info",
+        "/model/info",
+        "/v1/mcp/server",
+    ],
+)
+def test_lit_3300_management_bucket_allows_management_routes(route):
+    """Regression for LIT-3300: a key with allowed_routes=['management_routes']
+    must reach routes in ``LiteLLMRoutes.management_routes.value`` via the
+    bucket-name expansion at the ``non_proxy_admin_allowed_routes_check``
+    fallback."""
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route=route,
+        request=request,
+        valid_token=_ticket_3300_token(["management_routes"]),
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/key/info",
+        "/team/info",
+        "/team/list",
+        "/v2/team/list",
+        "/user/info",
+        "/model/info",
+        "/health",
+        "/key/list",
+    ],
+)
+def test_lit_3300_read_only_bucket_allows_info_routes(route):
+    """Regression for LIT-3300: a key with allowed_routes=['info_routes']
+    must reach routes in ``LiteLLMRoutes.info_routes.value`` via bucket-name
+    expansion."""
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route=route,
+        request=request,
+        valid_token=_ticket_3300_token(["info_routes"]),
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "allowed_bucket,disallowed_route",
+    [
+        # Disallowed routes that only reach this fallback (not covered by
+        # llm_api_routes / info_routes / internal_user_routes /
+        # self_managed_routes earlier in the function). All picked from
+        # management_routes write entries.
+        ("info_routes", "/key/generate"),
+        ("info_routes", "/team/new"),
+        ("info_routes", "/team/delete"),
+        ("info_routes", "/user/new"),
+        ("info_routes", "/key/delete"),
+        ("info_routes", "/user/delete"),
+        ("llm_api_routes", "/key/generate"),
+        ("llm_api_routes", "/team/new"),
+        ("llm_api_routes", "/team/delete"),
+        ("llm_api_routes", "/user/new"),
+        ("llm_api_routes", "/key/delete"),
+        ("llm_api_routes", "/user/delete"),
+    ],
+)
+def test_lit_3300_bucket_does_not_overreach(allowed_bucket, disallowed_route):
+    """Negative regression for LIT-3300: bucket-name expansion at the
+    fallback must NOT silently grant a key access to routes outside its
+    bucket."""
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route=disallowed_route,
+            request=request,
+            valid_token=_ticket_3300_token([allowed_bucket]),
+            request_data={},
+        )
+    assert (
+        "Only proxy admin can be used to generate, delete, update info for new keys/users/teams"
+        in str(exc_info.value)
+    )
+
+
+def test_lit_3300_bucket_and_explicit_routes_coexist():
+    """A virtual key may carry a mix of bucket names AND explicit paths in
+    ``allowed_routes``. Both forms must be honored together; routes outside
+    both must still raise."""
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    token = _ticket_3300_token(["info_routes", "/custom/route"])
+
+    # info_routes bucket-covered route — allowed via expansion
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route="/key/info",
+        request=request,
+        valid_token=token,
+        request_data={},
+    )
+    # explicit path — still allowed via the existing prefix-match branch
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route="/custom/route",
+        request=request,
+        valid_token=token,
+        request_data={},
+    )
+    # write route outside both bucket and explicit set — must still raise
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route="/key/generate",
+            request=request,
+            valid_token=token,
+            request_data={},
+        )
