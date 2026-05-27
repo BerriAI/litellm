@@ -268,9 +268,9 @@ or `litellm/exceptions.py`:
    `openai.<Error>` (or existing LiteLLM) base — both are required by
    downstream code paths.
 
-Each finding should cite the specific rule (S1–S4) from
-ERROR_HANDLING_STANDARDS.md so authors can self-correct without a
-maintainer round-trip.
+Each finding should cite the specific rule (S1–S4) from the
+`Error-handling standards (observability)` section of `AGENTS.md` so
+authors can self-correct without a maintainer round-trip.
 ```
 
 ##### Semgrep rule (proposed, not yet active)
