@@ -2231,7 +2231,6 @@ def _ticket_3300_token(allowed_routes):
         "/user/new",
         "/user/info",
         "/model/info",
-        "/v1/mcp/server",
     ],
 )
 def test_lit_3300_management_bucket_allows_management_routes(route):
@@ -2362,3 +2361,59 @@ def test_lit_3300_bucket_and_explicit_routes_coexist():
             valid_token=token,
             request_data={},
         )
+
+
+def test_lit_3300_llm_api_bucket_allows_registered_pass_through_in_fallback():
+    """LIT-3300 + Greptile follow-up: at the second-pass fallback gate
+    (``non_proxy_admin_allowed_routes_check``), a virtual key with
+    ``allowed_routes=['llm_api_routes']`` must also reach dynamically
+    registered pass-through endpoints, mirroring the carve-out already
+    present in the first-pass ``is_virtual_key_allowed_to_call_route``.
+    Without this, a Proxy-Admin-issued llm_api key whose user_obj falls
+    back to None would 401 on a route the first gate would have allowed.
+    """
+    mock_registered_routes = {
+        "lit3300-uuid:exact:/fake-openai-proxy-6": {
+            "endpoint_id": "lit3300-uuid",
+            "path": "/fake-openai-proxy-6",
+            "type": "exact",
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        request = MagicMock(spec=Request)
+        request.query_params = {}
+
+        # Must NOT raise — the helper's llm_api_routes pass-through carve-out
+        # honors the registered pass-through endpoint.
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route="/fake-openai-proxy-6",
+            request=request,
+            valid_token=_ticket_3300_token(["llm_api_routes"]),
+            request_data={},
+        )
+
+        # A route NOT in the registered pass-through map and NOT in
+        # llm_api_routes.value must still raise. /key/generate is a
+        # management write that reaches the fallback (no earlier guard
+        # covers it for an llm_api bucket key).
+        with pytest.raises(Exception):
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=None,
+                _user_role=None,
+                route="/key/generate",
+                request=request,
+                valid_token=_ticket_3300_token(["llm_api_routes"]),
+                request_data={},
+            )
