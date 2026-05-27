@@ -1653,9 +1653,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1802,6 +1800,81 @@ def test_translate_system_message_preserves_cache_control():
     assert len(result) == 1
     assert result[0]["text"] == "Cached content"
     assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    "whitespace_content",
+    [" ", "   ", "\t", "\n", "\r\n", "  \t\n  "],
+    ids=["space", "spaces", "tab", "newline", "crlf", "mixed"],
+)
+def test_translate_system_message_skips_whitespace_only_string_content(
+    whitespace_content,
+):
+    """
+    Whitespace-only system messages must be dropped, same as empty strings.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/28706
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {"role": "system", "content": whitespace_content},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 0
+    assert all(m["role"] != "system" for m in messages)
+
+
+@pytest.mark.parametrize(
+    "whitespace_content",
+    [" ", "   ", "\t", "\n"],
+    ids=["space", "spaces", "tab", "newline"],
+)
+def test_translate_system_message_skips_whitespace_only_list_content(
+    whitespace_content,
+):
+    """
+    Whitespace-only text blocks inside list-format system messages must be dropped.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/28706
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": whitespace_content},
+                {"type": "text", "text": "Valid content"},
+                {"type": "text", "text": whitespace_content},
+            ],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "Valid content"
+
+
+def test_translate_system_message_no_system_field():
+    """
+    Messages without a system role should produce an empty result.
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 0
+    assert len(messages) == 1
 
 
 # ============ Dynamic max_tokens Tests ============
@@ -2217,9 +2290,7 @@ def test_max_effort_rejected_for_sonnet_46():
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
             messages=messages,
