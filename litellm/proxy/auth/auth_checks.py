@@ -1765,38 +1765,18 @@ async def _cache_team_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
+    key = "team_id:{}".format(team_id)
+
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
-    # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key="team_id:{}".format(team_id),
+        key=key,
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=LiteLLM_TeamTableCachedObj,
     )
-
-    # Invalidate the alias-keyed cache so the JWT auth path with
-    # `team_alias_jwt_field` (which reads via `get_team_object_by_alias`)
-    # doesn't keep serving the pre-mutation team after every team-write
-    # endpoint (team_model_add, team_model_delete, update_team, etc.).
-    #
-    # Why DELETE and not WRITE: `team_alias` has no UNIQUE constraint in
-    # schema.prisma. Writing this cache from the generic refresh path
-    # would let a team admin who renamed their team to collide with
-    # another team's alias silently overwrite the cached team for
-    # JWT-by-alias auth (veria-ai review on #28739). Deleting forces the
-    # next reader through `get_team_object_by_alias`, which DOES enforce
-    # uniqueness (len(teams) > 1 raises HTTPException) before populating
-    # the cache from a verified single row.
-    if team_table.team_alias:
-        alias_key = "team_alias:{}".format(team_table.team_alias)
-        user_api_key_cache.delete_cache(key=alias_key)
-        if proxy_logging_obj is not None:
-            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
-                key=alias_key
-            )
 
 
 async def _cache_key_object(
@@ -3163,40 +3143,44 @@ async def can_team_access_model(
         raise
 
 
-async def get_authorized_resources_from_key_access_groups(
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
     valid_token: Optional[UserAPIKeyAuth],
     team_object: Optional[LiteLLM_TeamTable],
-    resource_field: Literal[
-        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
-    ],
-) -> List[str]:
+    llm_router: Optional[Router],
+) -> bool:
     """
-    For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
-    and contribute its `resource_field` only if the group authorizes the caller
-    as an owner — that is, the group's `assigned_team_ids` includes the key's
-    `team_id`, or the group's `assigned_key_ids` includes the key's token. This
-    preserves the team-as-owner boundary while still letting a group reach the
-    key without first being added to the team's `access_group_ids` list.
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+
+    A key's access group only counts if the access group itself authorizes the
+    caller as an owner — that is, the group's `assigned_team_ids` includes the
+    key's `team_id`, or the group's `assigned_key_ids` includes the key's
+    token. This preserves the team-as-owner boundary (a team member cannot
+    escalate by naming a group assigned to a different team) while still
+    letting a group reach the key without first being added to the team's
+    `access_group_ids` list.
     """
     if valid_token is None:
-        return []
+        return False
     key_access_group_ids = list(valid_token.access_group_ids or [])
     if not key_access_group_ids:
-        return []
+        return False
 
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
     from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
     from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
     if _prisma_client is None or _user_api_key_cache is None:
-        return []
+        return False
 
     key_team_id = valid_token.team_id or (
         team_object.team_id if team_object is not None else None
     )
     key_token = valid_token.token
 
-    authorized_resources: List[str] = []
+    authorized_models: List[str] = []
     for ag_id in key_access_group_ids:
         try:
             ag = await get_access_object(
@@ -3212,36 +3196,17 @@ async def get_authorized_resources_from_key_access_groups(
         )
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
         if team_authorized or key_authorized:
-            authorized_resources.extend(getattr(ag, resource_field, []) or [])
+            authorized_models.extend(ag.access_model_names or [])
 
-    return list(set(authorized_resources))
-
-
-async def _key_access_group_grants_model(
-    model: Union[str, List[str]],
-    valid_token: Optional[UserAPIKeyAuth],
-    team_object: Optional[LiteLLM_TeamTable],
-    llm_router: Optional[Router],
-) -> bool:
-    """
-    Returns True if the key's `access_group_ids` expand to models that grant
-    access to `model`. Used to let a key's access group override a team's
-    model restriction in `common_checks`.
-    """
-    authorized_models = await get_authorized_resources_from_key_access_groups(
-        valid_token=valid_token,
-        team_object=team_object,
-        resource_field="access_model_names",
-    )
     if not authorized_models:
         return False
     try:
         _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=authorized_models,
-            team_model_aliases=valid_token.team_model_aliases if valid_token else None,
-            team_id=valid_token.team_id if valid_token else None,
+            models=list(set(authorized_models)),
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
             object_type="key",
         )
         return True
@@ -3950,10 +3915,7 @@ async def _team_max_budget_check(
         # authoritative — if the DB row says spend is well under the cap
         # while Redis says it is over, the Redis counter is stale and we
         # reseed from DB. Customer-reported in LIT-3132.
-        if (
-            math.isfinite(team_object.max_budget)
-            and spend > team_object.max_budget
-        ):
+        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             spend = await _maybe_reseed_stale_team_spend_counter(
                 counter_key=counter_key,
                 team_object=team_object,
