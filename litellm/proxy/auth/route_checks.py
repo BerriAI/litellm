@@ -281,9 +281,39 @@ class RouteChecks:
         ):
             pass
         elif valid_token.allowed_routes is not None:
-            # check if route is in allowed_routes (exact match or prefix match)
+            # Check if route is in allowed_routes via exact / prefix match,
+            # wildcard pattern, OR a ``LiteLLMRoutes`` enum-member bucket name
+            # (e.g. ``"management_routes"`` / ``"llm_api_routes"`` /
+            # ``"info_routes"`` — the values that the ``/key/generate``
+            # ``key_type`` presets in ``handle_key_type`` write onto the token).
+            #
+            # Without bucket-name expansion here, a Proxy-Admin-issued virtual
+            # key created with ``key_type=management`` (or ``llm_api`` /
+            # ``read_only``) hits this branch with
+            # ``allowed_routes=["management_routes"]`` and the raw string
+            # ``"management_routes"`` can never match a real route like
+            # ``/key/generate`` or ``/team/list``. The call falls through to
+            # ``_raise_admin_only_route_exception`` and the user sees an
+            # ``Unauthorized`` 401 (``"Only proxy admin can be used to..."`` /
+            # ``"Only admin users can..."``) on routes that the key's bucket
+            # already covers. Mirrors the symmetric bucket-name expansion in
+            # ``is_virtual_key_allowed_to_call_route``.
             route_allowed = False
             for allowed_route in valid_token.allowed_routes:
+                if (
+                    isinstance(allowed_route, str)
+                    and allowed_route in LiteLLMRoutes._member_names_
+                ):
+                    if RouteChecks.check_route_access(
+                        route=route,
+                        allowed_routes=LiteLLMRoutes._member_map_[
+                            allowed_route
+                        ].value,
+                    ):
+                        route_allowed = True
+                        break
+                    continue
+
                 if RouteChecks._route_matches_allowed_route(
                     route=route, allowed_route=allowed_route
                 ):
