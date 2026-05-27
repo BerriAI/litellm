@@ -2185,7 +2185,7 @@ def _sanitize_empty_text_content(
 
     Key behavior: if the message already carries non-text content (a content
     list with tool_use/tool_result/image blocks, OR a message with
-    \`\`tool_calls\`\`), empty text is *dropped* instead of rewritten to the
+    `tool_calls`), empty text is *dropped* instead of rewritten to the
     placeholder. Otherwise the placeholder is emitted so Anthropic does not
     reject the request for an empty text block.
 
