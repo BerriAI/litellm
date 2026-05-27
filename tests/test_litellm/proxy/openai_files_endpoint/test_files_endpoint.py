@@ -1873,3 +1873,94 @@ def test_get_file_content_non_openai_provider_skips_streaming_handler(
     assert "stream" not in captured_kwargs
     mock_streaming_response.assert_not_awaited()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_files_uses_async_cursor_page_returned_by_post_call_hook(
+    monkeypatch, llm_router: Router
+):
+    """
+    Regression for LIT-3386 / GH #28294.
+
+    The managed-files hook (`async_post_call_success_hook`) returns an
+    `AsyncCursorPage` for GET /v1/files responses. Prior to the fix the
+    list_files endpoint only re-assigned `response` when the hook returned an
+    `OpenAIFileObject`, so any freshly-constructed page from the hook was
+    silently dropped and the unfiltered raw provider listing was returned to
+    the caller. This test asserts the hook-returned page reaches the client.
+    """
+    from openai.pagination import AsyncCursorPage
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    raw_provider_page = AsyncCursorPage(
+        data=[
+            OpenAIFileObject(
+                id="file-leaked-raw",
+                bytes=10,
+                created_at=1,
+                filename="raw.jsonl",
+                object="file",
+                purpose="batch",
+                status="processed",
+            ),
+            OpenAIFileObject(
+                id="file-owned-by-user",
+                bytes=10,
+                created_at=1,
+                filename="owned.jsonl",
+                object="file",
+                purpose="batch",
+                status="processed",
+            ),
+        ],
+    )
+
+    filtered_page = AsyncCursorPage(
+        data=[
+            OpenAIFileObject(
+                id="file-owned-by-user",
+                bytes=10,
+                created_at=1,
+                filename="owned.jsonl",
+                object="file",
+                purpose="batch",
+                status="processed",
+            ),
+        ],
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "afile_list",
+        AsyncMock(return_value=raw_provider_page),
+    )
+    monkeypatch.setattr(
+        ps.proxy_logging_obj,
+        "post_call_success_hook",
+        AsyncMock(return_value=filtered_page),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    returned_ids = [item["id"] for item in body["data"]]
+    assert returned_ids == ["file-owned-by-user"], (
+        f"expected only owned file id, got {returned_ids}"
+    )
