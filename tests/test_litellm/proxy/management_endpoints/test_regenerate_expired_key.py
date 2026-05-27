@@ -283,3 +283,37 @@ async def test_lit2569_regenerate_expired_key_missing_created_at_falls_back_to_3
     assert timedelta(days=29) < delta < timedelta(days=31), (
         f"Expected 30d fallback, got {delta}"
     )
+
+
+@pytest.mark.asyncio
+async def test_lit2569_auto_extend_respects_upperbound_duration():
+    """LIT-2569 + Veria review: when ``upperbound_key_generate_params.duration``
+    is configured, the auto-extend lifetime is capped to that bound. Without
+    this cap a caller could revive a 30-day key on a deployment that has
+    since been locked down to e.g. ``duration="1d"`` by omitting
+    ``duration`` from the regenerate request.
+    """
+    import litellm
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    existing_key = _make_expired_key(days_ago_created=31, days_ago_expired=1)
+    saved = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = (
+            LiteLLM_UpperboundKeyGenerateParams(duration="1d")
+        )
+        written = await _run_regenerate(existing_key, RegenerateKeyRequest())
+    finally:
+        litellm.upperbound_key_generate_params = saved
+
+    new_expires = written.get("expires")
+    assert new_expires is not None
+    delta = new_expires - datetime.now(timezone.utc)
+    # Cap is 1d -- new expires should be ~1d out, NOT the original ~30d.
+    assert delta < timedelta(days=2), (
+        f"BUG: auto-extend bypassed upperbound cap; new expires {delta} > 1d"
+    )
+    assert delta > timedelta(hours=23)
