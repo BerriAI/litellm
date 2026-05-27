@@ -126,3 +126,37 @@ async def test_async_set_cache_no_promotion_when_ttl_is_none():
     observed = _observed_ttl(cache, "no-ttl-key")
     # DualCache stamps default_in_memory_ttl when ttl is absent, so this should be ~300.
     assert observed > 250, f"expected ttl ~300, got {observed}"
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_also_promotes_management_ttl():
+    """Pipeline path must apply the same promotion — guards a future writer migrating to pipeline.
+
+    Greptile P2 from the initial review: if a future management-object writer
+    switches from ``async_set_cache`` to ``async_set_cache_pipeline``, the TTL
+    promotion must still apply or the operator-configured TTL is silently lost.
+    """
+    cache = UserApiKeyCache()
+    cache.update_cache_ttl(default_in_memory_ttl=300, default_redis_ttl=300)
+    await cache.async_set_cache_pipeline(
+        cache_list=[("pipeline-key-1", {"x": 1}), ("pipeline-key-2", {"x": 2})],
+        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    )
+    obs1 = _observed_ttl(cache, "pipeline-key-1")
+    obs2 = _observed_ttl(cache, "pipeline-key-2")
+    assert obs1 > 250 and obs1 < 310, f"key1: expected ~300, got {obs1}"
+    assert obs2 > 250 and obs2 < 310, f"key2: expected ~300, got {obs2}"
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_does_not_touch_non_management_ttl():
+    """Pipeline ttl=10 (non-management) must be respected, not promoted."""
+    cache = UserApiKeyCache()
+    cache.update_cache_ttl(default_in_memory_ttl=300, default_redis_ttl=300)
+    await cache.async_set_cache_pipeline(
+        cache_list=[("p-other", {"x": 1})],
+        ttl=10,
+    )
+    obs = _observed_ttl(cache, "p-other")
+    assert math.isclose(obs, 10, abs_tol=1.5), f"expected ~10, got {obs}"
+
