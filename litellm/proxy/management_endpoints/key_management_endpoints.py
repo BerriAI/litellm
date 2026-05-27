@@ -4311,13 +4311,16 @@ async def _execute_virtual_key_regeneration(  # noqa: PLR0915
                     _original_lifetime = timedelta(0)
                 if _original_lifetime.total_seconds() <= 0:
                     _original_lifetime = timedelta(days=30)
-                # Cap the auto-extended lifetime to the configured upper
-                # bound so a caller can't revive a 30-day key on a deployment
-                # that has since been locked down to e.g. ``duration="1d"``.
-                # The upperbound check on the regenerate request body above
-                # (``_enforce_upperbound_key_params``) only fires when the
-                # caller supplied ``duration`` explicitly; without this cap,
-                # omitting ``duration`` would silently bypass it.
+                # Guard against lifetime creep on successive regenerations.
+                #
+                # ``created_at`` does not change on regenerate; only the new
+                # ``expires`` is written. So if a key is regenerated several
+                # times while expired, naive ``new_expires - created_at``
+                # grows on each pass (30d -> 61d -> 123d -> ...). Cap the
+                # auto-extended lifetime to a fixed default (30d) when no
+                # operator-configured upperbound exists; if the upperbound
+                # IS set, defer to that value as the authoritative cap.
+                _AUTO_EXTEND_DEFAULT_CAP = timedelta(days=30)
                 if litellm.upperbound_key_generate_params is not None:
                     upperbound_duration_str = getattr(
                         litellm.upperbound_key_generate_params, "duration", None
@@ -4328,6 +4331,10 @@ async def _execute_virtual_key_regeneration(  # noqa: PLR0915
                         )
                         if _original_lifetime.total_seconds() > upperbound_seconds:
                             _original_lifetime = timedelta(seconds=upperbound_seconds)
+                    elif _original_lifetime > _AUTO_EXTEND_DEFAULT_CAP:
+                        _original_lifetime = _AUTO_EXTEND_DEFAULT_CAP
+                elif _original_lifetime > _AUTO_EXTEND_DEFAULT_CAP:
+                    _original_lifetime = _AUTO_EXTEND_DEFAULT_CAP
                 update_data["expires"] = _now + _original_lifetime
                 # Identify the old key by hashed token (always present) plus
                 # alias (often None) so log lines are actionable on their own
