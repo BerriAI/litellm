@@ -437,6 +437,7 @@ async def aresponses(
     user: Optional[str] = None,
     service_tier: Optional[str] = None,
     safety_identifier: Optional[str] = None,
+    context_management: Optional[Iterable[Dict[str, Any]]] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -450,6 +451,7 @@ async def aresponses(
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
+    # breakpoint()
     local_vars = locals()
     try:
         loop = asyncio.get_event_loop()
@@ -540,6 +542,7 @@ async def aresponses(
             top_p=top_p,
             truncation=truncation,
             user=user,
+            context_management=context_management,
             extra_headers=extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
@@ -730,6 +733,7 @@ def responses(
     user: Optional[str] = None,
     service_tier: Optional[str] = None,
     safety_identifier: Optional[str] = None,
+    context_management: Optional[List[Dict[str, Any]]] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -919,6 +923,7 @@ def responses(
                 **emulated_kwargs,
             )
 
+        # breakpoint()
         if responses_api_provider_config is None:
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
@@ -927,6 +932,7 @@ def responses(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
+                context_management=context_management,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
                 **kwargs,
@@ -1115,11 +1121,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=custom_llm_provider,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=custom_llm_provider,
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1296,11 +1302,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=custom_llm_provider,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=custom_llm_provider,
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1454,11 +1460,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=custom_llm_provider,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=custom_llm_provider,
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1613,11 +1619,11 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=None,
-            provider=custom_llm_provider,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=None,
+                provider=custom_llm_provider,
+            )
         )
 
         if responses_api_provider_config is None:
@@ -1801,11 +1807,11 @@ def compact_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=custom_llm_provider,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+            ProviderConfigManager.get_provider_responses_api_config(
+                model=model,
+                provider=custom_llm_provider,
+            )
         )
 
         if responses_api_provider_config is None:
