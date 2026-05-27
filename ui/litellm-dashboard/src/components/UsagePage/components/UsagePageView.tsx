@@ -44,6 +44,7 @@ import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
+import { getDailySpendChartData } from "../utils/dailySpendChart";
 import { valueFormatterSpend } from "../utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
@@ -429,8 +430,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [userSpendData.results, topKeysLimit]);
 
   const sortedDailyResults = useMemo(
-    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-    [userSpendData.results],
+    () => getDailySpendChartData(userSpendData.results, dateValue),
+    [userSpendData.results, dateValue],
   );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
