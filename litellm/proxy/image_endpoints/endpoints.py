@@ -27,6 +27,9 @@ import io
 from fastapi import UploadFile
 
 
+_CHUNK_SIZE = 1024 * 1024  # 1 MB
+
+
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
     Read a FastAPI UploadFile into a BytesIO and set .name so OpenAI SDK
@@ -34,10 +37,16 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
     The UploadFile is closed after reading to release the underlying
     SpooledTemporaryFile resources and prevent memory accumulation.
+    Chunked reading avoids large peak allocations under high concurrency.
     """
     try:
-        data = await upload.read()
-        buffer = io.BytesIO(data)
+        buffer = io.BytesIO()
+        while True:
+            chunk = await upload.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            buffer.write(chunk)
+        buffer.seek(0)
         buffer.name = upload.filename
         return buffer
     finally:
