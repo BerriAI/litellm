@@ -11,6 +11,7 @@ Covers:
 - Wrong call_type still short-circuits before the skip check.
 - Defensive helper handles missing/None model in data.
 """
+
 import os
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -67,6 +68,7 @@ def _install_router(deployment):
         ),
     )
     import litellm.proxy.proxy_server as ps
+
     prev = getattr(ps, "llm_router", None)
     ps.llm_router = fake_router
 
@@ -98,9 +100,7 @@ async def test_default_runs_input_file_retrieval():
             called["n"] += 1
             return BatchFileUsage(total_tokens=0, request_count=0)
 
-        with patch.object(
-            limiter, "count_input_file_usage", side_effect=fake_count
-        ):
+        with patch.object(limiter, "count_input_file_usage", side_effect=fake_count):
             await limiter.async_pre_call_hook(
                 user_api_key_dict=_user(),
                 cache=None,
@@ -211,9 +211,7 @@ async def test_per_deployment_flag_false_still_runs_retrieval():
             called["n"] += 1
             return BatchFileUsage(total_tokens=0, request_count=0)
 
-        with patch.object(
-            limiter, "count_input_file_usage", side_effect=fake_count
-        ):
+        with patch.object(limiter, "count_input_file_usage", side_effect=fake_count):
             await limiter.async_pre_call_hook(
                 user_api_key_dict=_user(),
                 cache=None,
@@ -238,6 +236,7 @@ async def test_router_lookup_error_falls_back_to_global_flag():
             raise RuntimeError("boom")
 
     import litellm.proxy.proxy_server as ps
+
     prev = getattr(ps, "llm_router", None)
     ps.llm_router = _RaisingRouter()
     try:
@@ -281,10 +280,7 @@ def test_helper_returns_false_when_data_has_no_model():
     restore = _install_router(None)
     try:
         assert limiter._should_skip_input_file_retrieval(data={}) is False
-        assert (
-            limiter._should_skip_input_file_retrieval(data={"model": None})
-            is False
-        )
+        assert limiter._should_skip_input_file_retrieval(data={"model": None}) is False
         litellm.skip_batch_input_file_retrieval = True
         assert limiter._should_skip_input_file_retrieval(data={}) is True
     finally:
