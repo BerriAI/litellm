@@ -1254,8 +1254,24 @@ async def _validate_caller_can_assign_key_org(
     organization_id: str,
     prisma_client: PrismaClient,
 ) -> None:
-    """Reject ``/key/update`` requests that point a key at an organization
-    the caller does not belong to.
+    """Reject ``/key/generate`` and ``/key/update`` requests that point a key
+    at an organization the caller does not belong to.
+
+    A caller belongs to ``organization_id`` if EITHER:
+
+    1. they have a direct ``LiteLLM_OrganizationMembership`` row for it, OR
+    2. they are a member of any team whose ``organization_id`` matches
+       (transitive membership via team).
+
+    The team-membership branch is required because the enterprise key flow
+    inherits ``organization_id`` from the team on ``/key/generate``
+    (``add_team_organization_id``). Without this branch, an internal user who
+    is a member of a team that belongs to an org could no longer create a
+    virtual key for that team after the membership rule was added — even
+    though they never asked the API to scope the key to the org. Restores
+    pre-v1.84.0 behavior for team-inherited ``organization_id`` while still
+    blocking the case the rule was added for: a caller *explicitly* targeting
+    an organization they have no relationship to.
 
     Mirrors the org-membership rule already enforced on ``/key/list`` in
     ``validate_key_list_check``. Proxy admins are checked at the call site.
@@ -1270,19 +1286,40 @@ async def _validate_caller_can_assign_key_org(
         where={"user_id": user_api_key_dict.user_id},
         include={"organization_memberships": True},
     )
-    memberships = (
-        getattr(user_row, "organization_memberships", None) if user_row else None
-    )
+    if user_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Caller is not a member of organization_id={organization_id}",
+        )
+
+    # 1. direct org membership
+    memberships = getattr(user_row, "organization_memberships", None)
     member_org_ids = {
         membership.organization_id
         for membership in (memberships or [])
         if membership.organization_id is not None
     }
-    if organization_id not in member_org_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Caller is not a member of organization_id={organization_id}",
+    if organization_id in member_org_ids:
+        return
+
+    # 2. transitive membership via a team owned by that org.
+    # `LiteLLM_UserTable.teams` is a String[] column of team_ids the user
+    # belongs to (kept in sync by `/team/member_add`).
+    team_ids = list(getattr(user_row, "teams", None) or [])
+    if team_ids:
+        team_rows = await prisma_client.db.litellm_teamtable.find_many(
+            where={
+                "team_id": {"in": team_ids},
+                "organization_id": organization_id,
+            },
         )
+        if team_rows:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Caller is not a member of organization_id={organization_id}",
+    )
 
 
 async def _check_org_key_limits(
