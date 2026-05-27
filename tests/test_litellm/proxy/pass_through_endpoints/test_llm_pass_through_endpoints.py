@@ -2890,3 +2890,153 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestVertexStreamGenerateContentAltParam:
+    """
+    Regression coverage for LIT-3358:
+    `_base_vertex_proxy_route` previously force-appended ``?alt=sse`` to the
+    upstream Vertex URL whenever ``stream`` appeared in the path, even when the
+    client explicitly asked for a different response format. That broke the
+    google-genai SDK, which calls ``...:streamGenerateContent`` without
+    ``alt=`` and expects raw JSON chunks.
+    """
+
+    def _setup(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials="t",
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            router,
+        )
+
+        async def _no_auth(*args, **kwargs):
+            return {"api_key": "key"}
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key",
+            lambda **kwargs: "Bearer key",
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            AsyncMock(side_effect=_no_auth),
+        )
+
+        handler = Mock()
+        handler.get_default_base_target_url.return_value = (
+            "https://us-central1-aiplatform.googleapis.com/"
+        )
+        handler.update_base_target_url_with_credential_location = Mock(
+            return_value="https://us-central1-aiplatform.googleapis.com/"
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler",
+            lambda *a, **kw: handler,
+        )
+
+    async def _drive(self, endpoint, client_query):
+        from starlette.datastructures import QueryParams
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            vertex_proxy_route,
+        )
+
+        req = Mock()
+        req.state = None
+        req.method = "POST"
+        req.headers = {
+            "Authorization": "Bearer t",
+            "Content-Type": "application/json",
+        }
+        req.url = Mock()
+        req.url.path = endpoint
+        req.query_params = QueryParams(client_query)
+
+        with (
+            mock.patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
+            ) as mla,
+            mock.patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mcpr,
+        ):
+            creds = Mock()
+            creds.token = "test"
+            mla.return_value = (creds, "test-project")
+            mcpr.return_value = AsyncMock(return_value={"ok": True})
+
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=req,
+                fastapi_response=Response(),
+                user_api_key_dict={"api_key": "key"},
+            )
+
+            assert mcpr.called, "expected create_pass_through_route to be called"
+            return mcpr.call_args
+
+    STREAM_ENDPOINT = (
+        "/v1/projects/test-project/locations/us-central1/"
+        "publishers/google/models/gemini-1.5-flash:streamGenerateContent"
+    )
+    NONSTREAM_ENDPOINT = (
+        "/v1/projects/test-project/locations/us-central1/"
+        "publishers/google/models/gemini-1.5-flash:generateContent"
+    )
+
+    @pytest.mark.asyncio
+    async def test_no_client_alt_defaults_to_sse(self, monkeypatch):
+        """When the client does not send ?alt=, default to ?alt=sse (no regression)."""
+        self._setup(monkeypatch)
+        call = await self._drive(self.STREAM_ENDPOINT, "")
+        target = call.kwargs["target"]
+        assert target.endswith("?alt=sse"), (
+            "When the client does not specify ?alt=, the proxy should still "
+            "default to ?alt=sse for backward compatibility. Got: " + target
+        )
+        assert call.kwargs["is_streaming_request"] is True
+
+    @pytest.mark.asyncio
+    async def test_client_alt_sse_not_duplicated(self, monkeypatch):
+        """Client already asked for SSE - do not double-append it to the target."""
+        self._setup(monkeypatch)
+        call = await self._drive(self.STREAM_ENDPOINT, "alt=sse")
+        target = call.kwargs["target"]
+        assert "?alt=sse" not in target, (
+            "When the client already sent ?alt=sse, the proxy should not "
+            "inject another copy (request.query_params already carries it). "
+            "Got: " + target
+        )
+        assert call.kwargs["is_streaming_request"] is True
+
+    @pytest.mark.asyncio
+    async def test_client_alt_json_preserved(self, monkeypatch):
+        """LIT-3358 regression: client asked for JSON streaming, proxy must NOT force SSE."""
+        self._setup(monkeypatch)
+        call = await self._drive(self.STREAM_ENDPOINT, "alt=json")
+        target = call.kwargs["target"]
+        assert "?alt=sse" not in target, (
+            "When the client sent ?alt=json (google-genai SDK shape), the "
+            "proxy MUST NOT inject alt=sse. Got: " + target
+        )
+        assert call.kwargs["is_streaming_request"] is True
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_endpoint_unchanged(self, monkeypatch):
+        """generateContent (non-streaming) must never get alt=sse."""
+        self._setup(monkeypatch)
+        call = await self._drive(self.NONSTREAM_ENDPOINT, "")
+        target = call.kwargs["target"]
+        assert "?alt=sse" not in target, (
+            "Non-streaming generateContent must never have alt=sse added. "
+            "Got: " + target
+        )
+        assert call.kwargs["is_streaming_request"] is False
+

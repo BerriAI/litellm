@@ -1873,7 +1873,15 @@ async def _base_vertex_proxy_route(
     is_streaming_request = False
     if "stream" in str(updated_url):
         is_streaming_request = True
-        target += "?alt=sse"
+        # Only default to ?alt=sse when the client did NOT specify a response
+        # format. The google-genai SDK calls streamGenerateContent without
+        # ?alt= and expects raw JSON chunks; forcing alt=sse for those clients
+        # breaks SDK parsing. When the client passes ?alt=, the value is
+        # already forwarded by the pass-through layer via request.query_params,
+        # so we do not need to inject anything here.
+        client_alt = request.query_params.get("alt") if request.query_params else None
+        if not client_alt:
+            target += "?alt=sse"
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
