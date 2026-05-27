@@ -2892,7 +2892,6 @@ class TestCursorProxyRoute:
             assert result["status"] == "CREATING"
 
 
-
 class TestVertexStreamGenerateContentAltParam:
     """
     Regression coverage for LIT-3358:
