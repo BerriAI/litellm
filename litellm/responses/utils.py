@@ -959,6 +959,16 @@ class ResponseAPILoggingUtils:
                 image_tokens=getattr(output_tokens_details, "image_tokens", None),
                 text_tokens=getattr(output_tokens_details, "text_tokens", None),
             )
+        else:
+            # Some providers (notably Azure OpenAI) omit ``output_tokens_details``
+            # from the Responses API payload even when ``input_tokens_details``
+            # is populated. Mirror what OpenAI sends by default
+            # (``reasoning_tokens=0``) so downstream loggers always see a
+            # ``CompletionTokensDetailsWrapper`` on ``response_obj.usage``.
+            # See: https://github.com/BerriAI/litellm/issues/15377
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+            )
 
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
