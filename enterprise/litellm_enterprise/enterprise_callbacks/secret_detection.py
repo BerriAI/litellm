@@ -11,6 +11,7 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import re
 import tempfile
 from typing import Optional
 
@@ -21,6 +22,51 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 GUARDRAIL_NAME = "hide_secrets"
+
+# Match a full PEM block (BEGIN...END) for any private-key armor type.
+# detect-secrets PrivateKeyDetector is line-based and returns only the
+# -----BEGIN ... PRIVATE KEY----- line as the secret_value, so the
+# str.replace(secret_value, REDACTED) at every redact call site only
+# strikes that single header line, leaving the base64 body and END
+# footer to be forwarded downstream. We expand each Private Key entry
+# to the full block before returning from scan_message_for_secrets.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*?PRIVATE KEY-----"
+    r"[\s\S]*?"
+    r"-----END [A-Z0-9 ]*?PRIVATE KEY-----",
+    re.MULTILINE,
+)
+
+
+def _expand_private_key_values(detected_secrets, original_text):
+    """Promote header-only Private Key matches to the full PEM block.
+
+    ``detect_secrets`` is line-based, so a multi-line PEM private key yields
+    a ``secret_value`` of only the ``-----BEGIN ... PRIVATE KEY-----`` armor
+    header. Without expansion, ``str.replace(secret_value, "[REDACTED]")`` at
+    each redact call site would only strike the header line, leaving the
+    base64 body and ``-----END ... PRIVATE KEY-----`` footer to be forwarded
+    downstream. This helper rewrites each ``Private Key`` entry value with
+    the full PEM block found in ``original_text``. Non-Private-Key entries
+    pass through unchanged. If no PEM block is found in ``original_text``
+    the input list is returned untouched.
+    """
+    if not detected_secrets:
+        return detected_secrets
+    pem_blocks = _PEM_BLOCK_RE.findall(original_text)
+    if not pem_blocks:
+        return detected_secrets
+    expanded = []
+    idx = 0
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key" and idx < len(pem_blocks):
+            expanded.append({"type": secret["type"], "value": pem_blocks[idx]})
+            idx += 1
+        else:
+            expanded.append(secret)
+    return expanded
+
+
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -452,6 +498,10 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets.append(
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
+
+        detected_secrets = _expand_private_key_values(
+            detected_secrets, message_content
+        )
 
         return detected_secrets
 
