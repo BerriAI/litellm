@@ -11,7 +11,8 @@
 #
 # Bypassed branches (always allowed):
 #   - main
-#   - litellm_internal_staging
+#   - litellm_*  (long-lived internal branches: litellm_internal_staging,
+#                 litellm_oss_agent_shin_daily_branch, release branches, etc.)
 #   - dependabot/*
 #   - gh-readonly-queue/*
 #
@@ -32,8 +33,13 @@ set -euo pipefail
 
 zero='0000000000000000000000000000000000000000'
 
-bypass_re='^(main|litellm_internal_staging|dependabot/.*|gh-readonly-queue/.*)$'
-valid_re='^(feature|bugfix|hotfix|release|chore)/[A-Za-z0-9._/\-]+$'
+# `litellm_.*` covers internal long-lived branches (e.g. litellm_internal_staging,
+# litellm_oss_agent_shin_daily_branch, release/hotfix branches the team uses).
+bypass_re='^(main|litellm_.*|dependabot/.*|gh-readonly-queue/.*)$'
+# Note: hyphen is at the END of the bracket expression to remain valid across
+# BSD / macOS / GNU regex implementations (escaped `\-` is not POSIX-portable
+# inside `[...]`).
+valid_re='^(feature|bugfix|hotfix|release|chore)/[A-Za-z0-9._/-]+$'
 
 failed=0
 
