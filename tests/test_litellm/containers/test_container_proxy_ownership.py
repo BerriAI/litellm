@@ -1,3 +1,4 @@
+import json
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -91,8 +92,9 @@ async def test_should_not_mutate_dict_container_response_when_recording_owner(
 
     assert returned == {"id": "cntr_provider", "object": "container"}
     data = table.create.await_args.kwargs["data"]
-    assert data["file_object"]["custom_llm_provider"] == "openai"
-    assert data["file_object"]["provider_container_id"] == "cntr_provider"
+    file_obj = json.loads(data["file_object"])
+    assert file_obj["custom_llm_provider"] == "openai"
+    assert file_obj["provider_container_id"] == "cntr_provider"
 
 
 @pytest.mark.asyncio
