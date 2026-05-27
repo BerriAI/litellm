@@ -64,10 +64,11 @@ class TestSagemakerChatValidateEnvironmentModelId:
         # The empty string is still consumed so it does not leak to the body.
         assert "model_id" not in optional_params
 
-    def test_does_not_clobber_explicit_header(self):
-        """If a caller already passed `X-Amzn-SageMaker-Inference-Component`
-        (e.g. via `extra_headers`), the `model_id`-derived value wins because
-        it is the more recently-specified explicit `model_id` kwarg.
+    def test_model_id_takes_precedence_over_explicit_header(self):
+        """If a caller passes both an explicit
+        `X-Amzn-SageMaker-Inference-Component` header (e.g. via
+        `extra_headers`) and `model_id`, the `model_id`-derived value wins
+        because it is the more recently-specified explicit `model_id` kwarg.
 
         This mirrors the behavior of the legacy `sagemaker` completion handler
         (`prepared_request.headers.update(...)`), which also overwrites any
@@ -77,3 +78,14 @@ class TestSagemakerChatValidateEnvironmentModelId:
         optional_params = {"model_id": "from-model-id"}
         out = self._call(headers, optional_params)
         assert out["X-Amzn-SageMaker-Inference-Component"] == "from-model-id"
+
+    def test_whitespace_only_model_id_is_treated_as_unset(self):
+        """A whitespace-only `model_id` (e.g. `" "`) must not produce a
+        non-empty component header — SageMaker rejects whitespace-only
+        InferenceComponent names."""
+        headers: dict = {}
+        optional_params: dict = {"model_id": "   "}
+        out = self._call(headers, optional_params)
+        assert "X-Amzn-SageMaker-Inference-Component" not in out
+        assert "model_id" not in optional_params
+
