@@ -533,7 +533,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
         **kwargs,
-    ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+    ) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management = kwargs.pop("context_management", None)
         drop_params: Optional[bool] = kwargs.get("drop_params", None)
@@ -631,6 +631,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     ) -> Union[
         AnthropicMessagesResponse,
         Iterator[bytes],
+        AsyncIterator[Any],
         Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
     ]:
         """Handle non-Anthropic models using the adapter."""
