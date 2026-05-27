@@ -113,6 +113,24 @@ def test_view_only_admin_team_new_still_blocked_when_flag_true():
         )
 
 
+def test_internal_user_view_only_team_new_still_blocked_when_flag_true():
+    """
+    INTERNAL_USER_VIEW_ONLY must NEVER be able to create teams regardless of
+    `allow_user_team_creation`. The new elif branch in
+    `non_proxy_admin_allowed_routes_check` is scoped to
+    `LitellmUserRoles.INTERNAL_USER.value` only; this test guards against a
+    future refactor that accidentally widens the role match to cover
+    view-only internal users.
+    """
+    with pytest.raises(Exception) as exc:
+        _run(
+            "/team/new",
+            general_settings={"allow_user_team_creation": True},
+            role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        )
+    assert "Only proxy admin" in str(exc.value)
+
+
 def test_helper_returns_false_when_general_settings_is_not_a_dict():
     with patch("litellm.proxy.proxy_server.general_settings", None):
         assert RouteChecks._user_team_self_serve_enabled() is False
