@@ -958,12 +958,61 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        # Some callers pass unhashable scope parts (e.g. ``guardrail_mode``
+        # can legitimately be a list like ``["pre_call", "post_call"]``).
+        # Normalize the full scope to a hashable form so the dedupe key is
+        # always usable as a dict key regardless of caller-supplied shape.
+        hashable_scope = tuple(self._make_hashable(part) for part in scope)
+        dedupe_key = (self.__class__.__name__, id(self), *hashable_scope)
         if spans_logged.get(dedupe_key) is True:
             return False
 
         spans_logged[dedupe_key] = True
         return True
+
+    @staticmethod
+    def _make_hashable(value):
+        """Return a hashable representation of ``value``.
+
+        Used to normalize ``_emit_once`` scope parts so callers can pass
+        list/dict/set values (or nested combinations) without crashing the
+        dedupe-key construction with ``TypeError: unhashable type``.
+
+        The transformation preserves equality for the dedupe semantics:
+        two values that should be considered "the same scope" map to the
+        same hashable result.
+            * ``list``/``tuple`` -> ``tuple`` of recursively-hashable elements
+              (order preserved, since list order is part of identity)
+            * ``set``/``frozenset`` -> ``frozenset`` of recursively-hashable
+              elements (order-independent)
+            * ``dict`` -> ``tuple`` of ``(key, hashable_value)`` pairs sorted
+              by ``repr(key)`` so equal dicts produce the same tuple
+            * any already-hashable value -> returned unchanged
+            * any remaining unhashable value -> ``repr(value)`` (last-resort
+              fallback so we never re-raise; not equality-preserving but
+              keeps the dedupe key well-defined)
+        """
+        try:
+            hash(value)
+            return value
+        except TypeError:
+            pass
+
+        if isinstance(value, (list, tuple)):
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, (set, frozenset)):
+            return frozenset(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (
+                        (OpenTelemetry._make_hashable(k), OpenTelemetry._make_hashable(v))
+                        for k, v in value.items()
+                    ),
+                    key=lambda kv: repr(kv[0]),
+                )
+            )
+        return repr(value)
 
     def _end_proxy_span_from_kwargs(self, kwargs: dict, end_time) -> None:
         """Close the proxy-level parent span if it is still recording.
