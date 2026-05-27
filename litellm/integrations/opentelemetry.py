@@ -1006,7 +1006,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return tuple(
                 sorted(
                     (
-                        (OpenTelemetry._make_hashable(k), OpenTelemetry._make_hashable(v))
+                        (
+                            OpenTelemetry._make_hashable(k),
+                            OpenTelemetry._make_hashable(v),
+                        )
                         for k, v in value.items()
                     ),
                     key=lambda kv: repr(kv[0]),
