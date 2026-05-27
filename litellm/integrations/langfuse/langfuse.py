@@ -155,6 +155,16 @@ class LangFuseLogger:
             self.is_mock_mode = True
         else:
             http_client = _get_httpx_client()
+            # Hold a strong reference to the wrapping HTTPHandler so its
+            # __del__ (which calls self.client.close()) cannot fire while
+            # this Langfuse logger is still alive. Without this, the
+            # HTTPHandler exists only in litellm.in_memory_llm_clients_cache,
+            # and once that cache entry is evicted (TTL, restart, manual
+            # flush) the underlying httpx.Client is closed out from under
+            # the Langfuse SDK’s background flush thread, surfacing as
+            # RuntimeError: Cannot send a request, as the client has
+            # been closed.
+            self._langfuse_http_handler = http_client
             self.langfuse_client = http_client.client
             self.is_mock_mode = False
 
