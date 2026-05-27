@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
     reconstruct_model_name,
     filter_exceptions_from_params,
+    get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
@@ -308,9 +309,19 @@ class LangFuseLogger:
 
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
+            # Read metadata via the canonical helper so endpoints that store
+            # proxy-auth metadata under ``litellm_metadata`` (e.g. ``/v1/messages``,
+            # ``/v1/responses``, ``/v1/batches``, ``/v1/files``, ``/thread*``,
+            # ``/assistant*``) surface the same ``user_api_key_alias``,
+            # ``user_api_key_user_id``, ``user_api_key_team_id`` etc. as the
+            # endpoints that still use ``metadata``.
+            # ``get_litellm_metadata_from_kwargs`` prefers ``litellm_metadata``
+            # and falls back to ``metadata``; when both are present it merges
+            # the spend-tracking fields into the ``litellm_metadata`` copy.
+            metadata = get_litellm_metadata_from_kwargs(kwargs) or {}
+            # Defensive copy: downstream code pops keys off ``metadata`` /
+            # ``clean_metadata`` and we do not want to mutate the caller dict.
+            metadata = dict(metadata)
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
