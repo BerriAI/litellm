@@ -2252,9 +2252,11 @@ async def apply_guardrail(
             litellm_logging_obj.model_call_details["call_type"] = (
                 "pass_through_endpoint"
             )
-            litellm_logging_obj.model_call_details["messages"] = [
-                {"role": "user", "content": request.text}
-            ]
+            litellm_logging_obj.model_call_details["messages"] = (
+                request.messages
+                if request.messages
+                else [{"role": "user", "content": request.text}]
+            )
 
         request_data: dict = {}
         if request.messages:
@@ -2287,29 +2289,6 @@ async def apply_guardrail(
         response_for_logging = {
             "response": response.model_dump(exclude_none=True),
         }
-
-        await proxy_logging_obj.post_call_success_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-        )
-        end_time = datetime.now(timezone.utc)
-        if litellm_logging_obj is not None:
-            await litellm_logging_obj.async_success_handler(
-                result=response_for_logging,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=False,
-            )
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-
-        return response
     except Exception as e:
         if litellm_logging_obj is not None and not isinstance(e, HTTPException):
             await litellm_logging_obj.async_failure_handler(
@@ -2327,6 +2306,31 @@ async def apply_guardrail(
             request_data=data,
         )
         raise handle_exception_on_proxy(e)
+
+    # Success logging is outside the except block so a hook error never
+    # triggers failure handlers for a successful guardrail run.
+    await proxy_logging_obj.post_call_success_hook(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=response,
+    )
+    end_time = datetime.now(timezone.utc)
+    if litellm_logging_obj is not None:
+        await litellm_logging_obj.async_success_handler(
+            result=response_for_logging,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+        )
+        thread_pool_executor.submit(
+            litellm_logging_obj.success_handler,
+            response_for_logging,
+            start_time,
+            end_time,
+            False,
+        )
+
+    return response
 
 
 # Usage (dashboard) endpoints: overview, detail, logs
