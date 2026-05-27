@@ -4312,10 +4312,16 @@ async def _execute_virtual_key_regeneration(  # noqa: PLR0915
                 if _original_lifetime.total_seconds() <= 0:
                     _original_lifetime = timedelta(days=30)
                 update_data["expires"] = _now + _original_lifetime
+                # Identify the old key by hashed token (always present) plus
+                # alias (often None) so log lines are actionable on their own
+                # without needing to cross-reference other log entries.
                 verbose_proxy_logger.info(
-                    "Regenerated expired key %s: auto-extending expires to %s "
+                    "Regenerated expired key (token_hash=%s, alias=%s, "
+                    "new_key_name=%s): auto-extending expires to %s "
                     "(original lifetime %s)",
+                    hashed_api_key,
                     getattr(key_in_db, "key_alias", None),
+                    new_token_key_name,
                     update_data["expires"].isoformat(),
                     _original_lifetime,
                 )
