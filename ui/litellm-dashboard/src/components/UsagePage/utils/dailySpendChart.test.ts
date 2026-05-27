@@ -102,3 +102,10 @@ describe("collapseDailyResults — breakdown merging (LIT-3383 P1)", () => {
     expect(Object.keys(c.breakdown.models)).toHaveLength(0);
   });
 });
+
+describe("SINGLE_DAY_TIME_LABEL", () => {
+  it("uses the time-of-day '12 AM' label, not a date label like 'Today'", () => {
+    expect(SINGLE_DAY_TIME_LABEL).toBe("12 AM");
+  });
+});
+
