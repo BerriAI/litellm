@@ -93,11 +93,9 @@ class ComplexityRouter(CustomLogger):
             self.config.reasoning_keywords or DEFAULT_REASONING_KEYWORDS
         )
         # Base technical keyword list: explicit technical_keywords override or defaults.
-        base_technical = (
-            self.config.technical_keywords
-            if self.config.technical_keywords is not None
-            else DEFAULT_TECHNICAL_KEYWORDS
-        )
+        # Use the same falsy-fallback semantics as code_keywords/reasoning_keywords/simple_keywords
+        # so an empty list falls back to the defaults consistently across all keyword fields.
+        base_technical = self.config.technical_keywords or DEFAULT_TECHNICAL_KEYWORDS
         if self.config.custom_technical_keywords:
             # Append caller-supplied terms onto the base list, preserving order
             # and de-duplicating overlap with the base list (case-insensitive).
