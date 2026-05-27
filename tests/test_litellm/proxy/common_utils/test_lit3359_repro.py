@@ -147,3 +147,7 @@ async def test_count_probe_failure_falls_back_to_in_place(fake_user):
 
     tx.litellm_budgettable.update.assert_awaited_once()
     tx.litellm_budgettable.create.assert_not_called()
+    # The membership row itself is left alone; no re-linking happens on the
+    # legacy fallback path.
+    tx.litellm_teammembership.upsert.assert_not_called()
+    tx.litellm_teammembership.update.assert_not_called()
