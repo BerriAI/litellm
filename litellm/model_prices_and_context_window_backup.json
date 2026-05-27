@@ -6054,6 +6054,17 @@
         "mode": "audio_speech",
         "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
     },
+    "azure/speech/azure-stt": {
+        "audio_transcription_config": "azure_speech",
+        "input_cost_per_second": 0.0002777778,
+        "litellm_provider": "azure",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "azure/tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "azure",
@@ -13982,6 +13993,21 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "fireworks_ai/accounts/fireworks/models/glm-5p1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 202800,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://fireworks.ai/models/fireworks/glm-5p1",
+        "supports_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false
+    },
     "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "fireworks_ai",
@@ -14247,6 +14273,21 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "fireworks_ai/glm-5p1": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 202800,
+        "max_output_tokens": 202800,
+        "max_tokens": 202800,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://fireworks.ai/models/fireworks/glm-5p1",
+        "supports_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": false
     },
     "fireworks_ai/kimi-k2p5": {
         "cache_read_input_token_cost": 1e-07,
@@ -26267,6 +26308,51 @@
         "supports_function_calling": true,
         "supports_response_schema": false
     },
+    "oci/openai.gpt-5": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "oci",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "oci/openai.gpt-5-mini": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "oci",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "oci/openai.gpt-5-nano": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "oci",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "oci/google.gemini-2.5-pro": {
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "oci",
@@ -27264,6 +27350,58 @@
         "output_cost_per_token": 1.5e-06,
         "rpm": 2000,
         "source": "https://ai.google.dev/pricing/gemini-3",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_code_execution": true,
+        "supports_file_search": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "tpm": 800000
+    },
+    "openrouter/google/gemini-3.1-flash-lite": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_per_audio_token": 5e-08,
+        "input_cost_per_audio_token": 5e-07,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "openrouter",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65536,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-06,
+        "output_cost_per_token": 1.5e-06,
+        "rpm": 2000,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-lite",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -29069,6 +29207,24 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "reducto/parse-legacy": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "reducto/parse-v3": {
+        "litellm_provider": "reducto",
+        "mode": "ocr",
+        "ocr_cost_per_credit": 0.015,
+        "source": "https://reducto.ai/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
     },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",

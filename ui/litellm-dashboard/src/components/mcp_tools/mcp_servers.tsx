@@ -404,6 +404,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       </Modal>
       <CreateMCPServer
         userRole={userRole}
+        userID={userID}
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}

@@ -1,0 +1,24 @@
+model_list:
+  - model_name: oci-cohere-command
+    litellm_params:
+      model: oci/cohere.command-latest
+  - model_name: oci-llama
+    litellm_params:
+      model: oci/meta.llama-3.3-70b-instruct
+  - model_name: oci-gemini
+    litellm_params:
+      model: oci/google.gemini-2.5-flash
+  - model_name: oci-grok
+    litellm_params:
+      model: oci/xai.grok-3-mini
+  - model_name: oci-embed
+    litellm_params:
+      model: oci/cohere.embed-v4.0
+    model_info:
+      mode: embedding
+
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: True

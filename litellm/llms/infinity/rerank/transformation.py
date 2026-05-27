@@ -1,5 +1,5 @@
 """
-Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank` format. 
+Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank` format.
 
 Why separate file? Make it easy to see how transformation works
 """
