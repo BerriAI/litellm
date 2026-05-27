@@ -143,6 +143,45 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _check_allowed_routes_match(route: str, allowed_routes: List) -> bool:
+        """LIT-3300 helper. Returns True if ``route`` matches any entry in
+        ``allowed_routes`` using:
+
+        1. Bucket-name expansion (e.g. ``"management_routes"`` ->
+           ``LiteLLMRoutes.management_routes.value``). Bucket names that
+           don't match the route are NOT then re-checked as literal paths.
+        2. Exact / prefix match (``_route_matches_allowed_route``).
+        3. Wildcard pattern match (``_route_matches_wildcard_pattern``).
+
+        Used by ``non_proxy_admin_allowed_routes_check`` as the fallback
+        when no earlier role-based gate has accepted the request.
+        """
+        for allowed_route in allowed_routes:
+            if (
+                isinstance(allowed_route, str)
+                and allowed_route in LiteLLMRoutes._member_names_
+            ):
+                if RouteChecks.check_route_access(
+                    route=route,
+                    allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                ):
+                    return True
+                # bucket name handled - do not also try to literal-match it
+                continue
+
+            if RouteChecks._route_matches_allowed_route(
+                route=route, allowed_route=allowed_route
+            ):
+                return True
+
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
+
+        return False
+
+    @staticmethod
     def _mask_user_id(user_id: str) -> str:
         """
         Mask user_id to prevent leaking sensitive information in error messages
@@ -281,22 +320,15 @@ class RouteChecks:
         ):
             pass
         elif valid_token.allowed_routes is not None:
-            # check if route is in allowed_routes (exact match or prefix match)
-            route_allowed = False
-            for allowed_route in valid_token.allowed_routes:
-                if RouteChecks._route_matches_allowed_route(
-                    route=route, allowed_route=allowed_route
-                ):
-                    route_allowed = True
-                    break
-
-                if RouteChecks._route_matches_wildcard_pattern(
-                    route=route, pattern=allowed_route
-                ):
-                    route_allowed = True
-                    break
-
-            if not route_allowed:
+            # LIT-3300: allowed_routes may contain LiteLLMRoutes enum-member NAMES
+            # (e.g. "management_routes", "llm_api_routes", "info_routes") written by
+            # handle_key_type() in key_management_endpoints.py. _check_allowed_routes_match
+            # expands any bucket name to its concrete route list before doing the regular
+            # exact / prefix / wildcard checks. Mirrors the symmetric expansion already
+            # done by is_virtual_key_allowed_to_call_route.
+            if not RouteChecks._check_allowed_routes_match(
+                route=route, allowed_routes=valid_token.allowed_routes
+            ):
                 RouteChecks._raise_admin_only_route_exception(
                     user_obj=user_obj, route=route
                 )
