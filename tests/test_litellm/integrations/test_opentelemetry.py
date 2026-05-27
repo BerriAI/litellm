@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 import json
 import os
@@ -5142,3 +5143,183 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+# ---------------------------------------------------------------------------
+# LIT-3299: _emit_once must accept list/dict/set scope elements without crashing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lit_3299_otel_handler():
+    """Build a real OpenTelemetry handler with span emission disabled.
+
+    Constructed via the real OpenTelemetry class so the test exercises the
+    actual ``_emit_once`` / ``_make_hashable`` path, not a stub.
+    """
+    from unittest.mock import patch
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    with patch.object(OpenTelemetry, "_init_otel_logger_on_litellm_proxy"):
+        return OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+
+
+def test_lit_3299_emit_once_handles_list_guardrail_mode(lit_3299_otel_handler):
+    """LIT-3299: a list-valued guardrail_mode in scope must not crash.
+
+    Before the fix this raised ``TypeError: unhashable type: 'list'`` at
+    ``spans_logged.get(dedupe_key)``, returning HTTP 500 from the proxy.
+    """
+    kwargs: dict = {}
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs,
+            "guardrail",
+            "my-guardrail",
+            1.0,
+            ["pre_call", "post_call"],
+        )
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs,
+            "guardrail",
+            "my-guardrail",
+            1.0,
+            ["pre_call", "post_call"],
+        )
+        is False
+    )
+
+
+def test_lit_3299_list_and_tuple_collapse_to_same_slot(lit_3299_otel_handler):
+    """list and its equivalent tuple must dedupe to the same key.
+
+    Without this guarantee a single guardrail invocation whose ``mode``
+    varies in container type between calls would emit two spans rather
+    than one.
+    """
+    kwargs: dict = {}
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]
+        )
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g1", 1.0, ("pre_call", "post_call")
+        )
+        is False
+    )
+
+
+def test_lit_3299_handles_nested_list(lit_3299_otel_handler):
+    """Nested list of lists must also normalize (defensive)."""
+    kwargs: dict = {}
+    assert lit_3299_otel_handler._emit_once(kwargs, [["a", "b"], "c"]) is True
+    assert lit_3299_otel_handler._emit_once(kwargs, [["a", "b"], "c"]) is False
+
+
+def test_lit_3299_handles_dict_scope(lit_3299_otel_handler):
+    """dict-valued scope element (e.g. arbitrary metadata) must not crash."""
+    kwargs: dict = {}
+    assert lit_3299_otel_handler._emit_once(kwargs, {"k": "v", "m": ["x", "y"]}) is True
+    # Equivalent dict (different insertion order) collapses to same slot.
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, {"m": ["x", "y"], "k": "v"}) is False
+    )
+
+
+def test_lit_3299_handles_set_scope(lit_3299_otel_handler):
+    """set-valued scope element must not crash and is order-independent."""
+    kwargs: dict = {}
+    assert lit_3299_otel_handler._emit_once(kwargs, {"pre_call", "post_call"}) is True
+    assert lit_3299_otel_handler._emit_once(kwargs, {"post_call", "pre_call"}) is False
+
+
+def test_lit_3299_make_hashable_returns_scalars_unchanged():
+    """Already-hashable scalars pass through untouched."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    for v in (None, "x", 1, 1.5, True, ("a", "b"), b"bytes"):
+        assert O._make_hashable(v) == v
+
+
+def test_lit_3299_make_hashable_list_to_tuple():
+    """list -> tuple with element order preserved and recursive."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    assert O._make_hashable(["a", "b"]) == ("a", "b")
+    assert O._make_hashable([["a", "b"], "c"]) == (("a", "b"), "c")
+
+
+def test_lit_3299_make_hashable_dict_to_sorted_pairs():
+    """dict -> tuple of (k, normalized v) pairs sorted by repr(k)."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    assert O._make_hashable({"b": 2, "a": 1}) == (("a", 1), ("b", 2))
+    assert O._make_hashable({"a": ["x", "y"]}) == (("a", ("x", "y")),)
+
+
+def test_lit_3299_make_hashable_dict_with_mixed_type_keys():
+    """Defensive: dict with non-comparable mixed-type keys still normalizes.
+
+    A plain ``sorted(dict.items())`` would raise on Python 3 because str/int
+    aren't orderable. We sort by ``repr(key)`` instead so this path is
+    always safe.
+    """
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    out = O._make_hashable({1: "a", "2": "b"})
+    assert isinstance(out, tuple)
+    {out: True}  # hashable -> usable as dict key
+
+
+def test_lit_3299_make_hashable_set_to_frozenset():
+    """set -> frozenset; order-independent and hashable."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    assert O._make_hashable({"a", "b"}) == frozenset({"a", "b"})
+    assert O._make_hashable(frozenset({"a", "b"})) == frozenset({"a", "b"})
+
+
+def test_lit_3299_distinguishes_different_list_modes(lit_3299_otel_handler):
+    """Sanity: two different list-valued modes must NOT collapse to one slot."""
+    kwargs: dict = {}
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", ["pre_call"]) is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g", ["pre_call", "post_call"]
+        )
+        is True
+    )
+
+
+def test_lit_3299_make_hashable_tuple_with_unhashable_element():
+    """Greptile P2 follow-up: a tuple whose elements are unhashable must
+    also normalize, not just top-level lists/dicts/sets."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    # tuple-of-list -> tuple-of-tuple
+    assert O._make_hashable((["a", "b"], "c")) == (("a", "b"), "c")
+    # tuple-of-dict -> tuple-of-sorted-pairs
+    assert O._make_hashable(({"k": "v"},)) == ((("k", "v"),),)
+    # the result must itself be hashable
+    {O._make_hashable((["a"], {"b": "c"})): True}
+
+
+def test_lit_3299_emit_once_handles_tuple_with_inner_list(lit_3299_otel_handler):
+    """A tuple-of-list passed as a scope element must not crash _emit_once."""
+    kwargs: dict = {}
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", (["a", "b"], "c"))
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", (["a", "b"], "c"))
+        is False
+    )
