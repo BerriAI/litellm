@@ -8,6 +8,7 @@ import random
 # What is this?
 ## Unit test for presidio pii masking
 import sys
+import re as _re
 import time
 import traceback
 from datetime import datetime
@@ -316,8 +317,6 @@ async def test_chat_completion_request_with_redaction():
 # Regression coverage for the bug where ``hide_secrets`` only redacted the
 # ``-----BEGIN ... PRIVATE KEY-----`` header line for PEM private keys,
 # leaving the base64 body and ``-----END`` footer in the forwarded request.
-
-import re as _re
 
 _PEM_PKCS8 = (
     "-----BEGIN PRIVATE KEY-----\n"
