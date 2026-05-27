@@ -185,6 +185,8 @@ class HunyuanImageEditConfig(BaseImageEditConfig):
         for k, v in image_edit_optional_request_params.items():
             if k == "mask" and v is not None:
                 request_body["mask"] = _image_to_url(v)
+            elif k == "n" and v is not None:
+                request_body["n"] = int(v)
             elif k not in ("mask",) and v is not None:
                 request_body[k] = v
 

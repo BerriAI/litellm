@@ -155,6 +155,19 @@ class TestHunyuanImageEditConfig:
         assert data["images"][0].startswith("data:image/png;base64,")
         assert files == []
 
+    def test_transform_image_edit_request_n_is_cast_to_int(self):
+        """n must be sent as int regardless of the input type (str or float)."""
+        data, _ = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image="https://example.com/source.png",
+            image_edit_optional_request_params={"n": "2"},
+            litellm_params={},
+            headers={},
+        )
+        assert data["n"] == 2
+        assert isinstance(data["n"], int)
+
     def test_transform_image_edit_request_rejects_local_path(self):
         with pytest.raises(ValueError, match="HTTP/HTTPS URL or data URL"):
             self.cfg.transform_image_edit_request(
