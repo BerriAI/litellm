@@ -387,9 +387,20 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     Object.entries(modelMap).forEach(([key, value]) => {
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
+        // Match by exact equality or by a token-prefix boundary (`<provider>_*`
+        // or `<provider>-*`). This keeps sub-flavor providers like
+        // `bedrock_converse`, `fireworks_ai-embedding-models`, and
+        // `vertex_ai-anthropic_models` grouped under their parent provider
+        // (`bedrock`, `fireworks_ai`, `vertex_ai`), but stops the previous
+        // unbounded `.includes()` from pulling in unrelated providers whose
+        // name merely contains the parent as a substring (e.g.
+        // `vertex_ai-anthropic_models` under `anthropic`, or
+        // `vertex_ai-openai_models` under `openai`).
         if (
-          litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+          typeof litellmProvider === "string" &&
+          (litellmProvider === custom_llm_provider ||
+            litellmProvider.startsWith(custom_llm_provider + "_") ||
+            litellmProvider.startsWith(custom_llm_provider + "-"))
         ) {
           providerModels.push(key);
         }
