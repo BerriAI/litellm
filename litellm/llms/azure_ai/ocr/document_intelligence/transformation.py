@@ -360,10 +360,19 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             spans = page_data.get("spans", [])
             if spans:
                 parts = []
+                # Azure DI span offsets are UTF-16 code-unit offsets, not
+                # Python (Unicode code-point) indices.  We encode the full
+                # content as UTF-16-LE (2 bytes per code unit) so we can
+                # slice correctly, then decode back to str.
+                content_u16 = full_content.encode("utf-16-le")
                 for span in spans:
                     offset = span.get("offset", 0)
                     length = span.get("length", 0)
-                    parts.append(full_content[offset : offset + length])
+                    byte_start = offset * 2
+                    byte_end = (offset + length) * 2
+                    parts.append(
+                        content_u16[byte_start:byte_end].decode("utf-16-le")
+                    )
                 return "".join(parts)
 
         # Fallback: concatenate lines
