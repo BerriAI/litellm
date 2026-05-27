@@ -4,6 +4,7 @@ import inspect
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.anthropic import AppliedEdit
 
 from .constants import CLEAR_TOOL_USES_EDIT_TYPE, COMPACT_EDIT_TYPE
 from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112
@@ -75,7 +76,7 @@ async def apply_context_management(
 
     current_messages = messages
     current_system = system
-    aggregated_applied: List[Dict[str, Any]] = []
+    aggregated_applied: List[AppliedEdit] = []
     aggregated_compaction_block = None
     aggregated_iterations_usage = None
 
@@ -118,7 +119,7 @@ async def apply_context_management(
     return PolyfillResult(
         messages=current_messages,
         system=current_system,
-        applied_edits=cast(List[Any], aggregated_applied),
+        applied_edits=aggregated_applied,
         compaction_block=aggregated_compaction_block,
         iterations_usage=aggregated_iterations_usage,
     )

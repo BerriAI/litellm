@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic import (
     AppliedEdit,
+    CompactionBlock,
     ContextManagementResponse,
     UsageDelta,
     UsageIteration,
@@ -62,7 +63,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
         applied_edits: Optional[List[AppliedEdit]] = None,
-        compaction_block: Optional[Dict[str, Any]] = None,
+        compaction_block: Optional[CompactionBlock] = None,
         iterations_usage: Optional[List[UsageIteration]] = None,
     ):
         super().__init__(completion_stream)
