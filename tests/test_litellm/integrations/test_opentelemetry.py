@@ -5177,9 +5177,7 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
 
     def _service_span_attrs(self, exporter, service_value):
         spans = [s for s in exporter.get_finished_spans() if s.name == service_value]
-        assert len(spans) == 1, (
-            f"expected one {service_value!r} span, got {len(spans)}"
-        )
+        assert len(spans) == 1, f"expected one {service_value!r} span, got {len(spans)}"
         return dict(spans[0].attributes or {})
 
     def _run(self, coro):
@@ -5197,15 +5195,17 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
             event_metadata=None,
         )
 
-    @parameterized.expand([
-        ("PROXY_PRE_CALL",),
-        ("DB",),
-        ("REDIS",),
-        ("AUTH",),
-        ("ROUTER",),
-        ("BATCH_WRITE_TO_DB",),
-        ("POD_LOCK_MANAGER",),
-    ])
+    @parameterized.expand(
+        [
+            ("PROXY_PRE_CALL",),
+            ("DB",),
+            ("REDIS",),
+            ("AUTH",),
+            ("ROUTER",),
+            ("BATCH_WRITE_TO_DB",),
+            ("POD_LOCK_MANAGER",),
+        ]
+    )
     def test_success_hook_stamps_team_attrs_on_every_service_type(self, name):
         from litellm.types.services import ServiceTypes
 
@@ -5215,13 +5215,15 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         payload = self._make_payload(service)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=50)
-        self._run(otel.async_service_success_hook(
-            payload=payload,
-            parent_otel_span=parent,
-            start_time=start,
-            end_time=end,
-            event_metadata=None,
-        ))
+        self._run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent,
+                start_time=start,
+                end_time=end,
+                event_metadata=None,
+            )
+        )
         attrs = self._service_span_attrs(exporter, service.value)
         assert attrs.get("metadata.user_api_key_team_id") == "team-7", attrs
         assert attrs.get("metadata.user_api_key_team_alias") == "alias-7", attrs
@@ -5234,14 +5236,16 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         payload = self._make_payload(ServiceTypes.DB)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=20)
-        self._run(otel.async_service_failure_hook(
-            payload=payload,
-            error="boom",
-            parent_otel_span=parent,
-            start_time=start,
-            end_time=end,
-            event_metadata=None,
-        ))
+        self._run(
+            otel.async_service_failure_hook(
+                payload=payload,
+                error="boom",
+                parent_otel_span=parent,
+                start_time=start,
+                end_time=end,
+                event_metadata=None,
+            )
+        )
         attrs = self._service_span_attrs(exporter, ServiceTypes.DB.value)
         assert attrs.get("metadata.user_api_key_team_id") == "team-9"
         assert attrs.get("metadata.user_api_key_team_alias") == "alias-9"
@@ -5255,12 +5259,14 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         payload = self._make_payload(ServiceTypes.REDIS)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=10)
-        self._run(otel.async_service_success_hook(
-            payload=payload,
-            parent_otel_span=parent,
-            start_time=start,
-            end_time=end,
-        ))
+        self._run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent,
+                start_time=start,
+                end_time=end,
+            )
+        )
         attrs = self._service_span_attrs(exporter, ServiceTypes.REDIS.value)
         assert "metadata.user_api_key_team_id" not in attrs
         assert "metadata.user_api_key_team_alias" not in attrs
@@ -5273,12 +5279,14 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         payload = self._make_payload(ServiceTypes.AUTH)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=5)
-        self._run(otel.async_service_success_hook(
-            payload=payload,
-            parent_otel_span=parent,
-            start_time=start,
-            end_time=end,
-        ))
+        self._run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent,
+                start_time=start,
+                end_time=end,
+            )
+        )
         attrs = self._service_span_attrs(exporter, ServiceTypes.AUTH.value)
         assert "metadata.user_api_key_team_id" not in attrs
         assert "metadata.user_api_key_team_alias" not in attrs
@@ -5290,12 +5298,14 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         payload = self._make_payload(ServiceTypes.DB)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=5)
-        self._run(otel.async_service_success_hook(
-            payload=payload,
-            parent_otel_span=None,
-            start_time=start,
-            end_time=end,
-        ))
+        self._run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=None,
+                start_time=start,
+                end_time=end,
+            )
+        )
         assert exporter.get_finished_spans() == ()
 
     def test_non_recording_parent_does_not_crash_hook(self):
@@ -5306,19 +5316,25 @@ class TestServiceHookTeamAttributePropagation(unittest.TestCase):
         from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
         otel, exporter = self._otel()
-        parent = NonRecordingSpan(SpanContext(
-            trace_id=0x1, span_id=0x2, is_remote=False,
-            trace_flags=TraceFlags(0x01),
-        ))
+        parent = NonRecordingSpan(
+            SpanContext(
+                trace_id=0x1,
+                span_id=0x2,
+                is_remote=False,
+                trace_flags=TraceFlags(0x01),
+            )
+        )
         payload = self._make_payload(ServiceTypes.DB)
         start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         end = start + timedelta(milliseconds=5)
-        self._run(otel.async_service_success_hook(
-            payload=payload,
-            parent_otel_span=parent,
-            start_time=start,
-            end_time=end,
-        ))
+        self._run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent,
+                start_time=start,
+                end_time=end,
+            )
+        )
         for span in exporter.get_finished_spans():
             attrs = dict(span.attributes or {})
             assert "metadata.user_api_key_team_id" not in attrs
