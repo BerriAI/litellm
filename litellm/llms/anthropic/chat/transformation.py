@@ -903,6 +903,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         for tool in tools:
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
+            elif "function" not in tool:
+                litellm.verbose_logger.warning(
+                    "_map_tools: skipping tool without input_schema or function key: %s",
+                    tool.get("name", tool.get("type", "unknown")),
+                )
+                continue
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
 

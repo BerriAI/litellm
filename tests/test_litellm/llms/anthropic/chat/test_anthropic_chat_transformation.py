@@ -4864,3 +4864,60 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_map_tools_skips_non_standard_tools():
+    """_map_tools should skip tools without 'input_schema' or 'function' keys
+    instead of crashing. This supports Responses API tool types like
+    web_search_preview, server_tool_use, etc."""
+    config = AnthropicConfig()
+    tools = [
+        # Standard OpenAI function tool - should be mapped
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        # Anthropic-format tool - should pass through
+        {
+            "type": "custom",
+            "name": "my_tool",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        # Non-standard tool without 'function' key - should be skipped
+        {
+            "type": "web_search_preview",
+            "name": "web_search",
+        },
+        # Another non-standard tool type
+        {
+            "type": "server_tool_use",
+            "name": "server_tool",
+            "server_url": "https://example.com/tools",
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+
+    # Should have 2 tools: the OpenAI function tool and the Anthropic-format tool
+    assert (
+        len(anthropic_tools) == 2
+    ), f"Expected 2 tools, got {len(anthropic_tools)}: {anthropic_tools}"
+    assert mcp_servers == []
+
+    # Verify the first tool is the OpenAI function one (mapped to Anthropic format)
+    assert "input_schema" in anthropic_tools[0]
+    assert anthropic_tools[0]["name"] == "get_weather"
+
+    # Verify the second tool is the Anthropic-format one (passed through)
+    assert anthropic_tools[1]["name"] == "my_tool"
+
+
+def test_map_tools_allows_empty_tool_list():
+    """_map_tools should handle an empty tool list gracefully."""
+    config = AnthropicConfig()
+    anthropic_tools, mcp_servers = config._map_tools([])
+    assert anthropic_tools == []
+    assert mcp_servers == []
