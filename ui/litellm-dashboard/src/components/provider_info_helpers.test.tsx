@@ -218,14 +218,62 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual(["gpt-3.5-turbo", "gpt-4"]);
     });
 
-    it("should return models when litellm_provider includes the provider string", () => {
+    it("should return models when litellm_provider matches the provider via a token-prefix boundary", () => {
+      // Sub-flavor providers (`<provider>_*` or `<provider>-*`) are grouped
+      // under their parent provider, but unrelated providers that merely
+      // *contain* the parent name as a substring are NOT pulled in.
       const modelMap = {
-        "custom-openai-model": { litellm_provider: "custom_openai_endpoint" },
-        "another-model": { litellm_provider: "openai" },
+        "bedrock-base-model": { litellm_provider: "bedrock" },
+        "bedrock-converse-model": { litellm_provider: "bedrock_converse" },
+        "fireworks-embed-model": { litellm_provider: "fireworks_ai-embedding-models" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const bedrockResult = getProviderModels(Providers.Bedrock, modelMap);
+      expect(bedrockResult).toContain("bedrock-base-model");
+      expect(bedrockResult).toContain("bedrock-converse-model");
+      expect(bedrockResult).not.toContain("openai-model");
+
+      const fireworksResult = getProviderModels(Providers.FireworksAI, modelMap);
+      expect(fireworksResult).toContain("fireworks-embed-model");
+    });
+
+    it("should not leak vertex_ai-anthropic_models into the Anthropic provider", () => {
+      // Regression: previously the `.includes()` substring check pulled every
+      // `vertex_ai-anthropic_models` entry (e.g. `vertex_ai/claude-3-5-haiku`)
+      // into the Anthropic dropdown of the Add Model UI.
+      const modelMap = {
+        "claude-3-opus": { litellm_provider: "anthropic" },
+        "vertex_ai/claude-3-5-haiku": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/claude-haiku-4-5": { litellm_provider: "vertex_ai-anthropic_models" },
+      };
+      const result = getProviderModels(Providers.Anthropic, modelMap);
+      expect(result).toEqual(["claude-3-opus"]);
+      expect(result).not.toContain("vertex_ai/claude-3-5-haiku");
+      expect(result).not.toContain("vertex_ai/claude-haiku-4-5");
+    });
+
+    it("should not leak vertex_ai-openai_models into the OpenAI provider", () => {
+      const modelMap = {
+        "gpt-4": { litellm_provider: "openai" },
+        "vertex_ai/gpt-4o-mini": { litellm_provider: "vertex_ai-openai_models" },
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
-      expect(result).toContain("custom-openai-model");
-      expect(result).toContain("another-model");
+      expect(result).toEqual(["gpt-4"]);
+      expect(result).not.toContain("vertex_ai/gpt-4o-mini");
+    });
+
+    it("should still include all vertex_ai-* sub-providers under the Vertex AI provider", () => {
+      const modelMap = {
+        "vertex_ai/gemini-pro": { litellm_provider: "vertex_ai" },
+        "vertex_ai/claude-3-5-haiku": { litellm_provider: "vertex_ai-anthropic_models" },
+        "vertex_ai/llama-3": { litellm_provider: "vertex_ai-llama_models" },
+        "anthropic/claude-3-opus": { litellm_provider: "anthropic" },
+      };
+      const result = getProviderModels(Providers.Vertex_AI, modelMap);
+      expect(result).toContain("vertex_ai/gemini-pro");
+      expect(result).toContain("vertex_ai/claude-3-5-haiku");
+      expect(result).toContain("vertex_ai/llama-3");
+      expect(result).not.toContain("anthropic/claude-3-opus");
     });
 
     it("should filter out models with null values", () => {
