@@ -10,10 +10,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _attempt_json_repair,
+    _escape_raw_newlines_in_json,
     add_system_prompt_to_messages,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    parse_tool_call_arguments,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -546,3 +549,112 @@ class TestExtractFileDataBareStr:
         extracted = extract_file_data(("foo.txt", b"raw bytes content"))
         assert extracted.get("filename") == "foo.txt"
         assert extracted.get("content") == b"raw bytes content"
+
+
+def test_escape_raw_newlines_in_json_inside_string():
+    """Raw newlines inside JSON string values should be escaped."""
+    result = _escape_raw_newlines_in_json('{"cmd": "echo hello\nworld"}')
+    assert "\\n" in result
+    import json
+
+    parsed = json.loads(result)
+    assert parsed == {"cmd": "echo hello\nworld"}
+
+
+def test_escape_raw_newlines_in_json_outside_string():
+    """Raw newlines outside JSON string values should NOT be escaped."""
+    result = _escape_raw_newlines_in_json('{"a": 1}\n{"b": 2}')
+    assert "\n" in result
+    assert result.count("\n") == 1
+
+
+def test_escape_raw_newlines_in_json_preserves_escaped():
+    """Already-escaped sequences should not be doubled."""
+    result = _escape_raw_newlines_in_json('{"text": "hello\\\\nworld"}')
+    import json
+
+    parsed = json.loads(result)
+    assert parsed == {"text": "hello\\nworld"}
+
+
+def test_escape_raw_newlines_in_json_empty():
+    """Empty string should return empty string."""
+    assert _escape_raw_newlines_in_json("") == ""
+
+
+def test_attempt_json_repair_truncated_inside_string():
+    """Repair should close an unclosed string value before adding brackets."""
+    result = _attempt_json_repair('{"arg": "unfinished')
+    assert result is not None
+    assert result == {"arg": "unfinished"}
+
+
+def test_attempt_json_repair_truncated_inside_string_with_backslash():
+    """Repair should strip trailing backslash before adding closing quote."""
+    result = _attempt_json_repair('{"arg": "unfinished\\\\')
+    assert result is not None
+    assert result == {"arg": "unfinished\\"}
+
+
+def test_attempt_json_repair_valid_json_returns_none():
+    """Valid JSON should return None since there is nothing to repair."""
+    assert _attempt_json_repair('{"valid": "json"}') is None
+
+
+def test_attempt_json_repair_truncated_brackets():
+    """Truncated JSON with missing closing brackets should be repaired."""
+    result = _attempt_json_repair('{"a": {"b": 1}')
+    assert result == {"a": {"b": 1}}
+
+
+def test_attempt_json_repair_empty():
+    """Empty or whitespace-only input should return None."""
+    assert _attempt_json_repair("") is None
+    assert _attempt_json_repair("   ") is None
+
+
+def test_attempt_json_repair_truncated_inside_string_odd_backslash():
+    """Repair should strip a single trailing backslash (odd count) before
+    adding the closing quote. This exercises the escape_next=True path."""
+    result = _attempt_json_repair('{"arg": "unfinished\\')  # single trailing \\
+    assert result is not None
+    assert result == {"arg": "unfinished"}
+
+
+def test_attempt_json_repair_truncated_inside_string_with_comma():
+    """Repair should NOT strip a trailing comma that is part of a string value.
+    The rstrip(",") must only run after checking in_string."""
+    result = _attempt_json_repair('{"arg": "value,')
+    assert result is not None
+    assert result == {"arg": "value,"}
+
+
+def test_parse_tool_call_arguments_with_raw_newlines():
+    """parse_tool_call_arguments should handle raw newlines in strings.
+    This exercises the _escape_raw_newlines_in_json code path inside
+    parse_tool_call_arguments (json.loads will reject a raw newline,
+    forcing the escape+repair path)."""
+    payload = '{"cmd": "echo hello' + chr(10) + "world" + chr(10) + '"}'
+    result = parse_tool_call_arguments(
+        payload,
+        tool_name="bash",
+        context="test",
+    )
+    assert result == {"cmd": "echo hello\nworld\n"}
+
+
+def test_parse_tool_call_arguments_truncated_inside_string():
+    """parse_tool_call_arguments should handle truncated strings."""
+    result = parse_tool_call_arguments(
+        '{"cmd": "echo hello',
+        tool_name="bash",
+        context="test",
+    )
+    assert result == {"cmd": "echo hello"}
+
+
+def test_parse_tool_call_arguments_none():
+    """None or empty arguments should return empty dict."""
+    assert parse_tool_call_arguments(None) == {}
+    assert parse_tool_call_arguments("") == {}
+    assert parse_tool_call_arguments("  ") == {}
