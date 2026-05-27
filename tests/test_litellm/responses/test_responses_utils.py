@@ -348,6 +348,71 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.image_tokens == 100
         assert result.completion_tokens_details.text_tokens == 70
 
+    def test_transform_response_api_usage_defaults_completion_tokens_details_when_provider_omits_it(
+        self,
+    ):
+        """
+        Regression for https://github.com/BerriAI/litellm/issues/15377 (LIT-1771).
+
+        Azure OpenAI's Responses API can omit ``output_tokens_details`` from the
+        usage payload even when ``input_tokens_details`` is present. In that
+        case, downstream loggers used to see
+        ``response_obj.usage.completion_tokens_details`` as ``None`` while
+        ``prompt_tokens_details`` was populated — asymmetric and confusing for
+        cost/observability callbacks. After the fix we always emit a default
+        ``CompletionTokensDetailsWrapper(reasoning_tokens=0)`` in this case.
+        """
+        # Setup — Azure-style payload (no output_tokens_details)
+        usage = {
+            "input_tokens": 12,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 204,
+            "total_tokens": 216,
+        }
+
+        # Execute
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        # Assert — the key regression: completion_tokens_details is populated,
+        # not None.
+        assert result.completion_tokens == 204
+        assert result.prompt_tokens == 12
+        assert result.total_tokens == 216
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 0
+        # Other fields stay None — no info from the provider.
+        assert result.completion_tokens_details.text_tokens is None
+        assert result.completion_tokens_details.image_tokens is None
+        # And we did NOT regress the populated input side.
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 0
+
+    def test_transform_response_api_usage_preserves_output_tokens_details_when_provided(
+        self,
+    ):
+        """
+        Ensure the default-fallback path does not stomp on a provider-supplied
+        ``output_tokens_details`` block.
+        """
+        usage = {
+            "input_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 5},
+            "output_tokens": 25,
+            "output_tokens_details": {"reasoning_tokens": 7},
+            "total_tokens": 40,
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 7
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 5
+
 
 class TestResponsesAPIProviderSpecificParams:
     """
@@ -463,73 +528,3 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
             "effort": "high",
             "summary": "detailed",
         }
-
-    def test_transform_response_api_usage_defaults_completion_tokens_details_when_provider_omits_it(
-        self,
-    ):
-        """
-        Regression for https://github.com/BerriAI/litellm/issues/15377 (LIT-1771).
-
-        Azure OpenAI's Responses API can omit ``output_tokens_details`` from the
-        usage payload even when ``input_tokens_details`` is present. In that
-        case, downstream loggers used to see ``response_obj.usage.completion_tokens_details``
-        as ``None`` while ``prompt_tokens_details`` was populated — asymmetric
-        and confusing for cost/observability callbacks. After the fix we always
-        emit a default ``CompletionTokensDetailsWrapper(reasoning_tokens=0)``
-        in this case.
-        """
-        # Setup — Azure-style payload (no output_tokens_details)
-        usage = {
-            "input_tokens": 12,
-            "input_tokens_details": {"cached_tokens": 0},
-            "output_tokens": 204,
-            "total_tokens": 216,
-        }
-
-        # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-            usage
-        )
-
-        # Assert
-        assert result.completion_tokens == 204
-        assert result.prompt_tokens == 12
-        assert result.total_tokens == 216
-        # The key regression assertion: completion_tokens_details is populated,
-        # not None.
-        assert result.completion_tokens_details is not None
-        assert result.completion_tokens_details.reasoning_tokens == 0
-        # Other fields stay None — we have no info on them from the provider.
-        assert result.completion_tokens_details.text_tokens is None
-        assert result.completion_tokens_details.image_tokens is None
-        # And we did NOT regress the populated input side.
-        assert result.prompt_tokens_details is not None
-        assert result.prompt_tokens_details.cached_tokens == 0
-
-    def test_transform_response_api_usage_preserves_output_tokens_details_when_provided(
-        self,
-    ):
-        """
-        Ensure the default-fallback path does not stomp on a provider-supplied
-        ``output_tokens_details`` block.
-        """
-        # Setup — full payload (output_tokens_details present)
-        usage = {
-            "input_tokens": 15,
-            "input_tokens_details": {"cached_tokens": 5},
-            "output_tokens": 25,
-            "output_tokens_details": {"reasoning_tokens": 7},
-            "total_tokens": 40,
-        }
-
-        # Execute
-        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-            usage
-        )
-
-        # Assert
-        assert result.completion_tokens_details is not None
-        assert result.completion_tokens_details.reasoning_tokens == 7
-        assert result.prompt_tokens_details is not None
-        assert result.prompt_tokens_details.cached_tokens == 5
-
