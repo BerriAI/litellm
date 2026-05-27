@@ -11,8 +11,12 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm.caching.dual_cache import DualCache
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+    _extract_prompt_cache_key,
     _openai_prompt_cache_affinity_cache_key,
+    _parse_model_id_from_affinity_cache_value,
+    _tenant_token_for_openai_pc_affinity,
 )
+from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.types.utils import (
     CallTypes,
     StandardLoggingModelInformation,
@@ -23,6 +27,47 @@ from litellm.types.utils import (
 def _long_user_messages() -> list:
     # Enough tokens for is_prompt_caching_valid_prompt (default >= 1024).
     return [{"role": "user", "content": "test long message here" * 1024}]
+
+
+def _anthropic_cache_control_messages() -> list:
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+
+def test_helper_extract_and_tenant_edge_cases():
+    assert _extract_prompt_cache_key(None) is None
+    assert _extract_prompt_cache_key({"prompt_cache_key": "   "}) is None
+    assert _tenant_token_for_openai_pc_affinity(None) == ""
+    assert (
+        _tenant_token_for_openai_pc_affinity({"metadata": {"other": "x"}}) == ""
+    )
+    assert (
+        _tenant_token_for_openai_pc_affinity(
+            {"litellm_metadata": {"user_api_key_hash": "from-litellm-md"}}
+        )
+        == "from-litellm-md"
+    )
+    assert _parse_model_id_from_affinity_cache_value(99) is None
 
 
 def _make_openai_success_payload() -> StandardLoggingPayload:
@@ -649,3 +694,232 @@ async def test_async_log_success_completion_call_type_writes_affinity():
         prompt_cache_key="sync-completion",
     )
     assert await cache.async_get_cache(key=key) is not None
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_anthropic_prefix_cache_pins_deployment():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    messages = _anthropic_cache_control_messages()
+    prompt_cache = PromptCachingCache(cache=cache)
+    await prompt_cache.async_add_model_id(
+        model_id="dep-anthropic-1",
+        messages=messages,
+        tools=None,
+    )
+    healthy = [
+        {
+            "litellm_params": {
+                "model": "anthropic/claude-sonnet-4-5-20250929",
+                "custom_llm_provider": "anthropic",
+            },
+            "model_info": {"id": "dep-anthropic-1"},
+        },
+        {
+            "litellm_params": {
+                "model": "anthropic/claude-sonnet-4-5-20250929",
+                "custom_llm_provider": "anthropic",
+            },
+            "model_info": {"id": "dep-anthropic-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model="claude-model",
+        healthy_deployments=healthy,
+        messages=messages,
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "dep-anthropic-1"
+
+
+@pytest.mark.asyncio
+async def test_filter_deployments_no_prompt_cache_key_returns_all():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    healthy = [
+        {
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-1"},
+        },
+        {
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-2"},
+        },
+    ]
+    filtered = await check.async_filter_deployments(
+        model="gpt-4o-mini",
+        healthy_deployments=healthy,
+        messages=_long_user_messages(),
+        request_kwargs={"metadata": {"user_api_key_hash": "h"}},
+    )
+    assert len(filtered) == 2
+
+
+@pytest.mark.asyncio
+async def test_filter_skips_openai_affinity_when_model_and_deployments_unsupported():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model_group = "router-alias"
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model=model_group,
+        tenant_token="h",
+        prompt_cache_key="k",
+    )
+    await cache.async_set_cache(key, {"model_id": "dep-1"}, ttl=300)
+    healthy = [
+        {"model_info": {"id": "dep-1"}},
+        {
+            "litellm_params": "not-a-dict",
+            "model_info": {"id": "dep-2"},
+        },
+        {
+            "litellm_params": {"custom_llm_provider": "ollama"},
+            "model_info": {"id": "dep-3"},
+        },
+    ]
+    with patch(
+        "litellm.litellm_core_utils.get_supported_openai_params.get_supported_openai_params",
+        return_value=["messages"],
+    ):
+        filtered = await check.async_filter_deployments(
+            model=model_group,
+            healthy_deployments=healthy,
+            messages=_long_user_messages(),
+            request_kwargs={
+                "prompt_cache_key": "k",
+                "metadata": {"user_api_key_hash": "h"},
+                "custom_llm_provider": "ollama",
+            },
+        )
+    assert len(filtered) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_skips_when_messages_not_list():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    payload["messages"] = "not-a-list"
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "prompt_cache_key": "k",
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="k",
+    )
+    assert await cache.async_get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_skips_when_model_id_none():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    payload = _make_openai_success_payload()
+    payload["model_id"] = None
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": payload,
+            "prompt_cache_key": "k",
+        },
+        response_obj={},
+        start_time=0.0,
+        end_time=1.0,
+    )
+    key = _openai_prompt_cache_affinity_cache_key(
+        router_model="gpt-4o-mini",
+        tenant_token="hash-abc",
+        prompt_cache_key="k",
+    )
+    assert await cache.async_get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_model_supports_prompt_cache_key_handles_get_params_exception():
+    with patch(
+        "litellm.litellm_core_utils.get_supported_openai_params.get_supported_openai_params",
+        side_effect=RuntimeError("lookup failed"),
+    ):
+        filtered = await PromptCachingDeploymentCheck(
+            cache=DualCache()
+        ).async_filter_deployments(
+            model="gpt-4o-mini",
+            healthy_deployments=[
+                {
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "custom_llm_provider": "openai",
+                    },
+                    "model_info": {"id": "dep-1"},
+                },
+            ],
+            messages=_long_user_messages(),
+            request_kwargs={"prompt_cache_key": "k"},
+        )
+    assert len(filtered) == 1
+
+
+@pytest.mark.asyncio
+async def test_filter_openai_affinity_when_only_deployments_support_prompt_cache_key():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model_group = "router-alias-only"
+    affinity_key = _openai_prompt_cache_affinity_cache_key(
+        router_model=model_group,
+        tenant_token="h",
+        prompt_cache_key="dep-only",
+    )
+    await cache.async_set_cache(
+        affinity_key,
+        {"model_id": "dep-openai-1"},
+        ttl=300,
+    )
+
+    def _supported_params(model: str, custom_llm_provider=None):
+        if model == model_group:
+            return ["messages"]
+        return ["messages", "prompt_cache_key"]
+
+    healthy = [
+        {
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-1"},
+        },
+        {
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "custom_llm_provider": "openai",
+            },
+            "model_info": {"id": "dep-openai-2"},
+        },
+    ]
+    with patch(
+        "litellm.litellm_core_utils.get_supported_openai_params.get_supported_openai_params",
+        side_effect=_supported_params,
+    ):
+        filtered = await check.async_filter_deployments(
+            model=model_group,
+            healthy_deployments=healthy,
+            messages=_long_user_messages(),
+            request_kwargs={
+                "prompt_cache_key": "dep-only",
+                "metadata": {"user_api_key_hash": "h"},
+            },
+        )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "dep-openai-1"
