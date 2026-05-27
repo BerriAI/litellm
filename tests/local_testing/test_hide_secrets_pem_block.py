@@ -105,6 +105,32 @@ def test_expand_private_key_values_no_block_falls_back_to_header():
     assert expanded[0]["value"] == "BEGIN PRIVATE KEY"
 
 
+def test_expand_private_key_values_no_block_preserves_all_truncated_headers():
+    """If every detected header lacks a closing ``-----END`` marker (truncated
+    input), preserve ALL of them — not just the first — so the existing
+    per-header redaction still runs for each. Regression guard for an early
+    version of the fix that silently dropped header redaction past the first
+    entry once the truncated-fallback branch was hit."""
+    detected = [
+        {"type": "Private Key", "value": "BEGIN PRIVATE KEY"},
+        {"type": "Private Key", "value": "BEGIN RSA PRIVATE KEY"},
+        {"type": "Private Key", "value": "BEGIN EC PRIVATE KEY"},
+    ]
+    message = (
+        "first:\n-----BEGIN PRIVATE KEY-----\nMIIE\n"
+        "second:\n-----BEGIN RSA PRIVATE KEY-----\nMIIF\n"
+        "third:\n-----BEGIN EC PRIVATE KEY-----\nMHcC\n"
+        "(no end markers anywhere)"
+    )
+    expanded = _expand_private_key_values(message, detected)
+    pk_values = [e["value"] for e in expanded if e["type"] == "Private Key"]
+    assert pk_values == [
+        "BEGIN PRIVATE KEY",
+        "BEGIN RSA PRIVATE KEY",
+        "BEGIN EC PRIVATE KEY",
+    ]
+
+
 def test_expand_private_key_values_passthrough_when_no_private_key():
     """If no ``Private Key`` entry is present, the list is returned unchanged."""
     detected = [{"type": "OpenAI Token", "value": "sk-AAAA"}]
