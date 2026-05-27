@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -132,9 +133,52 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
+    def _resolve_management_object_ttl(self, kwargs: dict) -> None:
+        """
+        Honor ``general_settings.user_api_key_cache_ttl`` for management-object writes.
+
+        Auth-related cache writers (``litellm/proxy/auth/auth_checks.py``,
+        ``litellm/proxy/auth/handle_jwt.py``,
+        ``litellm/proxy/_experimental/mcp_server/mcp_server_manager.py``) explicitly
+        pass ``ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` (60s) on every
+        write. When the operator sets ``general_settings.user_api_key_cache_ttl``
+        in the proxy config, ``proxy_server.py`` updates this cache instance via
+        ``update_cache_ttl(default_in_memory_ttl=<configured>)`` -- but DualCache
+        only falls back to ``default_in_memory_ttl`` when ``ttl`` is absent from
+        kwargs, so the explicit 60s wins and the configured TTL is silently lost.
+
+        This helper treats the ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
+        constant as a *sentinel*: when the caller passes exactly that value AND
+        the cache instance has been configured with a different
+        ``default_in_memory_ttl``, the configured value is promoted. Any other
+        explicit ttl is left untouched.
+        """
+        if "ttl" not in kwargs:
+            return
+        ttl = kwargs["ttl"]
+        if ttl is None:
+            return
+        try:
+            ttl_value = float(ttl)
+        except (TypeError, ValueError):
+            return
+        if ttl_value != float(DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL):
+            return
+        configured = self.default_in_memory_ttl
+        if configured is None:
+            return
+        try:
+            configured_value = float(configured)
+        except (TypeError, ValueError):
+            return
+        if configured_value == float(DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL):
+            return
+        kwargs["ttl"] = configured_value
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
+        self._resolve_management_object_ttl(kwargs)
         return super().set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
@@ -142,6 +186,7 @@ class UserApiKeyCache(DualCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
+        self._resolve_management_object_ttl(kwargs)
         return await super().async_set_cache(
             key=key, value=payload, local_only=local_only, **kwargs
         )
@@ -152,11 +197,17 @@ class UserApiKeyCache(DualCache):
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
+
+        Honours the same ``user_api_key_cache_ttl`` sentinel-promotion semantics
+        as ``async_set_cache`` -- a batch writer passing the
+        ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` sentinel against a
+        configured cache gets the operator-configured TTL.
         """
         normalized = [
             (key, CacheCodec.serialize(value, model_type=None))
             for key, value in cache_list
         ]
+        self._resolve_management_object_ttl(kwargs)
         return await super().async_set_cache_pipeline(
             cache_list=normalized, local_only=local_only, **kwargs
         )
