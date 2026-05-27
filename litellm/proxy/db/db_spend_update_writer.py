@@ -338,6 +338,40 @@ class DBSpendUpdateWriter:
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e
             )
 
+    def _should_skip_daily_aggregation(self) -> bool:
+        """Return ``True`` when the operator has opted out of daily spend aggregation.
+
+        Honors (in order of precedence):
+
+        1. ``general_settings.disable_daily_spend_aggregation`` (read at
+           startup by ``proxy_server.load_config`` into the
+           ``proxy_server.disable_daily_spend_aggregation`` module-level
+           global).
+        2. ``LITELLM_DISABLE_DAILY_SPEND_AGGREGATION`` environment variable
+           (truthy when in ``{"1", "true", "yes", "on"}``, case insensitive).
+        """
+        try:
+            from litellm.proxy import proxy_server
+
+            flag = getattr(proxy_server, "disable_daily_spend_aggregation", False)
+            # Truthy-check on purpose so a YAML int / string ``1`` also works
+            # (a YAML loader can hand us a non-bool truthy value when the
+            # operator writes ``disable_daily_spend_aggregation: 1`` instead
+            # of ``true``).
+            if bool(flag):
+                return True
+        except Exception:
+            pass
+        env_val = os.environ.get("LITELLM_DISABLE_DAILY_SPEND_AGGREGATION")
+        if env_val is not None and env_val.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return True
+        return False
+
     async def _batch_database_updates(
         self,
         *,
@@ -358,6 +392,17 @@ class DBSpendUpdateWriter:
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
         """
+        # Short-circuit the 6 daily-aggregation writers when the operator has
+        # opted out via ``general_settings.disable_daily_spend_aggregation`` (or
+        # the ``LITELLM_DISABLE_DAILY_SPEND_AGGREGATION`` env var). Operators
+        # who do not use the LiteLLM Usage dashboard and pipe analytics to a
+        # separate datastore via custom callbacks get no value from the per-day
+        # aggregation; without this, the ``litellm_daily_*_spend_update_buffer``
+        # Redis keys keep growing and ``DailySpendUpdateQueue`` consumes RAM
+        # for transactions that nothing reads. Skipping the six helpers below
+        # keeps those buffers / queues empty.
+        skip_daily_aggregation = self._should_skip_daily_aggregation()
+
         try:
             await self._update_user_db(
                 response_cost=response_cost,
@@ -434,6 +479,28 @@ class DBSpendUpdateWriter:
                 "_batch_database_updates: _update_agent_db failed: %s",
                 traceback.format_exc(),
             )
+
+        if not skip_daily_aggregation:
+            await self._dispatch_daily_aggregation_writes(
+                payload_copy=payload_copy,
+                org_id=org_id,
+            )
+
+    async def _dispatch_daily_aggregation_writes(
+        self,
+        *,
+        payload_copy: SpendLogsPayload,
+        org_id: Optional[str],
+    ) -> None:
+        """Run the six per-day aggregation writers.
+
+        Extracted from ``_batch_database_updates`` so the parent method stays
+        under the ruff PLR0915 statement budget after the
+        ``disable_daily_spend_aggregation`` short-circuit was added (LIT-3332).
+        Each writer remains wrapped in its own ``try``/``except`` so a single
+        failure does not block the others.
+        """
+        from litellm.proxy.proxy_server import prisma_client
 
         try:
             await self.add_spend_log_transaction_to_daily_user_transaction(
