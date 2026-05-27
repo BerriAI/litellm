@@ -448,7 +448,10 @@ def _expand_private_key_values(
         return detected_secrets
     if not any(s.get("type") == "Private Key" for s in detected_secrets):
         return detected_secrets
-    pem_blocks = _PEM_BLOCK_RE.findall(message_content)
+    # ``dict.fromkeys`` deduplicates while preserving order so we emit one
+    # entry per distinct PEM block, even if the same key appears multiple times
+    # in the message.
+    pem_blocks = list(dict.fromkeys(_PEM_BLOCK_RE.findall(message_content)))
     if not pem_blocks:
         return detected_secrets
     expanded: list = []
