@@ -2290,45 +2290,59 @@ async def apply_guardrail(
             "response": response.model_dump(exclude_none=True),
         }
     except Exception as e:
-        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
-            await litellm_logging_obj.async_failure_handler(
-                exception=e,
-                traceback_exception=traceback.format_exc(),
+        try:
+            if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+                await litellm_logging_obj.async_failure_handler(
+                    exception=e,
+                    traceback_exception=traceback.format_exc(),
+                )
+                thread_pool_executor.submit(
+                    litellm_logging_obj.failure_handler,
+                    e,
+                    traceback.format_exc(),
+                )
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=data,
             )
-            thread_pool_executor.submit(
-                litellm_logging_obj.failure_handler,
-                e,
-                traceback.format_exc(),
-            )
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=data,
-        )
+        except Exception:
+            verbose_proxy_logger.exception("apply_guardrail: failure logging failed")
         raise handle_exception_on_proxy(e)
 
-    # Success logging is outside the except block so a hook error never
-    # triggers failure handlers for a successful guardrail run.
-    await proxy_logging_obj.post_call_success_hook(
-        data=data,
-        user_api_key_dict=user_api_key_dict,
-        response=response,
-    )
+    # Success logging is outside the try/except so a hook error never
+    # triggers failure handlers for a successful guardrail run, and each
+    # logging call is wrapped defensively so callback failures don't
+    # discard the response the caller is waiting for.
+    try:
+        modified_response = await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if isinstance(modified_response, ApplyGuardrailResponse):
+            response = modified_response
+    except Exception:
+        verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
+
     end_time = datetime.now(timezone.utc)
     if litellm_logging_obj is not None:
-        await litellm_logging_obj.async_success_handler(
-            result=response_for_logging,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=False,
-        )
-        thread_pool_executor.submit(
-            litellm_logging_obj.success_handler,
-            response_for_logging,
-            start_time,
-            end_time,
-            False,
-        )
+        try:
+            await litellm_logging_obj.async_success_handler(
+                result=response_for_logging,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+            thread_pool_executor.submit(
+                litellm_logging_obj.success_handler,
+                response_for_logging,
+                start_time,
+                end_time,
+                False,
+            )
+        except Exception:
+            verbose_proxy_logger.exception("apply_guardrail: success logging failed")
 
     return response
 
