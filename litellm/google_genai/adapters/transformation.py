@@ -2,6 +2,7 @@ import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm import verbose_logger
+from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -42,6 +43,22 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         self.accumulated_tool_calls = {}
         self._returned_response = False
         super().__init__(completion_stream)
+
+    @staticmethod
+    def _is_terminal_sse_chunk(chunk: Any) -> bool:
+        if isinstance(chunk, bytes):
+            try:
+                chunk = chunk.decode("utf-8")
+            except UnicodeDecodeError:
+                return False
+        if not isinstance(chunk, str):
+            return False
+
+        payload = chunk.strip()
+        if payload.startswith("data:"):
+            payload = payload[5:].strip()
+
+        return payload == STREAM_SSE_DONE_STRING
 
     def __next__(self):
         try:
@@ -145,6 +162,8 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         Convert Google GenAI streaming chunks to Server-Sent Events format.
         """
         for chunk in self.completion_stream:
+            if self._is_terminal_sse_chunk(chunk):
+                continue
             if isinstance(chunk, dict):
                 payload = f"data: {json.dumps(chunk)}\n\n"
                 yield payload.encode()
@@ -158,6 +177,8 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         from litellm.types.utils import ModelResponseStream
 
         async for chunk in self.completion_stream:
+            if self._is_terminal_sse_chunk(chunk):
+                continue
             if isinstance(chunk, dict):
                 payload = f"data: {json.dumps(chunk)}\n\n"
                 yield payload.encode()
