@@ -203,8 +203,7 @@ def add_missing_spend_metadata_to_litellm_metadata(
             # already stripped from `metadata` upstream.
             litellm_metadata[key] = value
         elif (
-            key in _PROXY_SET_METADATA_KEYS_TO_PRESERVE
-            and key not in litellm_metadata
+            key in _PROXY_SET_METADATA_KEYS_TO_PRESERVE and key not in litellm_metadata
         ):
             # Header-derived spend keys: only copy when the destination does
             # not already have the key, to avoid letting a client-body
