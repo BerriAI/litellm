@@ -1483,7 +1483,7 @@ class ProxyBaseLLMRequestProcessing:
 
         await check_response_size_is_safe(response=response)
 
-        if route_type in {"aresponses", "_aresponses_websocket", "aget_responses"}:
+        if route_type in {"aresponses", "aget_responses"}:
             await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
                 response=response,
                 user_api_key_dict=user_api_key_dict,

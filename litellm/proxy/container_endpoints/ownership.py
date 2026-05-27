@@ -156,9 +156,11 @@ async def record_container_owners_from_responses_response(
                 user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=resolved_provider,
             )
-        except HTTPException:
-            raise
         except Exception as e:
+            # Per-container errors (including ``HTTPException`` from
+            # conflicting/forbidden ownership rows) must not abort the
+            # batch — other containers in the same response should still
+            # get recorded so their follow-up file API calls don't 403.
             verbose_proxy_logger.exception(
                 "Failed to record container ownership from responses output "
                 "for container_id=%s: %s",
