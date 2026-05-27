@@ -184,6 +184,15 @@ def test_google_count_tokens_unchanged():
 
 # ---------------------------------------------------------------------------
 # :streamGenerateContent SSE -> NDJSON adapter (regression for LIT-3358)
+#
+# Gemini's :streamGenerateContent serves two clients:
+#   * SDK default (no ?alt)  -> newline-delimited JSON
+#   * SSE callers (?alt=sse) -> "data: {json}\n\n" frames
+# Before this fix, the proxy always emitted SSE, breaking the default SDK
+# path. The fix reads ?alt off the FastAPI Request directly in the response
+# framing block (NOT via self.data, so the value cannot leak as **kwargs
+# into the upstream LLM call) and wraps the existing SSE generator with
+# `_google_genai_jsonl_from_sse` when the client did not request alt=sse.
 # ---------------------------------------------------------------------------
 
 
@@ -232,8 +241,8 @@ async def test_google_genai_jsonl_from_sse_forwards_error_frames():
 
 @pytest.mark.asyncio
 async def test_google_genai_jsonl_from_sse_drops_done_only():
-    """If the upstream stream is just ``data: [DONE]`` (no payload), the
-    adapter yields nothing so the client terminates cleanly on close."""
+    """If the stream is just ``data: [DONE]`` (no payload), the adapter
+    yields nothing and the client terminates cleanly on close."""
     from litellm.proxy.common_request_processing import (
         ProxyBaseLLMRequestProcessing,
     )
