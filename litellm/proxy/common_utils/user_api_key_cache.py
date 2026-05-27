@@ -165,6 +165,18 @@ class UserApiKeyCache(DualCache):
         so the operator setting wins. Non-management call sites that pass their
         own ``ttl=<n>`` for unrelated reasons are unaffected: only the exact
         management constant triggers promotion.
+
+        Note on the in-memory vs Redis backend split: the parent
+        ``DualCache.async_set_cache`` forwards the same ``ttl`` kwarg to both the
+        in-memory backend and the Redis backend, so promoting ``ttl`` here causes
+        the same value to be stamped on both. In the current proxy startup
+        (``proxy_server.py``) ``user_api_key_cache.update_cache_ttl`` is called
+        with the same value for ``default_in_memory_ttl`` and ``default_redis_ttl``,
+        so the two backends always agree and there is no observable difference.
+        If a divergent configuration is ever introduced, the Redis TTL for
+        management objects will continue to track ``default_in_memory_ttl`` here —
+        a follow-up change to ``DualCache`` (per-backend TTL kwargs) would be
+        required to honour both independently, which is out of scope for this fix.
         """
         explicit_ttl = kwargs.get("ttl")
         if explicit_ttl is None:
@@ -184,11 +196,17 @@ class UserApiKeyCache(DualCache):
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
+
+        Honour ``general_settings.user_api_key_cache_ttl`` for management-object writes
+        on the pipeline path too, so a future writer that switches from
+        ``async_set_cache`` to the pipeline does not silently lose the operator-configured
+        TTL. See ``_promote_management_ttl``.
         """
         normalized = [
             (key, CacheCodec.serialize(value, model_type=None))
             for key, value in cache_list
         ]
+        self._promote_management_ttl(kwargs)
         return await super().async_set_cache_pipeline(
             cache_list=normalized, local_only=local_only, **kwargs
         )
