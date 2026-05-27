@@ -35,9 +35,14 @@ _PEM_BLOCK_RE = re.compile(
 )
 
 
-def _redact_pem_blocks(text: str) -> str:
-    """Replace every full PEM private-key block in ``text`` with ``[REDACTED]``."""
-    return _PEM_BLOCK_RE.sub("[REDACTED]", text)
+def _redact_pem_blocks(text: str) -> tuple[str, int]:
+    """Replace every full PEM private-key block in ``text`` with ``[REDACTED]``.
+
+    Returns ``(redacted_text, num_blocks_replaced)`` so callers can record
+    when the regex sweep caught a block that ``detect-secrets`` did not.
+    """
+    redacted, n = _PEM_BLOCK_RE.subn("[REDACTED]", text)
+    return redacted, n
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -500,13 +505,20 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             # any full PEM block first so the body + footer go with the
             # header, then run the normal per-secret loop to handle the
             # non-PEM secret types.
-            text = _redact_pem_blocks(text)
+            text, pem_blocks_redacted = _redact_pem_blocks(text)
             for secret in detected_secrets:
                 text = text.replace(secret["value"], "[REDACTED]")
             if detected_secrets:
                 secret_types = [secret["type"] for secret in detected_secrets]
                 verbose_proxy_logger.warning(
                     f"Detected and redacted secrets in message: {secret_types}"
+                )
+            elif pem_blocks_redacted:
+                # Regex sweep caught a PEM block that detect-secrets missed —
+                # keep operator-visible evidence that something was scrubbed.
+                verbose_proxy_logger.warning(
+                    f"Redacted {pem_blocks_redacted} PEM private key block(s) "
+                    "in message that were not flagged by detect-secrets"
                 )
             return text
 
@@ -517,7 +529,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets = self.scan_message_for_secrets(data["prompt"])
                 # Scrub any full PEM block first so body + END footer are
                 # removed alongside the BEGIN header.
-                data["prompt"] = _redact_pem_blocks(data["prompt"])
+                data["prompt"], pem_blocks_redacted = _redact_pem_blocks(
+                    data["prompt"]
+                )
                 for secret in detected_secrets:
                     data["prompt"] = data["prompt"].replace(
                         secret["value"], "[REDACTED]"
@@ -526,6 +540,11 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                     secret_types = [secret["type"] for secret in detected_secrets]
                     verbose_proxy_logger.warning(
                         f"Detected and redacted secrets in prompt: {secret_types}"
+                    )
+                elif pem_blocks_redacted:
+                    verbose_proxy_logger.warning(
+                        f"Redacted {pem_blocks_redacted} PEM private key block(s) "
+                        "in prompt that were not flagged by detect-secrets"
                     )
             elif isinstance(data["prompt"], list):
                 # Index back into the list — assigning to ``item`` would only
@@ -536,7 +555,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                         detected_secrets = self.scan_message_for_secrets(item)
                         # Scrub any full PEM block first so body + END footer
                         # are removed alongside the BEGIN header.
-                        item = _redact_pem_blocks(item)
+                        item, pem_blocks_redacted = _redact_pem_blocks(item)
                         for secret in detected_secrets:
                             item = item.replace(secret["value"], "[REDACTED]")
                         data["prompt"][idx] = item
@@ -546,6 +565,12 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                             ]
                             verbose_proxy_logger.warning(
                                 f"Detected and redacted secrets in prompt: {secret_types}"
+                            )
+                        elif pem_blocks_redacted:
+                            verbose_proxy_logger.warning(
+                                f"Redacted {pem_blocks_redacted} PEM private key "
+                                "block(s) in prompt that were not flagged by "
+                                "detect-secrets"
                             )
 
         # ``data["input"]`` (Responses API and embeddings/moderation) is
