@@ -4657,6 +4657,57 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "success"))
 
+    def test_emit_once_list_guardrail_mode_does_not_raise(self):
+        """Regression test for LIT-3299.
+
+        When ``guardrail_mode`` is a list (e.g. ``["pre_call", "post_call"]``)
+        it must not raise ``TypeError: unhashable type: \'list\'`` -- the list
+        should be normalised to a tuple before being used in the dedupe-key.
+        """
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        list_mode = ["pre_call", "post_call"]
+        first = otel._emit_once(kwargs, "guardrail", "block-code", 1.0, list_mode)
+        self.assertTrue(first, "first call with list mode must return True")
+        second = otel._emit_once(kwargs, "guardrail", "block-code", 1.0, list_mode)
+        self.assertFalse(second, "second identical call must be deduped")
+
+    def test_emit_once_list_mode_dedupes_against_equivalent_tuple(self):
+        """A list-valued scope and the equivalent tuple share the same dedupe slot."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "g1", 1.0, ("pre_call", "post_call")))
+
+    def test_emit_once_distinct_lists_dont_collide(self):
+        """Different list values must produce different dedupe slots."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["pre_call"]))
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g1", 1.0, ["post_call"]))
+
+    def test_emit_once_dict_scope_does_not_raise(self):
+        """Dict-valued scope must not raise; equivalent dicts dedupe."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g", 1.0, {"a": 1, "b": 2}))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "g", 1.0, {"b": 2, "a": 1}))
+
+    def test_emit_once_set_scope_does_not_raise(self):
+        """Set-valued scope must not raise; equivalent sets dedupe."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g", 1.0, {"pre_call", "post_call"}))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "g", 1.0, {"post_call", "pre_call"}))
+
+    def test_emit_once_nested_list_does_not_raise(self):
+        """Nested containers (list of dicts) must not raise."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        nested = [{"mode": "pre_call"}, {"mode": "post_call"}]
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g", 1.0, nested))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "g", 1.0, nested))
+
     def test_emit_once_handles_missing_litellm_params(self):
         otel = OpenTelemetry()
         kwargs = {}
