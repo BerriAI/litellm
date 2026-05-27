@@ -2461,6 +2461,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     ui_access_mode: Optional[Literal["admin_only", "all"]] = Field(
         "all", description="Control access to the Proxy UI"
     )
+    allow_user_team_creation: Optional[bool] = Field(
+        default=False,
+        description=(
+            "When True, internal users (non-admin authenticated users) are "
+            "allowed to call POST /team/new and create their own teams. The "
+            "creating user is automatically added to the new team as `admin` "
+            "by the existing /team/new handler. Defaults to False — behavior "
+            "is unchanged unless an admin opts in. UI button is not in this "
+            "release; non-admin users must hit the endpoint directly."
+        ),
+    )
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
     )
