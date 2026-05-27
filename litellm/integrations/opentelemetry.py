@@ -958,12 +958,59 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        dedupe_key = (
+            self.__class__.__name__,
+            id(self),
+            *(self._make_hashable(s) for s in scope),
+        )
         if spans_logged.get(dedupe_key) is True:
             return False
 
         spans_logged[dedupe_key] = True
         return True
+
+    @staticmethod
+    def _make_hashable(value: object) -> object:
+        """Recursively convert unhashable container types to hashable equivalents
+        so a scope element can safely participate in a ``dedupe_key`` tuple.
+
+        Lists become tuples, dicts become tuples of sorted ``(key, value)`` pairs
+        with each value also normalized, and sets become frozensets. The
+        conversion is **structure-preserving**: two structurally equal inputs
+        (e.g. ``["pre_call", "post_call"]`` and another list with the same
+        contents) collapse to the same dedupe slot, so deduplication semantics
+        are unchanged for the values OTEL actually sees in practice.
+
+        Values whose type is already hashable are returned untouched. If
+        normalization itself fails (e.g. an exotic object that is not hashable
+        and cannot be normalized), the value is replaced with its ``repr`` —
+        a stable string fallback that keeps the dedupe key buildable instead
+        of crashing the request.
+        """
+        if isinstance(value, list):
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, tuple):
+            return tuple(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, (set, frozenset)):
+            return frozenset(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, dict):
+            items = [
+                (k, OpenTelemetry._make_hashable(v))
+                for k, v in value.items()
+            ]
+            # Sort defensively — if keys are non-comparable across types we
+            # fall back to a stable string sort so the dedupe key stays
+            # deterministic without crashing.
+            try:
+                items.sort()
+            except TypeError:
+                items.sort(key=lambda kv: repr(kv[0]))
+            return tuple(items)
+        try:
+            hash(value)
+        except TypeError:
+            return repr(value)
+        return value
 
     def _end_proxy_span_from_kwargs(self, kwargs: dict, end_time) -> None:
         """Close the proxy-level parent span if it is still recording.
