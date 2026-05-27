@@ -108,6 +108,16 @@ class A2ACompletionBridgeHandler:
         }
         completion_params.update(litellm_params_to_add)
 
+        if custom_llm_provider == "langflow":
+            message = params.get("message", {})
+            context_id = (
+                message.get("contextId")
+                if isinstance(message, dict)
+                else getattr(message, "contextId", None)
+            )
+            if context_id and "session_id" not in completion_params:
+                completion_params["session_id"] = context_id
+
         # Call litellm.acompletion
         response = await litellm.acompletion(**completion_params)
 
@@ -214,6 +224,16 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
+
+        if custom_llm_provider == "langflow":
+            message = params.get("message", {})
+            context_id = (
+                message.get("contextId")
+                if isinstance(message, dict)
+                else getattr(message, "contextId", None)
+            )
+            if context_id and "session_id" not in completion_params:
+                completion_params["session_id"] = context_id
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
