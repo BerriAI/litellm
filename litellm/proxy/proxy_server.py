@@ -6986,10 +6986,46 @@ async def async_data_generator(  # noqa: PLR0915
             elif isinstance(chunk, bytes):
                 # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
                 # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
-                # Decode to str so the f-string below does not emit a Python b'...' literal,
-                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
+                # Decode to str so the f-string below does not emit a Python b'...' literal.
                 chunk = chunk.decode("utf-8", errors="replace")
                 if chunk.startswith(("data:", "event:", ":")):
+                    # Honor the client-requested response format. Gemini's
+                    # `streamGenerateContent` returns raw JSON by default and
+                    # SSE only when the caller passes `?alt=sse`. LiteLLM
+                    # always calls upstream with `alt=sse` so it can parse
+                    # chunks server-side, so without this re-framing every
+                    # native streamGenerateContent reply arrives at the client
+                    # with `data: ` prefixes and the google-genai SDK fails to
+                    # JSON-parse it. When the client did NOT request SSE,
+                    # strip the framing and emit only the JSON payloads.
+                    _alt = (
+                        request_data.get("litellm_metadata", {}).get(
+                            "client_requested_stream_format"
+                        )
+                        if isinstance(request_data, dict)
+                        else None
+                    )
+                    if _alt is not None and _alt != "sse":
+                        json_payloads = []
+                        for line in chunk.splitlines():
+                            if line.startswith("data: "):
+                                payload = line[len("data: ") :]
+                            elif line.startswith("data:"):
+                                payload = line[len("data:") :]
+                            else:
+                                # event:/comment (: prefix) lines are SSE
+                                # control frames; drop them for non-SSE
+                                # clients.
+                                continue
+                            # Drop the SSE [DONE] sentinel if upstream ever
+                            # emits it as a chunk -- it is not valid JSON
+                            # and the non-SSE client detects EOF instead.
+                            if payload.strip() == "[DONE]":
+                                continue
+                            json_payloads.append(payload)
+                        if json_payloads:
+                            yield "\n".join(json_payloads) + "\n"
+                        continue
                     yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
                     continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
@@ -7007,11 +7043,24 @@ async def async_data_generator(  # noqa: PLR0915
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
-        # Streaming is done, yield the [DONE] chunk
+        # Streaming is done, yield the [DONE] chunk -- but only for SSE clients.
+        # For non-SSE callers (e.g. google-genai SDK against
+        # streamGenerateContent), appending "data: [DONE]" to a raw-JSON body
+        # would make the body un-parseable as JSON. The SDK detects
+        # end-of-stream from EOF.
+        _client_alt = (
+            request_data.get("litellm_metadata", {}).get(
+                "client_requested_stream_format"
+            )
+            if isinstance(request_data, dict)
+            else None
+        )
+        _is_non_sse_client = _client_alt is not None and _client_alt != "sse"
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        if not _is_non_sse_client:
+            done_message = "[DONE]"
+            yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
