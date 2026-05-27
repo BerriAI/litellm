@@ -4829,6 +4829,158 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             f"Two distinct guardrail invocations expected, got {len(guardrail_spans)}",
         )
 
+    # ------------------------------------------------------------------
+    # LIT-3299: dedupe key must tolerate unhashable scope parts.
+    #
+    # ``_create_guardrail_span`` plumbs ``guardrail_mode`` straight into
+    # ``_emit_once`` as a scope arg. ``guardrail_mode`` is typed as
+    # ``Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]``
+    # (see ``custom_guardrail.py``), so a list is a supported value. Without
+    # hashable-normalization, every request through a guardrail with a
+    # list-valued mode crashed at the ``spans_logged.get(dedupe_key)``
+    # lookup with ``TypeError: unhashable type: 'list'`` and the proxy
+    # returned HTTP 500 (Linear LIT-3299, GH #28486).
+    # ------------------------------------------------------------------
+
+    def test_emit_once_accepts_list_valued_scope(self):
+        """A list-valued scope part (e.g. ``guardrail_mode=["pre_call",
+        "post_call"]``) must not raise and must dedupe by value."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+
+        first = otel._emit_once(
+            kwargs, "guardrail", "block-code", 1.0, ["pre_call", "post_call"]
+        )
+        second = otel._emit_once(
+            kwargs, "guardrail", "block-code", 1.0, ["pre_call", "post_call"]
+        )
+        self.assertTrue(first)
+        self.assertFalse(
+            second,
+            "Same list-valued scope must dedupe to the same key on a second call",
+        )
+
+    def test_emit_once_distinct_list_scopes_dont_collide(self):
+        """Two scopes that differ only in their list-valued part must each
+        emit (no false-positive dedupe from coercion)."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "block-code", 1.0, ["pre_call"])
+        )
+        self.assertTrue(
+            otel._emit_once(
+                kwargs, "guardrail", "block-code", 1.0, ["pre_call", "post_call"]
+            ),
+            "Different list contents must not collide via _make_hashable",
+        )
+
+    def test_emit_once_accepts_dict_and_set_valued_scope(self):
+        """``_make_hashable`` covers dict and set as well — they are also
+        unhashable in Python and would crash the same dedupe path."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+
+        # dict
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, {"effort": "high"})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g", 1.0, {"effort": "high"})
+        )
+
+        # set
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "g2", 1.0, {"pre_call", "post_call"})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "g2", 1.0, {"pre_call", "post_call"})
+        )
+
+    def test_emit_once_accepts_nested_unhashable_scope(self):
+        """Nested unhashables (e.g. list of dicts) must also normalize."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        scope_part = [{"a": 1}, {"b": 2}]
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "g", 1.0, scope_part))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "g", 1.0, scope_part))
+
+    def test_create_guardrail_span_with_list_mode_emits_one_span(self):
+        """End-to-end: ``_create_guardrail_span`` driven with a list-valued
+        ``guardrail_mode`` (the LIT-3299 repro) must succeed and emit
+        exactly one guardrail span — not crash, not zero, not two."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs()
+        kwargs["standard_logging_object"]["guardrail_information"] = [
+            {
+                "guardrail_name": "my_guardrail",
+                "guardrail_mode": ["pre_call", "post_call"],
+                "guardrail_response": "allow",
+                "start_time": 1.0,
+                "end_time": 2.0,
+            }
+        ]
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)  # second pass dedupes
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            f"List-valued guardrail_mode must produce exactly one span; "
+            f"got {len(guardrail_spans)}",
+        )
+
+    # _make_hashable unit tests — the helper itself must never raise.
+
+    def test_make_hashable_passes_through_already_hashable(self):
+        self.assertEqual(OpenTelemetry._make_hashable("x"), "x")
+        self.assertEqual(OpenTelemetry._make_hashable(1.0), 1.0)
+        self.assertIs(OpenTelemetry._make_hashable(None), None)
+        self.assertEqual(OpenTelemetry._make_hashable((1, 2)), (1, 2))
+
+    def test_make_hashable_normalizes_list_dict_set(self):
+        self.assertEqual(
+            OpenTelemetry._make_hashable(["a", "b"]),
+            ("a", "b"),
+        )
+        self.assertEqual(
+            OpenTelemetry._make_hashable({"k": "v"}),
+            frozenset({("k", "v")}),
+        )
+        self.assertEqual(
+            OpenTelemetry._make_hashable({"a", "b"}),
+            frozenset({"a", "b"}),
+        )
+
+    def test_make_hashable_normalizes_nested_structures(self):
+        out = OpenTelemetry._make_hashable([["x"], {"k": "v"}])
+        # Outer becomes tuple; inner list -> tuple; inner dict -> frozenset.
+        self.assertEqual(out, (("x",), frozenset({("k", "v")})))
+        # Result must be hashable.
+        hash(out)
+
+    def test_make_hashable_returned_value_is_always_hashable(self):
+        """Property: the helper never returns an unhashable value."""
+        samples = [
+            None, "x", 0, 1.5, True, b"bytes",
+            (1, 2), frozenset({1, 2}),
+            [1, 2, 3], {"a": 1, "b": 2}, {1, 2, 3},
+            [{"a": [1, 2]}, ("nested",)],
+        ]
+        for s in samples:
+            out = OpenTelemetry._make_hashable(s)
+            hash(out)  # must not raise
+
 
 class TestOpenTelemetryHttpStatusCodeAttribute(unittest.TestCase):
     """PR 1: the failure recorder also exposes the HTTP status under the
