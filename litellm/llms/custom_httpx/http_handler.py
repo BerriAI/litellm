@@ -1145,6 +1145,7 @@ class HTTPHandler:
         parts = urlsplit(url)
         return dict(parse_qsl(parts.query))
 
+    @track_llm_api_timing()
     def post(
         self,
         url: str,
