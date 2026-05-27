@@ -453,7 +453,31 @@ async def _upsert_budget_and_membership(
         and existing_budget_id == team_default_budget_id
     )
 
+    # Reference-count safety net: even when the membership is NOT pointing at
+    # the team's declared default budget (e.g. because the team metadata
+    # was cleared, or because backfill populated multiple memberships with the
+    # same budget_id), we must avoid mutating a budget row that is shared by
+    # other memberships. If we are about to update an existing budget that is
+    # still referenced by another LiteLLM_TeamMembership row, fork it instead.
+    is_shared_by_other_memberships = False
     if existing_budget_id is not None and not is_shared_default:
+        try:
+            sharing_count = await tx.litellm_teammembership.count(
+                where={"budget_id": existing_budget_id},
+            )
+            if isinstance(sharing_count, int) and sharing_count > 1:
+                is_shared_by_other_memberships = True
+        except Exception:
+            # If the count probe fails (e.g. on a tx implementation that does
+            # not support count on this model), fall back to the previous
+            # behavior rather than blocking the update.
+            is_shared_by_other_memberships = False
+
+    if (
+        existing_budget_id is not None
+        and not is_shared_default
+        and not is_shared_by_other_memberships
+    ):
         # Update the existing budget in-place to preserve fields not being changed.
         # Only write fields that the caller explicitly provided (non-None).
         update_data: Dict[str, Any] = {
@@ -483,7 +507,7 @@ async def _upsert_budget_and_membership(
 
     # If we're forking off the shared default, seed the new row with the
     # default's values so fields the caller did not change carry over.
-    if is_shared_default:
+    if is_shared_default or is_shared_by_other_memberships:
         default_budget_row = await tx.litellm_budgettable.find_unique(
             where={"budget_id": existing_budget_id}
         )
