@@ -4267,6 +4267,59 @@ async def _execute_virtual_key_regeneration(
             _validate_key_alias_format(key_alias=new_key_alias)
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
     update_data.update(non_default_values)
+
+    # LIT-2569: when the caller did not supply duration and the
+    # existing key has *already* expired, auto-extend the expiration so
+    # the regenerated key is actually usable. Without this, a key whose
+    # expires is in the past stays in the past after regeneration --
+    # users would receive a new sk-... value that immediately fails
+    # auth, which defeats the purpose of regenerating a key.
+    #
+    # Scope of the auto-extend:
+    #   - Only fires when expires is NOT in update_data (i.e. the
+    #     caller did not pass duration). An explicit duration
+    #     (including duration="-1" to mean "never expire") always wins.
+    #   - Only fires when the existing key has a concrete expires in
+    #     the past. Non-expiring keys (expires is None) and
+    #     not-yet-expired keys are left alone.
+    #   - The new expiration preserves the original lifetime
+    #     old.expires - old.created_at so a 30-day key stays a 30-day
+    #     key. If created_at is missing or the computed lifetime is
+    #     non-positive, fall back to a 30-day default.
+    if "expires" not in update_data:
+        _existing_expires = getattr(key_in_db, "expires", None)
+        if isinstance(_existing_expires, str):
+            try:
+                _existing_expires = datetime.fromisoformat(
+                    _existing_expires.replace("Z", "+00:00")
+                )
+            except ValueError:
+                _existing_expires = None
+        if isinstance(_existing_expires, datetime):
+            _now = datetime.now(timezone.utc)
+            if _existing_expires.tzinfo is None:
+                _existing_expires = _existing_expires.replace(tzinfo=timezone.utc)
+            if _existing_expires < _now:
+                _existing_created = getattr(key_in_db, "created_at", None)
+                if isinstance(_existing_created, datetime):
+                    if _existing_created.tzinfo is None:
+                        _existing_created = _existing_created.replace(
+                            tzinfo=timezone.utc
+                        )
+                    _original_lifetime = _existing_expires - _existing_created
+                else:
+                    _original_lifetime = timedelta(0)
+                if _original_lifetime.total_seconds() <= 0:
+                    _original_lifetime = timedelta(days=30)
+                update_data["expires"] = _now + _original_lifetime
+                verbose_proxy_logger.info(
+                    "Regenerated expired key %s: auto-extending expires to %s "
+                    "(original lifetime %s)",
+                    getattr(key_in_db, "key_alias", None),
+                    update_data["expires"].isoformat(),
+                    _original_lifetime,
+                )
+
     update_data = prisma_client.jsonify_object(data=update_data)
 
     # If grace period set, insert deprecated key so old key remains valid
