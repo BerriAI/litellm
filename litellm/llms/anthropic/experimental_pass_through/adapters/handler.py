@@ -93,6 +93,19 @@ async def _prepare_context_managed_request(
 
     if polyfill_result is not None:
         return polyfill_result
+
+    # Safety net: if we skipped client-history pre-processing because a
+    # ``compact_20260112`` polyfill was expected to handle the compaction
+    # block itself but the polyfill ultimately did not produce a result
+    # (e.g. it crashed and was best-effort swallowed in
+    # ``_run_polyfill_if_enabled``), apply the slice-only fallback now so
+    # Anthropic-specific ``compaction`` content blocks don't leak through
+    # to non-Anthropic backends that would reject them.
+    if polyfill_will_run and history_result is None:
+        history_result = apply_client_compaction_block_history(
+            messages=cast(List[Dict[str, Any]], messages),
+            system=system,
+        )
     return history_result
 
 

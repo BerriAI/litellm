@@ -129,7 +129,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             )
         return self._augment_message_delta_usage(merged_chunk)
 
-    def _augment_message_delta_usage(self, message_delta_chunk: Dict[str, Any]) -> Dict[str, Any]:
+    def _augment_message_delta_usage(
+        self, message_delta_chunk: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Attach polyfill compaction iteration usage to the final message_delta."""
         if self.iterations_usage is None:
             return message_delta_chunk
@@ -230,7 +232,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_compaction_block is False and self.compaction_block is not None:
+            if (
+                self.sent_compaction_block is False
+                and self.compaction_block is not None
+            ):
                 self.sent_compaction_block = True
                 self._queue_compaction_block_events()
                 return self.chunk_queue.popleft()
@@ -257,19 +262,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
                 # intermediate chunk. For the hold-and-merge path below,
-                # context_management is attached directly to the merged chunk.
+                # context_management is attached directly to the merged chunk,
+                # so the translated ``processed_chunk`` would be discarded —
+                # skip the applied_edits attachment in that case to avoid
+                # allocating a throwaway ``MessageBlockDelta``.
+                will_merge_into_held = (
+                    self.holding_stop_reason_chunk is not None
+                    and getattr(chunk, "usage", None) is not None
+                )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=self.applied_edits if is_final_chunk else None,
+                    applied_edits=(
+                        self.applied_edits
+                        if is_final_chunk and not will_merge_into_held
+                        else None
+                    ),
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
-                if (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
-                ):
+                if will_merge_into_held:
                     merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
                     self.chunk_queue.append(merged_chunk)
                     self.queued_usage_chunk = True
@@ -347,6 +360,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return self.chunk_queue.popleft()
                 elif self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
+                    if processed_chunk.get("type") == "message_delta":
+                        processed_chunk = self._augment_message_delta_usage(
+                            processed_chunk
+                        )
                     self.chunk_queue.append(processed_chunk)
                     self.holding_chunk = None
                     return self.chunk_queue.popleft()
@@ -385,9 +402,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
             # Handle any held stop_reason chunk
             if self.holding_stop_reason_chunk is not None:
-                held = self._augment_message_delta_usage(
-                    self.holding_stop_reason_chunk
-                )
+                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if self.sent_last_message is False:
@@ -428,7 +443,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_compaction_block is False and self.compaction_block is not None:
+            if (
+                self.sent_compaction_block is False
+                and self.compaction_block is not None
+            ):
                 self.sent_compaction_block = True
                 self._queue_compaction_block_events()
                 return self.chunk_queue.popleft()
@@ -456,19 +474,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
                 # intermediate chunk. For the hold-and-merge path below,
-                # context_management is attached directly to the merged chunk.
+                # context_management is attached directly to the merged chunk,
+                # so the translated ``processed_chunk`` would be discarded —
+                # skip the applied_edits attachment in that case to avoid
+                # allocating a throwaway ``MessageBlockDelta``.
+                will_merge_into_held = (
+                    self.holding_stop_reason_chunk is not None
+                    and getattr(chunk, "usage", None) is not None
+                )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
-                    applied_edits=self.applied_edits if is_final_chunk else None,
+                    applied_edits=(
+                        self.applied_edits
+                        if is_final_chunk and not will_merge_into_held
+                        else None
+                    ),
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
-                if (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
-                ):
+                if will_merge_into_held:
                     merged_chunk = self._merge_usage_into_held_stop_reason_chunk(chunk)
                     self.chunk_queue.append(merged_chunk)
                     self.queued_usage_chunk = True
@@ -544,6 +570,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     elif self.holding_chunk is not None:
                         # Queue both chunks
                         self.chunk_queue.append(self.holding_chunk)
+                        if processed_chunk.get("type") == "message_delta":
+                            processed_chunk = self._augment_message_delta_usage(
+                                processed_chunk
+                            )
                         self.chunk_queue.append(processed_chunk)
                         self.holding_chunk = None
                         return self.chunk_queue.popleft()
@@ -587,9 +617,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             # subsequent ``__anext__`` call doesn't re-emit the same chunk
             # (matches the sync ``__next__`` path).
             if self.holding_stop_reason_chunk is not None:
-                held = self._augment_message_delta_usage(
-                    self.holding_stop_reason_chunk
-                )
+                held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
             if not self.sent_last_message:
