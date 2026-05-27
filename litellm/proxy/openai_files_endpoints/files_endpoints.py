@@ -47,7 +47,7 @@ from litellm.types.llms.openai import (
 )
 from openai.pagination import (
     AsyncCursorPage,
-)  # noqa: E402  # used in list_files post-call type check
+)  # used in list_files post-call type check
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
