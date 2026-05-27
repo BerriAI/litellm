@@ -1920,9 +1920,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # ``team_id`` query parameter. Reject mismatched query params, then
         # force the filter to the key's team and skip the role-based
         # scoping branch below (the team filter already covers it).
-        enforced_team_id: Optional[str] = getattr(
-            user_api_key_dict, "team_id", None
-        )
+        enforced_team_id: Optional[str] = getattr(user_api_key_dict, "team_id", None)
         if enforced_team_id is not None:
             if team_id is not None and team_id != enforced_team_id:
                 raise HTTPException(
