@@ -467,10 +467,21 @@ async def _upsert_budget_and_membership(
             )
             if isinstance(sharing_count, int) and sharing_count > 1:
                 is_shared_by_other_memberships = True
-        except Exception:
+        except Exception as e:
             # If the count probe fails (e.g. on a tx implementation that does
             # not support count on this model), fall back to the previous
-            # behavior rather than blocking the update.
+            # behavior rather than blocking the update. Log a warning so a
+            # silent regression to the shared-row mutation is at least
+            # discoverable in operator logs.
+            verbose_proxy_logger.warning(
+                "Could not probe LiteLLM_TeamMembership.count to detect a "
+                "shared budget row (budget_id=%s, team_id=%s): %s. Falling "
+                "back to in-place update; if the row is shared, every "
+                "member pointing at it will be updated.",
+                existing_budget_id,
+                team_id,
+                e,
+            )
             is_shared_by_other_memberships = False
 
     if (
