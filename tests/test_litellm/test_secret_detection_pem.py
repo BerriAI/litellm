@@ -110,15 +110,28 @@ def test_expand_empty_input():
     assert _expand_private_key_values("anything", []) == []
 
 
-def test_expand_collapses_duplicate_private_key_entries():
+def test_expand_dedupes_identical_pem_blocks():
+    # When the same PEM block appears multiple times we only want a single
+    # entry per distinct block, since each entry triggers a separate
+    # ``str.replace`` pass at the call sites.
     text = f"a: {RSA_PEM}\nb: {RSA_PEM}"
     detected = [
         {"type": "Private Key", "value": "BEGIN RSA PRIVATE KEY"},
         {"type": "Private Key", "value": "BEGIN RSA PRIVATE KEY"},
     ]
     expanded = _expand_private_key_values(text, detected)
+    assert expanded == [{"type": "Private Key", "value": RSA_PEM}]
+
+
+def test_expand_one_entry_per_distinct_block_not_per_occurrence():
+    # Two distinct PEM blocks: dedupe must keep both because they're different.
+    text = f"rsa: {RSA_PEM}\npkcs8: {PKCS8_PEM}\nrsa-again: {RSA_PEM}"
+    detected = [{"type": "Private Key", "value": "BEGIN RSA PRIVATE KEY"}]
+    expanded = _expand_private_key_values(text, detected)
+    values = [e["value"] for e in expanded]
+    assert RSA_PEM in values
+    assert PKCS8_PEM in values
     assert len(expanded) == 2
-    assert all(e["value"] == RSA_PEM for e in expanded)
 
 
 # --- End-to-end tests (detect-secrets required) ---
