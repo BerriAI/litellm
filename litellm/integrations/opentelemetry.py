@@ -1796,99 +1796,231 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def _record_exception_on_span(self, span: Span, kwargs: dict):
         """
-        Record exception information on the span using OTEL standard methods.
+        Record error information on the span using OTEL standard methods.
 
-        This extracts error information from StandardLoggingPayload and:
-        1. Uses span.record_exception() for the actual exception object (OTEL standard)
-        2. Sets structured error attributes from StandardLoggingPayloadErrorInformation
+        Normalizes the error attribute surface across every failure path so
+        downstream collectors (Datadog, Tempo, Jaeger, etc.) see a consistent
+        set of attributes whether the failure originated from:
+
+          * an exception object (e.g. ``litellm.AuthenticationError``)
+          * a ``StandardLoggingPayloadErrorInformation`` block (proxy path)
+          * a fallback ``error_str`` only (older logging payloads)
+          * an HTTP-status-only error with no Python exception (guardrail
+            rejection, upstream 4xx returned as a response body)
+
+        Always stamps, when at least one input source is non-empty:
+
+          * ``error.type`` / ``exception.type``
+          * ``error.message`` / ``exception.message``
+          * ``error.stack_trace`` / ``exception.stacktrace`` (when a stack
+            trace is available from any source)
+          * ``error.code`` (legacy) and ``http.response.status_code`` (when
+            the error code is a parseable HTTP status)
+          * ``error.llm_provider`` (when available)
+
+        ``span.record_exception()`` is still invoked when an exception object
+        is supplied so the OTEL ``exception`` event is emitted as before; the
+        attribute stamping is additive and ensures the attributes are
+        queryable even on spans that never saw a Python exception.
         """
         try:
             from litellm.integrations._types.open_inference import (
                 ErrorAttributes,
+                ExceptionAttributes,
             )
 
-            # Get the exception object if available
             exception = kwargs.get("exception")
+            standard_logging_payload: Optional[StandardLoggingPayload] = (
+                kwargs.get("standard_logging_object")
+            )
 
-            # Record the exception using OTEL's standard method
+            # Step 1: emit the OTEL ``exception`` span event when we have a
+            # real exception object. Unconditional regardless of whether the
+            # downstream attribute stamping runs.
             if exception is not None:
                 span.record_exception(exception)
 
-            # Get StandardLoggingPayload for structured error information
-            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
+            # Step 2: collect every source of error info into a normalized
+            # tuple. Each source feeds into one set of attributes so the span
+            # surface is identical regardless of which input was populated.
+            error_information: Optional[dict] = None
+            error_str: Optional[str] = None
+            if standard_logging_payload is not None:
+                error_information = standard_logging_payload.get(
+                    "error_information"
+                )
+                error_str = standard_logging_payload.get("error_str")
+
+            normalized = self._normalize_error_attributes(
+                exception=exception,
+                error_information=error_information,
+                error_str=error_str,
             )
 
-            if standard_logging_payload is None:
+            # Step 3: if no input source produced any error info at all, leave
+            # the span untouched (preserves the prior no-op behaviour when
+            # both exception and standard_logging_payload are missing).
+            if not normalized["has_any_error_info"]:
                 return
 
-            # Extract error_information from StandardLoggingPayload
-            error_information = standard_logging_payload.get("error_information")
-
-            if error_information is None:
-                # Fallback to error_str if error_information is not available
-                error_str = standard_logging_payload.get("error_str")
-                if error_str:
-                    self.safe_set_attribute(
-                        span=span,
-                        key=ErrorAttributes.ERROR_MESSAGE,
-                        value=error_str,
-                    )
-                return
-
-            # Set structured error attributes from StandardLoggingPayloadErrorInformation
-            if error_information.get("error_code"):
-                self.safe_set_attribute(
-                    span=span,
-                    key=ErrorAttributes.ERROR_CODE,
-                    value=error_information["error_code"],
-                )
-
-                # Also expose under the OTel-standard name as an int
-                # (error_code is a str, may be non-numeric).
-                _error_code_val = error_information["error_code"]
-                if _error_code_val is not None:
-                    try:
-                        self.safe_set_attribute(
-                            span=span,
-                            key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
-                            value=int(_error_code_val),
-                        )
-                    except (ValueError, TypeError):
-                        pass
-
-            if error_information.get("error_class"):
+            # Step 4: stamp normalized attributes. Empty strings are skipped
+            # via the ``if value:`` guard so a blank field from one source
+            # never overwrites a real value from another.
+            error_type = normalized["error_type"]
+            if error_type:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_TYPE,
-                    value=error_information["error_class"],
+                    value=error_type,
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=ExceptionAttributes.EXCEPTION_TYPE,
+                    value=error_type,
                 )
 
-            if error_information.get("error_message"):
+            error_message = normalized["error_message"]
+            if error_message:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_MESSAGE,
-                    value=error_information["error_message"],
+                    value=error_message,
                 )
-
-            if error_information.get("llm_provider"):
                 self.safe_set_attribute(
                     span=span,
-                    key=ErrorAttributes.ERROR_LLM_PROVIDER,
-                    value=error_information["llm_provider"],
+                    key=ExceptionAttributes.EXCEPTION_MESSAGE,
+                    value=error_message,
                 )
 
-            if error_information.get("traceback"):
+            error_stack_trace = normalized["error_stack_trace"]
+            if error_stack_trace:
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_STACK_TRACE,
-                    value=error_information["traceback"],
+                    value=error_stack_trace,
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=ExceptionAttributes.EXCEPTION_STACKTRACE,
+                    value=error_stack_trace,
+                )
+
+            error_code = normalized["error_code"]
+            if error_code:
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_CODE,
+                    value=error_code,
+                )
+                # OTel-standard HTTP status code as int, only when parseable.
+                # error_code may be non-numeric (e.g. "ContextWindowExceeded").
+                try:
+                    self.safe_set_attribute(
+                        span=span,
+                        key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
+                        value=int(error_code),
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+            llm_provider = normalized["llm_provider"]
+            if llm_provider:
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_LLM_PROVIDER,
+                    value=llm_provider,
                 )
 
         except Exception as e:
             verbose_logger.exception(
                 "OpenTelemetry: Error recording exception on span: %s", str(e)
             )
+
+    @staticmethod
+    def _normalize_error_attributes(
+        exception: Any,
+        error_information: Optional[dict],
+        error_str: Optional[str],
+    ) -> dict:
+        """
+        Build a single source-of-truth attribute set from every available
+        error-info input. Precedence per attribute:
+
+          ``error.type``     : error_information.error_class
+                               -> type(exception).__name__
+          ``error.message``  : error_information.error_message
+                               -> error_str
+                               -> str(exception)
+          ``error.stack_trace`` : error_information.traceback
+                                  -> traceback.format_exception(exception)
+                                     when a traceback is attached
+          ``error.code``     : error_information.error_code (str)
+          ``error.llm_provider`` : error_information.llm_provider
+
+        Returns a dict with the resolved fields plus ``has_any_error_info``
+        which is False only when every source was empty / None.
+        """
+        ei = error_information or {}
+
+        # error.type
+        error_type = ei.get("error_class") or ""
+        if not error_type and exception is not None:
+            error_type = type(exception).__name__
+
+        # error.message
+        error_message = ei.get("error_message") or ""
+        if not error_message and error_str:
+            error_message = error_str
+        if not error_message and exception is not None:
+            try:
+                error_message = str(exception)
+            except Exception:
+                error_message = ""
+
+        # error.stack_trace
+        error_stack_trace = ei.get("traceback") or ""
+        if not error_stack_trace and exception is not None:
+            tb = getattr(exception, "__traceback__", None)
+            if tb is not None:
+                try:
+                    import traceback as _tb_mod
+
+                    error_stack_trace = "".join(
+                        _tb_mod.format_exception(
+                            type(exception), exception, tb
+                        )
+                    )
+                except Exception:
+                    error_stack_trace = ""
+
+        # error.code (str form, preserved for back-compat)
+        error_code = ""
+        if ei.get("error_code") is not None:
+            try:
+                error_code = str(ei["error_code"])
+            except Exception:
+                error_code = ""
+
+        # error.llm_provider
+        llm_provider = ei.get("llm_provider") or ""
+
+        has_any_error_info = bool(
+            error_type
+            or error_message
+            or error_stack_trace
+            or error_code
+            or llm_provider
+        )
+
+        return {
+            "error_type": error_type,
+            "error_message": error_message,
+            "error_stack_trace": error_stack_trace,
+            "error_code": error_code,
+            "llm_provider": llm_provider,
+            "has_any_error_info": has_any_error_info,
+        }
+
 
     def set_tools_attributes(self, span: Span, tools):
         import json
