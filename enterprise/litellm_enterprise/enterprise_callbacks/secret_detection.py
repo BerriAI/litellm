@@ -6,13 +6,14 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -21,6 +22,72 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 GUARDRAIL_NAME = "hide_secrets"
+
+# Matches a full PEM private-key block (header + base64 body + footer) across
+# multiple lines.  detect-secrets is line-based and only records the BEGIN
+# header as the secret value; ``_expand_private_key_values`` uses this
+# pattern to promote that header-only value to the full block so every
+# str.replace call site redacts the entire key, not just the first line.
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----"
+)
+
+
+def _expand_private_key_values(
+    detected_secrets: List[Dict[str, Any]], text: str
+) -> List[Dict[str, Any]]:
+    """Promote ``Private Key`` entries from BEGIN-header-only to full PEM block.
+
+    detect-secrets scans line-by-line, so for PEM keys it records only the
+    ``-----BEGIN ... PRIVATE KEY-----`` armor header as the secret value.
+    Downstream ``str.replace`` call sites would only strike that single line
+    and leave the base64 body + END footer in the forwarded payload.  This
+    helper finds enclosing PEM blocks in *text* and rewrites the secret
+    value to the full block so the existing replace logic redacts the whole
+    key.
+
+    Because detect-secrets de-duplicates by secret value, multiple PEM
+    blocks that share the same BEGIN header (e.g. two ``-----BEGIN PRIVATE
+    KEY-----`` blocks in the same message) collapse to a single entry in
+    *detected_secrets*.  To make sure every block is redacted, we add a
+    synthetic ``Private Key`` entry for each additional PEM block in *text*
+    that shares the same header but has no matching detected entry.
+
+    Each PEM block is claimed at most once.  All other secret types pass
+    through unchanged.
+    """
+    pem_blocks = list(_PEM_BLOCK_RE.finditer(text))
+    claimed: set = set()
+    seen_headers: set = set()
+
+    expanded: List[Dict[str, Any]] = []
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key":
+            header = secret.get("value")
+            if header:
+                seen_headers.add(header)
+                for idx, match in enumerate(pem_blocks):
+                    if idx in claimed:
+                        continue
+                    if header in match.group(0):
+                        secret = {**secret, "value": match.group(0)}
+                        claimed.add(idx)
+                        break
+        expanded.append(secret)
+
+    # Backfill PEM blocks whose header matched a detected entry but where
+    # detect-secrets de-duplicated them down to a single record.  This
+    # guarantees every block is independently redactable downstream.
+    for idx, match in enumerate(pem_blocks):
+        if idx in claimed:
+            continue
+        block = match.group(0)
+        if any(header in block for header in seen_headers):
+            expanded.append({"type": "Private Key", "value": block})
+            claimed.add(idx)
+
+    return expanded
+
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -452,6 +519,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets.append(
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
+
+        # detect-secrets is line-based: for PEM private keys it records only
+        # the BEGIN armor header as the secret value.  Expand each ``Private
+        # Key`` entry to the full PEM block so that downstream ``str.replace``
+        # call sites redact the entire key (body + END footer), not just the
+        # first line.
+        detected_secrets = _expand_private_key_values(
+            detected_secrets, message_content
+        )
 
         return detected_secrets
 
