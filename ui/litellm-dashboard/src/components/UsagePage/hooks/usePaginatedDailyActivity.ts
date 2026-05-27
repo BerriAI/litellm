@@ -25,6 +25,19 @@ const SUMMABLE_METADATA_KEYS = [
   "total_cache_creation_input_tokens",
 ] as const;
 
+/** The per-row metric fields that should be summed when two rows share a date. */
+const SUMMABLE_ROW_METRIC_KEYS = [
+  "spend",
+  "prompt_tokens",
+  "completion_tokens",
+  "total_tokens",
+  "api_requests",
+  "successful_requests",
+  "failed_requests",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
 interface DailyActivityResponse {
   results: DailyData[];
   metadata: Record<string, any>;
@@ -77,6 +90,98 @@ function sumMetadata(
     result[key] = (a[key] || 0) + (b[key] || 0);
   }
   return result;
+}
+
+function sumRowMetrics(
+  a: Record<string, any>,
+  b: Record<string, any>,
+): Record<string, any> {
+  const result = { ...a };
+  for (const key of SUMMABLE_ROW_METRIC_KEYS) {
+    result[key] = (a[key] || 0) + (b[key] || 0);
+  }
+  return result;
+}
+
+/**
+ * Merge two breakdown sub-maps (e.g. models, api_keys) keyed by entity id.
+ * When the same entity appears in both, metrics are summed and the nested
+ * api_key_breakdown is recursively merged. metadata from the first row wins.
+ */
+function mergeBreakdownSubMap(
+  a: Record<string, any> | undefined,
+  b: Record<string, any> | undefined,
+): Record<string, any> {
+  if (!a) return { ...(b || {}) };
+  if (!b) return { ...a };
+  const result: Record<string, any> = { ...a };
+  for (const [key, bEntry] of Object.entries(b)) {
+    const aEntry = result[key];
+    if (!aEntry) {
+      result[key] = bEntry;
+      continue;
+    }
+    result[key] = {
+      ...aEntry,
+      metrics: sumRowMetrics(aEntry.metrics || {}, bEntry.metrics || {}),
+      metadata: aEntry.metadata ?? bEntry.metadata,
+      api_key_breakdown: mergeBreakdownSubMap(
+        aEntry.api_key_breakdown,
+        bEntry.api_key_breakdown,
+      ),
+    };
+  }
+  return result;
+}
+
+const BREAKDOWN_SUBMAPS = [
+  "models",
+  "model_groups",
+  "mcp_servers",
+  "providers",
+  "api_keys",
+  "entities",
+  "endpoints",
+] as const;
+
+/**
+ * Merge the full breakdown object of two DailyData rows that share a date.
+ * Each known sub-map is merged independently; unknown sub-maps from either
+ * side are passed through so we never drop fields the backend adds later.
+ */
+export function mergeBreakdowns(
+  a: Record<string, any> | undefined,
+  b: Record<string, any> | undefined,
+): Record<string, any> {
+  const merged: Record<string, any> = { ...(a || {}), ...(b || {}) };
+  for (const key of BREAKDOWN_SUBMAPS) {
+    merged[key] = mergeBreakdownSubMap(a?.[key], b?.[key]);
+  }
+  return merged;
+}
+
+/**
+ * Collapse paginated DailyData results so rows with the same date are
+ * merged into one entry (metrics summed, breakdowns merged). Without this,
+ * a paginated backend response for a single-day window emits one chart bar
+ * per page instead of one bar per actual day. Order is preserved by
+ * first-seen date.
+ */
+export function mergeResultsByDate(rows: DailyData[]): DailyData[] {
+  const byDate = new Map<string, DailyData>();
+  for (const row of rows) {
+    const existing = byDate.get(row.date);
+    if (!existing) {
+      byDate.set(row.date, row);
+      continue;
+    }
+    byDate.set(row.date, {
+      date: row.date,
+      metrics: sumRowMetrics(existing.metrics, row.metrics) as DailyData["metrics"],
+      breakdown: mergeBreakdowns(existing.breakdown, row.breakdown) as DailyData["breakdown"],
+    });
+  }
+  return Array.from(byDate.values());
 }
 
 /**
@@ -164,7 +269,14 @@ export function usePaginatedDailyActivity({
 
         if (isStale()) return;
 
-        setData(firstPage);
+        // Dedupe rows that share a date within the first page too -- e.g. the
+        // backend _adjust_dates_for_timezone may emit a UTC ghost-bar for the
+        // same local-day window.
+        const firstPageDeduped: DailyActivityResponse = {
+          ...firstPage,
+          results: mergeResultsByDate(firstPage.results),
+        };
+        setData(firstPageDeduped);
 
         const totalPages = firstPage.metadata?.total_pages || 1;
 
@@ -175,11 +287,11 @@ export function usePaginatedDailyActivity({
           return;
         }
 
-        // More pages — start fetching sequentially.
+        // More pages -- start fetching sequentially.
         setLoading(false);
         setIsFetchingMore(true);
 
-        let accumulatedResults = [...firstPage.results];
+        let accumulatedResults = [...firstPageDeduped.results];
         let accumulatedMetadata = { ...firstPage.metadata };
 
         for (let page = 2; page <= totalPages; page++) {
@@ -195,7 +307,12 @@ export function usePaginatedDailyActivity({
 
           if (isStale()) return;
 
-          accumulatedResults = [...accumulatedResults, ...pageData.results];
+          // Merge rows that share the same date (one bar per actual day,
+          // not one bar per paginated page).
+          accumulatedResults = mergeResultsByDate([
+            ...accumulatedResults,
+            ...pageData.results,
+          ]);
           accumulatedMetadata = sumMetadata(
             accumulatedMetadata,
             pageData.metadata,
