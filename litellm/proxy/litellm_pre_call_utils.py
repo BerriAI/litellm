@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
@@ -332,8 +333,10 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata"
     """
-    path = request.url.path
+    # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
+    path = get_request_route(request)
     if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
@@ -477,7 +480,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.metadata is not None
             and "logging" in user_api_key_dict.metadata
         ):
-            return user_api_key_dict.metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
         return None
 
     @staticmethod
@@ -486,7 +489,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.team_metadata is not None
             and "logging" in user_api_key_dict.team_metadata
         ):
-            return user_api_key_dict.team_metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
         return None
 
 
@@ -540,7 +543,7 @@ def _get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata = user_api_key_dict.team_metadata
+        team_metadata = decrypt_callback_vars(user_api_key_dict.team_metadata)
         callback_settings = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(**callback_settings)
         verbose_proxy_logger.debug(
@@ -1510,10 +1513,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
     #
-    # Exclude secret_fields (which contains raw_headers with Authorization
-    # tokens) from the snapshot — they must never be persisted in spend logs
-    # or any other audit trail.
-    _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
+    # Exclude:
+    #   - secret_fields: contains raw_headers with Authorization tokens; must
+    #     never be persisted in spend logs or any other audit trail.
+    #   - proxy_server_request: already a key on `data` at this point (set
+    #     earlier in this function); including it would make the snapshot
+    #     self-reference — body.proxy_server_request.body would be the same
+    #     dict as body, producing an infinite traversal loop for any consumer
+    #     that walks the structure.
+    _body_snapshot_exclude = {"secret_fields", "proxy_server_request"}
+    _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
     # Snapshot the requester-supplied metadata for downstream consumers.

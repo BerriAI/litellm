@@ -12,7 +12,6 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
-
 _FORM_CONTENT_TYPES: frozenset[str] = frozenset(
     {"application/x-www-form-urlencoded", "multipart/form-data"}
 )
@@ -301,7 +300,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any]
+    form_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -547,7 +546,10 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         request_data: The request data dictionary to populate
         request: The FastAPI Request object
     """
-    path = request.url.path
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    path = get_request_route(request)
     vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
     if vector_store_match:
         vector_store_id = vector_store_match.group(1)
