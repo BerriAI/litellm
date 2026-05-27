@@ -614,6 +614,10 @@ def test_log_event_on_langfuse_reads_litellm_metadata_for_v1_messages():
     )
 
     original_clients = litellm.initialized_langfuse_clients
+    saved_env = {
+        k: os.environ.get(k)
+        for k in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
+    }
     try:
         os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-test"
         os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-test"
@@ -715,3 +719,8 @@ def test_log_event_on_langfuse_reads_litellm_metadata_for_v1_messages():
         ), "user_api_key_user_id missing from generation metadata"
     finally:
         litellm.initialized_langfuse_clients = original_clients
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
