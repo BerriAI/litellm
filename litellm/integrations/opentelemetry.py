@@ -970,27 +970,47 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         spans_logged[dedupe_key] = True
         return True
 
+    # Sentinels that tag normalized container values so different
+    # container types with the same contents (e.g. ``[1, 2]`` and
+    # ``(1, 2)``) do not silently collapse to the same dedupe key
+    # after normalization.
+    _LIST_TAG = "__list__"
+    _SET_TAG = "__set__"
+    _DICT_TAG = "__dict__"
+
     @staticmethod
     def _make_hashable(value):
         """Return a hashable representation of ``value``.
 
-        Used to normalize ``_emit_once`` scope parts so callers can pass
-        list/dict/set values (or nested combinations) without crashing the
-        dedupe-key construction with ``TypeError: unhashable type``.
+        Used to normalize ``_emit_once`` scope parts so callers can
+        pass list/dict/set values (or nested combinations) without
+        crashing the dedupe-key construction with
+        ``TypeError: unhashable type``.
 
-        The transformation preserves equality for the dedupe semantics:
-        two values that should be considered "the same scope" map to the
-        same hashable result.
-            * ``list``/``tuple`` -> ``tuple`` of recursively-hashable elements
-              (order preserved, since list order is part of identity)
-            * ``set``/``frozenset`` -> ``frozenset`` of recursively-hashable
-              elements (order-independent)
-            * ``dict`` -> ``tuple`` of ``(key, hashable_value)`` pairs sorted
-              by ``repr(key)`` so equal dicts produce the same tuple
-            * any already-hashable value -> returned unchanged
-            * any remaining unhashable value -> ``repr(value)`` (last-resort
-              fallback so we never re-raise; not equality-preserving but
-              keeps the dedupe key well-defined)
+        The transformation preserves Python equality semantics: two
+        values that compare equal map to the same hashable result,
+        two values that do not compare equal stay distinct.
+        Container types carry a tag so a list and a tuple with the
+        same contents (which are not equal in Python) do not
+        collapse to the same dedupe key.
+            * already-hashable value -> returned unchanged
+            * ``list`` -> ``(_LIST_TAG, tuple of recursively-hashable
+              elements)``; order preserved
+            * unhashable ``tuple`` -> ``tuple`` of recursively-
+              hashable elements (no tag, so a tuple of all-hashable
+              elements -- handled by the fast path -- produces the
+              same result for the same contents)
+            * ``set`` -> ``(_SET_TAG, frozenset of recursively-
+              hashable elements)``; order-independent.
+              ``frozenset`` is always hashable so it never reaches
+              this branch.
+            * ``dict`` -> ``(_DICT_TAG, tuple of (k, v) pairs)``
+              sorted by ``repr(key)`` so equal dicts produce the
+              same result regardless of insertion order
+            * any other unhashable value -> ``repr(value)`` (last-
+              resort fallback so we never re-raise; not equality-
+              preserving for that value, but keeps the dedupe key
+              well-defined)
         """
         try:
             hash(value)
@@ -998,22 +1018,33 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         except TypeError:
             pass
 
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list):
+            return (
+                OpenTelemetry._LIST_TAG,
+                tuple(OpenTelemetry._make_hashable(v) for v in value),
+            )
+        if isinstance(value, tuple):
             return tuple(OpenTelemetry._make_hashable(v) for v in value)
-        if isinstance(value, (set, frozenset)):
-            return frozenset(OpenTelemetry._make_hashable(v) for v in value)
+        if isinstance(value, set):
+            return (
+                OpenTelemetry._SET_TAG,
+                frozenset(OpenTelemetry._make_hashable(v) for v in value),
+            )
         if isinstance(value, dict):
-            return tuple(
-                sorted(
-                    (
+            return (
+                OpenTelemetry._DICT_TAG,
+                tuple(
+                    sorted(
                         (
-                            OpenTelemetry._make_hashable(k),
-                            OpenTelemetry._make_hashable(v),
-                        )
-                        for k, v in value.items()
-                    ),
-                    key=lambda kv: repr(kv[0]),
-                )
+                            (
+                                OpenTelemetry._make_hashable(k),
+                                OpenTelemetry._make_hashable(v),
+                            )
+                            for k, v in value.items()
+                        ),
+                        key=lambda kv: repr(kv[0]),
+                    )
+                ),
             )
         return repr(value)
 
