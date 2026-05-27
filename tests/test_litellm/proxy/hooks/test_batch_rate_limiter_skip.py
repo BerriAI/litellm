@@ -366,3 +366,47 @@ def test_helper_presence_aware_resolution_order():
     _check(False, False, None, False)  # case 4
     _check(False, True, True, True)  # case 5
     _check(False, True, False, False)  # case 6
+
+
+@pytest.mark.asyncio
+async def test_skip_path_emits_warning_log(caplog):
+    """LIT-3266 / Veria feedback: when the skip path is taken, the hook MUST
+    log a WARNING that names the model and the security implication, so
+    operators can audit the trust decision in production.
+    """
+    import logging
+
+    limiter = _make_limiter()
+    deployment = {
+        "model_name": "trusted-vllm",
+        "model_info": {
+            "id": "dep-1",
+            "skip_batch_input_file_retrieval": True,
+        },
+    }
+    restore = _install_router(deployment)
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"), patch.object(
+            limiter, "count_input_file_usage"
+        ) as m:
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=_user(),
+                cache=None,
+                data=_make_data(model="trusted-vllm"),
+                call_type="acreate_batch",
+            )
+        assert m.call_count == 0
+        # The warning must include the model name and call out the security
+        # implication, not just say "skipping".
+        warning_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "skip_batch_input_file_retrieval" in r.getMessage()
+        ]
+        assert warning_records, "expected a WARNING log when the skip path is taken"
+        message = warning_records[-1].getMessage()
+        assert "trusted-vllm" in message
+        assert "model allowlist" in message or "trust" in message
+    finally:
+        restore()
