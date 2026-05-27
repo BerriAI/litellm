@@ -3215,14 +3215,16 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw("""
+    response = await prisma_client.db.query_raw(
+        """
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """)
+        """
+    )
 
     return response
 
@@ -3617,6 +3619,13 @@ async def _assert_user_can_view_request_id(
     Verify the requesting non-admin user is allowed to view this spend-log row.
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
+
+    LIT-3301: if the calling key is team-scoped (``user_api_key_dict.team_id``
+    set), the row's ``team_id`` MUST match. The same-user fallback below does
+    NOT apply for team keys, because a team virtual key minted by an admin
+    would otherwise be able to retrieve message/response payloads for any log
+    owned by that admin outside of the key's team.
+
     Raises HTTP 403 if not.
     """
     row = await prisma_client.db.litellm_spendlogs.find_unique(
@@ -3625,6 +3634,21 @@ async def _assert_user_can_view_request_id(
     )
     if row is None:
         return
+
+    calling_team_id = getattr(user_api_key_dict, "team_id", None)
+    if calling_team_id is not None:
+        # A team virtual key may only inspect rows for its own team. No
+        # same-user fallback for team keys.
+        if row.team_id == calling_team_id:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Not authorized to view spend log for request_id={}".format(
+                    request_id
+                )
+            },
+        )
 
     if row.user is not None and row.user == user_api_key_dict.user_id:
         return
