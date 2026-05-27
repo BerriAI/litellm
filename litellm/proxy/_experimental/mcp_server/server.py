@@ -1449,17 +1449,13 @@ if MCP_AVAILABLE:
                 # via mcp_tool_call_metadata so external callbacks (Langfuse, Datadog,
                 # OTEL, etc.) can attribute the event to the MCP server(s) and tool
                 # counts without having to crack open spend_logs_metadata.
-                _list_tools_server_names: List[str] = []
-                for _srv in allowed_mcp_servers:
-                    if _srv is None:
-                        continue
-                    _srv_name = (
-                        getattr(_srv, "server_name", None)
-                        or getattr(_srv, "alias", None)
-                        or getattr(_srv, "name", None)
-                    )
-                    if isinstance(_srv_name, str) and _srv_name:
-                        _list_tools_server_names.append(_srv_name)
+                #
+                # Derive server names directly from per_server_tool_counts so the two
+                # fields stay in sync (same key set, same "unknown" fallback for
+                # nameless servers — see the earlier per_server_tool_counts build).
+                _list_tools_server_names: List[str] = [
+                    str(_name) for _name in per_server_tool_counts.keys() if _name
+                ]
 
                 list_tools_mcp_metadata: StandardLoggingMCPToolCall = (
                     StandardLoggingMCPToolCall(
