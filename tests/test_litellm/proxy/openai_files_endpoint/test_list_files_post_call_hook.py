@@ -15,6 +15,7 @@ that returns a fresh AsyncCursorPage instance.
 This regression test pins the broadened type check
 (OpenAIFileObject, AsyncCursorPage).
 """
+
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
