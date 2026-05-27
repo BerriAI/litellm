@@ -930,3 +930,280 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
     litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
+
+
+class TestLangfuseLitellmMetadataResolution(unittest.TestCase):
+    """
+    Regression tests for LIT-3293: Preserve proxy auth metadata in Langfuse for
+    /v1/messages.
+
+    Endpoints like ``/v1/messages``, ``/v1/responses``, ``/v1/batches``, and
+    ``/v1/files`` store proxy auth context (``user_api_key_alias``,
+    ``user_api_key_user_id``, ``user_api_key_team_id``, ...) under
+    ``litellm_params['litellm_metadata']``. The Langfuse callback previously
+    read only ``litellm_params['metadata']`` and dropped proxy auth on the
+    floor for these routes.
+
+    These tests drive ``log_event_on_langfuse`` end-to-end against a mocked
+    Langfuse SDK and assert on what the callback would have created.
+    """
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret-key",
+                "LANGFUSE_PUBLIC_KEY": "test-public-key",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        )
+        self.env_patcher.start()
+
+        # Patch only the Langfuse client construction; keep the real
+        # ``langfuse`` and ``langfuse.model`` modules importable so the
+        # code path under test (``_add_prompt_to_generation_params``) still
+        # works.
+        self.mock_langfuse_client = MagicMock()
+        self.mock_langfuse_client.client = MagicMock()
+        self.langfuse_class_patcher = patch(
+            "langfuse.Langfuse", return_value=self.mock_langfuse_client
+        )
+        self.langfuse_class_patcher.start()
+
+        self.captured_trace_kwargs = {}
+        self.captured_generation_kwargs = {}
+
+        self.mock_trace = MagicMock()
+        self.mock_generation = MagicMock()
+        self.mock_generation.trace_id = "tr-test"
+
+        def _trace_side_effect(**kwargs):
+            self.captured_trace_kwargs.update(kwargs)
+            return self.mock_trace
+
+        def _generation_side_effect(**kwargs):
+            self.captured_generation_kwargs.update(kwargs)
+            return self.mock_generation
+
+        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
+        self.mock_trace.generation.side_effect = _generation_side_effect
+
+        self._original_count = litellm.initialized_langfuse_clients
+        self.logger = LangFuseLogger()
+        self.logger.Langfuse = self.mock_langfuse_client
+        self.logger.langfuse_sdk_version = "3.0.0"
+
+        def _is_v2(self):
+            return True
+
+        self.logger._is_langfuse_v2 = types.MethodType(_is_v2, self.logger)
+
+    def tearDown(self):
+        litellm.initialized_langfuse_clients = self._original_count
+        self.env_patcher.stop()
+        self.langfuse_class_patcher.stop()
+
+    @staticmethod
+    def _fake_response_obj():
+        class _Usage:
+            prompt_tokens = 5
+            completion_tokens = 3
+            total_tokens = 8
+            cache_creation_input_tokens = 0
+            cache_read_input_tokens = 0
+            completion_tokens_details = None
+            prompt_tokens_details = None
+            model_extra: dict = {}
+
+            def get(self, k, default=None):
+                return getattr(self, k, default)
+
+        class _Resp:
+            id = "resp-1"
+            system_fingerprint = None
+            model = "claude-3-5-sonnet-20241022"
+            object = "chat.completion"
+            choices: list = []
+            usage = _Usage()
+            _hidden_params: dict = {}
+
+            def get(self, *a, **kw):
+                if a and a[0] == "id":
+                    return self.id
+                return None
+
+            def model_dump(self):
+                return {}
+
+        return _Resp()
+
+    def _build_kwargs(
+        self, metadata, litellm_metadata, call_type="anthropic_messages"
+    ):
+        return {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "user", "content": "hi"}],
+            "call_type": call_type,
+            "custom_llm_provider": "anthropic",
+            "litellm_call_id": "cid-1",
+            "litellm_params": {
+                "api_base": "",
+                "metadata": metadata,
+                "litellm_metadata": litellm_metadata,
+                "proxy_server_request": {},
+            },
+            "optional_params": {},
+            "standard_logging_object": {
+                "metadata": {},
+                "model_map_information": {},
+            },
+            "response_cost": 0,
+            "input": "hi",
+            "completion_start_time": datetime.datetime.now(),
+            "stream": False,
+        }
+
+    def test_v1_messages_proxy_auth_present_in_generation_metadata(self):
+        """
+        For /v1/messages, proxy auth lives in litellm_metadata while the request
+        body's own `metadata` (the Anthropic provider-level field) is in
+        litellm_params['metadata']. The Langfuse generation must still carry
+        user_api_key_alias / user_api_key_user_id / user_api_key_team_id.
+        """
+        proxy_litellm_metadata = {
+            "user_api_key_alias": "shin-key-alias",
+            "user_api_key_user_id": "shin-user-123",
+            "user_api_key_team_id": "team-eng",
+            "user_api_key_user_email": "shin@example.test",
+            "user_api_key_org_id": "org-acme",
+            "headers": {},
+            "endpoint": "/v1/messages",
+        }
+        client_metadata = {"user_id": "client-XYZ"}
+        kwargs = self._build_kwargs(client_metadata, proxy_litellm_metadata)
+        self.logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=self._fake_response_obj(),
+            start_time=datetime.datetime.now() - datetime.timedelta(seconds=1),
+            end_time=datetime.datetime.now(),
+            user_id="shin-user-123",
+            level="DEFAULT",
+            status_message=None,
+        )
+        gen_meta = self.captured_generation_kwargs.get("metadata") or {}
+        assert gen_meta.get("user_api_key_alias") == "shin-key-alias"
+        assert gen_meta.get("user_api_key_user_id") == "shin-user-123"
+        assert gen_meta.get("user_api_key_team_id") == "team-eng"
+        assert gen_meta.get("user_api_key_user_email") == "shin@example.test"
+        assert gen_meta.get("user_api_key_org_id") == "org-acme"
+
+    def test_v1_messages_generation_name_uses_key_alias(self):
+        """
+        Generation name should default to ``litellm:<user_api_key_alias>`` when
+        key_alias is present (matches /chat/completions behavior). Previously,
+        for /v1/messages it fell back to ``litellm-anthropic_messages``.
+        """
+        proxy_litellm_metadata = {
+            "user_api_key_alias": "shin-key-alias",
+            "user_api_key_user_id": "shin-user-123",
+            "headers": {},
+            "endpoint": "/v1/messages",
+        }
+        kwargs = self._build_kwargs({"user_id": "client-XYZ"}, proxy_litellm_metadata)
+        self.logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=self._fake_response_obj(),
+            start_time=datetime.datetime.now() - datetime.timedelta(seconds=1),
+            end_time=datetime.datetime.now(),
+            user_id="shin-user-123",
+            level="DEFAULT",
+            status_message=None,
+        )
+        assert (
+            self.captured_generation_kwargs.get("name") == "litellm:shin-key-alias"
+        ), self.captured_generation_kwargs.get("name")
+
+    def test_chat_completions_metadata_path_unchanged(self):
+        """
+        For /chat/completions, proxy auth lives directly in
+        ``litellm_params['metadata']``. The fix must keep this path working:
+        when ``litellm_metadata`` is absent, metadata fallback still drives the
+        generation name + auth fields.
+        """
+        proxy_metadata = {
+            "user_api_key_alias": "alpha-key-alias",
+            "user_api_key_user_id": "alpha-user",
+            "user_api_key_team_id": "team-alpha",
+            "headers": {},
+            "endpoint": "/chat/completions",
+        }
+        kwargs = self._build_kwargs(proxy_metadata, None, call_type="completion")
+        # Drop the None key to match real /chat/completions kwargs shape
+        kwargs["litellm_params"].pop("litellm_metadata")
+        self.logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=self._fake_response_obj(),
+            start_time=datetime.datetime.now() - datetime.timedelta(seconds=1),
+            end_time=datetime.datetime.now(),
+            user_id="alpha-user",
+            level="DEFAULT",
+            status_message=None,
+        )
+        assert (
+            self.captured_generation_kwargs.get("name") == "litellm:alpha-key-alias"
+        )
+        gen_meta = self.captured_generation_kwargs.get("metadata") or {}
+        assert gen_meta.get("user_api_key_alias") == "alpha-key-alias"
+        assert gen_meta.get("user_api_key_team_id") == "team-alpha"
+
+    def test_both_metadata_and_litellm_metadata_merge_user_api_key_fields(self):
+        """
+        When both ``metadata`` and ``litellm_metadata`` are present but
+        ``user_api_key_*`` fields live on ``metadata`` (some legacy paths), the
+        callback must still surface them via
+        ``add_missing_spend_metadata_to_litellm_metadata``.
+        """
+        proxy_metadata = {
+            "user_api_key_alias": "from-metadata-alias",
+            "user_api_key_user_id": "from-metadata-user",
+            "headers": {},
+        }
+        proxy_litellm_metadata = {
+            "endpoint": "/v1/messages",
+            "headers": {},
+            "some_other_field": "yes",
+        }
+        kwargs = self._build_kwargs(proxy_metadata, proxy_litellm_metadata)
+        self.logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=self._fake_response_obj(),
+            start_time=datetime.datetime.now() - datetime.timedelta(seconds=1),
+            end_time=datetime.datetime.now(),
+            user_id="from-metadata-user",
+            level="DEFAULT",
+            status_message=None,
+        )
+        gen_meta = self.captured_generation_kwargs.get("metadata") or {}
+        assert gen_meta.get("user_api_key_alias") == "from-metadata-alias"
+        assert gen_meta.get("user_api_key_user_id") == "from-metadata-user"
+        assert (
+            self.captured_generation_kwargs.get("name") == "litellm:from-metadata-alias"
+        )
+
+    def test_no_metadata_or_litellm_metadata_uses_default_generation_name(self):
+        """No metadata at all -> generation name falls back to ``litellm-<call_type>``."""
+        kwargs = self._build_kwargs({}, None, call_type="completion")
+        kwargs["litellm_params"].pop("litellm_metadata")
+        kwargs["litellm_params"]["metadata"] = {}
+        self.logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=self._fake_response_obj(),
+            start_time=datetime.datetime.now() - datetime.timedelta(seconds=1),
+            end_time=datetime.datetime.now(),
+            user_id=None,
+            level="DEFAULT",
+            status_message=None,
+        )
+        assert (
+            self.captured_generation_kwargs.get("name") == "litellm-completion"
+        ), self.captured_generation_kwargs.get("name")
