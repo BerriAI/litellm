@@ -11,14 +11,13 @@ test("user can log in", async ({ page }) => {
   await loginButton.click();
   await expect(page.getByText("Virtual Keys")).toBeVisible();
 
-  // Dispatch hover events directly — antd Dropdown's default hover trigger
-  // closes the popup as soon as the cursor moves off the button, which
-  // happens between Playwright assertions.
-  const userTrigger = page.locator("nav").getByRole("button").filter({ hasText: /^User$/ });
-  await userTrigger.evaluate((el: HTMLElement) => {
-    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-    el.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-  });
+  // Match the navbar account button by its stable aria-label (UserDropdown.tsx
+  // emits "Account menu — <role> — signed in as <email|id>"). Earlier this used
+  // `hasText: /^User$/`, which never matched the rendered button (text is
+  // displayName = "Account" for the master-key admin), so the trigger evaluate
+  // would time out in CI.
+  const userTrigger = page.locator('button[aria-label^="Account menu"]').first();
+  await userTrigger.click();
 
   // Filter by the popupRender wrapper class to disambiguate from other
   // ant-dropdown popups.
