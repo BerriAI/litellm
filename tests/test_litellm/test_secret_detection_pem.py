@@ -159,3 +159,74 @@ def test_redaction_handles_two_distinct_pem_keys_in_message():
     for marker in ("AAAAAAAAAAAAAAAAAAAA", "ZZZZZZZZZZZZZZZZZZZZ"):
         assert marker not in redacted
     assert "-----END PRIVATE KEY-----" not in redacted
+
+
+
+# ---------------------------------------------------------------------------
+# Tests using the *actual* no-dashes header value emitted by detect-secrets,
+# plus coverage for the regex-matched-but-undetected backfill path.
+# ---------------------------------------------------------------------------
+#
+# detect-secrets' PrivateKeyDetector reports a value like "BEGIN PRIVATE KEY"
+# (no dashes, len 17), not the full "-----BEGIN PRIVATE KEY-----" line.  The
+# unit tests above mostly use the dashed form; these tests pin the contract
+# against the real header form so a future change to the matching logic
+# can't pass unit tests while regressing the real path.
+
+_DETECT_SECRETS_RAW_HEADER = "BEGIN PRIVATE KEY"
+_DETECT_SECRETS_RAW_RSA_HEADER = "BEGIN RSA PRIVATE KEY"
+_DETECT_SECRETS_RAW_OPENSSH_HEADER = "BEGIN OPENSSH PRIVATE KEY"
+
+_SAMPLE_OPENSSH_PEM = (
+    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAA\n"
+    "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\n"
+    "-----END OPENSSH PRIVATE KEY-----"
+)
+
+
+def test_expand_promotes_no_dashes_header_value_to_full_block():
+    """Matches the *actual* value detect-secrets emits ('BEGIN PRIVATE KEY')."""
+    detected = [{"type": "Private Key", "value": _DETECT_SECRETS_RAW_HEADER}]
+    text = f"Here is a key:\n{_SAMPLE_PEM}\nEnd."
+    result = _expand_private_key_values(detected, text)
+    assert result[0]["value"] == _SAMPLE_PEM
+
+
+def test_expand_promotes_no_dashes_rsa_header():
+    detected = [{"type": "Private Key", "value": _DETECT_SECRETS_RAW_RSA_HEADER}]
+    text = f"Key:\n{_SAMPLE_RSA_PEM}\n"
+    result = _expand_private_key_values(detected, text)
+    assert result[0]["value"] == _SAMPLE_RSA_PEM
+
+
+def test_expand_promotes_no_dashes_openssh_header():
+    detected = [{"type": "Private Key", "value": _DETECT_SECRETS_RAW_OPENSSH_HEADER}]
+    text = f"Key:\n{_SAMPLE_OPENSSH_PEM}\n"
+    result = _expand_private_key_values(detected, text)
+    assert result[0]["value"] == _SAMPLE_OPENSSH_PEM
+
+
+def test_backfill_redacts_pem_block_even_when_no_detection_present():
+    """If ``_PEM_BLOCK_RE`` matches a block but detect-secrets emitted nothing
+    for it (e.g. an obscure key format only our regex catches), the backfill
+    still synthesizes a ``Private Key`` entry so the block gets redacted."""
+    text = f"Surprise key:\n{_SAMPLE_PEM}\n"
+    result = _expand_private_key_values([], text)
+    pks = [s for s in result if s["type"] == "Private Key"]
+    assert any(p["value"] == _SAMPLE_PEM for p in pks)
+
+
+def test_backfill_redacts_block_when_detect_secrets_emits_unrelated_header():
+    """A detected entry for one header type plus a different-header block both
+    get handled: the matched entry is expanded, the other-header block is
+    backfilled regardless of whether its header was seen in detected_secrets."""
+    text = (
+        f"first:\n{_SAMPLE_PEM}\n"
+        f"second:\n{_SAMPLE_OPENSSH_PEM}\n"
+    )
+    detected = [{"type": "Private Key", "value": _DETECT_SECRETS_RAW_HEADER}]
+    result = _expand_private_key_values(detected, text)
+    pks = [s["value"] for s in result if s["type"] == "Private Key"]
+    assert _SAMPLE_PEM in pks
+    assert _SAMPLE_OPENSSH_PEM in pks
