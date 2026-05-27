@@ -306,3 +306,129 @@ async def test_chat_completion_request_with_redaction():
         {"role": "user", "content": "Hello here is my OPENAI_API_KEY = [REDACTED]"}
     ]
     pass
+
+
+
+# -------------------------------------------------------------------
+# PEM private key full-block redaction (LIT-3292)
+# -------------------------------------------------------------------
+#
+# Regression coverage for the bug where ``hide_secrets`` only redacted the
+# ``-----BEGIN ... PRIVATE KEY-----`` header line for PEM private keys,
+# leaving the base64 body and ``-----END`` footer in the forwarded request.
+
+import re as _re
+
+_PEM_PKCS8 = (
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCOI2lrF8oDbsRg\n"
+    "Qv6tTMapRkTldNoyTRnsuOZAdxIjMH6jh1tiogARdOtAWoZO0yQefN10ckpo3qNZ\n"
+    "-----END PRIVATE KEY-----"
+)
+_PEM_RSA = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+    "-----END RSA PRIVATE KEY-----"
+)
+
+
+def _do_redact(g, text):
+    detected = g.scan_message_for_secrets(text)
+    out = text
+    for s in detected:
+        out = out.replace(s["value"], "[REDACTED]")
+    return detected, out
+
+
+def test_pem_block_full_redaction_pkcs8():
+    """PEM PKCS#8 private key in a user message is fully redacted (header,
+    base64 body, and END footer) -- not just the BEGIN header line."""
+    g = _ENTERPRISE_SecretDetection()
+    msg = "Please decrypt:\n" + _PEM_PKCS8 + "\nThanks."
+    _, redacted = _do_redact(g, msg)
+    assert "-----BEGIN" not in redacted, redacted
+    assert "-----END" not in redacted, redacted
+    assert not _re.search(r"^[A-Za-z0-9+/=]{40,}$", redacted, _re.M), redacted
+
+
+def test_pem_block_full_redaction_rsa_variant():
+    """RSA-armored PEM private keys are also fully redacted."""
+    g = _ENTERPRISE_SecretDetection()
+    msg = "Key dump:\n" + _PEM_RSA + "\nend."
+    _, redacted = _do_redact(g, msg)
+    assert "-----BEGIN" not in redacted, redacted
+    assert "-----END" not in redacted, redacted
+
+
+def test_pem_block_full_redaction_two_blocks_in_same_message():
+    """Two distinct PEM blocks in one message are both fully redacted."""
+    g = _ENTERPRISE_SecretDetection()
+    msg = "two:\n" + _PEM_PKCS8 + "\n\n" + _PEM_RSA + "\nend"
+    _, redacted = _do_redact(g, msg)
+    assert "-----BEGIN" not in redacted, redacted
+    assert "-----END" not in redacted, redacted
+
+
+def test_pem_block_full_redaction_no_op_when_no_secret():
+    """A message with no PEM block (and no other secret) is unchanged."""
+    g = _ENTERPRISE_SecretDetection()
+    msg = "just a normal sentence with no secrets"
+    _, redacted = _do_redact(g, msg)
+    assert redacted == msg
+
+
+def test_pem_expand_helper_replaces_header_match_with_full_block():
+    """_expand_private_key_values rewrites a header-only detect-secrets match
+    to span the full PEM block from the source text."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _expand_private_key_values,
+    )
+
+    detected = [{"type": "Private Key", "value": "BEGIN PRIVATE KEY"}]
+    msg = "prefix\n" + _PEM_PKCS8 + "\nsuffix"
+    expanded = _expand_private_key_values(msg, detected)
+    assert expanded == [{"type": "Private Key", "value": _PEM_PKCS8}]
+
+
+def test_pem_expand_helper_handles_multiple_blocks():
+    """Multiple PEM blocks in the source text are emitted as separate
+    expanded entries so the per-secret replace loop strikes each one."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _expand_private_key_values,
+    )
+
+    detected = [{"type": "Private Key", "value": "BEGIN PRIVATE KEY"}]
+    msg = _PEM_PKCS8 + "\n--\n" + _PEM_RSA
+    expanded = _expand_private_key_values(msg, detected)
+    assert {e["value"] for e in expanded} == {_PEM_PKCS8, _PEM_RSA}
+
+
+def test_pem_expand_helper_keeps_non_pem_secrets_alongside():
+    """Non-PEM secret entries (e.g. AWS keys) pass through unchanged when a
+    PEM entry is also present."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _expand_private_key_values,
+    )
+
+    secrets = [
+        {"type": "AWSKeyDetector", "value": "AKIA1234567890ABCDEF"},
+        {"type": "Private Key", "value": "BEGIN PRIVATE KEY"},
+    ]
+    msg = "key=AKIA1234567890ABCDEF\n" + _PEM_PKCS8
+    expanded = _expand_private_key_values(msg, secrets)
+    assert [s["type"] for s in expanded] == ["AWSKeyDetector", "Private Key"]
+    assert expanded[1]["value"] == _PEM_PKCS8
+
+
+def test_pem_expand_helper_falls_back_when_no_full_block_present():
+    """If the source text only contains a stray BEGIN header (no matching
+    END footer), the original header-only entry is preserved so the existing
+    redaction loop still strikes the header line."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _expand_private_key_values,
+    )
+
+    detected = [{"type": "Private Key", "value": "BEGIN PRIVATE KEY"}]
+    msg = "-----BEGIN PRIVATE KEY-----\n"
+    expanded = _expand_private_key_values(msg, detected)
+    assert expanded == detected
