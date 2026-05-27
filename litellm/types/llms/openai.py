@@ -1518,7 +1518,7 @@ class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
-    sequence_number: int = 1
+    sequence_number: int = 0
     item: BaseLiteLLMOpenAIResponseObject
 
 
