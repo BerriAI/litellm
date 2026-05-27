@@ -37,8 +37,49 @@ if TYPE_CHECKING:
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset(
-    {"output_config", "context_management"}
+    {"output_config"}
 )
+
+
+async def _prepare_context_managed_request(
+    *,
+    model: str,
+    messages: List[Dict],
+    tools: Optional[List[Dict]],
+    system: Optional[Any],
+    context_management_spec: Any,
+    metadata: Optional[Dict],
+    drop_params: Optional[bool],
+    llm_router: Any,
+) -> Optional[PolyfillResult]:
+    """Apply client compaction history, then optional context_management polyfill."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        apply_client_compaction_block_history,
+    )
+
+    history_result = apply_client_compaction_block_history(
+        messages=cast(List[Dict[str, Any]], messages),
+        system=system,
+    )
+    working_messages = (
+        history_result.messages if history_result is not None else messages
+    )
+    working_system = history_result.system if history_result is not None else system
+
+    polyfill_result = await _run_polyfill_if_enabled(
+        model=model,
+        messages=working_messages,
+        tools=tools,
+        system=working_system,
+        context_management_spec=context_management_spec,
+        metadata=metadata,
+        drop_params=drop_params,
+        llm_router=llm_router,
+    )
+
+    if polyfill_result is not None:
+        return polyfill_result
+    return history_result
 
 
 async def _run_polyfill_if_enabled(
@@ -372,7 +413,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 pass
 
-        polyfill_result = await _run_polyfill_if_enabled(
+        polyfill_result = await _prepare_context_managed_request(
             model=model,
             messages=messages,
             tools=tools,
@@ -495,7 +536,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 pass
 
         polyfill_result = run_async_function(
-            _run_polyfill_if_enabled,
+            _prepare_context_managed_request,
             model=model,
             messages=messages,
             tools=tools,

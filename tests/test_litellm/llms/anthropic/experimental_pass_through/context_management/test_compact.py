@@ -26,7 +26,11 @@ from litellm.llms.anthropic.experimental_pass_through.context_management.editors
     _extract_summary_text,
     _slice_around_compaction_block,
     _strip_compaction_blocks,
+    apply_client_compaction_block_history,
     apply_compact_20260112,
+)
+from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+    PolyfillResult,
 )
 
 MODEL = "openai/gpt-4o"
@@ -82,6 +86,36 @@ def _make_mock_response(
 # ---------------------------------------------------------------------------
 # Unit: helper functions
 # ---------------------------------------------------------------------------
+
+
+def test_applied_edits_for_response_omits_compact_without_compaction_block():
+    """Slice-only / under-threshold: no client-visible context_management edit."""
+    result = PolyfillResult(
+        messages=[],
+        system="summary on system",
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=None,
+    )
+    assert result.applied_edits_for_response() is None
+
+
+def test_applied_edits_for_response_includes_compact_when_block_present():
+    result = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[
+            {
+                "type": "compact_20260112",
+                "summary_input_tokens": 10,
+                "summary_output_tokens": 5,
+            }
+        ],
+        compaction_block={"type": "compaction", "content": "summary"},
+    )
+    visible = result.applied_edits_for_response()
+    assert visible is not None
+    assert visible[0]["type"] == "compact_20260112"
+    assert visible[0]["summary_input_tokens"] == 10
 
 
 def test_slice_around_compaction_block_found():
@@ -244,6 +278,34 @@ async def test_opt_in_gating_no_summary_model_configured():
 
 
 # ---------------------------------------------------------------------------
+# Client compaction block without context_management
+# ---------------------------------------------------------------------------
+
+
+def test_client_compaction_block_history_without_context_management():
+    """Compaction in messages alone triggers slice-only forwarding."""
+    messages = _messages_with_compaction("prior summary text")
+
+    result = apply_client_compaction_block_history(messages=messages, system=None)
+
+    assert result is not None
+    assert result.system is not None
+    assert "prior summary text" in str(result.system)
+    assert result.compaction_block is None
+    assert result.applied_edits == []
+    assert len(result.messages) == 1
+    assert result.messages[0]["role"] == "user"
+    assert result.messages[0]["content"] == "latest question"
+
+
+def test_client_compaction_block_history_no_compaction_returns_none():
+    result = apply_client_compaction_block_history(
+        messages=_simple_messages(), system="base"
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Editor: slice-only path
 # ---------------------------------------------------------------------------
 
@@ -275,7 +337,10 @@ async def test_slice_only_path_with_existing_compaction_block():
     assert result.compaction_block is None
     assert result.iterations_usage is None
 
-    # No compaction block in downstream messages
+    # Main call: summary on system, latest user question only (no stale assistant).
+    assert len(result.messages) == 1
+    assert result.messages[0]["role"] == "user"
+    assert result.messages[0]["content"] == "latest question"
     for msg in result.messages:
         content = msg.get("content")
         if isinstance(content, list):

@@ -236,12 +236,22 @@ class AnthropicAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
             polyfill_result: PolyfillResult from context_management polyfill.
         """
-        applied_edits = polyfill_result.applied_edits if polyfill_result else None
+        applied_edits = (
+            polyfill_result.applied_edits_for_response() if polyfill_result else None
+        )
+        compaction_block = (
+            polyfill_result.compaction_block if polyfill_result is not None else None
+        )
+        iterations_usage = (
+            polyfill_result.iterations_usage if polyfill_result is not None else None
+        )
         anthropic_wrapper = AnthropicStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             tool_name_mapping=tool_name_mapping,
             applied_edits=applied_edits,
+            compaction_block=compaction_block,
+            iterations_usage=iterations_usage,
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
@@ -1424,7 +1434,9 @@ class LiteLLMAnthropicMessagesAdapter:
             stop_reason=anthropic_finish_reason,
         )
 
-        applied_edits = polyfill_result.applied_edits if polyfill_result else None
+        applied_edits = (
+            polyfill_result.applied_edits_for_response() if polyfill_result else None
+        )
         if applied_edits:
             translated_obj["context_management"] = ContextManagementResponse(
                 applied_edits=list(applied_edits)

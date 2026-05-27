@@ -395,6 +395,47 @@ def _extract_usage(response: Any) -> Tuple[int, int]:
     )
 
 
+def apply_client_compaction_block_history(
+    *,
+    messages: List[Dict[str, Any]],
+    system: Optional[Union[str, List[Dict[str, Any]]]],
+) -> Optional[PolyfillResult]:
+    """Honor client-sent compaction blocks without a ``compact_20260112`` edit.
+
+    When the request omits ``context_management`` but the message history already
+    contains a ``compaction`` content block (e.g. Claude Code client-side compaction),
+    apply the same slice-only forwarding as the under-threshold path: summary on
+    ``system``, latest user question only on the main call.
+    """
+    effective_messages, prior_compaction_block = _slice_around_compaction_block(
+        messages
+    )
+    if prior_compaction_block is None:
+        return None
+
+    verbose_logger.info(
+        "compact_20260112: client compaction block in message history; "
+        "applying slice-only forwarding (no context_management edit)"
+    )
+
+    prior_summary_text = prior_compaction_block.get("content") or ""
+    augmented_system: Union[str, List[Dict[str, Any]], None] = system
+    if isinstance(prior_summary_text, str) and prior_summary_text:
+        augmented_system = _augment_system_with_summary(system, prior_summary_text)
+        verbose_logger.info(
+            "compact_20260112: compaction summary added to main call system prefix (%s chars)",
+            len(prior_summary_text),
+        )
+
+    downstream_messages = _select_last_user_question(effective_messages)
+
+    return PolyfillResult(
+        messages=downstream_messages,
+        system=augmented_system,
+        applied_edits=[],
+    )
+
+
 async def apply_compact_20260112(
     *,
     model: str,
@@ -415,6 +456,10 @@ async def apply_compact_20260112(
     # Validation runs first. Raising AnthropicContextManagementError here is
     # the only path on which the polyfill aborts the request.
     trigger_tokens, warnings = _resolve_trigger_tokens(edit_spec)
+    verbose_logger.info(
+        "compact_20260112: request has compaction trigger (input_tokens threshold=%s)",
+        trigger_tokens,
+    )
     if edit_spec.get("pause_after_compaction"):
         warnings.append("pause_after_compaction_ignored")
 
@@ -442,6 +487,10 @@ async def apply_compact_20260112(
     augmented_system: Union[str, List[Dict[str, Any]], None] = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
+        verbose_logger.info(
+            "compact_20260112: compaction summary added to main call system prefix (%s chars)",
+            len(prior_summary_text),
+        )
 
     downstream_messages = _strip_compaction_blocks(effective_messages)
 
@@ -464,14 +513,14 @@ async def apply_compact_20260112(
     )
 
     if current_tokens <= trigger_tokens:
-        # Slice-only path. If Phase A fired we still slice + system-prefix.
-        # Guard against an empty downstream message list: this happens when the
-        # sliced result was a single assistant turn whose only block was the
-        # compaction block, which ``_strip_compaction_blocks`` then drops. The
-        # downstream API rejects an empty messages array, so fall back to
-        # picking a real user question (or a synthetic continuation prompt) —
-        # mirroring the full-summary path's behavior below.
-        if not downstream_messages:
+        # Slice-only path: prior context lives in ``augmented_system`` (the
+        # compaction summary prefix). The main model call must not re-send stale
+        # assistant turns from the post-compaction tail — only the latest user
+        # question, matching the full-summary path below.
+        if prior_compaction_block is not None:
+            downstream_messages = _select_last_user_question(effective_messages)
+        elif not downstream_messages:
+            # No compaction checkpoint: only substitute when strip left nothing.
             downstream_messages = _select_last_user_question(effective_messages)
         return PolyfillResult(
             messages=downstream_messages,
@@ -537,6 +586,10 @@ async def apply_compact_20260112(
     # eligible turn exists, fall back to a synthetic continuation prompt so
     # the downstream call still has a non-empty user message.
     summarized_system = _augment_system_with_summary(system, summary_text)
+    verbose_logger.info(
+        "compact_20260112: compaction summary added to main call system prefix (%s chars)",
+        len(summary_text),
+    )
     downstream_messages_after_summary = _select_last_user_question(effective_messages)
 
     return PolyfillResult(
