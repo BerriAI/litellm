@@ -192,9 +192,19 @@ test.describe("Add Model", () => {
     // Models table renders team-scoped models with the team id in the row.
     await page.getByRole("tab", { name: "All Models" }).click();
     await page.waitForLoadState("networkidle");
+    // Match the sibling tests in this file — networkidle fires before the table
+    // finishes re-rendering, so give it the same 2s settle before searching.
+    await page.waitForTimeout(2000);
 
     await page.locator('input[placeholder="Search model names..."]').fill("cohere");
     await page.waitForTimeout(1000);
+
+    // Confirm the search returned at least one result — gives a clear failure
+    // message when the table is empty instead of timing out on a row assertion.
+    await expect(page.getByTestId("models-results-count")).toHaveText(
+      /Showing \d+ - \d+ of \d+ results/,
+      { timeout: 15_000 },
+    );
 
     // The Team Alias column renders team_alias (falling back to team_id),
     // so seeing the seeded alias in the filtered row confirms the team
