@@ -471,10 +471,32 @@ async def _emit_management_endpoint_otel_span(
         route = func.__name__
         request_body = {}
 
+    _CREDENTIAL_FIELDS = frozenset(
+        {
+            "key",
+            "token",
+            "api_key",
+            "secret",
+            "password",
+            "access_token",
+            "refresh_token",
+            "private_key",
+            "service_account_key",
+        }
+    )
+
+    _response: Optional[dict] = None
+    if exception is None and result is not None:
+        try:
+            raw = dict(result)
+            _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+        except Exception:
+            _response = None
+
     logging_payload = ManagementEndpointLoggingPayload(
         route=route,
         request_data=request_body,
-        response=None,
+        response=_response,
         start_time=start_time,
         end_time=end_time,
         exception=exception,
@@ -546,14 +568,22 @@ def management_endpoint_wrapper(func):
             )
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
-                await _emit_management_endpoint_otel_span(
-                    func=func,
-                    kwargs=kwargs,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    exception=e,
-                )
+                try:
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        exception=e,
+                    )
+                except Exception as otel_exc:
+                    # Non-Blocking Exception - never let OTEL failures swallow
+                    # the original management-endpoint exception.
+                    verbose_logger.debug(
+                        "Error emitting OTEL span in management endpoint wrapper failure path: %s",
+                        str(otel_exc),
+                    )
 
             raise e
 
