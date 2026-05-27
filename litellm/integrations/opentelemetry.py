@@ -577,6 +577,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 key="service",
                 value=payload.service.value,
             )
+            # Propagate team attrs from the proxy SERVER root span onto this
+            # child service span so dashboards filtered by team do not lose
+            # DB/Redis/cache spans (LIT-3192).
+            self._propagate_team_attributes_from_parent_span(
+                child_span=service_logging_span, parent_otel_span=parent_otel_span
+            )
 
             if event_metadata:
                 for key, value in event_metadata.items():
@@ -636,6 +642,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span=service_logging_span,
                 key="service",
                 value=payload.service.value,
+            )
+            # Propagate team attrs from the proxy SERVER root span onto this
+            # child service span (LIT-3192).
+            self._propagate_team_attributes_from_parent_span(
+                child_span=service_logging_span, parent_otel_span=parent_otel_span
             )
             if error:
                 self.safe_set_attribute(
@@ -1212,6 +1223,41 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and proxy_span.is_recording()
         ):
             self._set_team_attributes_from_kwargs(proxy_span, kwargs)
+
+    def _propagate_team_attributes_from_parent_span(
+        self, child_span: Span, parent_otel_span: Span
+    ) -> None:
+        """Copy team attrs from a (real-SDK) parent span onto a child span.
+
+        Service-logger spans (DB/Redis/cache child spans created in
+        ``async_service_success_hook`` / ``async_service_failure_hook``)
+        otherwise inherit nothing from the proxy SERVER root span - the
+        team attrs only live as set_attribute() calls on the root span, not
+        on the OTel context - so without this, dashboards filtered by
+        ``metadata.user_api_key_team_id`` lose every service span in the
+        trace.
+
+        Defensive about non-SDK / NoOp spans that do not expose ``.attributes``
+        (e.g. propagated remote spans, no-op tracer); falls through silently.
+        """
+        try:
+            parent_attrs = getattr(parent_otel_span, "attributes", None)
+            if not parent_attrs:
+                return
+            for key in (
+                "metadata.user_api_key_team_id",
+                "metadata.user_api_key_team_alias",
+            ):
+                value = parent_attrs.get(key)
+                if value:
+                    self.safe_set_attribute(
+                        span=child_span,
+                        key=key,
+                        value=value,
+                    )
+        except Exception:
+            # Never let observability plumbing crash a real request path.
+            pass
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
