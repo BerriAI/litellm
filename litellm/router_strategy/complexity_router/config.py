@@ -235,7 +235,20 @@ class ComplexityRouterConfig(BaseModel):
     )
     technical_keywords: Optional[List[str]] = Field(
         default=None,
-        description="Keywords indicating technical content",
+        description=(
+            "Keywords indicating technical content. When set, REPLACES the default "
+            "technical keyword list - use `custom_technical_keywords` to extend instead."
+        ),
+    )
+    custom_technical_keywords: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Domain-specific technical keywords to APPEND to the effective technical "
+            "keyword list (defaults, or `technical_keywords` if set). Order is preserved; "
+            "duplicates against the base list are dropped (case-insensitive). Use this to "
+            "extend the technical signal with terms like `udp`, `dns`, `kafka`, `postgresql` "
+            "without re-declaring the default list."
+        ),
     )
     simple_keywords: Optional[List[str]] = Field(
         default=None,
