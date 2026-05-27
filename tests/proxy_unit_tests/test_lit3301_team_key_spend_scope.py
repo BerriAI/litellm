@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     _is_admin_view_safe,
     view_spend_logs,
@@ -235,7 +235,7 @@ class TestUIViewSpendLogsTeamScope:
                     user_api_key_dict=team_uak,
                     request=self._make_request(),
                 )
-            except HTTPException as e:
+            except (HTTPException, ProxyException) as e:
                 return None, e, mock_prisma
         return True, None, mock_prisma
 
@@ -273,7 +273,11 @@ class TestUIViewSpendLogsTeamScope:
         )
         ok, exc, _ = await self._drive(team_uak, query_team_id="team-B")
         assert ok is None
-        assert exc is not None and exc.status_code == 403
+        assert exc is not None
+        # The endpoint wraps the underlying HTTPException(403) into a
+        # litellm ProxyException; either type is acceptable.
+        code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        assert int(code) == 403
 
     async def test_personal_admin_key_unchanged(self) -> None:
         """Regression guard: personal admin key keeps wide scope when no
