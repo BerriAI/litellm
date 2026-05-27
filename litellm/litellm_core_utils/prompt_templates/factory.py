@@ -2181,7 +2181,7 @@ def _sanitize_empty_text_content(
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
             if message.get("role") == "assistant":
-                message["content"] = None
+                message["content"] = None  # type: ignore[arg-type]
             else:
                 message["content"] = _DEFAULT_EMPTY_CONTENT_MESSAGE
             verbose_logger.debug(
@@ -2211,7 +2211,7 @@ def _sanitize_empty_text_content(
                 # All blocks were empty text blocks -- fall back to string treatment
                 message = cast(AllMessageValues, dict(message))
                 if message.get("role") == "assistant":
-                    message["content"] = None
+                    message["content"] = None  # type: ignore[arg-type]
                 else:
                     message["content"] = _DEFAULT_EMPTY_CONTENT_MESSAGE
             else:

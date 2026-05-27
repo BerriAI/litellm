@@ -2729,14 +2729,8 @@ def test_sanitize_empty_text_assistant_with_only_text_blocks():
         ],
     }
     result = _sanitize_empty_text_content(message)
-    # Content should have been sanitized - empty text blocks replaced
-    assert result.get("content") is not None
-    result_content = result["content"]
-    assert isinstance(result_content, list)
-    for block in result_content:
-        assert block["type"] == "text"
-        # Should not be empty/whitespace anymore
-        assert block["text"].strip()
+    # Only-empty-text assistant messages get content=None
+    assert result.get("content") is None
 
 
 def test_sanitize_empty_text_assistant_with_mixed_content():
@@ -2785,7 +2779,7 @@ def test_sanitize_empty_text_assistant_with_empty_string_content():
     message = {"role": "assistant", "content": ""}
     result = _sanitize_empty_text_content(message)
     assert result["role"] == "assistant"
-    # Empty string should be replaced with placeholder
+    # Empty string should be replaced with None
     assert result["content"] != ""
 
 
