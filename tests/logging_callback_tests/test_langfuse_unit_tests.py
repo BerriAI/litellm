@@ -586,3 +586,141 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
     assert "api_key" not in fallback_sanitized
     assert "secret_fields" not in fallback_sanitized
     assert fallback_sanitized["temperature"] == 0.5
+
+
+
+def test_log_event_on_langfuse_reads_litellm_metadata_for_v1_messages():
+    """
+    Regression for proxy auth metadata being dropped on ``/v1/messages``.
+
+    ``/v1/messages`` requests place proxy auth metadata in
+    ``litellm_params["litellm_metadata"]`` instead of ``litellm_params["metadata"]``.
+    Before the fix, ``log_event_on_langfuse`` only read
+    ``litellm_params["metadata"]`` and missed ``user_api_key_alias`` /
+    ``user_api_key_user_id`` for ``/v1/messages``, so the generation was named
+    ``litellm-anthropic_messages`` instead of ``litellm:<key_alias>`` and proxy
+    auth fields were dropped from the observation metadata.
+    """
+    import os
+    from datetime import datetime
+    from unittest.mock import MagicMock
+    import litellm
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+    from litellm.types.utils import (
+        ModelResponse,
+        Choices,
+        Message,
+        Usage,
+    )
+
+    original_clients = litellm.initialized_langfuse_clients
+    saved_env = {
+        k: os.environ.get(k)
+        for k in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
+    }
+    try:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-test"
+        os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-test"
+        os.environ["LANGFUSE_HOST"] = "https://example.invalid"
+
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret="sk-lf-test",
+            langfuse_host="https://example.invalid",
+        )
+
+        captured = {"trace": None, "generation": None}
+
+        def _trace(**trace_kw):
+            captured["trace"] = trace_kw
+            mock_trace = MagicMock()
+            mock_trace.id = trace_kw.get("id") or "trace-id"
+
+            def _generation(**gen_kw):
+                captured["generation"] = gen_kw
+                gen = MagicMock()
+                gen.id = "gen-id"
+                return gen
+
+            mock_trace.generation.side_effect = _generation
+            mock_trace.span.return_value = MagicMock()
+            return mock_trace
+
+        mock_client = MagicMock()
+        mock_client.trace.side_effect = _trace
+        logger.Langfuse = mock_client
+
+        proxy_auth = {
+            "user_api_key": "hashed_key_abc",
+            "user_api_key_alias": "alice-prod-key",
+            "user_api_key_user_id": "user-42",
+            "user_api_key_team_id": "team-7",
+            "user_api_key_org_id": "org-x",
+            "endpoint": "/v1/messages",
+        }
+        slo = {
+            "metadata": {
+                "user_api_key_end_user_id": None,
+                "prompt_management_metadata": None,
+            },
+            "model_parameters": {},
+            "hidden_params": {},
+        }
+        response = ModelResponse(
+            id="chatcmpl-1",
+            object="chat.completion",
+            created=1700000000,
+            model="claude-3-5-sonnet-20241022",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(content="Hi!", role="assistant"),
+                )
+            ],
+            usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+        )
+        kwargs = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "user", "content": "hi"}],
+            "call_type": "anthropic_messages",
+            # /v1/messages places proxy auth in litellm_metadata, not metadata
+            "litellm_params": {
+                "litellm_metadata": dict(proxy_auth),
+                "proxy_server_request": {
+                    "headers": {},
+                    "url": "/v1/messages",
+                },
+            },
+            "optional_params": {},
+            "litellm_call_id": "call-1",
+            "standard_logging_object": dict(slo),
+        }
+
+        logger.log_event_on_langfuse(
+            kwargs=kwargs,
+            response_obj=response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            user_id=None,
+        )
+
+        assert captured["generation"] is not None, "generation was never created"
+        # generation name should reflect the key alias from litellm_metadata
+        assert captured["generation"]["name"] == "litellm:alice-prod-key", (
+            "expected litellm:alice-prod-key, got "
+            + repr(captured["generation"]["name"])
+        )
+        gen_meta = captured["generation"].get("metadata") or {}
+        assert (
+            gen_meta.get("user_api_key_alias") == "alice-prod-key"
+        ), "user_api_key_alias missing from generation metadata"
+        assert (
+            gen_meta.get("user_api_key_user_id") == "user-42"
+        ), "user_api_key_user_id missing from generation metadata"
+    finally:
+        litellm.initialized_langfuse_clients = original_clients
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
