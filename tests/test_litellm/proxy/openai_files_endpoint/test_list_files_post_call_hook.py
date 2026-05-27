@@ -128,3 +128,39 @@ def test_list_files_passes_through_unchanged_when_hook_returns_none(
         "file-raw-output-bbb",
         "file-raw-other-ccc",
     ]
+
+
+def test_list_files_still_honors_openai_file_object_returned_by_hook(
+    client, unfiltered_page
+):
+    """Regression guard for the pre-existing OpenAIFileObject branch of the
+    broadened isinstance tuple.
+
+    Future refactors that accidentally drop OpenAIFileObject from the tuple
+    must fail this test.
+    """
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    synthetic = OpenAIFileObject(
+        id="file-from-hook",
+        object="file",
+        bytes=1,
+        created_at=0,
+        filename="y.jsonl",
+        purpose="batch",
+        status="processed",
+    )
+
+    async def _hook(*, data, user_api_key_dict, response):
+        return synthetic
+
+    with _patch_provider(unfiltered_page), _patch_hook(_hook):
+        r = client.get("/v1/files?purpose=batch")
+
+    assert r.status_code == 200, r.text
+    # When the hook returns a single OpenAIFileObject (legacy / synthetic path),
+    # the endpoint serializes that single object - not a list page - so the
+    # caller sees the object's fields at the top level.
+    assert (
+        r.json()["id"] == "file-from-hook"
+    ), "Pre-existing isinstance branch for OpenAIFileObject regressed."
