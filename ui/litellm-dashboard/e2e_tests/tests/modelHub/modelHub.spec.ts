@@ -15,6 +15,12 @@ test.describe("AI Hub (internal admin view)", () => {
     const modal = page.locator(".ant-modal:visible").filter({ hasText: "Make Models Public" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
+    // Guard: the "Select All (N)" label only shows a count when filteredData
+    // has at least one row. Asserting N>=1 here turns a missing-seed-data
+    // failure into an immediate diagnostic rather than a downstream timeout
+    // on the disabled-Next button or the success toast.
+    await expect(modal.getByText(/Select All \(\d+\)/)).toBeVisible({ timeout: 5_000 });
+
     // Step 1: pick the seeded models via "Select All"
     await modal.getByText(/Select All/i).click();
 
@@ -54,10 +60,13 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
     await page.goto(`/ui/model_hub_table?key=${masterKey}`);
 
+    // Dismiss the feedback popup before asserting on the tab, so a popup
+    // race can't briefly mask the tab while we're evaluating visibility.
+    await dismissFeedbackPopup(page);
+
     // Page loads (no auth redirect) and the Model Hub tab is always present.
     // Agent Hub and MCP Hub tabs are conditionally rendered only when public
     // agents/MCP servers exist, so we don't assert on them in a fresh CI run.
     await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
-    await dismissFeedbackPopup(page);
   });
 });
