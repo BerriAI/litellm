@@ -1256,8 +1256,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
         except Exception:
-            # Never let observability plumbing crash a real request path.
-            pass
+            # Never let observability plumbing crash a real request path,
+            # but surface internal regressions via verbose_logger so they
+            # do not hide forever.
+            verbose_logger.exception(
+                "OpenTelemetry: _propagate_team_attributes_from_parent_span failed; "
+                "child span will be missing team attrs"
+            )
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
