@@ -39,6 +39,11 @@ const modelEntry = (spend: number, api_requests: number) => ({
   api_key_breakdown: {},
 });
 
+const keyEntry = (spend: number, alias: string) => ({
+  metrics: { ...baseMetrics, spend, api_requests: 1 },
+  metadata: { key_alias: alias, team_id: null },
+});
+
 describe("mergeResultsByDate", () => {
   it("collapses duplicate-date rows into a single row with summed metrics", () => {
     const rows = [
@@ -155,7 +160,7 @@ describe("mergeBreakdowns", () => {
   });
 
   it("recursively merges api_key_breakdown when same key on both sides", () => {
-    const keyEntry = (spend: number) => ({
+    const keyEntryFor = (spend: number) => ({
       metrics: { ...baseMetrics, spend, api_requests: 1 },
       metadata: { key_alias: "alias", team_id: null },
     });
@@ -164,7 +169,7 @@ describe("mergeBreakdowns", () => {
         "gpt-4o": {
           metrics: { ...baseMetrics, spend: 1, api_requests: 1 },
           metadata: {},
-          api_key_breakdown: { "sk-xxx": keyEntry(1) },
+          api_key_breakdown: { "sk-xxx": keyEntryFor(1) },
         },
       },
     };
@@ -173,12 +178,74 @@ describe("mergeBreakdowns", () => {
         "gpt-4o": {
           metrics: { ...baseMetrics, spend: 2, api_requests: 2 },
           metadata: {},
-          api_key_breakdown: { "sk-xxx": keyEntry(2) },
+          api_key_breakdown: { "sk-xxx": keyEntryFor(2) },
         },
       },
     };
     const out = mergeBreakdowns(a, b);
     expect(out.models["gpt-4o"].metrics.spend).toBe(3);
     expect(out.models["gpt-4o"].api_key_breakdown["sk-xxx"].metrics.spend).toBe(3);
+  });
+
+  it("does NOT inject api_key_breakdown into entries that never had it (api_keys sub-map)", () => {
+    // Entries inside breakdown.api_keys are KeyMetricWithMetadata, which has
+    // no `api_key_breakdown` field. Merging two such entries must preserve
+    // that shape (no spurious empty object).
+    const a = { api_keys: { "sk-aaa": keyEntry(1, "alias-1") } };
+    const b = { api_keys: { "sk-aaa": keyEntry(2, "alias-1") } };
+    const out = mergeBreakdowns(a, b);
+    const merged = out.api_keys["sk-aaa"];
+    expect(merged.metrics.spend).toBe(3);
+    expect("api_key_breakdown" in merged).toBe(false);
+  });
+
+  it("does NOT inject api_key_breakdown into nested key-breakdown entries", () => {
+    const a = {
+      models: {
+        "gpt-4o": {
+          metrics: { ...baseMetrics, spend: 1, api_requests: 1 },
+          metadata: {},
+          api_key_breakdown: { "sk-xxx": keyEntry(1, "alias-1") },
+        },
+      },
+    };
+    const b = {
+      models: {
+        "gpt-4o": {
+          metrics: { ...baseMetrics, spend: 2, api_requests: 2 },
+          metadata: {},
+          api_key_breakdown: { "sk-xxx": keyEntry(2, "alias-1") },
+        },
+      },
+    };
+    const out = mergeBreakdowns(a, b);
+    const inner = out.models["gpt-4o"].api_key_breakdown["sk-xxx"];
+    expect(inner.metrics.spend).toBe(3);
+    expect("api_key_breakdown" in inner).toBe(false);
+  });
+
+  it("merges unknown shared sub-maps instead of overwriting them", () => {
+    // If the backend adds a new breakdown sub-map (e.g. "regions") that this
+    // helper does not list in BREAKDOWN_SUBMAPS, shared entries must still be
+    // merged correctly, not silently dropped by last-write-wins object spread.
+    const a = {
+      regions: {
+        "us-east-1": {
+          metrics: { ...baseMetrics, spend: 1, api_requests: 1 },
+          metadata: {},
+        },
+      },
+    } as any;
+    const b = {
+      regions: {
+        "us-east-1": {
+          metrics: { ...baseMetrics, spend: 2, api_requests: 2 },
+          metadata: {},
+        },
+      },
+    } as any;
+    const out = mergeBreakdowns(a, b);
+    expect(out.regions["us-east-1"].metrics.spend).toBe(3);
+    expect(out.regions["us-east-1"].metrics.api_requests).toBe(3);
   });
 });
