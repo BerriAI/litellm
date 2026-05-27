@@ -250,3 +250,25 @@ def test_transform_search_query_list_is_space_joined():
         litellm_params={},
     )
     assert body["query"] == "hello world"
+
+
+def test_transform_search_rejects_non_dict_data_store_spec_entry():
+    """Each DataStoreSpec list entry must be a dict (addresses Greptile review)."""
+    config = VertexSearchAPIVectorStoreConfig()
+    with pytest.raises(
+        ValueError,
+        match=r"vertex_data_store_specs\[1\] must be a DataStoreSpec dict",
+    ):
+        config.transform_search_vector_store_request(
+            vector_store_id="ds",
+            query="q",
+            vector_store_search_optional_params={},
+            api_base="https://example/x",
+            litellm_logging_obj=_logger(),
+            litellm_params={
+                "vertex_data_store_specs": [
+                    {"dataStore": "ok"},
+                    "not-a-dict",
+                ]
+            },
+        )
