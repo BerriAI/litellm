@@ -1346,6 +1346,15 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
 ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
     "anthropic-beta",  # Required for Anthropic features like extended context windows
     "content-type",  # Required for request body parsing
+    # ``X-Serverless-Authorization`` is the Google Cloud Run identity-aware-proxy
+    # header. Operators sometimes front Vertex AI through a Cloud Run service that
+    # requires custom auth: clients then send both ``Authorization`` (the LiteLLM
+    # virtual key, consumed by the proxy) AND ``X-Serverless-Authorization`` (the
+    # upstream Cloud Run token, intended for the proxied service). Without
+    # forwarding the latter, the upstream rejects the request with
+    # ``Request had invalid authentication credentials``. Documented Google
+    # infrastructure header, safe to forward.
+    "x-serverless-authorization",
 }
 
 # Prefix for headers that should be forwarded to the provider with the prefix stripped
