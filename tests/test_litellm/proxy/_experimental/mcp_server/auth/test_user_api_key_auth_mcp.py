@@ -3507,7 +3507,8 @@ async def test_team_access_group_ids_resolve_to_mcp_servers():
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
 
     assert result == ["srv-stripe"]
-    mock_resolver.assert_called_once_with(["mcp-premium"])
+    mock_resolver.assert_called_once()
+    assert mock_resolver.call_args.kwargs["access_group_ids"] == ["mcp-premium"]
 
 
 @pytest.mark.asyncio
@@ -3571,7 +3572,8 @@ async def test_team_access_group_ids_union_with_object_permission():
 
 @pytest.mark.asyncio
 async def test_team_access_group_ids_empty_returns_no_extras():
-    """Empty team.access_group_ids → no resolver call, no extras added."""
+    """Empty team.access_group_ids → resolver called with [], short-circuits
+    without DB access, no extras added."""
     from litellm.proxy._types import LiteLLM_TeamTable
 
     mock_team = LiteLLM_TeamTable(
@@ -3602,7 +3604,8 @@ async def test_team_access_group_ids_empty_returns_no_extras():
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
 
     assert result == []
-    mock_resolver.assert_called_once_with([])
+    mock_resolver.assert_called_once()
+    assert mock_resolver.call_args.kwargs["access_group_ids"] == []
 
 
 @pytest.mark.asyncio

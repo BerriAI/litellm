@@ -1032,7 +1032,10 @@ class MCPRequestHandler:
                 return []
 
             team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
-                team_obj.access_group_ids or []
+                access_group_ids=team_obj.access_group_ids or [],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
             object_permissions = team_obj.object_permission
