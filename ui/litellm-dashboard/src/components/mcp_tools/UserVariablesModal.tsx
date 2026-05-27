@@ -1,11 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
+import React from "react";
+import { Modal, Tag, Typography } from "antd";
 import { MCPUserVariablesGlobalStatus } from "./types";
-import {
-  getMCPUserVariables,
-  storeMCPUserVariables,
-} from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import UserVariablesForm from "./UserVariablesForm";
 
 const { Text, Title } = Typography;
 
@@ -19,11 +15,11 @@ interface UserVariablesModalProps {
 /**
  * User-facing modal for filling in per-user MCP variables.
  *
- * Backed by the GLOBAL (per-user, not per-server) endpoints
- * GET / POST ``/v1/mcp/user/variables``. Each field the admin marked as
- * ``scope=user`` shows up with the admin-supplied description as the
- * placeholder. The contract is write-only: the backend never returns the
- * stored value, only whether it ``is_set``.
+ * Wraps the reusable {@link UserVariablesForm} (which talks to the GLOBAL,
+ * per-user endpoints ``/v1/mcp/user/variables``). The form is mounted only
+ * while the modal is open (``destroyOnHidden``), so it re-fetches the latest
+ * status each time the modal is opened from a card's "Set" button or a
+ * deep-link. Values are write-only and never prefilled.
  */
 const UserVariablesModal: React.FC<UserVariablesModalProps> = ({
   open,
@@ -31,67 +27,6 @@ const UserVariablesModal: React.FC<UserVariablesModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  const [form] = Form.useForm();
-  const [status, setStatus] = useState<MCPUserVariablesGlobalStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open || !accessToken) {
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-    (async () => {
-      try {
-        const fetched = await getMCPUserVariables(accessToken);
-        if (cancelled) return;
-        setStatus(fetched);
-        // Values are write-only — never prefill from the backend.
-        form.resetFields();
-      } catch (err) {
-        if (!cancelled) {
-          NotificationsManager.fromBackend(
-            `Failed to load variables: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, accessToken, form]);
-
-  const handleSave = async (values: Record<string, string>) => {
-    if (!accessToken) return;
-    setIsSaving(true);
-    try {
-      // Only send non-empty fields (write-only contract; blank means "keep").
-      const trimmed: Record<string, string> = {};
-      for (const [k, v] of Object.entries(values)) {
-        const value = (v ?? "").trim();
-        if (value !== "") {
-          trimmed[k] = value;
-        }
-      }
-      const saved = await storeMCPUserVariables(accessToken, trimmed);
-      setStatus(saved);
-      NotificationsManager.success("Credentials saved");
-      if (onSaved) onSaved(saved);
-      onClose();
-    } catch (err) {
-      NotificationsManager.fromBackend(
-        `Failed to save variables: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const required = status?.required ?? [];
-
   return (
     <Modal
       open={open}
@@ -113,66 +48,14 @@ const UserVariablesModal: React.FC<UserVariablesModalProps> = ({
         </div>
       }
     >
-      <div className="space-y-4 mt-2">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Spin />
-          </div>
-        ) : required.length === 0 ? (
-          <Alert
-            type="info"
-            showIcon
-            message="No per-user fields are required."
-          />
-        ) : (
-          <>
-            <Text className="text-sm text-gray-600 block">
-              These values are private to you. Your admin configured these
-              per-user credentials:
-            </Text>
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={handleSave}
-              disabled={isSaving}
-            >
-              {required.map((spec) => (
-                <Form.Item
-                  key={spec.name}
-                  name={spec.name}
-                  label={
-                    <span className="font-mono text-sm font-semibold">
-                      {spec.name}
-                    </span>
-                  }
-                  extra={spec.description || undefined}
-                  rules={
-                    spec.is_set
-                      ? undefined
-                      : [{ required: true, message: `${spec.name} is required` }]
-                  }
-                >
-                  <Input.Password
-                    placeholder={
-                      spec.is_set
-                        ? "•••••• (set)"
-                        : spec.description || `Enter your ${spec.name}`
-                    }
-                    visibilityToggle
-                  />
-                </Form.Item>
-              ))}
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
-                <Button onClick={onClose} disabled={isSaving}>
-                  Cancel
-                </Button>
-                <Button type="primary" htmlType="submit" loading={isSaving}>
-                  Save Credentials
-                </Button>
-              </div>
-            </Form>
-          </>
-        )}
+      <div className="mt-2">
+        <UserVariablesForm
+          accessToken={accessToken}
+          onSaved={(saved) => {
+            if (onSaved) onSaved(saved);
+            onClose();
+          }}
+        />
       </div>
     </Modal>
   );

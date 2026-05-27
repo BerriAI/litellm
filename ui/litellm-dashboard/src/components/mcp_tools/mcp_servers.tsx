@@ -2,7 +2,7 @@ import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";
-import { Descriptions, Empty, Input, Modal, Select, Spin, Tooltip, Typography } from "antd";
+import { Alert, Card, Descriptions, Empty, Input, Modal, Select, Spin, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -21,6 +21,7 @@ import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
 import UserVariablesModal from "./UserVariablesModal";
+import UserVariablesForm from "./UserVariablesForm";
 import { listMCPUserVariableStatus } from "../networking";
 
 type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
@@ -100,6 +101,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     });
   }, [mcpServers, healthStatuses]);
 
+  // Split servers by kind. A server is a template iff kind === "template";
+  // everything else (null/undefined => instance) is an instance.
+  const instanceServers = useMemo(
+    () => serversWithHealth.filter((s) => s.kind !== "template"),
+    [serversWithHealth],
+  );
+  const templateServers = useMemo(
+    () => serversWithHealth.filter((s) => s.kind === "template"),
+    [serversWithHealth],
+  );
+
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -111,6 +123,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
+  // Tab index is controlled so deep-links and the Templates "Create instance"
+  // flow can switch tabs programmatically.
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  // When set, the create modal is opened to instantiate from this template.
+  const [templateToInstantiate, setTemplateToInstantiate] = useState<MCPServer | null>(null);
+  // When true, the create modal opens pre-set to Type=Template.
+  const [createTemplateMode, setCreateTemplateMode] = useState(false);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   // Per-user variables fill modal (now global per user) + bulk per-instance
@@ -156,9 +175,30 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     return map;
   }, [variableStatusByServer]);
 
+  // Index of the Variables tab in the controlled TabGroup: Instances(0),
+  // Templates(1), Variables(2).
+  const VARIABLES_TAB_INDEX = 2;
+
+  // Deep-link via ?tab=variables — jump straight to the Variables tab on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "variables") {
+      setSelectedTabIndex(VARIABLES_TAB_INDEX);
+      params.delete("tab");
+      const newSearch = params.toString();
+      const newUrl =
+        window.location.pathname +
+        (newSearch ? `?${newSearch}` : "") +
+        window.location.hash;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, []);
+
   // Deep-link via ?fill_variables=<server_id> — the link users follow from the
-  // friendly error the proxy returns when a per-user var is missing. Opens the
-  // fill modal for the matching server, then strips the param.
+  // friendly error the proxy returns when a per-user var is missing. Variables
+  // are global now, so switch to the Variables tab AND open the fill modal for
+  // the matching server, then strip the param.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!serversWithHealth || serversWithHealth.length === 0) return;
@@ -167,6 +207,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     if (!targetId) return;
     const match = serversWithHealth.find((s) => s.server_id === targetId);
     if (match) {
+      setSelectedTabIndex(VARIABLES_TAB_INDEX);
       setVariablesModalServer(match);
       params.delete("fill_variables");
       const newSearch = params.toString();
@@ -197,12 +238,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
   }, []);
 
-  // Get unique teams from all servers
+  // Get unique teams from instance servers (drives the Instances tab filters)
   const uniqueTeams = React.useMemo(() => {
-    if (!serversWithHealth) return [];
+    if (!instanceServers) return [];
     const teamsSet = new Set<string>();
     const uniqueTeamsArray: Team[] = [];
-    serversWithHealth.forEach((server: MCPServer) => {
+    instanceServers.forEach((server: MCPServer) => {
       if (server.teams) {
         server.teams.forEach((team: Team) => {
           const teamKey = team.team_id;
@@ -214,22 +255,22 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     });
     return uniqueTeamsArray;
-  }, [serversWithHealth]);
+  }, [instanceServers]);
 
-  // Get unique MCP access groups from all servers
+  // Get unique MCP access groups from instance servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
-    if (!serversWithHealth) return [];
+    if (!instanceServers) return [];
     return Array.from(
       new Set(
-        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        instanceServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
       ),
     );
-  }, [serversWithHealth]);
+  }, [instanceServers]);
 
-  // Filtering logic for both team and access group
+  // Filtering logic for both team and access group (Instances tab only)
   const filterServers = useCallback((teamId: string, group: string) => {
-    if (!serversWithHealth) return setFilteredServers([]);
-    let filtered = serversWithHealth;
+    if (!instanceServers) return setFilteredServers([]);
+    let filtered = instanceServers;
     if (teamId === "personal") {
       setFilteredServers([]);
       return;
@@ -249,7 +290,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
     setFilteredServers(sorted);
-  }, [serversWithHealth]);
+  }, [instanceServers]);
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
@@ -266,7 +307,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
+  }, [instanceServers, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
   // Search + sort layer applied on top of the team/access-group filters.
   const displayedServers = useMemo(() => {
@@ -335,9 +376,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     refetch();
   };
 
-  // Memoize the selected server to prevent unnecessary re-renders
+  // Memoize the selected server to prevent unnecessary re-renders. Search the
+  // full server list (not just filtered instances) so template drill-in works.
   const selectedServer = React.useMemo(() => {
-    return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
+    return serversWithHealth.find((server: MCPServer) => server.server_id === selectedServerId) || {
       server_id: "",
       server_name: "",
       alias: "",
@@ -349,7 +391,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       updated_at: "",
       updated_by: "",
     };
-  }, [filteredServers, selectedServerId]);
+  }, [serversWithHealth, selectedServerId]);
 
   // Memoize the onBack callback to prevent unnecessary re-renders
   const handleBack = React.useCallback(() => {
@@ -409,9 +451,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
-        setModalVisible={setModalVisible}
+        setModalVisible={(visible) => {
+          setModalVisible(visible);
+          // Reset the template/kind context whenever the modal closes.
+          if (!visible) {
+            setTemplateToInstantiate(null);
+            setCreateTemplateMode(false);
+          }
+        }}
         availableAccessGroups={uniqueMcpAccessGroups}
         prefillData={prefillData}
+        templatePrefill={templateToInstantiate}
+        templateId={templateToInstantiate?.server_id}
+        defaultKind={createTemplateMode ? "template" : "instance"}
         onBackToDiscovery={() => {
           setModalVisible(false);
           setPrefillData(null);
@@ -465,10 +517,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         }}
         accessToken={accessToken}
       />
-      <TabGroup className="w-full h-full">
+      <TabGroup className="w-full h-full" index={selectedTabIndex} onIndexChange={setSelectedTabIndex}>
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
-            <Tab>All Servers</Tab>
+            <Tab>Instances</Tab>
+            <Tab>Templates</Tab>
+            <Tab>Variables</Tab>
             <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
@@ -478,7 +532,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </TabList>
         <TabPanels>
           <TabPanel>
-            {selectedServerId ? (
+            {selectedServerId && !templateServers.some((t) => t.server_id === selectedServerId) ? (
               <MCPServerView
                 key={selectedServerId}
                 mcpServer={selectedServer}
@@ -612,6 +666,107 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 </div>
               </div>
             )}
+          </TabPanel>
+          <TabPanel>
+            {selectedServerId && templateServers.some((t) => t.server_id === selectedServerId) ? (
+              <MCPServerView
+                key={selectedServerId}
+                mcpServer={selectedServer}
+                onBack={handleBack}
+                isProxyAdmin={isAdminRole(userRole)}
+                isEditing={editServer}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                availableAccessGroups={uniqueMcpAccessGroups}
+              />
+            ) : (
+            <div className="w-full h-full">
+              <div className="flex items-center justify-between mt-2">
+                <div>
+                  <AntdTitle level={5} style={{ margin: 0 }}>
+                    Templates
+                  </AntdTitle>
+                  <AntdText type="secondary" className="text-sm">
+                    Reusable blueprints. Create your own instance from a template.
+                  </AntdText>
+                </div>
+                {isAdminRole(userRole) && (
+                  <Button
+                    className="flex-shrink-0"
+                    onClick={() => {
+                      setPrefillData(null);
+                      setTemplateToInstantiate(null);
+                      setCreateTemplateMode(true);
+                      setModalVisible(true);
+                    }}
+                  >
+                    + Add Template
+                  </Button>
+                )}
+              </div>
+              <div className="mt-4 w-full">
+                {isLoadingServers ? (
+                  <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-white p-12">
+                    <Spin tip="Loading templates..." />
+                  </div>
+                ) : templateServers.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-gray-200 bg-white p-12">
+                    <Empty
+                      description={
+                        isAdminRole(userRole)
+                          ? "No templates yet. Click '+ Add Template' to create one."
+                          : "No templates available."
+                      }
+                    />
+                  </div>
+                ) : (
+                  <div className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {templateServers.map((template) => (
+                      <MCPServerCard
+                        key={template.server_id}
+                        server={template}
+                        isLoadingHealth={isLoadingHealth}
+                        isRechecking={recheckingServerIds?.has(template.server_id)}
+                        onClick={() => {
+                          setSelectedServerId(template.server_id);
+                          setEditServer(true);
+                        }}
+                        onRecheckHealth={
+                          recheckServerHealth
+                            ? () => recheckServerHealth(template.server_id)
+                            : undefined
+                        }
+                        onCreateInstance={() => {
+                          setPrefillData(null);
+                          setCreateTemplateMode(false);
+                          setTemplateToInstantiate(template);
+                          setModalVisible(true);
+                        }}
+                        onDelete={
+                          isAdminRole(userRole)
+                            ? () => handleDelete(template.server_id)
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            )}
+          </TabPanel>
+          <TabPanel>
+            <Card className="mt-2">
+              <AntdTitle level={5} style={{ marginTop: 0 }}>
+                Your variables
+              </AntdTitle>
+              <AntdText type="secondary" className="text-sm block mb-4">
+                These per-user values apply to every MCP server that requires
+                them. Values are private to you and write-only.
+              </AntdText>
+              <UserVariablesForm accessToken={accessToken} onSaved={refetchVariableStatus} />
+            </Card>
           </TabPanel>
           <TabPanel>
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />

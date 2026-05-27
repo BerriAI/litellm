@@ -26,6 +26,8 @@ interface MCPServerCardProps {
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
   onDelete?: () => void;
+  // When provided (template cards), renders a primary "Create instance" button.
+  onCreateInstance?: () => void;
 }
 
 const HEALTH_TONE: Record<string, { dot: string }> = {
@@ -47,6 +49,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onByokConnect,
   onOpenFillFields,
   onDelete,
+  onCreateInstance,
 }) => {
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
@@ -282,6 +285,21 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {onCreateInstance && (
+        <div className="mt-auto flex items-center justify-end pt-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              stop(e);
+              onCreateInstance();
+            }}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+          >
+            Create instance
+          </button>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input, Switch, Collapse, Radio } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
@@ -32,6 +32,12 @@ interface CreateMCPServerProps {
   availableAccessGroups: string[];
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
+  // Default value for the Type control ("instance" by default).
+  defaultKind?: "template" | "instance";
+  // When creating an instance from a template, the source template's id.
+  templateId?: string;
+  // When provided, prefill the form from this template and lock Type=Instance.
+  templatePrefill?: MCPServer | null;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
@@ -81,6 +87,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   availableAccessGroups,
   prefillData,
   onBackToDiscovery,
+  defaultKind,
+  templateId,
+  templatePrefill,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
@@ -301,6 +310,64 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setAliasManuallyEdited(false);
   }, [isModalVisible, prefillData, form]);
 
+  // Pre-fill form from a template when creating an instance from it. Copies
+  // configuration fields (NOT server_id/timestamps/health) and locks Type to
+  // Instance. The submit payload also carries template_id + kind: "instance".
+  React.useEffect(() => {
+    if (!isModalVisible || !templatePrefill) {
+      return;
+    }
+    const t = templatePrefill;
+    const transport = t.transport || "";
+    setTransportType(transport);
+
+    const accessGroups = (t.mcp_access_groups ?? []).filter(
+      (g): g is string => typeof g === "string",
+    );
+
+    const prefillValues: Record<string, any> = {
+      kind: "instance",
+      // Leave server_name blank so the user names their instance; suggest an
+      // alias derived from the template name.
+      server_name: "",
+      alias: t.alias || (t.server_name ? `${t.server_name}_instance` : ""),
+      description: t.description || "",
+      transport,
+      url: t.url || undefined,
+      spec_path: t.spec_path || undefined,
+      auth_type: t.auth_type || undefined,
+      source_url: t.source_url || undefined,
+      mcp_access_groups: accessGroups.length > 0 ? accessGroups : undefined,
+      command: t.command || undefined,
+      args: t.args || undefined,
+      env: t.env || undefined,
+      static_headers: Object.entries(t.static_headers ?? {}).map(([header, value]) => ({
+        header,
+        value,
+      })),
+      variables: (t.variables ?? []).map((v) => ({
+        name: v.name,
+        value: v.scope === "user" ? "" : v.value,
+        scope: v.scope,
+        description: v.description || undefined,
+      })),
+    };
+
+    form.setFieldsValue(prefillValues);
+    setFormValues(prefillValues);
+    setAliasManuallyEdited(true);
+  }, [isModalVisible, templatePrefill, form]);
+
+  // Apply the default Type when the modal opens without a template prefill.
+  React.useEffect(() => {
+    if (!isModalVisible || templatePrefill) {
+      return;
+    }
+    const kind = defaultKind ?? "instance";
+    form.setFieldsValue({ kind });
+    setFormValues((prev) => ({ ...prev, kind }));
+  }, [isModalVisible, templatePrefill, defaultKind, form]);
+
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
     try {
@@ -425,6 +492,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
       payload.static_headers = staticHeaders;
       payload.variables = variables;
+
+      // Template/instance classification. Creating from a template forces an
+      // instance and carries the source template id.
+      if (templatePrefill) {
+        payload.kind = "instance";
+        if (templateId) {
+          payload.template_id = templateId;
+        }
+      } else {
+        payload.kind = restValues.kind === "template" ? "template" : "instance";
+      }
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -591,6 +669,24 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Type
+                  <Tooltip title="A Template is a reusable blueprint admins define once; users create their own Instances from it. An Instance is a concrete, runnable server.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="kind"
+              initialValue={defaultKind ?? "instance"}
+            >
+              <Radio.Group disabled={!!templatePrefill} optionType="button" buttonStyle="solid">
+                <Radio.Button value="instance">Instance</Radio.Button>
+                <Radio.Button value="template">Template</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+
             <Form.Item
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
