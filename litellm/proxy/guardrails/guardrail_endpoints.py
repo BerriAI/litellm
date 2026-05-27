@@ -2254,6 +2254,11 @@ async def _emit_guardrail_success_logs(
                 end_time=end_time,
                 cache_hit=False,
             )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "apply_guardrail: async_success_handler failed"
+            )
+        try:
             thread_pool_executor.submit(
                 litellm_logging_obj.success_handler,
                 response_for_logging,
@@ -2262,7 +2267,9 @@ async def _emit_guardrail_success_logs(
                 False,
             )
         except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success logging failed")
+            verbose_proxy_logger.exception(
+                "apply_guardrail: success_handler submit failed"
+            )
 
     return response
 
@@ -2344,21 +2351,26 @@ async def apply_guardrail(
             response_text=response_text[0] if response_text else request.text
         )
     except Exception as e:
-        try:
-            if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+            try:
                 await litellm_logging_obj.async_failure_handler(
                     exception=e,
                     traceback_exception=traceback.format_exc(),
                 )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "apply_guardrail: async_failure_handler failed"
+                )
+            try:
                 thread_pool_executor.submit(
                     litellm_logging_obj.failure_handler,
                     e,
                     traceback.format_exc(),
                 )
-        except Exception:
-            verbose_proxy_logger.exception(
-                "apply_guardrail: async_failure_handler failed"
-            )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "apply_guardrail: failure_handler submit failed"
+                )
         try:
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
