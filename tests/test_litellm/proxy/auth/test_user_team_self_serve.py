@@ -42,7 +42,7 @@ def _make_user_and_token(role: str = LitellmUserRoles.INTERNAL_USER.value):
     return user_obj, valid_token
 
 
-def _run(route, general_settings, role=LitellmUserRoles.INTERNAL_USER.value, method="POST"):
+def _run(route, general_settings, role=LitellmUserRoles.INTERNAL_USER.value, method="POST", request_data=None):
     user_obj, valid_token = _make_user_and_token(role=role)
     request = MagicMock()
     request.query_params = {}
@@ -56,7 +56,7 @@ def _run(route, general_settings, role=LitellmUserRoles.INTERNAL_USER.value, met
             route=route,
             request=request,
             valid_token=valid_token,
-            request_data={},
+            request_data=request_data if request_data is not None else {},
         )
 
 
@@ -149,3 +149,54 @@ def test_helper_returns_true_when_flag_is_truthy():
 def test_helper_returns_false_when_flag_missing():
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         assert RouteChecks._user_team_self_serve_enabled() is False
+
+
+# -- Org-scoped self-service must NOT bypass the org-admin path -------------
+
+
+def test_internal_user_team_new_with_organization_id_still_blocked_when_flag_true():
+    """
+    Veria flagged a cross-organization bypass on the first revision of
+    LIT-3254: without this guard, an internal user with no organization
+    memberships could POST `/team/new` with any known `organization_id` and
+    silently create a team they admin inside that organization, because
+    `team_endpoints.new_team` only checks that the org row exists.
+
+    Fix: the self-service branch is restricted to standalone teams. Any
+    request that carries an `organization_id` falls through to the existing
+    `_user_is_org_admin` branch and is rejected if the caller is not an
+    org-admin of that org.
+    """
+    with pytest.raises(Exception) as exc:
+        _run(
+            "/team/new",
+            general_settings={"allow_user_team_creation": True},
+            request_data={"organization_id": "org-abc-123"},
+        )
+    assert "Only proxy admin" in str(exc.value)
+
+
+def test_internal_user_team_new_without_organization_id_still_allowed_when_flag_true():
+    """
+    Sanity: the new guard does not regress the standalone-team happy path.
+    `request_data` carries no `organization_id`, so the gate still allows it.
+    """
+    rv = _run(
+        "/team/new",
+        general_settings={"allow_user_team_creation": True},
+        request_data={"team_alias": "my-self-served-team"},
+    )
+    assert rv is None
+
+
+def test_internal_user_team_new_with_explicit_none_organization_id_still_allowed():
+    """
+    `request_data={"organization_id": None}` is the same as omitting the
+    field for our purposes — should still go through the new branch.
+    """
+    rv = _run(
+        "/team/new",
+        general_settings={"allow_user_team_creation": True},
+        request_data={"organization_id": None},
+    )
+    assert rv is None
