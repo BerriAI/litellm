@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 import json
 import os
@@ -5148,10 +5149,8 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
 # LIT-3299: _emit_once must accept list/dict/set scope elements without crashing
 # ---------------------------------------------------------------------------
 
-import pytest as _lit_3299_pytest
 
-
-@_lit_3299_pytest.fixture
+@pytest.fixture
 def lit_3299_otel_handler():
     """Build a real OpenTelemetry handler with span emission disabled.
 
@@ -5172,12 +5171,26 @@ def test_lit_3299_emit_once_handles_list_guardrail_mode(lit_3299_otel_handler):
     ``spans_logged.get(dedupe_key)``, returning HTTP 500 from the proxy.
     """
     kwargs: dict = {}
-    assert lit_3299_otel_handler._emit_once(
-        kwargs, "guardrail", "my-guardrail", 1.0, ["pre_call", "post_call"],
-    ) is True
-    assert lit_3299_otel_handler._emit_once(
-        kwargs, "guardrail", "my-guardrail", 1.0, ["pre_call", "post_call"],
-    ) is False
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs,
+            "guardrail",
+            "my-guardrail",
+            1.0,
+            ["pre_call", "post_call"],
+        )
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs,
+            "guardrail",
+            "my-guardrail",
+            1.0,
+            ["pre_call", "post_call"],
+        )
+        is False
+    )
 
 
 def test_lit_3299_list_and_tuple_collapse_to_same_slot(lit_3299_otel_handler):
@@ -5188,12 +5201,18 @@ def test_lit_3299_list_and_tuple_collapse_to_same_slot(lit_3299_otel_handler):
     than one.
     """
     kwargs: dict = {}
-    assert lit_3299_otel_handler._emit_once(
-        kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]
-    ) is True
-    assert lit_3299_otel_handler._emit_once(
-        kwargs, "guardrail", "g1", 1.0, ("pre_call", "post_call")
-    ) is False
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g1", 1.0, ["pre_call", "post_call"]
+        )
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g1", 1.0, ("pre_call", "post_call")
+        )
+        is False
+    )
 
 
 def test_lit_3299_handles_nested_list(lit_3299_otel_handler):
@@ -5208,7 +5227,9 @@ def test_lit_3299_handles_dict_scope(lit_3299_otel_handler):
     kwargs: dict = {}
     assert lit_3299_otel_handler._emit_once(kwargs, {"k": "v", "m": ["x", "y"]}) is True
     # Equivalent dict (different insertion order) collapses to same slot.
-    assert lit_3299_otel_handler._emit_once(kwargs, {"m": ["x", "y"], "k": "v"}) is False
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, {"m": ["x", "y"], "k": "v"}) is False
+    )
 
 
 def test_lit_3299_handles_set_scope(lit_3299_otel_handler):
@@ -5221,6 +5242,7 @@ def test_lit_3299_handles_set_scope(lit_3299_otel_handler):
 def test_lit_3299_make_hashable_returns_scalars_unchanged():
     """Already-hashable scalars pass through untouched."""
     from litellm.integrations.opentelemetry import OpenTelemetry as O
+
     for v in (None, "x", 1, 1.5, True, ("a", "b"), b"bytes"):
         assert O._make_hashable(v) == v
 
@@ -5228,6 +5250,7 @@ def test_lit_3299_make_hashable_returns_scalars_unchanged():
 def test_lit_3299_make_hashable_list_to_tuple():
     """list -> tuple with element order preserved and recursive."""
     from litellm.integrations.opentelemetry import OpenTelemetry as O
+
     assert O._make_hashable(["a", "b"]) == ("a", "b")
     assert O._make_hashable([["a", "b"], "c"]) == (("a", "b"), "c")
 
@@ -5235,6 +5258,7 @@ def test_lit_3299_make_hashable_list_to_tuple():
 def test_lit_3299_make_hashable_dict_to_sorted_pairs():
     """dict -> tuple of (k, normalized v) pairs sorted by repr(k)."""
     from litellm.integrations.opentelemetry import OpenTelemetry as O
+
     assert O._make_hashable({"b": 2, "a": 1}) == (("a", 1), ("b", 2))
     assert O._make_hashable({"a": ["x", "y"]}) == (("a", ("x", "y")),)
 
@@ -5247,6 +5271,7 @@ def test_lit_3299_make_hashable_dict_with_mixed_type_keys():
     always safe.
     """
     from litellm.integrations.opentelemetry import OpenTelemetry as O
+
     out = O._make_hashable({1: "a", "2": "b"})
     assert isinstance(out, tuple)
     {out: True}  # hashable -> usable as dict key
@@ -5255,6 +5280,7 @@ def test_lit_3299_make_hashable_dict_with_mixed_type_keys():
 def test_lit_3299_make_hashable_set_to_frozenset():
     """set -> frozenset; order-independent and hashable."""
     from litellm.integrations.opentelemetry import OpenTelemetry as O
+
     assert O._make_hashable({"a", "b"}) == frozenset({"a", "b"})
     assert O._make_hashable(frozenset({"a", "b"})) == frozenset({"a", "b"})
 
@@ -5262,7 +5288,38 @@ def test_lit_3299_make_hashable_set_to_frozenset():
 def test_lit_3299_distinguishes_different_list_modes(lit_3299_otel_handler):
     """Sanity: two different list-valued modes must NOT collapse to one slot."""
     kwargs: dict = {}
-    assert lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", ["pre_call"]) is True
-    assert lit_3299_otel_handler._emit_once(
-        kwargs, "guardrail", "g", ["pre_call", "post_call"]
-    ) is True
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", ["pre_call"]) is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(
+            kwargs, "guardrail", "g", ["pre_call", "post_call"]
+        )
+        is True
+    )
+
+
+def test_lit_3299_make_hashable_tuple_with_unhashable_element():
+    """Greptile P2 follow-up: a tuple whose elements are unhashable must
+    also normalize, not just top-level lists/dicts/sets."""
+    from litellm.integrations.opentelemetry import OpenTelemetry as O
+
+    # tuple-of-list -> tuple-of-tuple
+    assert O._make_hashable((["a", "b"], "c")) == (("a", "b"), "c")
+    # tuple-of-dict -> tuple-of-sorted-pairs
+    assert O._make_hashable(({"k": "v"},)) == ((("k", "v"),),)
+    # the result must itself be hashable
+    {O._make_hashable((["a"], {"b": "c"})): True}
+
+
+def test_lit_3299_emit_once_handles_tuple_with_inner_list(lit_3299_otel_handler):
+    """A tuple-of-list passed as a scope element must not crash _emit_once."""
+    kwargs: dict = {}
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", (["a", "b"], "c"))
+        is True
+    )
+    assert (
+        lit_3299_otel_handler._emit_once(kwargs, "guardrail", "g", (["a", "b"], "c"))
+        is False
+    )
