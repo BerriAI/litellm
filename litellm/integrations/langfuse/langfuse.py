@@ -21,9 +21,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
 from litellm.litellm_core_utils.core_helpers import (
-    safe_deep_copy,
-    reconstruct_model_name,
     filter_exceptions_from_params,
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+    safe_deep_copy,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
@@ -308,9 +309,14 @@ class LangFuseLogger:
 
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
+            # Use the shared kwargs helper so endpoints that stash proxy auth
+            # under ``litellm_metadata`` (e.g. /v1/messages, /responses,
+            # batches, files) populate Langfuse generations with the same
+            # ``user_api_key_*`` fields that already show up in spend logs.
+            # ``get_litellm_metadata_from_kwargs`` falls back to ``metadata``
+            # for the legacy paths and merges spend_logs_metadata from
+            # ``metadata`` into ``litellm_metadata`` when both are populated.
+            metadata = get_litellm_metadata_from_kwargs(kwargs) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
