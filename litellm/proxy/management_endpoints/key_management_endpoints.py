@@ -4311,6 +4311,23 @@ async def _execute_virtual_key_regeneration(  # noqa: PLR0915
                     _original_lifetime = timedelta(0)
                 if _original_lifetime.total_seconds() <= 0:
                     _original_lifetime = timedelta(days=30)
+                # Cap the auto-extended lifetime to the configured upper
+                # bound so a caller can't revive a 30-day key on a deployment
+                # that has since been locked down to e.g. ``duration="1d"``.
+                # The upperbound check on the regenerate request body above
+                # (``_enforce_upperbound_key_params``) only fires when the
+                # caller supplied ``duration`` explicitly; without this cap,
+                # omitting ``duration`` would silently bypass it.
+                if litellm.upperbound_key_generate_params is not None:
+                    upperbound_duration_str = getattr(
+                        litellm.upperbound_key_generate_params, "duration", None
+                    )
+                    if upperbound_duration_str:
+                        upperbound_seconds = duration_in_seconds(
+                            duration=upperbound_duration_str
+                        )
+                        if _original_lifetime.total_seconds() > upperbound_seconds:
+                            _original_lifetime = timedelta(seconds=upperbound_seconds)
                 update_data["expires"] = _now + _original_lifetime
                 # Identify the old key by hashed token (always present) plus
                 # alias (often None) so log lines are actionable on their own
