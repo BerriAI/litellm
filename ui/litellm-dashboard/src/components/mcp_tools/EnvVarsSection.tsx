@@ -25,7 +25,7 @@ const SCOPE_OPTIONS = [
  */
 const EnvVarsSection: React.FC = () => {
   return (
-    <div className="rounded-lg border border-dashed border-purple-300 bg-purple-50 p-4">
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Text strong className="text-sm">
           Environment Variables
@@ -42,7 +42,7 @@ const EnvVarsSection: React.FC = () => {
             </>
           }
         >
-          <InfoCircleOutlined className="text-purple-500" />
+          <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
         </Tooltip>
       </div>
       <Text className="text-xs text-gray-600 block mb-3">
