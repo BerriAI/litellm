@@ -4,6 +4,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Optional,
     Tuple,
@@ -121,18 +122,68 @@ def _polyfill_will_run(
     skip only applies when the dispatcher will actually invoke
     ``apply_compact_20260112`` (which has its own compaction-block slicing).
     """
-    if not context_management_spec:
-        return False
-
-    effective_drop_params = (
-        drop_params if drop_params is not None else litellm.drop_params
+    edits = _normalize_spec_edits(
+        context_management_spec=context_management_spec,
+        drop_params=drop_params,
     )
-    if effective_drop_params:
+    if edits is None:
         return False
 
     from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
         COMPACT_EDIT_TYPE,
     )
+
+    return any(
+        isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE
+        for edit in edits
+    )
+
+
+def _spec_has_non_compact_edits(
+    *,
+    context_management_spec: Any,
+    drop_params: Optional[bool],
+) -> bool:
+    """Return True when the spec includes edits other than ``compact_20260112``.
+
+    Used to decide whether a polyfill failure can be silently swallowed
+    (compact-only specs have a safe compaction-block slicing fallback) or
+    must be surfaced (other editors like ``clear_tool_uses_20250919`` have
+    no slice-only fallback and would otherwise be dropped without notice).
+    """
+    edits = _normalize_spec_edits(
+        context_management_spec=context_management_spec,
+        drop_params=drop_params,
+    )
+    if edits is None:
+        return False
+
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_EDIT_TYPE,
+    )
+
+    return any(
+        isinstance(edit, dict)
+        and isinstance(edit.get("type"), str)
+        and edit.get("type") != COMPACT_EDIT_TYPE
+        for edit in edits
+    )
+
+
+def _normalize_spec_edits(
+    *,
+    context_management_spec: Any,
+    drop_params: Optional[bool],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run."""
+    if not context_management_spec:
+        return None
+
+    effective_drop_params = (
+        drop_params if drop_params is not None else litellm.drop_params
+    )
+    if effective_drop_params:
+        return None
 
     spec = context_management_spec
     if isinstance(spec, list):
@@ -141,16 +192,12 @@ def _polyfill_will_run(
 
             spec = AnthropicConfig.map_openai_context_management_to_anthropic(spec)
         except Exception:
-            return False
+            return None
 
     edits = spec.get("edits") if isinstance(spec, dict) else None
     if not isinstance(edits, list):
-        return False
-
-    return any(
-        isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE
-        for edit in edits
-    )
+        return None
+    return edits
 
 
 async def _run_polyfill_if_enabled(
@@ -198,6 +245,21 @@ async def _run_polyfill_if_enabled(
         verbose_logger.exception(
             "context_management polyfill: skipping edits due to error: %s", e
         )
+        # Best-effort swallow is only safe for compact-only specs, where the
+        # caller's compaction-block-slicing safety net produces a correct
+        # (if degraded) result. When the spec also requested non-compact
+        # edits (e.g. ``clear_tool_uses_20250919``), the safety net does
+        # NOT re-run those editors, so silently returning ``None`` would
+        # drop them with no error surface. Raise instead so the endpoint
+        # emits an Anthropic-format error.
+        if _spec_has_non_compact_edits(
+            context_management_spec=context_management_spec,
+            drop_params=drop_params,
+        ):
+            raise AnthropicContextManagementError(
+                status_code=500,
+                message=f"context_management polyfill failed: {e}",
+            ) from e
         return None
 
 
@@ -532,6 +594,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     model=model,
                     tool_name_mapping=tool_name_mapping,
                     polyfill_result=polyfill_result,
+                    is_async=True,
                 )
             )
             if transformed_stream is not None:
@@ -567,7 +630,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         **kwargs,
     ) -> Union[
         AnthropicMessagesResponse,
-        AsyncIterator[Any],
+        Iterator[bytes],
         Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
     ]:
         """Handle non-Anthropic models using the adapter."""
@@ -597,14 +660,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # bridge to it via ``run_async_function``.
         context_management = kwargs.pop("context_management", None)
         drop_params: Optional[bool] = kwargs.get("drop_params", None)
+        # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
+        # ``run_async_function`` spawns a new event loop in a worker thread
+        # to bridge to the async dispatcher, but the proxy router's httpx
+        # ``AsyncClient`` instances are bound to the proxy's main event loop.
+        # Reusing them from the new thread's loop violates httpx's single-loop
+        # invariant and can raise ``RuntimeError: Event loop is closed`` or
+        # produce stalled connections. The summary editor falls back to
+        # ``litellm.acompletion`` (which creates a fresh client per call) when
+        # ``llm_router`` is ``None``, which is safe to call from the bridged
+        # loop. The async ``async_anthropic_messages_handler`` path is
+        # unaffected because it ``await``s within the original event loop.
         litellm_router = kwargs.pop("litellm_router", None)
-        if litellm_router is None:
-            try:
-                from litellm.proxy.proxy_server import llm_router as _proxy_router
-
-                litellm_router = _proxy_router
-            except Exception:
-                pass
 
         polyfill_result = run_async_function(
             _prepare_context_managed_request,
@@ -655,6 +722,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     model=model,
                     tool_name_mapping=tool_name_mapping,
                     polyfill_result=polyfill_result,
+                    is_async=False,
                 )
             )
             if transformed_stream is not None:

@@ -6,6 +6,7 @@ from typing import (
     Any,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -225,7 +226,8 @@ class AnthropicAdapter:
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
         polyfill_result: Optional[PolyfillResult] = None,
-    ) -> Union[AsyncIterator[bytes], None]:
+        is_async: bool = True,
+    ) -> Union[AsyncIterator[bytes], Iterator[bytes], None]:
         """
         Translate OpenAI streaming response to Anthropic format.
 
@@ -234,6 +236,12 @@ class AnthropicAdapter:
             model: The model name
             tool_name_mapping: Optional mapping of truncated tool names to original names.
             polyfill_result: PolyfillResult from context_management polyfill.
+            is_async: When ``True`` (default, for back-compat with existing
+                async callers) returns an ``AsyncIterator[bytes]``. When
+                ``False`` returns a sync ``Iterator[bytes]`` so sync callers
+                (e.g. ``litellm.anthropic.messages.create(stream=True)`` via
+                the sync handler) don't get back an async iterator they
+                can't iterate without an event loop.
         """
         applied_edits = (
             polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -252,8 +260,10 @@ class AnthropicAdapter:
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
         )
-        # Return the SSE-wrapped version for proper event formatting
-        return anthropic_wrapper.async_anthropic_sse_wrapper()
+        # Return the SSE-wrapped version for proper event formatting.
+        if is_async:
+            return anthropic_wrapper.async_anthropic_sse_wrapper()
+        return anthropic_wrapper.anthropic_sse_wrapper()
 
 
 class LiteLLMAnthropicMessagesAdapter:
