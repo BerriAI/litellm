@@ -169,3 +169,60 @@ def test_empty_kwargs_does_not_crash(langfuse_logger):
         user_id=None,
     )
     assert out is not None
+
+
+def test_both_set_distinct_keys_litellm_metadata_wins_spend_keys_merged(langfuse_logger):
+    """Greptile P2: pin the intentional merge behavior when both fields are set with distinct keys.
+
+    When both `litellm_metadata` and `metadata` are populated, `litellm_metadata`
+    is the canonical source. `user_api_key_*` keys are additionally merged in
+    from `metadata` by `add_missing_spend_metadata_to_litellm_metadata` so spend
+    tracking does not regress. Other non-auth keys in `metadata` (e.g.
+    `trace_name`, `session_id`) are NOT silently promoted - callers that need
+    those preserved across the transition should place them in
+    `litellm_metadata` directly.
+
+    Old behavior (pre-LIT-3293): `metadata` won outright; anything only in
+    `litellm_metadata` was dropped.
+    New behavior:                `litellm_metadata` wins; only `user_api_key_*`
+                                  is rescued from `metadata`.
+    """
+    kwargs = _kwargs_with(
+        litellm_metadata={
+            "user_api_key_alias": "alias-from-litellm-metadata",
+            "user_api_key_user_id": "user-from-litellm-metadata",
+            "trace_name": "trace-from-litellm-metadata",
+        },
+        metadata={
+            "user_api_key_alias": "alias-from-metadata",
+            "trace_name": "trace-from-metadata",
+            "session_id": "session-from-metadata",
+        },
+    )
+    trace_kwargs = _captured_trace_kwargs(langfuse_logger, kwargs)
+    assert trace_kwargs.get("name") == "trace-from-litellm-metadata"
+    # session_id from `metadata` is intentionally NOT promoted into the merged
+    # dict (only `user_api_key_*` keys are rescued). If a future change starts
+    # promoting other keys, this test fails so the contract is re-evaluated.
+    assert trace_kwargs.get("session_id") is None
+
+
+def test_litellm_metadata_not_mutated_by_logger(langfuse_logger):
+    """Defense in depth: log_event_on_langfuse must not mutate caller's litellm_metadata.
+
+    Langfuse callbacks run alongside other callbacks reading the same kwargs;
+    mutating the dict in place can race. Verify the litellm_metadata dict the
+    caller passed in is the same object and unchanged after logging.
+    """
+    original_litellm_metadata = {
+        "user_api_key_alias": "alias",
+        "user_api_key_user_id": "user-id",
+        "trace_name": "original",
+    }
+    snapshot = dict(original_litellm_metadata)
+    kwargs = _kwargs_with(litellm_metadata=original_litellm_metadata, metadata=None)
+    _captured_trace_kwargs(langfuse_logger, kwargs)
+    assert original_litellm_metadata == snapshot, (
+        f"Logger mutated caller's litellm_metadata: "
+        f"got {original_litellm_metadata}, expected {snapshot}"
+    )
