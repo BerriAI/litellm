@@ -1087,8 +1087,6 @@ class TestCustomTechnicalKeywords:
             assert kw in router.technical_keywords, f"default {kw!r} dropped"
         for kw in custom:
             assert kw in router.technical_keywords, f"custom {kw!r} missing"
-        # Compute expected unique additions so the assertion stays correct
-        # even if DEFAULT_TECHNICAL_KEYWORDS later gains one of `custom`.
         unique_new = [kw for kw in custom if kw not in DEFAULT_TECHNICAL_KEYWORDS]
         assert len(router.technical_keywords) == len(
             DEFAULT_TECHNICAL_KEYWORDS
@@ -1104,9 +1102,6 @@ class TestCustomTechnicalKeywords:
             mock_router_instance,
             custom_technical_keywords=custom,
         )
-        # Compute expected unique additions explicitly so the assertion stays
-        # correct even if DEFAULT_TECHNICAL_KEYWORDS later gains one of these
-        # terms. Mirrors the dedup logic in ComplexityRouter.__init__.
         seen = set(DEFAULT_TECHNICAL_KEYWORDS)
         unique_new = []
         for kw in custom:
@@ -1138,18 +1133,19 @@ class TestCustomTechnicalKeywords:
         )
         assert router.technical_keywords == list(DEFAULT_TECHNICAL_KEYWORDS)
 
-    def test_verizon_keyword_list_round_trip(self, mock_router_instance):
+    def test_example_network_keyword_list_round_trip(self, mock_router_instance):
+        """Network/storage domain terms drawn from the LIT-3237 example list."""
         from litellm.router_strategy.complexity_router.config import (
             DEFAULT_TECHNICAL_KEYWORDS,
         )
-        verizon = [
+        example_keywords = [
             "udp", "dns", "ssl", "tls", "ssh", "rest",
             "graphql", "kafka", "redis", "postgresql", "mongodb",
         ]
         router = self._make_router(
-            mock_router_instance, custom_technical_keywords=verizon
+            mock_router_instance, custom_technical_keywords=example_keywords
         )
-        for kw in verizon:
+        for kw in example_keywords:
             assert kw in router.technical_keywords
         for kw in DEFAULT_TECHNICAL_KEYWORDS:
             assert kw in router.technical_keywords
