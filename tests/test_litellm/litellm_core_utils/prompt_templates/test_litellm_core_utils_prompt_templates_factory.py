@@ -2845,3 +2845,30 @@ def test_sanitize_empty_text_assistant_none_content():
     message = {"role": "assistant", "content": None}
     result = _sanitize_empty_text_content(message)
     assert result["content"] is None
+
+
+def test_sanitize_empty_text_assistant_all_empty_list():
+    """Assistant messages with a list where ALL text blocks are empty/whitespace
+    should fall back to content=None (no text content, no non-text blocks)."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] is None
+
+
+def test_sanitize_empty_text_assistant_mixed_text_list():
+    """Assistant messages with a mix of non-empty and empty text blocks
+    and no non-text blocks should drop the empty blocks."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "text", "text": ""},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    assert result["content"] == [{"type": "text", "text": "hello"}]
