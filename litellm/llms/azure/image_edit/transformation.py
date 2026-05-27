@@ -83,12 +83,19 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             "https://litellm8397336933.openai.azure.com"
             OR
             "https://litellm8397336933.openai.azure.com/openai/deployments/<deployment_name>/images/edits?api-version=2024-05-01-preview"
-        - model: Model name (deployment name).
+            OR (Azure OpenAI v1 API)
+            "https://litellm8397336933.openai.azure.com/openai/v1/images/edits?api-version=preview"
+        - model: Model name (deployment name for deployment-style URLs;
+            value of the ``model`` form field for the v1 API).
         - litellm_params: Additional query parameters, including "api_version".
 
         Returns:
-        - A complete URL string, e.g.,
-        "https://litellm8397336933.openai.azure.com/openai/deployments/<deployment_name>/images/edits?api-version=2024-05-01-preview"
+        - A complete URL string. When ``api_version`` is one of ``v1`` /
+        ``latest`` / ``preview`` the request is routed through
+        ``/openai/v1/images/edits`` (model selected via form field), matching
+        the convention introduced in #19313 for chat completions. Otherwise
+        the legacy ``/openai/deployments/{deployment}/images/edits`` path is
+        used.
         """
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         if api_base is None:
@@ -107,14 +114,26 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
-        # Add the path to the base URL using the model as deployment name
-        if "/openai/deployments/" not in api_base:
+        # Pick the route. The v1 API exposes models like ``gpt-image-2`` that
+        # have no Azure deployment, so the deployment-scoped path returns 404
+        # for them. The model is carried in the multipart ``model`` form field
+        # instead (see ``azure_deployment_image_edit_form_data``, which only
+        # strips ``model`` on deployment URLs).
+        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+            if "/openai/v1/images/edits" in api_base:
+                new_url = api_base
+            else:
+                new_url = _add_path_to_api_base(
+                    api_base=api_base,
+                    ending_path="/openai/v1/images/edits",
+                )
+        elif "/openai/deployments/" in api_base:
+            new_url = api_base
+        else:
             new_url = _add_path_to_api_base(
                 api_base=api_base,
                 ending_path=f"/openai/deployments/{model}/images/edits",
             )
-        else:
-            new_url = api_base
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)

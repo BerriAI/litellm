@@ -109,6 +109,89 @@ def test_azure_deployment_image_edit_form_data_keeps_model_non_deployment_url():
     assert out == data
 
 
+def test_get_complete_url_legacy_api_version_uses_deployment_path():
+    """
+    Regression guard: a traditional Azure ``api-version`` (e.g. the GA preview
+    versions) must keep routing to ``/openai/deployments/{model}/images/edits``.
+    """
+    config = AzureImageEditConfig()
+    url = config.get_complete_url(
+        model="my-deployment",
+        api_base="https://example.openai.azure.com",
+        litellm_params={"api_version": "2025-02-01-preview"},
+    )
+    assert "/openai/deployments/my-deployment/images/edits" in url
+    assert "/openai/v1/" not in url
+    assert "api-version=2025-02-01-preview" in url
+
+
+def test_get_complete_url_v1_api_version_uses_v1_path():
+    """
+    Azure OpenAI exposes models like ``gpt-image-2`` only through the v1 API
+    (``/openai/v1/...``), selecting the model via the ``model`` form field
+    instead of the URL deployment segment. ``api_version`` of ``v1`` /
+    ``latest`` / ``preview`` opts into that surface, matching the convention
+    introduced for chat completions in PR #19313.
+
+    Routing the deployment-style URL for these models returns
+    ``404 Resource not found`` (see LiteLLM #27978).
+    """
+    config = AzureImageEditConfig()
+    for api_version in ("v1", "latest", "preview"):
+        url = config.get_complete_url(
+            model="gpt-image-2",
+            api_base="https://example.openai.azure.com",
+            litellm_params={"api_version": api_version},
+        )
+        assert "/openai/v1/images/edits" in url, api_version
+        assert "/openai/deployments/" not in url, api_version
+        assert f"api-version={api_version}" in url, api_version
+
+
+def test_get_complete_url_v1_api_version_does_not_double_append():
+    """An ``api_base`` already pointing at ``/openai/v1/images/edits`` is kept as-is."""
+    config = AzureImageEditConfig()
+    api_base = "https://example.openai.azure.com/openai/v1/images/edits"
+    url = config.get_complete_url(
+        model="gpt-image-2",
+        api_base=api_base,
+        litellm_params={"api_version": "preview"},
+    )
+    assert url.count("/openai/v1/images/edits") == 1
+    assert "/openai/deployments/" not in url
+
+
+def test_v1_api_version_keeps_model_in_form_data():
+    """
+    The v1 endpoint requires the ``model`` form field to select the target
+    model. ``finalize_image_edit_request_data`` must leave it alone for v1
+    URLs (it only strips ``model`` for deployment-scoped URLs).
+    """
+    config = AzureImageEditConfig()
+    model = "gpt-image-2"
+    litellm_params = GenericLiteLLMParams(
+        api_base="https://example.openai.azure.com",
+        api_version="preview",
+    )
+    data, _files = config.transform_image_edit_request(
+        model=model,
+        prompt="add a hat",
+        image=b"fake_png_bytes",
+        image_edit_optional_request_params={"n": 1},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    resolved = config.get_complete_url(
+        model=model,
+        api_base=litellm_params.api_base,
+        litellm_params=litellm_params.model_dump(exclude_none=True),
+    )
+    data_out = config.finalize_image_edit_request_data(data, resolved)
+    assert "/openai/v1/images/edits" in resolved
+    assert data_out.get("model") == model
+    assert data_out.get("n") == 1
+
+
 def test_azure_finalize_image_edit_strips_model_after_openai_transform():
     """OpenAI transform still includes model; finalize uses the real request URL."""
     config = AzureImageEditConfig()
