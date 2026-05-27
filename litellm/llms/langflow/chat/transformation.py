@@ -70,18 +70,24 @@ class LangFlowConfig(BaseConfig):
 
     def _get_flow_id(self, model: str, optional_params: dict) -> str:
         """
-        Extract the flow_id from the model string or optional_params.
+        Extract flow_id from the authorized model name only.
 
-        Model format: "langflow/{flow_id}"
+        Model format: "langflow/{flow_id}". Request kwargs must not override
+        flow_id (would allow calling another flow with the same API key).
         """
-        flow_id = optional_params.get("flow_id")
-        if flow_id:
-            return flow_id
+        if optional_params.get("flow_id") is not None:
+            raise LangFlowError(
+                status_code=400,
+                message=(
+                    "flow_id cannot be set via request parameters; "
+                    "use model langflow/{flow_id}"
+                ),
+            )
 
+        if model.startswith("langflow/"):
+            return model.split("/", 1)[1]
         if "/" in model:
-            parts = model.split("/", 1)
-            if len(parts) == 2:
-                return parts[1]
+            return model.split("/", 1)[1]
         return model
 
     def get_complete_url(

@@ -12,6 +12,31 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
+def test_flow_id_cannot_be_overridden_via_optional_params():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+
+    config = LangFlowConfig()
+    url = config.get_complete_url(
+        api_base="http://localhost:7860",
+        api_key=None,
+        model="langflow/authorized-flow",
+        optional_params={},
+        litellm_params={},
+        stream=False,
+    )
+    assert url.endswith("/api/v1/run/authorized-flow")
+
+    with pytest.raises(LangFlowError):
+        config.get_complete_url(
+            api_base="http://localhost:7860",
+            api_key=None,
+            model="langflow/authorized-flow",
+            optional_params={"flow_id": "malicious-flow"},
+            litellm_params={},
+            stream=False,
+        )
+
+
 def test_langflow_config_get_complete_url():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
