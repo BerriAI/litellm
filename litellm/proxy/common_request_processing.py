@@ -1369,11 +1369,12 @@ class ProxyBaseLLMRequestProcessing:
                         request_data=self.data,
                     )
                     # :streamGenerateContent (native google-genai route):
-                    # honor Gemini’s contract. Read ``?alt`` directly off
-                    # the incoming FastAPI request — we deliberately do NOT
-                    # plumb it through ``self.data`` so it cannot leak into
-                    # the upstream LLM call (route_request forwards
-                    # ``**data`` to the provider SDK).
+                    # honor Gemini’s contract. The route is bound to a
+                    # specific URL, so we can dispatch on ``route_type`` and
+                    # read the client's ``?alt`` choice directly off the
+                    # incoming FastAPI request — we do NOT plumb it through
+                    # ``self.data`` so it cannot leak into the upstream LLM
+                    # call (which forwards ``**data`` to the provider SDK).
                     if route_type == "agenerate_content_stream":
                         client_alt = request.query_params.get("alt") or ""
                         if client_alt != "sse":
