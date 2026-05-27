@@ -1,39 +1,47 @@
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
-import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
-import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
-import { Tag } from "antd";
+import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
+import { Button, Switch, Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
-import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
-import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
+  userID: string | null;
+  userEmail: string | null;
+  userRole: string | null;
+  premiumUser: boolean;
   proxySettings: any;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
+  userID,
+  userEmail,
+  userRole,
+  premiumUser,
   proxySettings,
   setProxySettings,
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
@@ -41,10 +49,8 @@ const Navbar: React.FC<NavbarProps> = ({
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
-  const hideCommunityLinks = useDisableShowPrompts();
-  const { isControlPlane, selectedWorker } = useWorker();
-  const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
+  // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
   useEffect(() => {
@@ -81,14 +87,14 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
+    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
-        <div className="flex h-14 items-center px-4">
-          <div className="flex flex-shrink-0 items-center">
+        <div className="flex items-center h-14 px-4">
+          <div className="flex items-center flex-shrink-0">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
@@ -98,11 +104,11 @@ const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center gap-2">
               <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
-                  <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                  <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
                     <img
                       src={imageUrl}
                       alt="LiteLLM Brand"
-                      className="h-auto max-h-full w-auto max-w-full object-contain"
+                      className="max-w-full max-h-full w-auto h-auto object-contain"
                     />
                   </div>
                 </div>
@@ -111,14 +117,14 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="relative">
                   {!disableBouncingIcon && (
                     <span
-                      className="absolute -left-2 -top-1 animate-bounce text-lg"
+                      className="absolute -top-1 -left-2 text-lg animate-bounce"
                       style={{ animationDuration: "2s" }}
                       title="Thanks for using LiteLLM!"
                     >
                       🌑
                     </span>
                   )}
-                  <Tag className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -132,48 +138,28 @@ const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           </div>
-
-          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
-            {showWorkerSwitch && (
-              <div className="flex shrink-0 items-center">
-                <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-              </div>
+          {/* Right side nav items */}
+          <div className="flex items-center space-x-5 ml-auto">
+            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+            <CommunityEngagementButtons />
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && (
+              <Switch
+                data-testid="dark-mode-toggle"
+                checked={isDarkMode}
+                onChange={toggleDarkMode}
+                checkedChildren={<MoonOutlined />}
+                unCheckedChildren={<SunOutlined />}
+              />
             )}
+            <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
+              Docs
+            </Button>
+            <BlogDropdown />
 
-            <nav
-              aria-label="Product documentation"
-              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
-            >
-              <a
-                href="https://docs.litellm.ai/docs/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={NAV_PRODUCT_LINK_CLASS}
-              >
-                Docs
-                {/* Layout parity with Blog chevron — intentional single-level link */}
-                <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
-              </a>
-              <BlogDropdown />
-            </nav>
-
-            {!hideCommunityLinks && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <CommunityEngagementButtons />
-              </div>
-            )}
-
-            {!isPublicPage && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
-                  <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
-                  <UserDropdown onLogout={handleLogout} />
-                </div>
-              </div>
-            )}
+            {!isPublicPage && <UserDropdown onLogout={handleLogout} />}
           </div>
-          {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>
       </div>
     </nav>
