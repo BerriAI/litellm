@@ -388,6 +388,58 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
+    def _should_skip_input_file_retrieval(self, data: Dict) -> bool:
+        """Return True iff the input-file retrieval + batch rate-limit step
+        should be skipped for this batch request (LIT-3266).
+
+        Resolution order:
+        1. Per-deployment ``model_info.skip_batch_input_file_retrieval`` on the
+           deployment matching ``data["model"]`` in the router model list.
+        2. Global ``litellm.skip_batch_input_file_retrieval``.
+
+        Safe by default: returns False on any lookup error, so misconfiguration
+        never silently disables rate limiting.
+        """
+        try:
+            from litellm.proxy.proxy_server import llm_router
+        except Exception:
+            llm_router = None  # type: ignore[assignment]
+        model = data.get("model") if isinstance(data, dict) else None
+        if llm_router is not None and isinstance(model, str) and model:
+            try:
+                deployment = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=model
+                )
+            except Exception as exc:
+                verbose_proxy_logger.debug(
+                    "skip_batch_input_file_retrieval: deployment lookup failed "
+                    "for model=%s: %s",
+                    model,
+                    str(exc),
+                )
+                deployment = None
+            if deployment is not None:
+                model_info = None
+                if isinstance(deployment, dict):
+                    model_info = deployment.get("model_info")
+                else:
+                    model_info = getattr(deployment, "model_info", None)
+                    if model_info is not None and not isinstance(model_info, dict):
+                        try:
+                            model_info = model_info.model_dump()
+                        except Exception:
+                            try:
+                                model_info = model_info.dict()
+                            except Exception:
+                                model_info = None
+                if isinstance(model_info, dict) and model_info.get(
+                    "skip_batch_input_file_retrieval"
+                ):
+                    return True
+        if getattr(litellm, "skip_batch_input_file_retrieval", False):
+            return True
+        return False
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -419,6 +471,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if call_type != "acreate_batch":
             verbose_proxy_logger.debug(
                 f"Batch rate limiter: Not handling batch creation rate limiting for call type: {call_type}"
+            )
+            return data
+
+        # LIT-3266: Allow operators to opt out of input-file retrieval +
+        # batch rate-limiting per-deployment (via
+        # ``model_info.skip_batch_input_file_retrieval``) or globally (via
+        # ``litellm.skip_batch_input_file_retrieval``). Custom vLLM batch jobs
+        # do not need per-batch TPM/RPM accounting, and the internal
+        # file-content fetch can download 30-60 MB files unnecessarily, cause
+        # audit-log gaps (the internal retrieve does not propagate
+        # ``UserApiKeyAuth``), and 404 on base64-encoded file IDs.
+        if self._should_skip_input_file_retrieval(data=data):
+            verbose_proxy_logger.debug(
+                "Batch rate limiter: skip_batch_input_file_retrieval is set; "
+                "skipping input-file retrieval and batch rate-limit accounting"
             )
             return data
 
