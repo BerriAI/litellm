@@ -298,3 +298,40 @@ def test_transform_search_rejects_non_dict_data_store_spec_entry():
                 ]
             },
         )
+
+
+def test_admin_empty_list_blocks_caller_extra_body_data_store_specs():
+    """SECURITY: an admin who configures ``vertex_data_store_specs=[]`` is
+    asserting "no extra datastore scope" - callers MUST NOT be able to
+    sneak a scope in via ``extra_body['dataStoreSpecs']``. The empty-list
+    case is still treated as "admin-configured" by the security check."""
+    config = VertexSearchAPIVectorStoreConfig()
+    with pytest.raises(
+        ValueError,
+        match="dataStoreSpecs in extra_body is not allowed",
+    ):
+        config.transform_search_vector_store_request(
+            vector_store_id="ds-1",
+            query="q",
+            vector_store_search_optional_params={},
+            api_base="https://example/x",
+            litellm_logging_obj=_logger(),
+            litellm_params={"vertex_data_store_specs": []},
+            extra_body={"dataStoreSpecs": [{"dataStore": "sneaky"}]},
+        )
+
+
+def test_admin_empty_list_does_not_emit_data_store_specs_key():
+    """With ``vertex_data_store_specs=[]`` and no caller override, the
+    request body should not contain the key at all - Discovery Engine
+    rejects an empty ``dataStoreSpecs`` array."""
+    config = VertexSearchAPIVectorStoreConfig()
+    _, body = config.transform_search_vector_store_request(
+        vector_store_id="ds-1",
+        query="q",
+        vector_store_search_optional_params={},
+        api_base="https://example/x",
+        litellm_logging_obj=_logger(),
+        litellm_params={"vertex_data_store_specs": []},
+    )
+    assert "dataStoreSpecs" not in body
