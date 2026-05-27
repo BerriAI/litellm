@@ -141,14 +141,26 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-# Proxy-set metadata fields (populated by the proxy, not the client request body) that
-# must survive the merge from `metadata` -> `litellm_metadata` when both containers exist.
-# - `spend_logs_metadata`, `agent_id`, `trace_id`, `session_id` are set by
-#   `LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers` based on the
-#   `LitellmMetadataFromRequestHeaders` TypedDict.
-# - `requester_ip_address` is set separately by the proxy from `x-forwarded-for` /
-#   `request.client.host` in `litellm_pre_call_utils.py`.
-# In all cases the value lives on `metadata` and is needed by `_get_spend_logs_metadata`.
+# Proxy-set metadata fields that live on `metadata` rather than `litellm_metadata`
+# on the endpoints where `_metadata_variable_name == "metadata"` (most LiteLLM
+# routes; see `_get_metadata_variable_name`). When the caller also populates
+# `litellm_metadata` from the request body, these must survive the merge so
+# spend tracking and observability callbacks see them downstream.
+#
+# - `spend_logs_metadata`, `agent_id`, `trace_id`, `session_id` are written by
+#   `LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers`
+#   (`LitellmMetadataFromRequestHeaders` TypedDict).
+# - `requester_ip_address` is written separately in `litellm_pre_call_utils.py`
+#   from `x-forwarded-for` / `request.client.host`.
+#
+# These keys are propagated with `setdefault` semantics (only when the
+# destination does NOT already have the key) so that on the inverse case —
+# routes where `_metadata_variable_name == "litellm_metadata"` (e.g.
+# `/v1/messages`, `batches`, `responses`, `files`) and the proxy-trusted
+# value lives on `litellm_metadata` instead — a forged value passed by the
+# client on the body `metadata` cannot overwrite the real proxy-set value.
+# This matches the upstream pre_call_utils convention
+# (`if key not in data[_metadata_variable_name]: ...`).
 _PROXY_SET_METADATA_KEYS_TO_PRESERVE: frozenset = frozenset(
     {
         "spend_logs_metadata",
@@ -166,27 +178,35 @@ def add_missing_spend_metadata_to_litellm_metadata(
     """
     Helper to get litellm metadata for spend tracking.
 
-    PATCH for the case where both `litellm_metadata` and `metadata` are present in the
-    request kwargs. The proxy populates spend-tracking and header-derived fields onto
-    `metadata`; if `litellm_metadata` also exists (e.g. when a request body carries
-    Anthropic-style provider `metadata`), those fields would otherwise be dropped when
-    downstream code reads `litellm_metadata` only.
+    PATCH for the case where both `litellm_metadata` and `metadata` are present
+    in the request kwargs. The proxy populates spend-tracking and header-derived
+    fields onto whichever container is selected by `_get_metadata_variable_name`
+    for that route; the other container may carry client-body metadata. This
+    helper bridges proxy-set fields from `metadata` -> `litellm_metadata` so a
+    downstream reader of `litellm_metadata` still sees them.
 
-    Preserves:
-    - any key on `metadata` that contains the substring `user_api_key` (proxy auth fields)
-    - well-known proxy-set keys from request headers / proxy auth
-      (`spend_logs_metadata`, `agent_id`, `trace_id`, `session_id`, `requester_ip_address`)
-
-    Existing `litellm_metadata` values are overwritten so the proxy-set view wins, matching
-    the prior `user_api_key*` behavior. Client-supplied keys on `litellm_metadata` that
-    are not in either preserve set are left untouched.
+    - `user_api_key*`: copied with overwrite. This is the existing behavior and
+      is safe because pre_call_utils strips any forged `user_api_key_*` from
+      both containers before this stage (see `_UNTRUSTED_METADATA_CONTROL_FIELDS`).
+    - `_PROXY_SET_METADATA_KEYS_TO_PRESERVE` (header-derived spend keys):
+      copied only when `litellm_metadata` does NOT already have the key, so
+      that on routes where `litellm_metadata` is the proxy-trusted container
+      (e.g. `/v1/messages`), a client-supplied `metadata.<key>` from the
+      request body cannot overwrite the real proxy-set value.
     """
     potential_spend_tracking_metadata_substring = "user_api_key"
     for key, value in metadata.items():
-        if (
-            potential_spend_tracking_metadata_substring in key
-            or key in _PROXY_SET_METADATA_KEYS_TO_PRESERVE
+        if potential_spend_tracking_metadata_substring in key:
+            # Existing behavior: copy with overwrite. Forged values were
+            # already stripped from `metadata` upstream.
+            litellm_metadata[key] = value
+        elif (
+            key in _PROXY_SET_METADATA_KEYS_TO_PRESERVE
+            and key not in litellm_metadata
         ):
+            # Header-derived spend keys: only copy when the destination does
+            # not already have the key, to avoid letting a client-body
+            # `metadata.<key>` overwrite a proxy-set `litellm_metadata.<key>`.
             litellm_metadata[key] = value
     return litellm_metadata
 
