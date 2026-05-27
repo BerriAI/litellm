@@ -1452,8 +1452,14 @@ CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
-# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which intentionally uses a fixed 10-minute expiry for security.
+# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which has its own configurable duration below.
 LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
+
+# Duration for the EXPERIMENTAL_UI_LOGIN flow. Same format as LITELLM_UI_SESSION_DURATION ("10m", "1h", "2h", etc.).
+# Defaults to 10 minutes to preserve the historical short-lived security default; operators can extend session
+# length without touching the standard UI login flow. Malformed or non-positive values fall back to 10 minutes.
+EXPERIMENTAL_UI_LOGIN_SESSION_DURATION = os.getenv("EXPERIMENTAL_UI_LOGIN_SESSION_DURATION", "10m")
+EXPERIMENTAL_UI_LOGIN_SESSION_DURATION_FALLBACK_SECONDS = 600  # 10 minutes
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
