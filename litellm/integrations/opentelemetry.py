@@ -1226,7 +1226,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         ):
             self._set_team_attributes_from_kwargs(proxy_span, kwargs)
 
-
     def _copy_team_attributes_from_parent_span(
         self,
         parent_span: Optional[Span],
