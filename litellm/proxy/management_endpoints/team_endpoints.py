@@ -949,6 +949,7 @@ async def new_team(  # noqa: PLR0915
         from litellm.proxy.proxy_server import (
             _license_check,
             create_audit_log_for_update,
+            general_settings,
             litellm_proxy_admin_name,
             prisma_client,
             user_api_key_cache,
