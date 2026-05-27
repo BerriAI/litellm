@@ -173,7 +173,9 @@ class TestLangfuseLitellmMetadata:
         captured = _run_logger(kwargs, _build_response())
         assert captured["generation"]["name"] == "litellm-anthropic_messages"
 
-    def test_caller_owned_litellm_metadata_not_mutated(self):
+    def test_caller_owned_litellm_metadata_not_mutated_empty_metadata_branch(self):
+        """When metadata is empty, the helper returns litellm_metadata directly —
+        the callback must not mutate it."""
         kwargs = _build_kwargs(
             litellm_metadata=dict(PROXY_AUTH_META),
             metadata={},
@@ -186,3 +188,48 @@ class TestLangfuseLitellmMetadata:
         assert set(captured_lm.keys()) == before_keys
         for k, v in before_values.items():
             assert captured_lm.get(k) == v
+
+    def test_caller_owned_litellm_metadata_not_mutated_merge_branch(self):
+        """When BOTH metadata and litellm_metadata are populated,
+        ``get_litellm_metadata_from_kwargs`` invokes
+        ``add_missing_spend_metadata_to_litellm_metadata``, which mutates
+        its first argument in place. The Langfuse callback must guard
+        against this so the caller-owned dict is unchanged.
+
+        Setup: put proxy-auth fields in ``litellm_metadata`` and a *second*
+        proxy-auth field only in ``metadata`` — without the guard,
+        ``litellm_metadata`` would silently gain ``user_api_key_metadata``
+        after the callback runs.
+        """
+        existing_litellm_md = dict(PROXY_AUTH_META)
+        extra_in_metadata = {
+            # this matches the "user_api_key" substring used by
+            # add_missing_spend_metadata_to_litellm_metadata as a merge filter
+            "user_api_key_metadata": {"src": "request-headers"},
+            # non-matching key — should never leak into litellm_metadata
+            "requester_metadata": {"client": "claude-code"},
+        }
+        kwargs = _build_kwargs(
+            litellm_metadata=existing_litellm_md,
+            metadata=extra_in_metadata,
+            call_type="anthropic_messages",
+        )
+        captured_lm = kwargs["litellm_params"]["litellm_metadata"]
+        captured_md = kwargs["litellm_params"]["metadata"]
+        before_lm_keys = set(captured_lm.keys())
+        before_lm_values = dict(captured_lm)
+        before_md_keys = set(captured_md.keys())
+        before_md_values = dict(captured_md)
+        _run_logger(kwargs, _build_response())
+        # litellm_metadata is the dict the merge helper mutates — assert no
+        # extra keys leaked in.
+        assert set(captured_lm.keys()) == before_lm_keys, (
+            "Langfuse callback mutated litellm_params['litellm_metadata'] "
+            f"(added keys: {set(captured_lm.keys()) - before_lm_keys})"
+        )
+        for k, v in before_lm_values.items():
+            assert captured_lm.get(k) == v
+        # metadata is read-only in the helper but assert it too for symmetry.
+        assert set(captured_md.keys()) == before_md_keys
+        for k, v in before_md_values.items():
+            assert captured_md.get(k) == v
