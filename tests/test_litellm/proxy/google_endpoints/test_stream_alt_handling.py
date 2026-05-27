@@ -225,3 +225,35 @@ async def test_no_alt_metadata_keeps_existing_sse_behavior():
     body = "".join(out)
     assert 'data: {"candidates"' in body
     assert "data: [DONE]" in body
+
+
+@pytest.mark.asyncio
+async def test_strip_sse_drops_bare_done_sentinel_chunk():
+    """Defensive: if upstream Gemini ever emits a `data: [DONE]\n\n` chunk
+    while the client did not request SSE, that sentinel must be dropped --
+    `[DONE]` is not valid JSON and the SDK detects end-of-stream from EOF."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+
+    request_data = _make_request_data(alt="json")
+    chunks_with_done = SSE_FROM_GEMINI + [b"data: [DONE]\n\n"]
+    iterator = _FakeAsyncIterator(chunks_with_done)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u")
+
+    out = []
+    async for piece in async_data_generator(
+        response=iterator,
+        user_api_key_dict=user_api_key_dict,
+        request_data=request_data,
+    ):
+        out.append(piece)
+
+    body = "".join(out)
+    assert "[DONE]" not in body, f"unexpected [DONE] in body: {body!r}"
+    import json
+
+    lines = [ln for ln in body.split("\n") if ln.strip()]
+    # 2 from SSE_FROM_GEMINI; the [DONE] chunk must be silently dropped.
+    assert len(lines) == 2, f"expected 2 JSON lines (DONE dropped), got {lines!r}"
+    for ln in lines:
+        json.loads(ln)  # must JSON-parse
