@@ -439,6 +439,7 @@ class ErrorAttributes:
     Corresponds to StandardLoggingPayloadErrorInformation.llm_provider
     """
 
+
 class ExceptionAttributes:
     """
     OTEL semantic-convention attribute names for exception/error info.
@@ -463,4 +464,3 @@ class ExceptionAttributes:
 
     EXCEPTION_STACKTRACE = "exception.stacktrace"
     """The exception stack trace. Mirrors ErrorAttributes.ERROR_STACK_TRACE."""
-
