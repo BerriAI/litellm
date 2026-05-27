@@ -304,3 +304,66 @@ def test_orphan_begin_is_bounded_at_block_max_lines():
     assert blocks
     line_count = blocks[0].count("\n") + 1
     assert line_count <= _PEM_BLOCK_MAX_LINES + 1, line_count
+
+
+
+# ---------------------------------------------------------------------------
+# DoS resistance + truncated/orphan PEM block coverage
+# ---------------------------------------------------------------------------
+#
+# ``_find_pem_blocks`` walks line-by-line, so an attacker who pastes many
+# ``-----BEGIN PRIVATE KEY-----`` headers without matching END footers
+# cannot trigger super-linear regex backtracking on the proxy worker.
+
+import time
+
+
+def test_find_pem_blocks_is_linear_with_many_begin_only_lines():
+    """1000 BEGIN lines with no matching END finish in well under 1s."""
+    text = "\n".join(["-----BEGIN PRIVATE KEY-----"] * 1000)
+    t0 = time.monotonic()
+    blocks = _find_pem_blocks(text)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, f"_find_pem_blocks took {elapsed:.3f}s, expected linear"
+    assert len(blocks) == 1000
+
+
+def test_find_pem_blocks_is_linear_with_many_begin_plus_body_no_end():
+    """1000 BEGIN-plus-body sections with no END finish in well under 2s."""
+    section = "-----BEGIN PRIVATE KEY-----\n" + "X" * 200
+    text = "\n".join([section] * 1000)
+    t0 = time.monotonic()
+    blocks = _find_pem_blocks(text)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 2.0, f"_find_pem_blocks took {elapsed:.3f}s, expected linear"
+    assert len(blocks) == 1000
+
+
+def test_orphan_begin_no_end_is_still_redacted():
+    """A BEGIN header with body but no matching END footer is treated as
+    secret material so the body does not slip through un-redacted."""
+    orphan = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n"
+        "SECRETBODYBASE64NEVERTERMINATED\n"
+    )
+    text = f"truncated key:\n{orphan}rest of message"
+    result = _expand_private_key_values([], text)
+    pks = [s["value"] for s in result if s["type"] == "Private Key"]
+    assert pks, "orphan BEGIN block should still be redacted"
+    assert any("SECRETBODYBASE64NEVERTERMINATED" in p for p in pks)
+
+
+def test_orphan_begin_is_bounded_at_block_max_lines():
+    """An orphan BEGIN does not consume the rest of an arbitrarily long
+    message — the block is capped at _PEM_BLOCK_MAX_LINES to keep
+    parsing strictly linear."""
+    from litellm_enterprise.enterprise_callbacks.secret_detection import (
+        _PEM_BLOCK_MAX_LINES,
+    )
+    tail_lines = ["just a normal line"] * (_PEM_BLOCK_MAX_LINES * 4)
+    text = "-----BEGIN PRIVATE KEY-----\nbody1\nbody2\n" + "\n".join(tail_lines)
+    blocks = _find_pem_blocks(text)
+    assert blocks
+    line_count = blocks[0].count("\n") + 1
+    assert line_count <= _PEM_BLOCK_MAX_LINES + 1, line_count
