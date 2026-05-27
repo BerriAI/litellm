@@ -1280,9 +1280,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data["_litellm_client_requested_model"] = (
-                        requested_model_from_client
-                    )
+                    self.data[
+                        "_litellm_client_requested_model"
+                    ] = requested_model_from_client
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1368,6 +1368,24 @@ class ProxyBaseLLMRequestProcessing:
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
                     )
+                    # :streamGenerateContent (native google-genai route):
+                    # honor Gemini’s contract. The route is bound to a
+                    # specific URL, so we can dispatch on ``route_type`` and
+                    # read the client's ``?alt`` choice directly off the
+                    # incoming FastAPI request — we do NOT plumb it through
+                    # ``self.data`` so it cannot leak into the upstream LLM
+                    # call (which forwards ``**data`` to the provider SDK).
+                    if route_type == "agenerate_content_stream":
+                        client_alt = request.query_params.get("alt") or ""
+                        if client_alt != "sse":
+                            selected_data_generator = ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(
+                                selected_data_generator
+                            )
+                            return await create_response(
+                                generator=selected_data_generator,
+                                media_type="application/json",
+                                headers=custom_headers,
+                            )
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
@@ -2032,6 +2050,48 @@ class ProxyBaseLLMRequestProcessing:
         )
 
     @staticmethod
+    async def _google_genai_jsonl_from_sse(
+        sse_generator: "AsyncGenerator[str, None]",
+    ) -> "AsyncGenerator[str, None]":
+        """Adapt the proxy SSE stream into newline-delimited JSON for the
+        Google GenAI native ``:streamGenerateContent`` endpoint when the
+        client did NOT request ``?alt=sse``.
+
+        Google’s contract: ``streamGenerateContent`` returns a streamed JSON
+        array by default. Internally litellm asks Gemini for ``?alt=sse``
+        upstream (see ``_get_gemini_url``), so the chunks arriving from
+        ``async_data_generator`` are already SSE-framed as
+        ``data: {json}\n\n``. This helper strips the ``data:`` prefix,
+        drops SSE-only sentinels (``[DONE]``, ``event:`` lines, ``:``
+        comments), and emits each JSON payload followed by ``\n`` so JSON-
+        streaming clients (e.g. the google-genai SDK) can consume the
+        response correctly. Error frames (``data: {"error": ...}``) are
+        forwarded as a JSON line so the client still surfaces them.
+        """
+        async for sse_chunk in sse_generator:
+            if not isinstance(sse_chunk, str):
+                # ``async_data_generator`` only yields ``str`` frames for
+                # this route, but be defensive: pass anything else through.
+                yield sse_chunk
+                continue
+            for raw_line in sse_chunk.split("\n"):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                # SSE comments (``:keep-alive``) and ``event:`` carry no
+                # payload for JSON-streaming clients.
+                if line.startswith((":", "event:")):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:") :].strip()
+                if not payload or payload == "[DONE]":
+                    # ``[DONE]`` is an SSE-only sentinel; JSON-streaming
+                    # clients terminate on connection close.
+                    continue
+                yield payload + "\n"
+
+    @staticmethod
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
         """
         Process a streaming chunk and inject cost information if enabled.
@@ -2174,9 +2234,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

@@ -181,3 +181,78 @@ def test_google_count_tokens_unchanged():
         assert response.status_code == 200
         body = response.json()
         assert body["totalTokens"] == 7
+
+# ---------------------------------------------------------------------------
+# :streamGenerateContent SSE -> NDJSON adapter (regression for LIT-3358)
+#
+# Gemini's :streamGenerateContent serves two clients:
+#   * SDK default (no ?alt)  -> newline-delimited JSON
+#   * SSE callers (?alt=sse) -> "data: {json}\n\n" frames
+# Before this fix, the proxy always emitted SSE, breaking the default SDK
+# path. The fix reads ?alt off the FastAPI Request directly in the response
+# framing block (NOT via self.data, so the value cannot leak as **kwargs
+# into the upstream LLM call) and wraps the existing SSE generator with
+# `_google_genai_jsonl_from_sse` when the client did not request alt=sse.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_google_genai_jsonl_from_sse_strips_sse_framing():
+    """Adapter must drop ``data:`` prefix, skip ``[DONE]``/``event:``/comments,
+    and emit one JSON object per chunk followed by ``\n``."""
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+
+    async def fake_sse():
+        yield 'data: {"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}\n\n'
+        yield ': keep-alive\n\n'
+        yield 'event: ping\n\n'
+        yield 'data: {"candidates": [{"content": {"parts": [{"text": " world"}]}}]}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    chunks = []
+    async for line in ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(fake_sse()):
+        chunks.append(line)
+
+    assert chunks == [
+        '{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}\n',
+        '{"candidates": [{"content": {"parts": [{"text": " world"}]}}]}\n',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_google_genai_jsonl_from_sse_forwards_error_frames():
+    """Error frames (``data: {"error": ...}\n\n``) must reach the JSON client
+    as a JSON line so it can surface the failure."""
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+
+    async def fake_sse():
+        yield 'data: {"error": {"message": "rate limited", "code": 429}}\n\n'
+
+    chunks = []
+    async for line in ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(fake_sse()):
+        chunks.append(line)
+
+    assert chunks == ['{"error": {"message": "rate limited", "code": 429}}\n']
+
+
+@pytest.mark.asyncio
+async def test_google_genai_jsonl_from_sse_drops_done_only():
+    """If the stream is just ``data: [DONE]`` (no payload), the adapter
+    yields nothing and the client terminates cleanly on close."""
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+
+    async def fake_sse():
+        yield 'data: [DONE]\n\n'
+
+    chunks = []
+    async for line in ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(fake_sse()):
+        chunks.append(line)
+
+    assert chunks == []
+
