@@ -314,8 +314,9 @@ class LangFuseLogger:
             # batches, files) populate Langfuse generations with the same
             # ``user_api_key_*`` fields that already show up in spend logs.
             # ``get_litellm_metadata_from_kwargs`` falls back to ``metadata``
-            # for the legacy paths and merges spend_logs_metadata from
-            # ``metadata`` into ``litellm_metadata`` when both are populated.
+            # for the legacy paths and backfills any ``user_api_key_*`` keys
+            # from ``metadata`` into ``litellm_metadata`` when both are
+            # populated (via ``add_missing_spend_metadata_to_litellm_metadata``).
             metadata = get_litellm_metadata_from_kwargs(kwargs)
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
