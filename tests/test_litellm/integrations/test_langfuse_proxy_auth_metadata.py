@@ -209,12 +209,12 @@ def test_v1_messages_path_with_both_metadata_keys_records_user_api_key_alias(
     # survive whichever way the merge resolved.
     assert metadata.get("user_api_key_user_id") == "user-abc"
     assert metadata.get("user_api_key_team_id") == "team-z"
-    # spend_logs_metadata from the legacy field should be backfilled by the
-    # helper (it is a spend_logs-shaped field, not a user_api_key one, so it
-    # is not picked up by ``add_missing_spend_metadata_to_litellm_metadata`` —
-    # documenting actual current behavior).
-    # (Asserting only that no crash and the merged metadata still carries the
-    # other litellm_metadata-exclusive fields.)
+    # ``spend_logs_metadata`` from the legacy ``metadata`` field is NOT
+    # backfilled by ``add_missing_spend_metadata_to_litellm_metadata`` because
+    # that helper only copies keys containing ``user_api_key``. Documenting
+    # actual current behavior — this is intentional. We only assert here that
+    # the merged metadata still carries the litellm_metadata-exclusive auth
+    # fields and that no crash occurred.
 
 
 def test_v1_messages_path_with_no_metadata_uses_default_name(captured_generation):
