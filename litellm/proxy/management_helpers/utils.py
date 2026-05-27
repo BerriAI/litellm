@@ -469,7 +469,12 @@ def management_endpoint_wrapper(func):
 
                     if open_telemetry_logger is not None:
                         if _http_request:
-                            _route = _http_request.url.path
+                            # Inline import — auth_utils participates in a proxy import cycle.
+                            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                                get_request_route,
+                            )
+
+                            _route = get_request_route(_http_request)
                             _request_body: dict = await _read_request_body(
                                 request=_http_request
                             )
@@ -514,7 +519,12 @@ def management_endpoint_wrapper(func):
                 if open_telemetry_logger is not None:
                     _http_request = kwargs.get("http_request")
                     if _http_request:
-                        _route = _http_request.url.path
+                        # Inline import — auth_utils participates in a proxy import cycle.
+                        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                            get_request_route,
+                        )
+
+                        _route = get_request_route(_http_request)
                         _request_body: dict = await _read_request_body(
                             request=_http_request
                         )
