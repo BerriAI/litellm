@@ -5341,3 +5341,4 @@ class TestOpenTelemetryMakeHashable(unittest.TestCase):
         self.assertNotEqual(list_key, tuple_key)
         d = {list_key: "list", tuple_key: "tuple"}
         self.assertEqual(len(d), 2)
+
