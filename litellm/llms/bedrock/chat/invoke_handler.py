@@ -10,6 +10,7 @@ from typing import (
     AsyncIterator,
     Callable,
     Iterator,
+    NoReturn,
     Optional,
     Tuple,
     cast,
@@ -77,6 +78,14 @@ from ..common_utils import (
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
+
+
+# Max bytes of an upstream response we will buffer for the purposes of
+# sniffing a Bedrock JSON error body in AWSEventStreamDecoder. Bedrock JSON
+# error responses are always small and arrive in the opening chunk, so 8 KiB
+# is comfortably large enough while keeping memory overhead on successful
+# streaming responses O(1).
+_MAX_ERROR_SNIFF_BYTES = 8 * 1024
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
     AmazonBedrockOpenAIConfig,
@@ -1800,32 +1809,111 @@ class AWSEventStreamDecoder:
         self, iterator: Iterator[bytes]
     ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
+        from botocore.eventstream import ChecksumMismatch, EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        # Bedrock JSON error bodies are small and arrive in the first chunk, so
+        # we only need to capture the opening bytes of the response to sniff
+        # them when ChecksumMismatch fires. Capping the buffer keeps the hot
+        # path on a successful streaming response O(1) in memory.
+        accumulated_bytes = bytearray()
         for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message:
-                    # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+            if len(accumulated_bytes) < _MAX_ERROR_SNIFF_BYTES:
+                accumulated_bytes.extend(chunk)
+            try:
+                event_stream_buffer.add_data(chunk)
+                for event in event_stream_buffer:
+                    message = self._parse_message_from_event(event)
+                    if message:
+                        # sse_event = ServerSentEvent(data=message, event="completion")
+                        _data = json.loads(message)
+                        yield self._chunk_parser(chunk_data=_data)
+            except ChecksumMismatch as e:
+                # Bedrock occasionally returns a plain JSON error body (e.g.
+                # malformed URL, throttling, transient validation failures)
+                # instead of the binary event-stream framing. botocore raises
+                # ChecksumMismatch on the JSON prelude, which masks the actual
+                # Bedrock error message. Surface the real error when we can.
+                self._maybe_surface_json_error(bytes(accumulated_bytes), e)
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
     ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
+        from botocore.eventstream import ChecksumMismatch, EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        # See iter_bytes() above for the rationale on capping accumulation.
+        accumulated_bytes = bytearray()
         async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message:
-                    _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+            if len(accumulated_bytes) < _MAX_ERROR_SNIFF_BYTES:
+                accumulated_bytes.extend(chunk)
+            try:
+                event_stream_buffer.add_data(chunk)
+                for event in event_stream_buffer:
+                    message = self._parse_message_from_event(event)
+                    if message:
+                        _data = json.loads(message)
+                        yield self._chunk_parser(chunk_data=_data)
+            except ChecksumMismatch as e:
+                # See iter_bytes() for context: Bedrock can return a JSON error
+                # body in place of the binary event-stream framing, which makes
+                # botocore raise ChecksumMismatch on the JSON prelude. Surface
+                # the real Bedrock error when we can.
+                self._maybe_surface_json_error(bytes(accumulated_bytes), e)
+
+    @staticmethod
+    def _maybe_surface_json_error(
+        accumulated_bytes: bytes,
+        original_exc: Exception,
+    ) -> "NoReturn":
+        """Re-raise as a BedrockError if the accumulated bytes are a JSON error
+        body returned by Bedrock in place of an event-stream frame; otherwise
+        re-raise the original ChecksumMismatch.
+
+        Bedrock occasionally returns a plain JSON error body (e.g. malformed
+        URL paths, throttling, transient validation errors) on what is supposed
+        to be a streaming response. botocore's EventStreamBuffer parses the
+        first 4 bytes as a binary prelude and raises ChecksumMismatch, hiding
+        the real Bedrock error from the caller.
+
+        We sniff the accumulated payload: if it starts with ``{`` (object) or
+        ``[`` (array) after optional leading whitespace, we try to parse it as
+        JSON and, on success, raise a BedrockError carrying the underlying
+        ``message``. If it does not look like JSON, or JSON parsing fails, we
+        re-raise the original ChecksumMismatch unchanged so we never widen the
+        error surface beyond clearly-JSON payloads.
+        """
+        stripped = accumulated_bytes.lstrip()
+        if not stripped or stripped[:1] not in (b"{", b"["):
+            raise original_exc
+        try:
+            payload = json.loads(stripped.decode("utf-8", errors="replace"))
+        except ValueError:
+            # ``errors="replace"`` substitutes invalid bytes rather than
+            # raising, so the only reachable failure mode here is a JSON parse
+            # error -- which means the payload was not actually JSON.
+            raise original_exc
+
+        if isinstance(payload, dict):
+            error_message = (
+                payload.get("message")
+                or payload.get("Message")
+                or payload.get("error")
+                or payload.get("errorMessage")
+            )
+            if not isinstance(error_message, str) or not error_message:
+                error_message = json.dumps(payload)
+        else:
+            error_message = json.dumps(payload)
+
+        raise BedrockError(
+            status_code=400,
+            message=(
+                "Bedrock returned a JSON error body instead of the expected "
+                "event-stream frames: " + error_message
+            ),
+        )
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_stream_shape = get_bedrock_response_stream_shape()
