@@ -1765,18 +1765,38 @@ async def _cache_team_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    key = "team_id:{}".format(team_id)
-
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key=key,
+        key="team_id:{}".format(team_id),
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=LiteLLM_TeamTableCachedObj,
     )
+
+    # Invalidate the alias-keyed cache so the JWT auth path with
+    # `team_alias_jwt_field` (which reads via `get_team_object_by_alias`)
+    # doesn't keep serving the pre-mutation team after every team-write
+    # endpoint (team_model_add, team_model_delete, update_team, etc.).
+    #
+    # Why DELETE and not WRITE: `team_alias` has no UNIQUE constraint in
+    # schema.prisma. Writing this cache from the generic refresh path
+    # would let a team admin who renamed their team to collide with
+    # another team's alias silently overwrite the cached team for
+    # JWT-by-alias auth (veria-ai review on #28739). Deleting forces the
+    # next reader through `get_team_object_by_alias`, which DOES enforce
+    # uniqueness (len(teams) > 1 raises HTTPException) before populating
+    # the cache from a verified single row.
+    if team_table.team_alias:
+        alias_key = "team_alias:{}".format(team_table.team_alias)
+        user_api_key_cache.delete_cache(key=alias_key)
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+                key=alias_key
+            )
 
 
 async def _cache_key_object(
@@ -3143,44 +3163,40 @@ async def can_team_access_model(
         raise
 
 
-async def _key_access_group_grants_model(
-    model: Union[str, List[str]],
+async def get_authorized_resources_from_key_access_groups(
     valid_token: Optional[UserAPIKeyAuth],
     team_object: Optional[LiteLLM_TeamTable],
-    llm_router: Optional[Router],
-) -> bool:
+    resource_field: Literal[
+        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
+    ],
+) -> List[str]:
     """
-    Returns True if the key's `access_group_ids` expand to models that grant
-    access to `model`. Used to let a key's access group override a team's
-    model restriction in `common_checks`.
-
-    A key's access group only counts if the access group itself authorizes the
-    caller as an owner — that is, the group's `assigned_team_ids` includes the
-    key's `team_id`, or the group's `assigned_key_ids` includes the key's
-    token. This preserves the team-as-owner boundary (a team member cannot
-    escalate by naming a group assigned to a different team) while still
-    letting a group reach the key without first being added to the team's
-    `access_group_ids` list.
+    For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
+    and contribute its `resource_field` only if the group authorizes the caller
+    as an owner — that is, the group's `assigned_team_ids` includes the key's
+    `team_id`, or the group's `assigned_key_ids` includes the key's token. This
+    preserves the team-as-owner boundary while still letting a group reach the
+    key without first being added to the team's `access_group_ids` list.
     """
     if valid_token is None:
-        return False
+        return []
     key_access_group_ids = list(valid_token.access_group_ids or [])
     if not key_access_group_ids:
-        return False
+        return []
 
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
     from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
     from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
     if _prisma_client is None or _user_api_key_cache is None:
-        return False
+        return []
 
     key_team_id = valid_token.team_id or (
         team_object.team_id if team_object is not None else None
     )
     key_token = valid_token.token
 
-    authorized_models: List[str] = []
+    authorized_resources: List[str] = []
     for ag_id in key_access_group_ids:
         try:
             ag = await get_access_object(
@@ -3196,17 +3212,36 @@ async def _key_access_group_grants_model(
         )
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
         if team_authorized or key_authorized:
-            authorized_models.extend(ag.access_model_names or [])
+            authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
+    return list(set(authorized_resources))
+
+
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+) -> bool:
+    """
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+    """
+    authorized_models = await get_authorized_resources_from_key_access_groups(
+        valid_token=valid_token,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
     if not authorized_models:
         return False
     try:
         _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=list(set(authorized_models)),
-            team_model_aliases=valid_token.team_model_aliases,
-            team_id=valid_token.team_id,
+            models=authorized_models,
+            team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+            team_id=valid_token.team_id if valid_token else None,
             object_type="key",
         )
         return True
@@ -3798,6 +3833,94 @@ async def _check_team_member_model_access(
         )
 
 
+async def _maybe_reseed_stale_team_spend_counter(
+    counter_key: str,
+    team_object: LiteLLM_TeamTable,
+    redis_spend: float,
+) -> float:
+    """Detect-and-recover from a stale Redis team spend counter.
+
+    Called from ``_team_max_budget_check`` when the cross-pod Redis counter
+    says the team is over budget. Reads the authoritative
+    ``LiteLLM_TeamTable.spend`` from the DB directly (not from the cached
+    team_object, which can lag), and if the DB spend is well under the cap
+    while Redis says over, treats Redis as stale: deletes the counter key
+    so subsequent reads reseed from the DB, and returns the DB value.
+
+    The most common cause of this drift is the periodic reset job
+    committing ``team.spend = 0`` to Postgres but the corresponding Redis
+    write silently no-opping — Redis unreachable from the reset-job pod,
+    ``spend_counter_cache.redis_cache is None`` on that pod, etc.
+    Customer-reported in LIT-3132 (8451): ``Current cost: 2000.0000014,
+    Max budget: 2000.0`` from the auth check while the team's DB row
+    showed ``spend = 0.144``.
+
+    On any failure (DB unreachable, Prisma error, etc.) the caller's
+    existing ``redis_spend`` is returned unchanged, so this can only
+    relax enforcement on a clear staleness signal, never harden it.
+    """
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    from litellm.proxy.proxy_server import prisma_client, spend_counter_cache
+
+    if team_object.max_budget is None or prisma_client is None:
+        return redis_spend
+
+    try:
+        db_spend = await SpendCounterReseed.from_db(
+            prisma_client=prisma_client, counter_key=counter_key
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "_maybe_reseed_stale_team_spend_counter: SpendCounterReseed.from_db "
+            "failed for %s, leaving Redis value in place: %s",
+            counter_key,
+            e,
+        )
+        return redis_spend
+
+    if db_spend is None:
+        # DB unreachable or row missing — keep enforcing whatever Redis said.
+        return redis_spend
+
+    # Only treat Redis as stale when the DB row clearly contradicts it.
+    # "Clearly": DB spend is below 50% of the cap. A real over-budget
+    # condition is one where the DB will also reflect spend at or near
+    # the cap once the spend flusher commits.
+    if db_spend >= team_object.max_budget * 0.5:
+        return redis_spend
+
+    if spend_counter_cache is not None:
+        # Drop the stale counter so future reads on this pod take the
+        # clean-miss path through SpendCounterReseed.coalesced and
+        # converge on the DB value. SET NX inside that reseed keeps
+        # concurrent pods from multiplying the counter.
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_delete_cache(counter_key)
+            except Exception as redis_err:
+                verbose_proxy_logger.debug(
+                    "_maybe_reseed_stale_team_spend_counter: Redis delete failed "
+                    "for %s: %s",
+                    counter_key,
+                    redis_err,
+                )
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
+
+    verbose_proxy_logger.warning(
+        "Reseeded stale team spend counter %s from DB: Redis reported %.6f "
+        "(over max_budget=%.6f) but the authoritative DB row had spend=%.6f. "
+        "This typically means the cross-pod Redis counter did not get "
+        "invalidated by the most recent budget reset (e.g. Redis unreachable "
+        "on the reset-job pod, or spend_counter_cache.redis_cache was None "
+        "during reset).",
+        counter_key,
+        redis_spend,
+        team_object.max_budget,
+        db_spend,
+    )
+    return float(db_spend)
+
+
 async def _team_max_budget_check(
     team_object: Optional[LiteLLM_TeamTable],
     valid_token: Optional[UserAPIKeyAuth],
@@ -3814,10 +3937,28 @@ async def _team_max_budget_check(
         from litellm.proxy.proxy_server import get_current_spend
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        counter_key = f"spend:team:{team_object.team_id}"
         spend = await get_current_spend(
-            counter_key=f"spend:team:{team_object.team_id}",
+            counter_key=counter_key,
             fallback_spend=team_object.spend or 0.0,
         )
+
+        # Defensive: when Redis says we are over budget, double-check
+        # against the authoritative DB spend before raising. The cached
+        # team_object.spend can lag a multi-pod Redis counter (so trusting
+        # it would let real over-spend through), but a direct DB read is
+        # authoritative — if the DB row says spend is well under the cap
+        # while Redis says it is over, the Redis counter is stale and we
+        # reseed from DB. Customer-reported in LIT-3132.
+        if (
+            math.isfinite(team_object.max_budget)
+            and spend > team_object.max_budget
+        ):
+            spend = await _maybe_reseed_stale_team_spend_counter(
+                counter_key=counter_key,
+                team_object=team_object,
+                redis_spend=spend,
+            )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             if valid_token:
