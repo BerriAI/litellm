@@ -363,6 +363,91 @@ async def test_load_user_variables_returns_empty_when_db_unavailable(monkeypatch
     assert await manager._load_user_variables(server, fake_auth) == {}
 
 
+@pytest.mark.asyncio
+async def test_load_user_variables_reads_through_store(monkeypatch):
+    """With a user and DB available, the lookup goes through the variable store."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="s", name="s", transport="http", url="https://example.com"
+    )
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    captured = {}
+
+    async def fake_get(prisma_client, user_id):
+        captured["args"] = (prisma_client, user_id)
+        return {"CORP_USERNAME": "alice"}
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_variable_store.get_user_variables",
+        fake_get,
+    )
+    assert await manager._load_user_variables(server, fake_auth) == {
+        "CORP_USERNAME": "alice"
+    }
+    assert captured["args"][1] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_load_user_variables_swallows_store_errors(monkeypatch):
+    """A store failure is best-effort: it returns {} instead of raising."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="s", name="s", transport="http", url="https://example.com"
+    )
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    async def boom(prisma_client, user_id):
+        raise RuntimeError("vault down")
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_variable_store.get_user_variables",
+        boom,
+    )
+    assert await manager._load_user_variables(server, fake_auth) == {}
+
+
+@pytest.mark.asyncio
+async def test_reload_servers_excludes_templates_from_query(monkeypatch):
+    """Templates are filtered out at the DB level so they're never loaded as live servers."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(mgmt, "get_prisma_client_or_throw", lambda *a, **k: prisma)
+
+    manager = MCPServerManager()
+    await manager.reload_servers_from_database()
+
+    prisma.db.litellm_mcpservertable.find_many.assert_awaited_once()
+    where = prisma.db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
+    assert where["kind"] == {"not": "template"}
+    assert manager.registry == {}
+
+
 # ── DB helpers: per-user variables ─────────────────────────────────────────
 
 _SALT_KEY = "test-salt-key-for-variables-tests-1234"

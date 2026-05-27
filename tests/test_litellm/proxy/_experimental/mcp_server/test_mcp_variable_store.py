@@ -121,6 +121,74 @@ def test_build_manager_kms_without_client_returns_none(monkeypatch):
     assert store._build_manager("kms") is None
 
 
+def test_build_manager_hashicorp_instantiates_vault(monkeypatch):
+    import litellm.secret_managers.hashicorp_secret_manager as hv_mod
+
+    created = {}
+
+    class _FakeVault(BaseSecretManager):
+        def __init__(self):
+            created["init"] = True
+
+        async def async_read_secret(self, *a, **k):
+            return None
+
+        def sync_read_secret(self, *a, **k):
+            return None
+
+        async def async_write_secret(self, *a, **k):
+            return {}
+
+        async def async_delete_secret(self, *a, **k):
+            return {}
+
+    monkeypatch.setattr(hv_mod, "HashicorpSecretManager", _FakeVault)
+    mgr = store._build_manager("hashicorp_vault")
+    assert isinstance(mgr, _FakeVault)
+    assert created.get("init") is True
+
+
+# ── manager resolution + caching ─────────────────────────────────────────────
+
+
+def test_get_manager_returns_none_without_provider():
+    assert store._get_manager() is None
+
+
+def test_get_manager_builds_once_and_caches(monkeypatch):
+    monkeypatch.setenv("LITELLM_MCP_VARIABLE_STORE", "vault")
+    fake = _FakeSecretManager()
+    calls = {"n": 0}
+
+    def fake_build(provider):
+        calls["n"] += 1
+        assert provider == "vault"
+        return fake
+
+    monkeypatch.setattr(store, "_build_manager", fake_build)
+    store.reset_cache()
+
+    assert store._get_manager() is fake
+    assert store._get_manager() is fake  # served from cache
+    assert calls["n"] == 1
+
+
+def test_resolve_provider_swallows_general_settings_error(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    class _Boom:
+        def __bool__(self):
+            return True
+
+        def get(self, *a, **k):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(ps, "general_settings", _Boom(), raising=False)
+    monkeypatch.setenv("LITELLM_MCP_VARIABLE_STORE", "vault")
+    # The general_settings error is swallowed and resolution falls back to env.
+    assert store._resolve_provider() == "vault"
+
+
 # ── DB fallback (no store configured) ────────────────────────────────────────
 
 
