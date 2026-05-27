@@ -392,10 +392,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """Return True iff the input-file retrieval + batch rate-limit step
         should be skipped for this batch request (LIT-3266).
 
-        Resolution order:
-        1. Per-deployment ``model_info.skip_batch_input_file_retrieval`` on the
-           deployment matching ``data["model"]`` in the router model list.
-        2. Global ``litellm.skip_batch_input_file_retrieval``.
+        Resolution order (per-deployment is *authoritative* when set):
+        1. If ``model_info.skip_batch_input_file_retrieval`` is **present** on
+           the deployment matching ``data["model"]`` in the router model list,
+           its boolean value is final - including an explicit ``False`` that
+           re-enables accounting on a specific deployment when the global
+           flag is on.
+        2. Otherwise, fall back to the global ``litellm.skip_batch_input_file_retrieval``.
 
         Safe by default: returns False on any lookup error, so misconfiguration
         never silently disables rate limiting.
@@ -432,10 +435,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                                 model_info = model_info.dict()
                             except Exception:
                                 model_info = None
-                if isinstance(model_info, dict) and model_info.get(
-                    "skip_batch_input_file_retrieval"
+                # Per-deployment override is authoritative when *present*.
+                # Explicit False on a deployment must beat a True global flag.
+                if (
+                    isinstance(model_info, dict)
+                    and "skip_batch_input_file_retrieval" in model_info
                 ):
-                    return True
+                    return bool(model_info["skip_batch_input_file_retrieval"])
+        # Fall back to the global flag.
         if getattr(litellm, "skip_batch_input_file_retrieval", False):
             return True
         return False
