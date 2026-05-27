@@ -3695,6 +3695,11 @@ class ProxyException(Exception):
         provider_specific_fields: Optional[dict] = None,
     ):
         self.message = str(message)
+        # Populate Exception.args so str(self) returns the message.
+        # Without this, logging paths that call str(original_exception)
+        # (e.g. StandardLoggingPayloadSetup.get_error_information) record an
+        # empty error_message for ProxyException-based failures. See LIT-3094.
+        super().__init__(self.message)
         self.type = type
         self.param = param
         self.openai_code = openai_code or code
