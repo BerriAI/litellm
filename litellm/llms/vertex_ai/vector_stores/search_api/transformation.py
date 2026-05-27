@@ -80,30 +80,78 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_params: dict,
     ) -> str:
         """
-        Get the Base endpoint for Vertex AI Search API
+        Get the base endpoint for the Vertex AI Search API.
+
+        Two parent resource types are supported:
+
+        1. Data store (default, backwards-compatible):
+           ``collections/{collection}/dataStores/{datastore}/servingConfigs/{serving_config}``
+           Selected when no engine id is supplied. ``vector_store_id`` is the
+           datastore id and is required in this mode.
+
+        2. Engine / app (new):
+           ``collections/{collection}/engines/{engine}/servingConfigs/{serving_config}``
+           Selected when ``vertex_engine_id`` (alias ``vertex_app_id``) is set on
+           ``litellm_params``. ``vector_store_id`` is optional in this mode — when
+           the engine has multiple data stores, callers should pass
+           ``vertex_data_store_specs`` (a list of ``DataStoreSpec`` dicts) so the
+           search request body can scope results to specific data stores.
+
+        ``vertex_serving_config_id`` (default ``"default_config"``) controls the
+        trailing serving-config segment in either mode.
         """
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
         collection_id = (
             litellm_params.get("vertex_collection_id") or "default_collection"
         )
-        datastore_id = litellm_params.get("vector_store_id")
-        if not datastore_id:
-            raise ValueError("vector_store_id is required")
+        serving_config_id = (
+            litellm_params.get("vertex_serving_config_id") or "default_config"
+        )
+        engine_id = litellm_params.get("vertex_engine_id") or litellm_params.get(
+            "vertex_app_id"
+        )
+
         if api_base:
             return api_base.rstrip("/")
+
         encoded_collection_id = encode_url_path_segment(
             collection_id, field_name="vertex_collection_id"
         )
+        encoded_serving_config_id = encode_url_path_segment(
+            serving_config_id, field_name="vertex_serving_config_id"
+        )
+
+        base = (
+            f"https://discoveryengine.googleapis.com/v1/"
+            f"projects/{vertex_project}/locations/{vertex_location}/"
+            f"collections/{encoded_collection_id}"
+        )
+
+        if engine_id:
+            # App / engine-level URL — vector_store_id is optional here. When the
+            # engine has multiple data stores, the caller filters via
+            # ``dataStoreSpecs`` in the request body (see
+            # transform_search_vector_store_request).
+            encoded_engine_id = encode_url_path_segment(
+                engine_id, field_name="vertex_engine_id"
+            )
+            return (
+                f"{base}/engines/{encoded_engine_id}"
+                f"/servingConfigs/{encoded_serving_config_id}"
+            )
+
+        # Data store mode — keep existing requirement that the datastore id is
+        # present so callers don't accidentally hit a global serving config.
+        datastore_id = litellm_params.get("vector_store_id")
+        if not datastore_id:
+            raise ValueError("vector_store_id is required")
         encoded_datastore_id = encode_url_path_segment(
             datastore_id, field_name="vector_store_id"
         )
-
-        # Vertex AI Search API endpoint for search
         return (
-            f"https://discoveryengine.googleapis.com/v1/"
-            f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"collections/{encoded_collection_id}/dataStores/{encoded_datastore_id}/servingConfigs/default_config"
+            f"{base}/dataStores/{encoded_datastore_id}"
+            f"/servingConfigs/{encoded_serving_config_id}"
         )
 
     def transform_search_vector_store_request(
@@ -117,18 +165,42 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
-        Transform search request for Vertex AI RAG API
+        Transform a vector-store search request into a Vertex AI Search API call.
+
+        In addition to the basic ``{query, pageSize}`` body, this supports two
+        knobs needed for engine / app-level routing:
+
+        - ``vertex_data_store_specs`` on ``litellm_params``: a list of
+          ``DataStoreSpec`` dicts forwarded verbatim as ``dataStoreSpecs`` in the
+          request body. Used to scope an engine-level search across multiple
+          datastores. Each spec's ``dataStore`` field must be the full resource
+          name, e.g. ``projects/<num>/locations/<loc>/collections/<col>/dataStores/<ds>``.
+        - ``extra_body``: any caller-supplied keys are merged into the request
+          body after the defaults are applied (callers can override
+          ``pageSize`` or pass other SearchRequest fields like
+          ``numResultsPerDataStore``). An ``extra_body["dataStoreSpecs"]`` entry
+          takes precedence over ``vertex_data_store_specs`` so callers who
+          plumb specs through ``extra_body`` keep working unchanged.
         """
         # Convert query to string if it's a list
         if isinstance(query, list):
             query = " ".join(query)
 
-        # Vertex AI RAG API endpoint for retrieving contexts
+        # Vertex AI Search API endpoint for search
         url = f"{api_base}:search"
 
-        # Construct full rag corpus path
-        # Build the request body for Vertex AI Search API
-        request_body = {"query": query, "pageSize": 10}
+        request_body: Dict[str, Any] = {"query": query, "pageSize": 10}
+
+        data_store_specs = litellm_params.get("vertex_data_store_specs")
+        if data_store_specs:
+            if not isinstance(data_store_specs, list):
+                raise ValueError(
+                    "vertex_data_store_specs must be a list of DataStoreSpec dicts"
+                )
+            request_body["dataStoreSpecs"] = data_store_specs
+
+        if extra_body:
+            request_body.update(extra_body)
 
         #########################################################
         # Update logging object with details of the request
