@@ -129,6 +129,16 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         if api_base:
             return api_base.rstrip("/")
 
+        # GCP naming rules make unsafe characters in project/location
+        # unlikely, but a typo in env vars or config would otherwise
+        # silently malform the URL. Encode for parity with the other
+        # path segments.
+        encoded_vertex_project = encode_url_path_segment(
+            vertex_project, field_name="vertex_project"
+        )
+        encoded_vertex_location = encode_url_path_segment(
+            vertex_location, field_name="vertex_location"
+        )
         encoded_collection_id = encode_url_path_segment(
             collection_id, field_name="vertex_collection_id"
         )
@@ -145,7 +155,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             )
             return (
                 f"https://discoveryengine.googleapis.com/v1/"
-                f"projects/{vertex_project}/locations/{vertex_location}/"
+                f"projects/{encoded_vertex_project}/locations/{encoded_vertex_location}/"
                 f"collections/{encoded_collection_id}/engines/{encoded_app_id}/"
                 f"servingConfigs/{encoded_serving_config}"
             )
@@ -169,7 +179,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         return (
             f"https://discoveryengine.googleapis.com/v1/"
-            f"projects/{vertex_project}/locations/{vertex_location}/"
+            f"projects/{encoded_vertex_project}/locations/{encoded_vertex_location}/"
             f"collections/{encoded_collection_id}/dataStores/{encoded_datastore_id}/"
             f"servingConfigs/{encoded_serving_config}"
         )
@@ -190,12 +200,16 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Returns ``None`` when no datastores are specified.
         """
         raw = litellm_params.get("vertex_datastores")
-        if not raw:
+        if raw is None:
             return None
+        # Type-check before truthy-check so wrong-type values like 0/False
+        # don't slip through the empty-list short-circuit silently.
         if not isinstance(raw, list):
             raise ValueError(
-                "vertex_datastores must be a list of datastore ids or " "resource paths"
+                "vertex_datastores must be a list of datastore ids or resource paths"
             )
+        if not raw:
+            return None
 
         specs: List[Dict[str, str]] = []
         for entry in raw:
