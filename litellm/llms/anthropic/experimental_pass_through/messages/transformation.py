@@ -212,6 +212,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
+            mapped_effort = (
+                AnthropicMessagesConfig._normalize_xhigh_effort_for_max_model(
+                    model, mapped_effort
+                )
+            )
             gate_error = AnthropicConfig._validate_effort_for_model(
                 model, mapped_effort
             )
@@ -222,6 +227,35 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 existing_output_config = {}
             existing_output_config.setdefault("effort", mapped_effort)
             optional_params["output_config"] = existing_output_config
+
+    @staticmethod
+    def _normalize_xhigh_effort_for_max_model(model: str, effort: str) -> str:
+        """Return ``max`` when a model supports max effort but not xhigh."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        if effort != "xhigh":
+            return effort
+        if AnthropicConfig._supports_effort_level(model, "xhigh"):
+            return effort
+        if AnthropicConfig._supports_effort_level(model, "max"):
+            return "max"
+        return effort
+
+    @staticmethod
+    def _normalize_explicit_output_config_xhigh_effort(
+        model: str, optional_params: Dict
+    ) -> None:
+        """Normalize explicit ``output_config.effort=xhigh`` when ``max`` is supported."""
+        output_config = optional_params.get("output_config")
+        if not isinstance(output_config, dict):
+            return
+        effort = output_config.get("effort")
+        if not isinstance(effort, str):
+            return
+
+        output_config["effort"] = (
+            AnthropicMessagesConfig._normalize_xhigh_effort_for_max_model(model, effort)
+        )
 
     @staticmethod
     def _translate_legacy_thinking_for_adaptive_model(
@@ -273,6 +307,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+
+        self._normalize_explicit_output_config_xhigh_effort(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+        )
 
         self._translate_reasoning_effort_to_anthropic(
             model=model,
