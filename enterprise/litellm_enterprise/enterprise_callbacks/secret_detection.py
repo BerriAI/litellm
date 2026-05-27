@@ -72,8 +72,20 @@ def _redact_full_pem_blocks(text: str) -> str:
     Belt-and-braces safeguard against detect-secrets returning a partial
     match, behaviour changes, or missing a key type entirely -- if a
     complete BEGIN..END armor is still present, replace the whole block.
+
+    When this sweep actually replaces something the per-secret loop missed,
+    emit a warning so the audit trail matches the rest of the guardrail.
+    Silent divergence from the configured detectors would be a security
+    surprise.
     """
-    return _PEM_BLOCK_RE.sub("[REDACTED]", text)
+    new_text, n = _PEM_BLOCK_RE.subn("[REDACTED]", text)
+    if n > 0:
+        verbose_proxy_logger.warning(
+            "hide_secrets: defensive PEM-block sweep redacted %d block(s) "
+            "that the configured detect-secrets plugins did not flag.",
+            n,
+        )
+    return new_text
 
 
 GUARDRAIL_NAME = "hide_secrets"
