@@ -106,12 +106,6 @@ async def google_stream_generate_content(
         data["model"] = model_name
     data["stream"] = True
 
-    # Gemini :streamGenerateContent contract:
-    #   - no ?alt -> streamed JSON array (NDJSON; one JSON object per chunk)
-    #   - ?alt=sse -> SSE-framed (data: {json}\n\n + [DONE])
-    # Capture the client choice so the response framing below matches.
-    data["_google_genai_alt"] = request.query_params.get("alt") or ""
-
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
