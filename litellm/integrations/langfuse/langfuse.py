@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
     reconstruct_model_name,
     filter_exceptions_from_params,
+    get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
@@ -308,9 +309,16 @@ class LangFuseLogger:
 
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
+            # Read metadata from either ``litellm_params["metadata"]`` (legacy/chat)
+            # or ``litellm_params["litellm_metadata"]`` (new endpoints such as
+            # ``/v1/messages``) so proxy auth fields (user_api_key_alias,
+            # user_api_key_user_id, ...) injected by the proxy are always visible
+            # to Langfuse regardless of which endpoint received the request.
             metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
+                get_litellm_metadata_from_kwargs(kwargs)
+                or litellm_params.get("metadata", {})
+                or {}
+            )
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
