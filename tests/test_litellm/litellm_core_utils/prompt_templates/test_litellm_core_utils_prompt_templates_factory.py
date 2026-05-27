@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    _sanitize_empty_text_content,
     _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
@@ -2680,3 +2681,125 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_sanitize_empty_text_assistant_with_tool_calls():
+    """Assistant messages with tool_calls should not be sanitized
+    (they should be returned as-is with tool_calls preserved)."""
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"loc": "NY"}'},
+            }
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged (with tool_calls intact)
+    assert result.get("tool_calls") is not None
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["function"]["name"] == "get_weather"
+
+
+def test_sanitize_empty_text_assistant_with_non_text_content():
+    """Assistant messages with non-text content blocks (e.g., tool_use)
+    should not be sanitized - they contain substantive content beyond text."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged (content preserved)
+    assert result.get("content") == message["content"]
+
+
+def test_sanitize_empty_text_assistant_with_only_text_blocks():
+    """Assistant messages with ONLY empty/whitespace text blocks
+    should still be sanitized."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Content should have been sanitized - empty text blocks replaced
+    assert result.get("content") is not None
+    result_content = result["content"]
+    assert isinstance(result_content, list)
+    for block in result_content:
+        assert block["type"] == "text"
+        # Should not be empty/whitespace anymore
+        assert block["text"].strip()
+
+
+def test_sanitize_empty_text_assistant_with_mixed_content():
+    """Assistant messages with mixed content (text + non-text blocks)
+    should be preserved when they have non-text blocks."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            {"type": "text", "text": "   "},
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # Message should be returned unchanged because it has non-text content blocks
+    assert result.get("content") == message["content"]
+
+
+def test_sanitize_empty_text_non_assistant_non_user_roles():
+    """Non-user/assistant roles (tool, function) should pass through unchanged."""
+    tool_message = {"role": "tool", "content": "Result data", "tool_call_id": "call_1"}
+    result = _sanitize_empty_text_content(tool_message)
+    assert result["role"] == "tool"
+    assert result["content"] == "Result data"
+
+    function_message = {"role": "function", "content": "Result data", "name": "my_func"}
+    result = _sanitize_empty_text_content(function_message)
+    assert result["role"] == "function"
+    assert result["content"] == "Result data"
+
+
+def test_sanitize_empty_text_assistant_with_string_content():
+    """Assistant messages with plain string content (not a list) and
+    no tool_calls should pass through unchanged when content is non-empty.
+
+    This exercises the isinstance(content, list) -> False branch."""
+    message = {"role": "assistant", "content": "Hello, how can I help?"}
+    result = _sanitize_empty_text_content(message)
+    assert result["role"] == "assistant"
+    assert result["content"] == "Hello, how can I help?"
+
+
+def test_sanitize_empty_text_assistant_with_empty_string_content():
+    """Assistant messages with an empty string content and no tool_calls
+    should be sanitized (replaced with placeholder)."""
+    message = {"role": "assistant", "content": ""}
+    result = _sanitize_empty_text_content(message)
+    assert result["role"] == "assistant"
+    # Empty string should be replaced with placeholder
+    assert result["content"] != ""
+
+
+def test_sanitize_empty_text_assistant_with_missing_type_block():
+    """Assistant messages with content blocks missing a 'type' key should NOT
+    be treated as non-text — they should fall through to sanitization.
+    A dict block without a 'type' key is malformed and should not suppress
+    the empty-text guard."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"no_type": "value"},  # malformed: dict without 'type' key
+        ],
+    }
+    result = _sanitize_empty_text_content(message)
+    # The malformed block should not prevent sanitization from running
+    assert result.get("content") is not None

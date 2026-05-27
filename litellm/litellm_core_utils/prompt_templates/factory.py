@@ -2151,8 +2151,29 @@ def _sanitize_empty_text_content(
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
-    if message.get("role") not in ["user", "assistant"]:
-        return message
+    if message.get("role") != "user":
+        # For assistant messages: only skip sanitization when the message has
+        # content beyond empty text blocks -- either tool_calls (OpenAI format)
+        # or non-text content blocks (tool_use, image, etc.) that remain after
+        # the Anthropic conversion drops empty text blocks (the conversion logic
+        # only keeps text blocks whose content is truthy and non-empty, so
+        # remaining non-text blocks are substantive). If the message has ONLY
+        # empty/whitespace text blocks, still sanitize to prevent sending
+        # content: [] which the Anthropic API rejects.
+        if message.get("role") == "assistant":
+            content = message.get("content")
+            if message.get("tool_calls"):
+                return message
+            if isinstance(content, list) and any(
+                isinstance(b, dict)
+                and isinstance(b.get("type"), str)
+                and b.get("type") != "text"
+                for b in content
+            ):
+                return message
+            # Assistant messages with ONLY empty text blocks fall through
+        else:
+            return message
 
     content = message.get("content")
 
