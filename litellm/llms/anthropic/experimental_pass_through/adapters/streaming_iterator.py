@@ -139,14 +139,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if not isinstance(usage, dict) or "iterations" in usage:
             return message_delta_chunk
 
-        message_iteration: UsageIteration = {
-            "type": "message",
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-        }
+        input_tokens = usage.get("input_tokens", 0) or 0
+        output_tokens = usage.get("output_tokens", 0) or 0
         augmented = message_delta_chunk.copy()
         augmented_usage = dict(usage)
-        augmented_usage["iterations"] = list(self.iterations_usage) + [message_iteration]  # type: ignore[typeddict-unknown-key]
+        iterations: List[UsageIteration] = list(self.iterations_usage)
+        # Only emit a ``message`` iteration when we have real token data.
+        # Without a separate usage chunk (e.g. provider sent finish_reason
+        # alone), the held ``message_delta`` carries placeholder zeros from
+        # the translate step; reporting a zero-token iteration would be
+        # misleading and inconsistent with the non-streaming path.
+        if input_tokens > 0 or output_tokens > 0:
+            message_iteration: UsageIteration = {
+                "type": "message",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }
+            iterations.append(message_iteration)
+        augmented_usage["iterations"] = iterations  # type: ignore[typeddict-unknown-key]
         augmented["usage"] = augmented_usage
         return augmented
 
@@ -352,10 +362,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
-                        if processed_chunk.get("type") == "message_delta":
-                            processed_chunk = self._augment_message_delta_usage(
-                                processed_chunk
-                            )
+                        processed_chunk = self._augment_message_delta_usage(
+                            processed_chunk
+                        )
                         self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
                 elif self.holding_chunk is not None:
@@ -561,10 +570,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         ):
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
-                            if processed_chunk.get("type") == "message_delta":
-                                processed_chunk = self._augment_message_delta_usage(
-                                    processed_chunk
-                                )
+                            processed_chunk = self._augment_message_delta_usage(
+                                processed_chunk
+                            )
                             self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
                     elif self.holding_chunk is not None:

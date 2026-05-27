@@ -231,11 +231,10 @@ def _count_effective_tokens(
     )
 
     messages_without_compaction = _strip_compaction_blocks(effective_messages)
+    adapter = LiteLLMAnthropicMessagesAdapter()
     try:
-        openai_shape = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
-                messages=cast(Any, messages_without_compaction)
-            )
+        openai_shape = adapter.translate_anthropic_messages_to_openai(
+            messages=cast(Any, messages_without_compaction)
         )
     except Exception as e:
         verbose_logger.debug(
@@ -245,10 +244,30 @@ def _count_effective_tokens(
         )
         openai_shape = cast(Any, messages_without_compaction)
 
+    # Translate Anthropic-shaped tools (``input_schema``) to OpenAI-shaped
+    # tools (``{"type": "function", "function": {...}}``) so ``token_counter``
+    # gets a consistent format regardless of which counting path it uses.
+    # An inaccurate tool token count here could cause the polyfill to skip
+    # needed compaction or trigger unnecessary summarization.
+    openai_tools: Optional[List[Dict[str, Any]]] = None
+    if tools:
+        try:
+            translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
+                tools=cast(Any, tools)
+            )
+            openai_tools = cast(List[Dict[str, Any]], translated_tools)
+        except Exception as e:
+            verbose_logger.debug(
+                "compact_20260112: anthropic→openai tools translation failed "
+                "during token count, falling back to raw tools: %s",
+                e,
+            )
+            openai_tools = tools
+
     total = litellm.token_counter(
         model=model,
         messages=cast(Any, openai_shape),
-        tools=cast(Any, tools),
+        tools=cast(Any, openai_tools),
     )
     if compaction_block is not None:
         content = compaction_block.get("content") or ""
