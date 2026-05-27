@@ -1087,9 +1087,12 @@ class TestCustomTechnicalKeywords:
             assert kw in router.technical_keywords, f"default {kw!r} dropped"
         for kw in custom:
             assert kw in router.technical_keywords, f"custom {kw!r} missing"
+        # Compute expected unique additions so the assertion stays correct
+        # even if DEFAULT_TECHNICAL_KEYWORDS later gains one of `custom`.
+        unique_new = [kw for kw in custom if kw not in DEFAULT_TECHNICAL_KEYWORDS]
         assert len(router.technical_keywords) == len(
             DEFAULT_TECHNICAL_KEYWORDS
-        ) + len(custom)
+        ) + len(unique_new)
 
     def test_overlap_dedupes(self, mock_router_instance):
         from litellm.router_strategy.complexity_router.config import (
