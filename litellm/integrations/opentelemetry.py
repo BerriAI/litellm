@@ -174,6 +174,48 @@ class OpenTelemetryConfig:
         )
 
 
+def _make_hashable(value: object) -> object:
+    """Best-effort conversion of arbitrary ``_emit_once`` scope parts into a
+    hashable representation so they can be used inside the dedupe-key tuple.
+
+    The dedupe key is used as a dict key, so every component must be hashable.
+    In practice ``scope`` parts come from ``standard_logging_payload`` /
+    ``guardrail_information`` entries, where field types are not strictly
+    enforced. Notably, ``guardrail_mode`` may be configured as a list (e.g.
+    ``["pre_call", "post_call"]``) when a single guardrail is wired into
+    multiple lifecycle hooks -- this previously crashed ``_emit_once`` with
+    ``TypeError: unhashable type: \'list\'`` (LIT-3299).
+
+    The conversion is structure-preserving so equivalent representations
+    dedupe consistently:
+
+    * ``list`` / ``tuple`` -> ``tuple`` (positional order matters)
+    * ``set`` / ``frozenset`` -> ``frozenset`` (order does not matter)
+    * ``dict`` -> ``frozenset`` of ``(key, value)`` pairs (order does not matter)
+    * everything else is returned unchanged; if it is still unhashable, we
+      fall back to its ``repr()`` so a key can always be formed.
+
+    Conversion recurses into nested containers.
+    """
+    if isinstance(value, (str, bytes)):
+        return value
+    if isinstance(value, list):
+        return tuple(_make_hashable(v) for v in value)
+    if isinstance(value, tuple):
+        return tuple(_make_hashable(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_make_hashable(v) for v in value)
+    if isinstance(value, dict):
+        return frozenset(
+            (_make_hashable(k), _make_hashable(v)) for k, v in value.items()
+        )
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def __init__(
         self,
@@ -958,7 +1000,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (self.__class__.__name__, id(self), *scope)
+        # Normalize scope parts so the composed key is always hashable.
+        # See ``_make_hashable`` -- ``guardrail_mode`` may be a list when
+        # configured for multiple lifecycle hooks (e.g.
+        # ``["pre_call", "post_call"]``) which would otherwise raise
+        # ``TypeError: unhashable type: 'list'`` when the tuple is used
+        # as a dict key (LIT-3299).
+        dedupe_key = (
+            self.__class__.__name__,
+            id(self),
+            *(_make_hashable(s) for s in scope),
+        )
         if spans_logged.get(dedupe_key) is True:
             return False
 
