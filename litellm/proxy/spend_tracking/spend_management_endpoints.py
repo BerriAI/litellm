@@ -3571,7 +3571,6 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
         return False
 
 
-
 def _get_calling_key_team_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
     """
     Return the ``team_id`` the calling virtual key is scoped to, if any.
@@ -3684,7 +3683,6 @@ async def _assert_user_can_view_request_id(
     )
 
 
-
 async def _assert_calling_key_team_can_view_request_id(
     prisma_client,
     calling_key_team_id: str,
@@ -3714,6 +3712,7 @@ async def _assert_calling_key_team_can_view_request_id(
             )
         },
     )
+
 
 async def _get_permitted_team_ids_for_spend_logs(
     prisma_client,
