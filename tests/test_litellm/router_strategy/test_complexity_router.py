@@ -1047,3 +1047,114 @@ class TestExtractUserMessageAndSystemPrompt:
         )
         assert user_msg is None
         assert sys_prompt is None
+
+
+class TestCustomTechnicalKeywords:
+    """Tests for the `custom_technical_keywords` config field (LIT-3237)."""
+
+    def _make_router(self, mock_router_instance, **config_extras):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TIER_BOUNDARIES,
+            DEFAULT_TIER_MODELS,
+        )
+        config = {
+            "tiers": dict(DEFAULT_TIER_MODELS),
+            "tier_boundaries": dict(DEFAULT_TIER_BOUNDARIES),
+        }
+        config.update(config_extras)
+        return ComplexityRouter(
+            model_name="test",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    def test_default_when_field_absent(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TECHNICAL_KEYWORDS,
+        )
+        router = self._make_router(mock_router_instance)
+        assert router.technical_keywords == list(DEFAULT_TECHNICAL_KEYWORDS)
+
+    def test_extends_defaults_not_replaces(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TECHNICAL_KEYWORDS,
+        )
+        custom = ["kafka", "redis", "postgresql"]
+        router = self._make_router(
+            mock_router_instance, custom_technical_keywords=custom
+        )
+        for kw in DEFAULT_TECHNICAL_KEYWORDS:
+            assert kw in router.technical_keywords, f"default {kw!r} dropped"
+        for kw in custom:
+            assert kw in router.technical_keywords, f"custom {kw!r} missing"
+        assert len(router.technical_keywords) == len(
+            DEFAULT_TECHNICAL_KEYWORDS
+        ) + len(custom)
+
+    def test_overlap_dedupes(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TECHNICAL_KEYWORDS,
+        )
+        router = self._make_router(
+            mock_router_instance,
+            custom_technical_keywords=["http", "kafka", "kafka", "redis"],
+        )
+        assert (
+            len(router.technical_keywords)
+            == len(DEFAULT_TECHNICAL_KEYWORDS) + 2
+        )
+        assert router.technical_keywords.count("kafka") == 1
+        assert router.technical_keywords.count("redis") == 1
+        assert router.technical_keywords.count("http") == 1
+
+    def test_combined_with_technical_keywords_override(self, mock_router_instance):
+        router = self._make_router(
+            mock_router_instance,
+            technical_keywords=["alpha", "beta"],
+            custom_technical_keywords=["gamma", "delta"],
+        )
+        assert router.technical_keywords == ["alpha", "beta", "gamma", "delta"]
+
+    def test_empty_list_is_treated_as_unset(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TECHNICAL_KEYWORDS,
+        )
+        router = self._make_router(
+            mock_router_instance, custom_technical_keywords=[]
+        )
+        assert router.technical_keywords == list(DEFAULT_TECHNICAL_KEYWORDS)
+
+    def test_verizon_keyword_list_round_trip(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import (
+            DEFAULT_TECHNICAL_KEYWORDS,
+        )
+        verizon = [
+            "udp", "dns", "ssl", "tls", "ssh", "rest",
+            "graphql", "kafka", "redis", "postgresql", "mongodb",
+        ]
+        router = self._make_router(
+            mock_router_instance, custom_technical_keywords=verizon
+        )
+        for kw in verizon:
+            assert kw in router.technical_keywords
+        for kw in DEFAULT_TECHNICAL_KEYWORDS:
+            assert kw in router.technical_keywords
+
+    def test_custom_keywords_increase_complexity_signal(self, mock_router_instance):
+        prompt = (
+            "How do I configure a Kafka consumer with Redis as a state store "
+            "to read from a Postgresql change-data-capture topic?"
+        )
+        without = self._make_router(mock_router_instance)
+        with_custom = self._make_router(
+            mock_router_instance,
+            custom_technical_keywords=["kafka", "redis", "postgresql"],
+        )
+        _, score_off, _ = without.classify(prompt)
+        _, score_on, _ = with_custom.classify(prompt)
+        assert score_on > score_off
+
+    def test_config_field_round_trip_in_pydantic(self):
+        cfg = ComplexityRouterConfig(custom_technical_keywords=["kafka"])
+        assert cfg.custom_technical_keywords == ["kafka"]
+        assert ComplexityRouterConfig().custom_technical_keywords is None
