@@ -6,13 +6,14 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -21,6 +22,153 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 
 GUARDRAIL_NAME = "hide_secrets"
+
+# Matches a full PEM private-key block (header + base64 body + footer) across
+# multiple lines.  detect-secrets is line-based and only records the BEGIN
+# header as the secret value; ``_expand_private_key_values`` uses this
+# pattern to promote that header-only value to the full block so every
+# str.replace call site redacts the entire key, not just the first line.
+# Line-anchored PEM markers.  Used by ``_find_pem_blocks`` to walk the
+# input one line at a time, which is O(n) in the input length and avoids
+# any regex backtracking on adversarial inputs (e.g. many BEGIN headers
+# with no matching footer).
+_PEM_BEGIN_LINE_RE = re.compile(r"^-----BEGIN[ A-Z]*PRIVATE KEY-----\s*$")
+_PEM_END_LINE_RE = re.compile(r"^-----END[ A-Z]*PRIVATE KEY-----\s*$")
+# Per-block scan cap: PEM keys are at most a few KB; this bounds how many
+# lines we'll walk forward looking for the matching END footer before
+# giving up and treating the BEGIN as an orphan (truncated) block.
+_PEM_BLOCK_MAX_LINES = 256
+
+
+def _find_pem_blocks(text: str) -> List[str]:
+    """Return the full text of every PEM private-key block in *text*.
+
+    Walks line-by-line in O(n).  For each ``-----BEGIN ... PRIVATE KEY-----``
+    line we look forward up to ``_PEM_BLOCK_MAX_LINES`` for a matching
+    ``-----END ... PRIVATE KEY-----``.  If an END is found, the full block
+    (BEGIN through END, including original newlines) is returned.  If we
+    hit another BEGIN, the end of input, or the line cap first, we return
+    everything from the BEGIN through the line just before whatever made
+    us stop, so a truncated PEM body (no END footer) is still treated as
+    secret material and redacted.
+
+    Returns a list of block strings in order of appearance.  No state is
+    shared across blocks.
+    """
+    blocks: List[str] = []
+    # Use ``splitlines(keepends=True)`` so reconstructing a block preserves
+    # the original line terminators.
+    lines = text.splitlines(keepends=True)
+    i = 0
+    n = len(lines)
+    while i < n:
+        stripped = lines[i].rstrip("\r\n")
+        if _PEM_BEGIN_LINE_RE.match(stripped):
+            end_idx = None
+            for j in range(i + 1, min(n, i + 1 + _PEM_BLOCK_MAX_LINES)):
+                inner = lines[j].rstrip("\r\n")
+                if _PEM_END_LINE_RE.match(inner):
+                    end_idx = j
+                    break
+                if _PEM_BEGIN_LINE_RE.match(inner):
+                    # Another BEGIN before a matching END -> treat the
+                    # current block as orphaned, stop just before this one.
+                    break
+            if end_idx is not None:
+                # Strip trailing newline from the END line for a cleaner
+                # value (matches the historical regex behavior).
+                block = "".join(lines[i:end_idx + 1]).rstrip("\r\n")
+                blocks.append(block)
+                i = end_idx + 1
+                continue
+            else:
+                # Orphan BEGIN: redact from the BEGIN line through whatever
+                # we walked, which is at most _PEM_BLOCK_MAX_LINES.  This
+                # closes the "BEGIN + body, no END" partial-redaction gap.
+                stop = min(n, i + 1 + _PEM_BLOCK_MAX_LINES)
+                # If we stopped because of a next BEGIN, ``j`` is where we
+                # stopped; otherwise stop at the cap or end of input.
+                # We use the loop variable ``j``, but it may not be defined
+                # if there were no lines after BEGIN; recompute safely.
+                if i + 1 >= n:
+                    block = lines[i].rstrip("\r\n")
+                else:
+                    last = stop
+                    for j in range(i + 1, stop):
+                        inner = lines[j].rstrip("\r\n")
+                        if _PEM_BEGIN_LINE_RE.match(inner):
+                            last = j
+                            break
+                    block = "".join(lines[i:last]).rstrip("\r\n")
+                blocks.append(block)
+                i = (last if i + 1 < n else i + 1)
+                continue
+        i += 1
+    return blocks
+
+
+
+def _expand_private_key_values(
+    detected_secrets: List[Dict[str, Any]], text: str
+) -> List[Dict[str, Any]]:
+    """Promote ``Private Key`` entries from BEGIN-header-only to full PEM block.
+
+    detect-secrets scans line-by-line, so for PEM keys it records only the
+    ``-----BEGIN ... PRIVATE KEY-----`` armor header as the secret value.
+    Downstream ``str.replace`` call sites would only strike that single line
+    and leave the base64 body + END footer in the forwarded payload.  This
+    helper finds enclosing PEM blocks in *text* and rewrites the secret
+    value to the full block so the existing replace logic redacts the whole
+    key.
+
+    Because detect-secrets de-duplicates by secret value, multiple PEM
+    blocks that share the same BEGIN header (e.g. two ``-----BEGIN PRIVATE
+    KEY-----`` blocks in the same message) collapse to a single entry in
+    *detected_secrets*.  In addition, ``_find_pem_blocks`` is intentionally
+    broader than detect-secrets's built-in matcher and may catch blocks
+    (e.g. ``BEGIN OPENSSH PRIVATE KEY``) that detect-secrets never flagged.
+    To make sure every block is redacted, after expansion we add a
+    synthetic ``Private Key`` entry for every PEM block in *text* that did
+    not get claimed by an existing detected entry.
+
+    Each PEM block is claimed at most once.  All other secret types pass
+    through unchanged.
+    """
+    pem_blocks = _find_pem_blocks(text)
+    claimed: set = set()
+
+    expanded: List[Dict[str, Any]] = []
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key":
+            header = secret.get("value")
+            if header:
+                for idx, block in enumerate(pem_blocks):
+                    if idx in claimed:
+                        continue
+                    if header in block:
+                        secret = {**secret, "value": block}
+                        claimed.add(idx)
+                        break
+        expanded.append(secret)
+
+    # Backfill every unclaimed PEM block that ``_find_pem_blocks`` returned.
+    # detect-secrets de-duplicates entries by secret value, so multiple PEM
+    # blocks that share the same BEGIN header collapse to one detected
+    # record.  ``_find_pem_blocks`` is also intentionally broader than
+    # detect-secrets's built-in matcher (it accepts headers like
+    # ``BEGIN OPENSSH PRIVATE KEY`` and truncated blocks with no END
+    # footer), so a block in the message may have no matching detected
+    # entry at all.  Either way, the right behavior for ``hide_secrets``
+    # is to redact the full block, so we synthesize a ``Private Key``
+    # entry for every leftover.
+    for idx, block in enumerate(pem_blocks):
+        if idx in claimed:
+            continue
+        expanded.append({"type": "Private Key", "value": block})
+        claimed.add(idx)
+
+    return expanded
+
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -452,6 +600,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 detected_secrets.append(
                     {"type": found_secret.type, "value": found_secret.secret_value}
                 )
+
+        # detect-secrets is line-based: for PEM private keys it records only
+        # the BEGIN armor header as the secret value.  Expand each ``Private
+        # Key`` entry to the full PEM block so that downstream ``str.replace``
+        # call sites redact the entire key (body + END footer), not just the
+        # first line.
+        detected_secrets = _expand_private_key_values(
+            detected_secrets, message_content
+        )
 
         return detected_secrets
 
