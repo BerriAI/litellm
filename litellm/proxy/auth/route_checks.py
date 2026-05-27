@@ -200,7 +200,11 @@ class RouteChecks:
           ``"management_routes"`` / ``"llm_api_routes"`` /
           ``"info_routes"``) — the values that the
           ``/key/generate`` ``key_type`` presets in
-          ``handle_key_type`` write onto the token.
+          ``handle_key_type`` write onto the token. For the
+          ``llm_api_routes`` bucket this additionally honours
+          dynamically registered pass-through endpoints, matching
+          the symmetric behaviour of
+          ``is_virtual_key_allowed_to_call_route``.
 
         Bucket-name expansion mirrors the symmetric check in
         ``is_virtual_key_allowed_to_call_route``; without it a Proxy-
@@ -221,6 +225,23 @@ class RouteChecks:
                     allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                 ):
                     return True
+
+                # Mirror the llm_api_routes pass-through carve-out in
+                # is_virtual_key_allowed_to_call_route: keys scoped to
+                # llm_api_routes also reach dynamically registered
+                # pass-through endpoints (e.g. config-driven
+                # /fake-openai-proxy/*). Without this, a Proxy-Admin-
+                # issued llm_api key whose user_obj falls back to None
+                # would 401 on a route the first gate would have allowed.
+                if allowed_route == "llm_api_routes":
+                    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                        InitPassThroughEndpointHelpers,
+                    )
+
+                    if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                        route=route
+                    ):
+                        return True
                 continue
 
             if RouteChecks._route_matches_allowed_route(
