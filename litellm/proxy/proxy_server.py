@@ -7009,9 +7009,9 @@ async def async_data_generator(  # noqa: PLR0915
                         json_payloads = []
                         for line in chunk.splitlines():
                             if line.startswith("data: "):
-                                json_payloads.append(line[len("data: "):])
+                                json_payloads.append(line[len("data: ") :])
                             elif line.startswith("data:"):
-                                json_payloads.append(line[len("data:"):])
+                                json_payloads.append(line[len("data:") :])
                             # event:/comment (: prefix) lines are SSE control
                             # frames; drop them for non-SSE clients.
                         if json_payloads:
