@@ -2384,7 +2384,9 @@ class ExperimentalUIJWTToken:
 
         # Experimental UI flow uses its own session-duration env var (does not use LITELLM_UI_SESSION_DURATION).
         # Defaults to 10 minutes for backwards compatibility / security. Malformed values fall back to 10 min.
-        expiration_seconds = ExperimentalUIJWTToken._get_experimental_ui_session_seconds()
+        expiration_seconds = (
+            ExperimentalUIJWTToken._get_experimental_ui_session_seconds()
+        )
         expiration_time = get_utc_datetime() + timedelta(seconds=expiration_seconds)
 
         # Format the expiration time as ISO 8601 string
