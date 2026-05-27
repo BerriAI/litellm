@@ -364,3 +364,64 @@ def test_full_call_sequence_matches_proxy_call_shape():
             "dataStore": "projects/demo-proj/locations/global/collections/default_collection/dataStores/ds-beta"
         },
     ]
+
+
+def test_transform_request_rejects_zero_vertex_datastores():
+    """Wrong-type value 0 (falsy) must still raise ValueError - Greptile P2."""
+    config = VertexSearchAPIVectorStoreConfig()
+    logging_obj = _LoggingStub()
+
+    with pytest.raises(ValueError, match="vertex_datastores must be a list"):
+        config.transform_search_vector_store_request(
+            vector_store_id="ignored",
+            query="hi",
+            vector_store_search_optional_params={},
+            api_base="https://example.com",
+            litellm_logging_obj=logging_obj,
+            litellm_params={
+                "vertex_project": "p",
+                "vertex_location": "global",
+                "vertex_app_id": "my-app",
+                "vertex_datastores": 0,
+            },
+        )
+
+
+def test_transform_request_accepts_empty_list_vertex_datastores():
+    """Empty list is treated like no datastores (no dataStoreSpecs in body)."""
+    config = VertexSearchAPIVectorStoreConfig()
+    logging_obj = _LoggingStub()
+
+    _, body = config.transform_search_vector_store_request(
+        vector_store_id="ignored",
+        query="hi",
+        vector_store_search_optional_params={},
+        api_base="https://example.com",
+        litellm_logging_obj=logging_obj,
+        litellm_params={
+            "vertex_project": "p",
+            "vertex_location": "global",
+            "vertex_app_id": "my-app",
+            "vertex_datastores": [],
+        },
+    )
+
+    assert "dataStoreSpecs" not in body
+
+
+def test_url_encodes_vertex_project_and_location():
+    """vertex_project / vertex_location are encoded to avoid silent URL
+    malformation if a typo or env-var quirk introduces an unsafe char."""
+    config = VertexSearchAPIVectorStoreConfig()
+
+    url = config.get_complete_url(
+        api_base=None,
+        litellm_params={
+            "vertex_project": "weird/proj",
+            "vertex_location": "weird location",
+            "vertex_app_id": "my-app",
+        },
+    )
+
+    assert "projects/weird%2Fproj/" in url
+    assert "locations/weird%20location/" in url
