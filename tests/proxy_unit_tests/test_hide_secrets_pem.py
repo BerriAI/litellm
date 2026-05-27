@@ -136,3 +136,45 @@ def test_orphan_begin_does_not_misalign_following_block(secret_detector):
     assert "BEGIN RSA PRIVATE KEY" not in redacted
     assert "END RSA PRIVATE KEY" not in redacted
     assert "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" not in redacted
+
+
+PEM_RSA = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n"
+    "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF\n"
+    "-----END RSA PRIVATE KEY-----"
+)
+
+
+def test_two_complete_blocks_pair_correctly(secret_detector):
+    text = "k1:\n" + PEM + "\nk2:\n" + PEM_RSA + "\nend"
+    found = secret_detector.scan_message_for_secrets(text)
+    values = [s["value"] for s in found if s["type"] == "Private Key"]
+    assert PEM in values
+    assert PEM_RSA in values
+    redacted = text
+    for s in found:
+        redacted = redacted.replace(s["value"], "[REDACTED]")
+    assert "MIIEvQIBADANBgkqhkiG" not in redacted
+    assert "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" not in redacted
+    assert "BEGIN PRIVATE KEY" not in redacted
+    assert "END RSA PRIVATE KEY" not in redacted
+
+
+def test_orphan_begin_does_not_misalign_following_block(secret_detector):
+    text = (
+        "Orphan header pasted, no end:\n"
+        "-----BEGIN PRIVATE KEY-----\n"
+        "(user pasted only the armor line)\n"
+        "Then a complete RSA block:\n"
+        + PEM_RSA
+    )
+    found = secret_detector.scan_message_for_secrets(text)
+    assert len(found) >= 1
+    redacted = text
+    for s in found:
+        redacted = redacted.replace(s["value"], "[REDACTED]")
+    assert "BEGIN PRIVATE KEY" not in redacted
+    assert "BEGIN RSA PRIVATE KEY" not in redacted
+    assert "END RSA PRIVATE KEY" not in redacted
+    assert "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" not in redacted
