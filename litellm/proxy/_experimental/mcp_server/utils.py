@@ -371,12 +371,14 @@ class MCPMissingUserEnvVarsError(Exception):
         self.missing = missing
         self.setup_url = setup_url
         label = server_name or server_id
-        vars_list = ", ".join(missing)
+        bullet_list = "\n".join(f"- {name}" for name in missing)
         message = (
-            f"MCP server '{label}' is missing the following per-user environment "
-            f"variable{'s' if len(missing) != 1 else ''} that you need to fill in "
-            f"before this server can be used: {vars_list}.\n\n"
-            f"Go to {setup_url} to set them, then try again."
+            f'Cannot connect to MCP server "{label}".\n\n'
+            f"Your administrator configured this server to require per-user "
+            f"variables, but you haven't set the following yet:\n"
+            f"{bullet_list}\n\n"
+            f"Set your credentials here:\n"
+            f"{setup_url}"
         )
         super().__init__(message)
 

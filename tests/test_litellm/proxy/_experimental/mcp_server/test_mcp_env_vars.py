@@ -116,15 +116,16 @@ def test_missing_user_env_vars_error_message_is_friendly():
         )
     err = exc_info.value
     text = str(err)
-    assert "CorporateDB" in text
-    assert "CORP_USERNAME" in text
-    assert "CORP_PASSWORD" in text
+    assert 'Cannot connect to MCP server "CorporateDB".' in text
+    assert "- CORP_USERNAME" in text
+    assert "- CORP_PASSWORD" in text
     assert "fill_env_vars=abc-123" in text
+    assert "Set your credentials here:" in text
     assert err.server_id == "abc-123"
     assert err.missing == ["CORP_USERNAME", "CORP_PASSWORD"]
 
 
-def test_missing_user_env_vars_error_singular_message():
+def test_missing_user_env_vars_error_falls_back_to_server_id():
     err = _u("MCPMissingUserEnvVarsError")(
         server_id="abc",
         server_name=None,
@@ -132,10 +133,9 @@ def test_missing_user_env_vars_error_singular_message():
         setup_url="/ui/",
     )
     text = str(err)
-    # Singular "variable" rather than "variables" when only one is missing
-    assert "variable that you need to fill in" in text
     # Falls back to server_id when server_name is missing
-    assert "abc" in text
+    assert 'Cannot connect to MCP server "abc".' in text
+    assert "- X" in text
 
 
 # ── _resolve_static_headers_with_env_vars ────────────────────────────────
