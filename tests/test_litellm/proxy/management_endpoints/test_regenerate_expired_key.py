@@ -317,3 +317,40 @@ async def test_lit2569_auto_extend_respects_upperbound_duration():
         f"BUG: auto-extend bypassed upperbound cap; new expires {delta} > 1d"
     )
     assert delta > timedelta(hours=23)
+
+
+@pytest.mark.asyncio
+async def test_lit2569_auto_extend_caps_lifetime_at_30d_no_creep():
+    """LIT-2569 + Greptile review: prevent lifetime creep on successive
+    regenerations. ``created_at`` does not change on regenerate, so a naive
+    ``expires - created_at`` lifetime calculation grows on each cycle
+    (30d -> 61d -> 123d). Cap the auto-extended lifetime at a 30-day
+    default when no upperbound is configured.
+    """
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+
+    now = datetime.now(timezone.utc)
+    # Simulate a key that has already been regenerated twice with lifetime
+    # creep: ``expires - created_at`` is now ~90d even though it started
+    # life as a 30-day key.
+    existing_key = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+        created_at=now - timedelta(days=120),
+        expires=now - timedelta(days=1),  # still expired
+    )
+
+    written = await _run_regenerate(existing_key, RegenerateKeyRequest())
+    new_expires = written.get("expires")
+    assert new_expires is not None
+    delta = new_expires - datetime.now(timezone.utc)
+    # Must be capped at the 30-day default, not the naive 119d
+    # (created_at -> expires) span.
+    assert delta < timedelta(days=31), (
+        f"BUG: lifetime creep -- new expires {delta} > 30d cap"
+    )
+    assert delta > timedelta(days=29)
