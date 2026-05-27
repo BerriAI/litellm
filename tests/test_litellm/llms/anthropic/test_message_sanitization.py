@@ -635,3 +635,57 @@ class TestEmptyTextWithNonTextContent:
             "placeholder leaked into outgoing payload: " + as_text
         )
 
+
+    def test_empty_list_with_tool_calls_drops_text(self):
+        """
+        Edge case (LIT-3055 Greptile feedback): if the content list contains
+        only empty text blocks but the message has a sibling tool_calls field,
+        the empty text is dropped — content=[] is acceptable here because
+        tool_calls carries the turn.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": ""}],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": "{}"},
+                }
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        # Drop happened; tool_calls carries the turn.
+        assert out["content"] == []
+        assert out["tool_calls"][0]["id"] == "call_1"
+
+    def test_empty_text_only_list_without_tool_calls_keeps_placeholder(self):
+        """
+        Safety net: if the message has no tool_calls and only empty text blocks
+        (no non-text siblings), keep the existing rewrite-to-placeholder
+        behavior so Anthropic does not reject for an empty content list.
+        """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _sanitize_empty_text_content,
+        )
+
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "  "},
+            ],
+        }
+        out = _sanitize_empty_text_content(msg)
+        assert all(
+            isinstance(b, dict)
+            and b.get("type") == "text"
+            and b["text"] == self.PLACEHOLDER
+            for b in out["content"]
+        )
+        assert len(out["content"]) == 2
+
