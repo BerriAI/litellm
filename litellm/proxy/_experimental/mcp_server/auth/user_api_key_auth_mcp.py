@@ -992,42 +992,78 @@ class MCPRequestHandler:
         """
         Get allowed MCP servers for a team.
 
-        Note: object_permission is automatically loaded by get_team_object() in main auth flow.
+        Unions two sources:
+        - Legacy team.object_permission (mcp_servers, mcp_access_groups,
+          mcp_tool_permissions).
+        - Unified team.access_group_ids → access_group.access_mcp_server_ids.
+          Mirrors the model-side pattern in can_team_access_model — the group
+          is already attached to the team, so the team relationship is itself
+          the gate (no assigned_team_ids check needed here).
         """
         try:
-            # Get team object permission (already loaded in main auth flow)
-            object_permissions = await MCPRequestHandler._get_team_object_permission(
-                user_api_key_auth
-            )
-
-            if object_permissions is None:
-                return []
-
-            # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+                get_team_object,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if (
+                user_api_key_auth is None
+                or not user_api_key_auth.team_id
+                or prisma_client is None
+            ):
+                return []
+
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_obj is None:
+                return []
+
+            team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+                access_group_ids=team_obj.access_group_ids or [],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            object_permissions = team_obj.object_permission
+            if object_permissions is None:
+                return list(set(team_access_group_servers))
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
                 object_permissions.mcp_servers or []
             )
 
-            # Get MCP servers from access groups
-            access_group_servers = (
+            legacy_access_group_servers = (
                 await MCPRequestHandler._get_mcp_servers_from_access_groups(
                     object_permissions.mcp_access_groups or []
                 )
             )
 
-            # servers referenced in tool permissions should also be accessible
             tool_perm_servers = list(
                 global_mcp_server_manager.expand_tool_permissions(
                     object_permissions.mcp_tool_permissions
                 ).keys()
             )
 
-            # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + legacy_access_group_servers
+                + tool_perm_servers
+                + team_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(

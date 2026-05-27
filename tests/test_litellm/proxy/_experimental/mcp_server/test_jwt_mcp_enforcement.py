@@ -462,6 +462,9 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
     )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object
+    )
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
@@ -495,28 +498,25 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
             object_permission=key_object_permission,  # Key has its own permissions
         )
 
-        # Mock the helper methods to return our test data
-        with patch.object(
-            MCPRequestHandler, "_get_team_object_permission"
-        ) as mock_team_perm:
-            mock_team_perm.return_value = team_object_permission
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_object_permission",
+                return_value=key_object_permission,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            allowed_servers = await MCPRequestHandler.get_allowed_mcp_servers(
+                user_api_key_auth
+            )
 
-            with patch.object(
-                MCPRequestHandler, "_get_key_object_permission"
-            ) as mock_key_perm:
-                mock_key_perm.return_value = key_object_permission
-
-                with patch.object(
-                    MCPRequestHandler, "_get_mcp_servers_from_access_groups"
-                ) as mock_access_groups:
-                    mock_access_groups.return_value = []
-
-                    allowed_servers = await MCPRequestHandler.get_allowed_mcp_servers(
-                        user_api_key_auth
-                    )
-
-                    # Should be intersection: only server-2 is in both
-                    expected = ["server-2"]
-                    assert sorted(allowed_servers) == sorted(
-                        expected
-                    ), f"Expected intersection {expected}, got {allowed_servers}"
+            # Should be intersection: only server-2 is in both
+            expected = ["server-2"]
+            assert sorted(allowed_servers) == sorted(
+                expected
+            ), f"Expected intersection {expected}, got {allowed_servers}"
