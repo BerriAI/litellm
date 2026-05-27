@@ -36,9 +36,7 @@ if TYPE_CHECKING:
 
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
-ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset(
-    {"output_config"}
-)
+ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset({"output_config"})
 
 
 async def _prepare_context_managed_request(
@@ -57,14 +55,30 @@ async def _prepare_context_managed_request(
         apply_client_compaction_block_history,
     )
 
-    history_result = apply_client_compaction_block_history(
-        messages=cast(List[Dict[str, Any]], messages),
-        system=system,
+    # Skip the client-history pre-processing when a ``compact_20260112``
+    # polyfill spec will run: that editor already slices around any client-sent
+    # compaction block in its Phase A (and uses the full post-compaction tail
+    # for its token-threshold check). Pre-collapsing to just the latest user
+    # question here would starve the polyfill of conversation context and
+    # silently drop intermediate turns.
+    polyfill_will_run = _polyfill_will_run(
+        context_management_spec=context_management_spec,
+        drop_params=drop_params,
     )
-    working_messages = (
-        history_result.messages if history_result is not None else messages
-    )
-    working_system = history_result.system if history_result is not None else system
+
+    if polyfill_will_run:
+        history_result: Optional[PolyfillResult] = None
+        working_messages: List[Dict] = messages
+        working_system: Optional[Any] = system
+    else:
+        history_result = apply_client_compaction_block_history(
+            messages=cast(List[Dict[str, Any]], messages),
+            system=system,
+        )
+        working_messages = (
+            history_result.messages if history_result is not None else messages
+        )
+        working_system = history_result.system if history_result is not None else system
 
     polyfill_result = await _run_polyfill_if_enabled(
         model=model,
@@ -80,6 +94,50 @@ async def _prepare_context_managed_request(
     if polyfill_result is not None:
         return polyfill_result
     return history_result
+
+
+def _polyfill_will_run(
+    *,
+    context_management_spec: Any,
+    drop_params: Optional[bool],
+) -> bool:
+    """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
+
+    Mirrors the gating in ``_run_polyfill_if_enabled``: an empty spec or
+    effective ``drop_params`` short-circuits the polyfill. The pre-processing
+    skip only applies when the dispatcher will actually invoke
+    ``apply_compact_20260112`` (which has its own compaction-block slicing).
+    """
+    if not context_management_spec:
+        return False
+
+    effective_drop_params = (
+        drop_params if drop_params is not None else litellm.drop_params
+    )
+    if effective_drop_params:
+        return False
+
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_EDIT_TYPE,
+    )
+
+    spec = context_management_spec
+    if isinstance(spec, list):
+        try:
+            from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+            spec = AnthropicConfig.map_openai_context_management_to_anthropic(spec)
+        except Exception:
+            return False
+
+    edits = spec.get("edits") if isinstance(spec, dict) else None
+    if not isinstance(edits, list):
+        return False
+
+    return any(
+        isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE
+        for edit in edits
+    )
 
 
 async def _run_polyfill_if_enabled(
