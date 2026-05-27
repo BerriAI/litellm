@@ -1671,8 +1671,8 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
-    for effort in ["high", "medium", "low", "xhigh"]:
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
+    for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2113,13 +2113,13 @@ def test_get_config_does_not_leak_module_constants():
         ("claude-opus-4-7", "max", True),
         ("claude-opus-4-7", "xhigh", True),
         ("claude-opus-4-6", "max", True),
-        ("claude-opus-4-6", "xhigh", True),
+        ("claude-opus-4-6", "xhigh", False),
         ("claude-sonnet-4-6", "max", True),
         ("claude-sonnet-4-6", "xhigh", False),
         ("bedrock/invoke/us.anthropic.claude-opus-4-7", "max", True),
         ("bedrock/invoke/us.anthropic.claude-opus-4-7", "xhigh", True),
         ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "max", True),
-        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", False),
         ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", True),
         ("vertex_ai/claude-opus-4-7", "xhigh", True),
         ("azure_ai/claude-opus-4-7", "xhigh", True),
@@ -2139,7 +2139,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
         ("claude-opus-4-5-20251101", "max", True),
         ("claude-sonnet-4-5", "max", True),
         ("claude-opus-4-7", "xhigh", False),
-        ("claude-opus-4-6", "xhigh", False),
+        ("claude-opus-4-6", "xhigh", True),
         ("claude-sonnet-4-6", "xhigh", True),
         ("claude-opus-4-5-20251101", "high", False),
         ("claude-haiku-4-5", "low", False),
