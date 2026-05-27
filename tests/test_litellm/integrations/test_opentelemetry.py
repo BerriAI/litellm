@@ -5298,3 +5298,4 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
