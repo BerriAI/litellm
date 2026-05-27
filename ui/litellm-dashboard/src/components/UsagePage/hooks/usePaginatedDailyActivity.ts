@@ -107,6 +107,11 @@ function sumRowMetrics(
  * Merge two breakdown sub-maps (e.g. models, api_keys) keyed by entity id.
  * When the same entity appears in both, metrics are summed and the nested
  * api_key_breakdown is recursively merged. metadata from the first row wins.
+ *
+ * `api_key_breakdown` is only set on the merged entry if at least one of the
+ * inputs had it -- this preserves the shape of `KeyMetricWithMetadata` entries
+ * (which have no `api_key_breakdown` field) instead of injecting an empty
+ * object on every merge.
  */
 function mergeBreakdownSubMap(
   a: Record<string, any> | undefined,
@@ -121,15 +126,21 @@ function mergeBreakdownSubMap(
       result[key] = bEntry;
       continue;
     }
-    result[key] = {
+    const merged: Record<string, any> = {
       ...aEntry,
       metrics: sumRowMetrics(aEntry.metrics || {}, bEntry.metrics || {}),
       metadata: aEntry.metadata ?? bEntry.metadata,
-      api_key_breakdown: mergeBreakdownSubMap(
+    };
+    // Only carry api_key_breakdown forward if at least one side had it, so we
+    // don't add a `{}` field to entries (e.g. KeyMetricWithMetadata) whose
+    // interface does not include it.
+    if (aEntry.api_key_breakdown !== undefined || bEntry.api_key_breakdown !== undefined) {
+      merged.api_key_breakdown = mergeBreakdownSubMap(
         aEntry.api_key_breakdown,
         bEntry.api_key_breakdown,
-      ),
-    };
+      );
+    }
+    result[key] = merged;
   }
   return result;
 }
@@ -146,22 +157,32 @@ const BREAKDOWN_SUBMAPS = [
 
 /**
  * Merge the full breakdown object of two DailyData rows that share a date.
- * Each known sub-map is merged independently; unknown sub-maps from either
- * side are passed through so we never drop fields the backend adds later.
+ * Every sub-map (known *and* unknown) is merged with mergeBreakdownSubMap, so
+ * a future backend addition (e.g. a "regions" sub-map) is never silently
+ * dropped by last-write-wins object spreads. Known sub-maps are always at
+ * least `{}` in the output so downstream consumers do not need to guard for
+ * undefined.
  */
 export function mergeBreakdowns(
   a: Record<string, any> | undefined,
   b: Record<string, any> | undefined,
 ): Record<string, any> {
-  const merged: Record<string, any> = { ...(a || {}), ...(b || {}) };
-  for (const key of BREAKDOWN_SUBMAPS) {
+  const allKeys = new Set<string>([
+    ...Object.keys(a || {}),
+    ...Object.keys(b || {}),
+  ]);
+  const merged: Record<string, any> = {};
+  for (const key of allKeys) {
     merged[key] = mergeBreakdownSubMap(a?.[key], b?.[key]);
+  }
+  for (const key of BREAKDOWN_SUBMAPS) {
+    if (merged[key] === undefined) merged[key] = {};
   }
   return merged;
 }
 
 /**
- * Collapse paginated DailyData results so rows with the same date are
+ * Collapse paginated DailyData results so rows with the same `date` are
  * merged into one entry (metrics summed, breakdowns merged). Without this,
  * a paginated backend response for a single-day window emits one chart bar
  * per page instead of one bar per actual day. Order is preserved by
