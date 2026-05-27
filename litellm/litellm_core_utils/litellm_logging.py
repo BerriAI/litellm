@@ -3813,6 +3813,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_datadog_metrics_logger)
             return _datadog_metrics_logger  # type: ignore
         elif logging_integration == "datadog_llm_observability":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DataDogLLMObsLogger):
+                    return callback  # type: ignore
+
             _datadog_llm_obs_logger = DataDogLLMObsLogger()
             _in_memory_loggers.append(_datadog_llm_obs_logger)
             return _datadog_llm_obs_logger  # type: ignore
