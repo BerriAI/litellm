@@ -2840,8 +2840,21 @@ def _schedule_background_health_check_db_save(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
 ):
-    """Fire-and-forget: persist health check results to DB if prisma is available."""
+    """Fire-and-forget: persist health check results to DB if prisma is available.
+
+    Opt-out: setups with many models and frequent background health checks can
+    generate enough writes to ``LiteLLM_HealthCheckTable`` to dominate database
+    ACU usage. Setting ``general_settings.disable_background_health_check_db_save:
+    true`` skips the per-cycle DB write path entirely (both the
+    ``get_all_latest_health_checks()`` SELECT and the per-model UPSERTs). The
+    on-demand ``/health/*`` endpoint write path is unaffected.
+    """
     if prisma_client is None:
+        return
+    if general_settings.get("disable_background_health_check_db_save", False) is True:
+        verbose_proxy_logger.debug(
+            "background_health_check_db_save_disabled cycle skipped via general_settings.disable_background_health_check_db_save=True"
+        )
         return
     import time as time_module
 
