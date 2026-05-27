@@ -1369,25 +1369,24 @@ class ProxyBaseLLMRequestProcessing:
                         request_data=self.data,
                     )
                     # :streamGenerateContent (native google-genai route):
-                    # honor Gemini’s contract. When the client did NOT
-                    # send ?alt=sse (google-genai SDK default) return a
-                    # newline-delimited JSON stream, not SSE. When the
-                    # client DID request alt=sse, fall through to the
-                    # existing SSE-framed path.
-                    if (
-                        route_type == "agenerate_content_stream"
-                        and self.data.get("_google_genai_alt") != "sse"
-                    ):
-                        selected_data_generator = (
-                            ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(
-                                selected_data_generator
+                    # honor Gemini’s contract. Read ``?alt`` directly off
+                    # the incoming FastAPI request — we deliberately do NOT
+                    # plumb it through ``self.data`` so it cannot leak into
+                    # the upstream LLM call (route_request forwards
+                    # ``**data`` to the provider SDK).
+                    if route_type == "agenerate_content_stream":
+                        client_alt = request.query_params.get("alt") or ""
+                        if client_alt != "sse":
+                            selected_data_generator = (
+                                ProxyBaseLLMRequestProcessing._google_genai_jsonl_from_sse(
+                                    selected_data_generator
+                                )
                             )
-                        )
-                        return await create_response(
-                            generator=selected_data_generator,
-                            media_type="application/json",
-                            headers=custom_headers,
-                        )
+                            return await create_response(
+                                generator=selected_data_generator,
+                                media_type="application/json",
+                                headers=custom_headers,
+                            )
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
