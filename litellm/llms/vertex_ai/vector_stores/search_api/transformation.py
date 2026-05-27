@@ -135,9 +135,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         app_id = self._get_vertex_app_id(litellm_params)
         if app_id is not None:
-            encoded_app_id = encode_url_path_segment(
-                app_id, field_name="vertex_app_id"
-            )
+            encoded_app_id = encode_url_path_segment(app_id, field_name="vertex_app_id")
             serving_config = (
                 litellm_params.get("vertex_serving_config")
                 or _DEFAULT_ENGINE_SERVING_CONFIG
@@ -196,8 +194,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             return None
         if not isinstance(raw, list):
             raise ValueError(
-                "vertex_datastores must be a list of datastore ids or "
-                "resource paths"
+                "vertex_datastores must be a list of datastore ids or " "resource paths"
             )
 
         specs: List[Dict[str, str]] = []
@@ -255,8 +252,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 vertex_project=self.safe_get_vertex_ai_project(litellm_params),
                 vertex_location=self.safe_get_vertex_ai_location(litellm_params),
                 collection_id=(
-                    litellm_params.get("vertex_collection_id")
-                    or "default_collection"
+                    litellm_params.get("vertex_collection_id") or "default_collection"
                 ),
             )
             if data_store_specs is not None:
@@ -323,9 +319,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 if formatted_url:
                     attributes["formattedUrl"] = formatted_url
 
-                score = 1.0 / (
-                    float(search_results.__len__() + 1)
-                )
+                score = 1.0 / (float(search_results.__len__() + 1))
 
                 result_obj = VectorStoreSearchResult(
                     score=score,
