@@ -2279,6 +2279,11 @@ async def view_spend_logs(  # noqa: PLR0915
     ):
         user_id = user_api_key_dict.user_id
 
+    # LIT-3301: a team-scoped virtual key must only see its own team's logs,
+    # regardless of the underlying user role. Propagate ``team_id`` from the
+    # calling key into every filter assembled below.
+    enforced_team_id: Optional[str] = getattr(user_api_key_dict, "team_id", None)
+
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
@@ -2310,6 +2315,10 @@ async def view_spend_logs(  # noqa: PLR0915
                     "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
+
+            # LIT-3301: enforce team scope for team virtual keys.
+            if enforced_team_id is not None:
+                filter_query["team_id"] = enforced_team_id  # type: ignore[assignment]
 
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
@@ -2395,6 +2404,9 @@ async def view_spend_logs(  # noqa: PLR0915
 
         else:
             scoped_filter: Dict[str, Any] = {}
+            # LIT-3301: enforce team scope for team virtual keys.
+            if enforced_team_id is not None:
+                scoped_filter["team_id"] = enforced_team_id
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
@@ -3496,17 +3508,35 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
 
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
-    Safely determine if the current user has admin view permissions.
-    Defaults to False on any exception.
+    Safely determine if the current request should receive proxy-admin scope
+    when querying spend logs / spend resources.
+
+    A request is admin-scoped only when BOTH:
+    1. The underlying user has the PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY role.
+    2. The calling virtual key is NOT bound to a team (``team_id is None``).
+
+    Team-scoped virtual keys (``user_api_key_dict.team_id`` set) must always be
+    treated as team-scoped, even when the user that minted the key has the
+    proxy-admin role. This prevents a team key from reading other teams' spend
+    logs via the admin-bypass branch in ``view_spend_logs`` /
+    ``ui_view_spend_logs`` / other spend endpoints.
+
+    Defaults to ``False`` on any exception.
     """
     try:
         user_role = getattr(user_api_key_dict, "user_role", None)
         if user_role is None:
             return False
-        return user_role in (
+        if user_role not in (
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        )
+        ):
+            return False
+        # A team virtual key never gets cross-team admin scope, even when the
+        # underlying user is a proxy admin.
+        if getattr(user_api_key_dict, "team_id", None) is not None:
+            return False
+        return True
     except Exception:
         return False
 
