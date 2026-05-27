@@ -409,6 +409,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    # Edit types that the proxy consumes/injects internally before sending the
+    # request upstream. Stripping these on Bedrock InvokeModel is expected and
+    # should NOT produce a warning, because the customer did not ask for them
+    # to run on Bedrock — Claude Code sends them on every request.
+    _LITELLM_INTERNAL_CONTEXT_MANAGEMENT_EDIT_TYPES = frozenset(
+        {"clear_thinking_20251015"}
+    )
+
     @staticmethod
     def _filter_context_management_for_bedrock_invoke(
         anthropic_messages_request: Dict,
@@ -426,6 +434,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         compact edits remain, and drop ``context_management`` entirely when no
         supported edits are left so the safety-net allowlist can pass it through.
 
+        When customer-requested edit types (e.g. ``clear_tool_uses_20250919``)
+        get stripped because Bedrock InvokeModel does not support them, emit a
+        warning so the silent no-op is visible in the proxy logs.
+
         Ref: https://github.com/BerriAI/litellm/issues/27532
         """
         cm = anthropic_messages_request.get("context_management")
@@ -441,6 +453,45 @@ class AmazonAnthropicClaudeMessagesConfig(
             for e in edits
             if isinstance(e, dict) and e.get("type") == "compact_20260112"
         ]
+
+        # Identify edit types we are about to drop because Bedrock InvokeModel
+        # cannot accept them. Skip the LiteLLM-internal ones — those are
+        # consumed elsewhere in the pipeline and not stripping them on Bedrock
+        # is not surprising. Anything left is a customer-requested edit type
+        # that will silently not run on Bedrock InvokeModel, which is the
+        # exact case the warning is meant to surface.
+        dropped_edit_types: List[str] = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                continue
+            edit_type = edit.get("type")
+            if edit_type == "compact_20260112":
+                continue
+            if (
+                isinstance(edit_type, str)
+                and edit_type
+                in AmazonAnthropicClaudeMessagesConfig._LITELLM_INTERNAL_CONTEXT_MANAGEMENT_EDIT_TYPES
+            ):
+                continue
+            if isinstance(edit_type, str) and edit_type:
+                dropped_edit_types.append(edit_type)
+            else:
+                dropped_edit_types.append("<unknown>")
+
+        if dropped_edit_types:
+            # Stable, de-duplicated order so the warning is short when a
+            # request repeats the same edit type and operators / tests can
+            # match against the message reliably.
+            unique_dropped = sorted(set(dropped_edit_types))
+            verbose_logger.warning(
+                "Bedrock InvokeModel does not support context_management "
+                "edit types %s; dropping them from the request. Supported "
+                "edit type on Bedrock InvokeModel is compact_20260112 "
+                "(paired with anthropic-beta compact-2026-01-12). "
+                "See https://github.com/BerriAI/litellm/issues/27532",
+                unique_dropped,
+            )
+
         if compact_edits:
             beta_set.add("compact-2026-01-12")
             anthropic_messages_request["context_management"] = {
