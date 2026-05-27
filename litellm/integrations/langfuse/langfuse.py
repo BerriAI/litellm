@@ -314,11 +314,7 @@ class LangFuseLogger:
             # ``/v1/messages``) so proxy auth fields (user_api_key_alias,
             # user_api_key_user_id, ...) injected by the proxy are always visible
             # to Langfuse regardless of which endpoint received the request.
-            metadata = (
-                get_litellm_metadata_from_kwargs(kwargs)
-                or litellm_params.get("metadata", {})
-                or {}
-            )
+            metadata = get_litellm_metadata_from_kwargs(kwargs) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
