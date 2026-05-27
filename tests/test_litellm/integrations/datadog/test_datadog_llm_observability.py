@@ -1193,3 +1193,120 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
+
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for LIT-3315: DataDogLLMObsLogger was missing the singleton
+# guard in _init_custom_logger_compatible_class, causing a new instance to be
+# appended to _in_memory_loggers (and a new periodic_flush asyncio task to be
+# scheduled) on every invocation.  All other integrations in that function are
+# guarded by a "for callback in _in_memory_loggers / isinstance" scan that
+# returns the existing cached logger.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_init_custom_logger_datadog_llm_obs_returns_singleton(monkeypatch):
+    """
+    Calling _init_custom_logger_compatible_class("datadog_llm_observability",...)
+    multiple times must return the same DataDogLLMObsLogger instance and must
+    NOT grow the module-level _in_memory_loggers list past a single entry for
+    that class.
+    """
+    monkeypatch.setenv("DD_API_KEY", "fake")
+    monkeypatch.setenv("DD_SITE", "datadoghq.com")
+    monkeypatch.setenv("DATADOG_API_KEY", "fake")
+
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    saved = list(litellm_logging._in_memory_loggers)
+    litellm_logging._in_memory_loggers.clear()
+    try:
+        first = _init_custom_logger_compatible_class(
+            "datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        second = _init_custom_logger_compatible_class(
+            "datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+        third = _init_custom_logger_compatible_class(
+            "datadog_llm_observability",
+            internal_usage_cache=None,
+            llm_router=None,
+        )
+
+        assert first is second is third, (
+            "_init_custom_logger_compatible_class must return the same "
+            "DataDogLLMObsLogger singleton on repeated calls"
+        )
+
+        ddobs_in_cache = [
+            cb
+            for cb in litellm_logging._in_memory_loggers
+            if isinstance(cb, DataDogLLMObsLogger)
+        ]
+        assert len(ddobs_in_cache) == 1, (
+            f"Expected exactly one cached DataDogLLMObsLogger, found "
+            f"{len(ddobs_in_cache)} (regression of LIT-3315 leak)"
+        )
+    finally:
+        litellm_logging._in_memory_loggers.clear()
+        litellm_logging._in_memory_loggers.extend(saved)
+
+
+@pytest.mark.asyncio
+async def test_init_custom_logger_datadog_llm_obs_no_periodic_flush_task_leak(monkeypatch):
+    """
+    Each new DataDogLLMObsLogger() schedules a periodic_flush asyncio task in
+    __init__.  Before the LIT-3315 fix, N calls leaked N tasks bound to stale
+    logger instances.  After the fix, the singleton guard short-circuits and
+    we end up with exactly one periodic_flush task per process.
+    """
+    monkeypatch.setenv("DD_API_KEY", "fake")
+    monkeypatch.setenv("DD_SITE", "datadoghq.com")
+    monkeypatch.setenv("DATADOG_API_KEY", "fake")
+
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    def count_flush_tasks_for(cls):
+        n = 0
+        for t in asyncio.all_tasks():
+            coro = getattr(t, "get_coro", lambda: None)()
+            if coro is None:
+                continue
+            frame = getattr(coro, "cr_frame", None)
+            if frame is None:
+                continue
+            s = frame.f_locals.get("self")
+            if isinstance(s, cls):
+                n += 1
+        return n
+
+    saved = list(litellm_logging._in_memory_loggers)
+    litellm_logging._in_memory_loggers.clear()
+    try:
+        baseline = count_flush_tasks_for(DataDogLLMObsLogger)
+        for _ in range(5):
+            _init_custom_logger_compatible_class(
+                "datadog_llm_observability",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            await asyncio.sleep(0)
+        after = count_flush_tasks_for(DataDogLLMObsLogger)
+        assert (after - baseline) <= 1, (
+            f"Expected at most one new DataDogLLMObs periodic_flush task, "
+            f"but {after - baseline} were scheduled across 5 inits (LIT-3315 leak)"
+        )
+    finally:
+        litellm_logging._in_memory_loggers.clear()
+        litellm_logging._in_memory_loggers.extend(saved)
