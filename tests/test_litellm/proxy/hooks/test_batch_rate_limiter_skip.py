@@ -285,3 +285,84 @@ def test_helper_returns_false_when_data_has_no_model():
         assert limiter._should_skip_input_file_retrieval(data={}) is True
     finally:
         restore()
+
+
+@pytest.mark.asyncio
+async def test_per_deployment_false_beats_global_true():
+    """LIT-3266 Greptile feedback: an explicit per-deployment False must
+    re-enable input-file retrieval / batch accounting for a specific model
+    even when the global skip flag is on.
+    """
+    limiter = _make_limiter()
+    litellm.skip_batch_input_file_retrieval = True  # global says "skip everything"
+
+    deployment = {
+        "model_name": "billed-batch-model",
+        "model_info": {
+            "id": "dep-1",
+            "skip_batch_input_file_retrieval": False,  # but THIS deployment is billed
+        },
+    }
+    restore = _install_router(deployment)
+    try:
+        called = {"n": 0}
+
+        async def fake_count(
+            file_id, custom_llm_provider="openai", user_api_key_dict=None
+        ):
+            called["n"] += 1
+            return BatchFileUsage(total_tokens=0, request_count=0)
+
+        with patch.object(limiter, "count_input_file_usage", side_effect=fake_count):
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=_user(),
+                cache=None,
+                data=_make_data(model="billed-batch-model"),
+                call_type="acreate_batch",
+            )
+        assert (
+            called["n"] == 1
+        ), "explicit per-deployment False must override a True global flag"
+    finally:
+        restore()
+
+
+def test_helper_presence_aware_resolution_order():
+    """Direct helper test: per-deployment value (even False) is authoritative.
+
+    - global=True,  deployment unset             -> skip
+    - global=True,  deployment present and True  -> skip
+    - global=True,  deployment present and False -> do NOT skip
+    - global=False, deployment unset             -> do NOT skip
+    - global=False, deployment present and True  -> skip
+    - global=False, deployment present and False -> do NOT skip
+    """
+    limiter = _make_limiter()
+
+    def _check(global_flag, per_dep_present, per_dep_value, expected):
+        litellm.skip_batch_input_file_retrieval = global_flag
+        deployment = None
+        if per_dep_present:
+            deployment = {
+                "model_name": "x",
+                "model_info": {
+                    "id": "d",
+                    "skip_batch_input_file_retrieval": per_dep_value,
+                },
+            }
+        restore = _install_router(deployment)
+        try:
+            got = limiter._should_skip_input_file_retrieval(data={"model": "x"})
+            assert got is expected, (
+                f"global={global_flag} per_dep_present={per_dep_present} "
+                f"per_dep_value={per_dep_value!r} -> got {got!r}, want {expected!r}"
+            )
+        finally:
+            restore()
+
+    _check(True, False, None, True)  # case 1
+    _check(True, True, True, True)  # case 2
+    _check(True, True, False, False)  # case 3 (the bug fixed by Greptile feedback)
+    _check(False, False, None, False)  # case 4
+    _check(False, True, True, True)  # case 5
+    _check(False, True, False, False)  # case 6
