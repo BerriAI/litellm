@@ -1418,3 +1418,22 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+// Bench Runs — admin registry of vLLM/SGLang benchmark results (Bench Runs dashboard tab)
+model LiteLLM_BenchRun {
+  bench_run_id      String   @id @default(uuid())
+  model_name        String   // litellm model name (litellm_params.model), required
+  deployment_server String?  // "vllm" | "sglang"
+  bench_type        String?  // "random" | "multi-turn"
+  input_tokens      Int?
+  output_tokens     Int?
+  max_concurrency   Int?
+  raw_command       String?  // raw `vllm bench serve ...` command text
+  raw_results       String?  // raw "Serving Benchmark Result" stdout block
+  created_at        DateTime @default(now()) @map("created_at")
+  created_by        String?
+  updated_at        DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by        String?
+
+  @@index([model_name])
+}
