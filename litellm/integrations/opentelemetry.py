@@ -1830,8 +1830,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
 
             exception = kwargs.get("exception")
-            standard_logging_payload: Optional[StandardLoggingPayload] = (
-                kwargs.get("standard_logging_object")
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
             )
 
             # Step 1: emit the OTEL ``exception`` span event when we have a
@@ -1846,9 +1846,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             error_information: Optional[dict] = None
             error_str: Optional[str] = None
             if standard_logging_payload is not None:
-                error_information = standard_logging_payload.get(
-                    "error_information"
-                )
+                error_information = standard_logging_payload.get("error_information")
                 error_str = standard_logging_payload.get("error_str")
 
             normalized = self._normalize_error_attributes(
@@ -1986,9 +1984,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     import traceback as _tb_mod
 
                     error_stack_trace = "".join(
-                        _tb_mod.format_exception(
-                            type(exception), exception, tb
-                        )
+                        _tb_mod.format_exception(type(exception), exception, tb)
                     )
                 except Exception:
                     error_stack_trace = ""
@@ -2020,7 +2016,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "llm_provider": llm_provider,
             "has_any_error_info": has_any_error_info,
         }
-
 
     def set_tools_attributes(self, span: Span, tools):
         import json
