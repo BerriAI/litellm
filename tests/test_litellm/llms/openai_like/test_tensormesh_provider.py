@@ -2,18 +2,6 @@
 Tests for Tensormesh provider configuration and integration.
 """
 
-import os
-import sys
-
-try:
-    import pytest
-except ImportError:
-    pytest = None
-
-# Add workspace to path
-workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
-
 import litellm
 
 
