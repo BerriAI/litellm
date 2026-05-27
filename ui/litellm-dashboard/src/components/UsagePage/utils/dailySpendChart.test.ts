@@ -50,3 +50,55 @@ describe("getDailySpendChartData", () => {
     expect(out.map(r=>r.date)).toEqual(["2026-05-24","2026-05-25"]);
   });
 });
+
+describe("collapseDailyResults — breakdown merging (LIT-3383 P1)", () => {
+  const baseRow = (date: string, opts: { models?: Record<string, number>; entities?: Record<string, number> } = {}): DailyData => ({
+    date,
+    metrics: { ...bm },
+    breakdown: {
+      models: Object.fromEntries(
+        Object.entries(opts.models ?? {}).map(([k, v]) => [
+          k,
+          { metrics: { ...bm, spend: v }, metadata: {}, api_key_breakdown: {} },
+        ]),
+      ),
+      model_groups: {},
+      mcp_servers: {},
+      providers: {},
+      api_keys: {},
+      entities: Object.fromEntries(
+        Object.entries(opts.entities ?? {}).map(([k, v]) => [
+          k,
+          { metrics: { ...bm, spend: v }, metadata: { alias: k, id: k }, api_key_breakdown: {} },
+        ]),
+      ),
+    },
+  });
+
+  it("sums entity spend across all source rows, not just the first", () => {
+    const rows = [
+      baseRow("2026-05-26", { entities: { e1: 1.5, e2: 0.5 } }),
+      baseRow("2026-05-27", { entities: { e1: 1.0, e3: 2.0 } }),
+    ];
+    const c = collapseDailyResults(rows, SINGLE_DAY_TIME_LABEL);
+    expect(c.breakdown.entities.e1.metrics.spend).toBe(2.5);
+    expect(c.breakdown.entities.e2.metrics.spend).toBe(0.5);
+    expect(c.breakdown.entities.e3.metrics.spend).toBe(2.0);
+  });
+
+  it("merges model breakdown across rows", () => {
+    const rows = [
+      baseRow("2026-05-26", { models: { "gpt-4": 1.0 } }),
+      baseRow("2026-05-27", { models: { "gpt-4": 2.0, "claude-3": 1.0 } }),
+    ];
+    const c = collapseDailyResults(rows, SINGLE_DAY_TIME_LABEL);
+    expect(c.breakdown.models["gpt-4"].metrics.spend).toBe(3.0);
+    expect(c.breakdown.models["claude-3"].metrics.spend).toBe(1.0);
+  });
+
+  it("returns an empty breakdown when all source rows are empty", () => {
+    const c = collapseDailyResults([baseRow("2026-05-26")], SINGLE_DAY_TIME_LABEL);
+    expect(Object.keys(c.breakdown.entities)).toHaveLength(0);
+    expect(Object.keys(c.breakdown.models)).toHaveLength(0);
+  });
+});
