@@ -126,3 +126,37 @@ class TestEmptyResponseHandling:
 
         assert response == mock_stream
         assert headers == {"x-request-id": "123"}
+
+    def test_sync_request_drops_internal_litellm_fields(self):
+        openai_chat = OpenAIChatCompletion()
+
+        mock_response = MagicMock()
+        mock_response.model_dump.return_value = {"choices": []}
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = mock_response
+
+        mock_client = MagicMock()
+        create_mock = mock_client.chat.completions.with_raw_response.create
+        create_mock.return_value = mock_raw_response
+
+        data = {
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "test"}],
+            "_litellm_rate_limit_descriptors": ["should-not-leave-litellm"],
+            "_litellm_tpm_reserved_tokens": 42,
+        }
+
+        openai_chat.make_sync_openai_chat_completion_request(
+            openai_client=mock_client,
+            data=data,
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        _, kwargs = create_mock.call_args
+        assert "_litellm_rate_limit_descriptors" not in kwargs
+        assert "_litellm_tpm_reserved_tokens" not in kwargs
+        assert kwargs["model"] == "gpt-4.1"
+        assert kwargs["messages"] == [{"role": "user", "content": "test"}]
