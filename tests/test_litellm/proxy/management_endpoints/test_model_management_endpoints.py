@@ -1700,3 +1700,5 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+# LIT-3211: keys.team_id boundary check regression tests added in TestModelManagementAuthChecks above
