@@ -1231,6 +1231,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 value=team_alias,
             )
 
+    @staticmethod
+    def _get_provider_request_id_from_hidden_params(
+        hidden_params: Any,
+    ) -> Optional[str]:
+        """Return the upstream provider's request id from
+        standard_logging_payload.hidden_params.additional_headers.
+
+        Prefers the OpenAI / Azure / Vertex AI x-request-id (stored as
+        llm_provider-x-request-id); falls back to the Anthropic-style
+        request-id (stored as llm_provider-request-id). Returns
+        None if neither header is present, the value is empty, or the
+        input is not a mapping. Used by set_attributes (LIT-3091) to
+        surface the value as a dedicated, queryable
+        gen_ai.provider.request.id span attribute.
+        """
+        if not isinstance(hidden_params, dict):
+            return None
+        additional_headers = hidden_params.get("additional_headers")
+        if not isinstance(additional_headers, dict):
+            return None
+        for key in ("llm_provider-x-request-id", "llm_provider-request-id"):
+            value = additional_headers.get(key)
+            if value:
+                return str(value)
+        return None
+
     def _set_team_attributes_from_kwargs(self, span: Span, kwargs: dict) -> None:
         """Pull team_id / team_alias from the standard logging metadata in kwargs and stamp them onto span."""
         std_log = kwargs.get("standard_logging_object")
@@ -2187,6 +2213,28 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     span=span,
                     key="litellm.call_id",
                     value=litellm_call_id,
+                )
+
+            # The upstream provider's request identifier (LIT-3091).
+            # `gen_ai.response.id` above is the provider response body id
+            # (e.g. `chatcmpl-...`); providers also return a *request* id
+            # in the response headers (`x-request-id` for OpenAI / Azure /
+            # Vertex AI, `request-id` for Anthropic) which is what their
+            # support teams use to look up a call in provider-side logs.
+            # LiteLLM already captures it into
+            # `standard_logging_payload.hidden_params.additional_headers`
+            # but it is otherwise only emitted inside the dumped
+            # `hidden_params` JSON blob and is not queryable / filterable
+            # in OTEL backends. Surface it as a dedicated attribute so
+            # traces can be joined with provider-side logs.
+            provider_request_id = self._get_provider_request_id_from_hidden_params(
+                standard_logging_payload.get("hidden_params")
+            )
+            if provider_request_id:
+                self.safe_set_attribute(
+                    span=span,
+                    key="gen_ai.provider.request.id",
+                    value=provider_request_id,
                 )
 
             # The model used to generate the response.
