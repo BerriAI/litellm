@@ -1958,8 +1958,14 @@ async def _get_and_validate_existing_key(
         # by its alias without exposing the underlying token. Mirrors the
         # alias-based affordance already provided by /key/delete via
         # `key_aliases`.
+        # `key_alias` is indexed but not @@unique in the Prisma schema —
+        # uniqueness is only enforced advisory-style by
+        # `_enforce_unique_key_alias`. Pin the ordering on `created_at` ASC so
+        # that if two rows ever share an alias (race in validation), the
+        # earlier (canonical) row is the one that gets updated.
         existing_key_row = await prisma_client.db.litellm_verificationtoken.find_first(
-            where={"key_alias": token}
+            where={"key_alias": token},
+            order={"created_at": "asc"},
         )
 
     if existing_key_row is None:
