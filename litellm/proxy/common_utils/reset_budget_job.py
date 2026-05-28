@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
+from litellm.proxy.db.schema_qualifier import qualify
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.services import ServiceTypes
 
@@ -752,8 +753,10 @@ class ResetBudgetJob:
         # --- Keys ---
         try:
             key_rows = await self.prisma_client.db.query_raw(
-                'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" '
-                "WHERE budget_limits IS NOT NULL"
+                qualify(
+                    'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" '
+                    "WHERE budget_limits IS NOT NULL"
+                )
             )
             for row in key_rows:
                 raw = row["budget_limits"]
@@ -782,8 +785,10 @@ class ResetBudgetJob:
         # --- Teams ---
         try:
             team_rows = await self.prisma_client.db.query_raw(
-                'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" '
-                "WHERE budget_limits IS NOT NULL"
+                qualify(
+                    'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" '
+                    "WHERE budget_limits IS NOT NULL"
+                )
             )
             for row in team_rows:
                 raw = row["budget_limits"]

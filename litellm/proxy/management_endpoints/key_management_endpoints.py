@@ -29,6 +29,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.schema_qualifier import qualify
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -5179,14 +5180,14 @@ async def key_aliases(
 
         where_sql = " AND ".join(where_parts)
 
-        count_sql = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
+        count_sql = qualify(f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}')
         count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
         total_count = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params = query_params + [size, (page - 1) * size]
         limit_idx = len(aliases_params) - 1
         offset_idx = len(aliases_params)
-        aliases_sql = (
+        aliases_sql = qualify(
             f"SELECT key_alias"
             f' FROM "LiteLLM_VerificationToken"'
             f" WHERE {where_sql}"

@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy.db.schema_qualifier import qualify
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -587,7 +588,7 @@ async def get_spend_by_team_and_customer(
     """
 
     db_response = await prisma_client.db.query_raw(
-        sql_query, start_date, end_date, team_id, customer_id
+        qualify(sql_query), start_date, end_date, team_id, customer_id
     )
     if db_response is None:
         return []

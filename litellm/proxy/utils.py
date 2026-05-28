@@ -111,6 +111,7 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.schema_qualifier import qualify
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
@@ -2994,7 +2995,7 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(f"""
+            ret = await self.db.query_raw(qualify(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -3006,7 +3007,7 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """)
+                """))
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -3015,7 +3016,7 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw("""
+                    await self.db.execute_raw(qualify("""
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -3025,7 +3026,7 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """)
+                        """))
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -3141,6 +3142,7 @@ class PrismaClient:
         Raises:
             Original exception if not a cached plan error
         """
+        sql_query = qualify(sql_query)
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
@@ -3357,7 +3359,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await self.db.query_raw(sql_query, limit, offset)
+                        response = await self.db.query_raw(qualify(sql_query), limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
@@ -4812,7 +4814,7 @@ class PrismaClient:
             FROM pg_class
             WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
             """
-            result = await self.db.query_raw(query=sql_query)
+            result = await self.db.query_raw(query=qualify(sql_query))
             return result[0]["reltuples"]
 
         try:
