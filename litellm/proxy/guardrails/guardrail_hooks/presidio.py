@@ -1206,6 +1206,58 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ],
         )
 
+    async def _mask_tool_call_arguments_in_chunk(
+        self,
+        chunk: "ModelResponseStream",
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> "ModelResponseStream":
+        """Run Presidio masking over the `function.arguments` of each tool_call delta
+        in `chunk`. Returns the same chunk reference with masked arguments — or
+        unchanged on Presidio failure so the client still receives a response.
+
+        Veria HIGH: with `apply_to_output=True`, prior code yielded tool_call
+        chunks untouched, allowing a model to bypass output masking by emitting
+        PII inside `function.arguments`. This helper closes that bypass.
+        """
+        if not chunk.choices:
+            return chunk
+        delta = getattr(chunk.choices[0], "delta", None)
+        tool_calls = getattr(delta, "tool_calls", None) or []
+        if not tool_calls:
+            return chunk
+        for tc in tool_calls:
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            args = getattr(fn, "arguments", None)
+            if not isinstance(args, str) or not args:
+                continue
+            try:
+                masked_args = await self.check_pii(
+                    text=args,
+                    output_parse_pii=False,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+            except Exception as exc:  # noqa: BLE001
+                verbose_proxy_logger.error(
+                    "Presidio apply_to_output: tool_call arguments mask failed (%s); "
+                    "emitting %d chars unmasked",
+                    type(exc).__name__,
+                    len(args),
+                )
+                continue
+            try:
+                fn.arguments = masked_args
+            except Exception:  # noqa: BLE001
+                # Pydantic models sometimes block setattr; fall back to dict-style assignment.
+                try:
+                    fn.__dict__["arguments"] = masked_args  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+        return chunk
+
     @staticmethod
     def _build_streaming_text_chunk(
         template: "ModelResponseStream", text: str
@@ -1271,11 +1323,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # The last `<` is unclosed — push it (and everything after) into the tail.
         return buffer[:last_lt], buffer[last_lt:]
 
-    # Incremental flush thresholds for apply_to_output streaming.
-    # Chosen so the first masked chunk reaches the client within a sentence or
-    # ~80 chars (whichever comes first), keeping Presidio call rate bounded
-    # while restoring progressive streaming UX.
-    _STREAM_MASK_FLUSH_CHARS: int = 80
+    # Sentence boundaries that trigger an incremental mask flush. Any PII entity
+    # legitimately spanning two sentences is rare for the classes Presidio detects,
+    # so these are safer flush points than a char-limit fallback (which Veria flagged
+    # as a HIGH-risk bypass class — fragmented PII straddling a 80-char window).
+    _STREAM_MASK_FLUSH_CHARS: int = 80  # Retained for back-compat; not consulted.
     _STREAM_MASK_SENTENCE_ENDERS: tuple = (".", "!", "?", "\n")
 
     async def _mask_buffer_to_chunk(
@@ -1311,25 +1363,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return self._build_streaming_text_chunk(template, masked)
 
     def _mask_flush_due(self, buffer: str) -> bool:
-        """Return True when `buffer` has reached a Presidio-mask flush boundary.
+        """Return True when `buffer` ends on a sentence boundary that is safe to flush.
 
-        Boundaries (in priority order):
-        1. Sentence enders (`.`, `!`, `?`, newline) — natural semantic units;
-           multi-token entities are highly unlikely to straddle them.
-        2. `_STREAM_MASK_FLUSH_CHARS` chars **AND** buffer ends on whitespace
-           — a word boundary, so we never cut mid-token. This keeps TTFT
-           bounded on long sentences without splitting multi-word entities
-           like "John Smith" across two Presidio calls.
+        Boundaries: `.`, `!`, `?`, newline — natural semantic units. A PII entity
+        that legitimately spans two sentences is exceedingly rare for the entity
+        classes Presidio detects (names, emails, phone numbers, credit cards,
+        addresses), so flushing at these boundaries gives progressive streaming
+        without the entity-fragmentation risk a char-limit-only fallback would
+        introduce (Veria HIGH: `4111 ` / `1111 1111 1111` split bypass).
 
-        Returns False otherwise so the buffer continues to accumulate until a
-        safe boundary appears.
+        A pathological stream that never emits a sentence ender accumulates the
+        whole response into `buffer` and is flushed exactly once at end-of-stream,
+        matching the prior buffered behaviour for that case.
         """
         stripped = buffer.rstrip()
-        if stripped and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS:
-            return True
-        if len(buffer) >= self._STREAM_MASK_FLUSH_CHARS and buffer[-1:].isspace():
-            return True
-        return False
+        return bool(stripped) and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
 
     async def _stream_apply_output_masking(
         self,
@@ -1408,14 +1456,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             yield finish_chunk
                     continue
 
-                # Non-text MRS chunk — flush pending masked text first, then pass through.
+                # Non-text MRS chunk — flush pending masked text first, then mask
+                # any tool_call arguments (Veria HIGH: tool_call args bypass) before
+                # yielding.
                 flushed = await self._mask_buffer_to_chunk(
                     buffer, template, presidio_config, request_data
                 )
                 buffer = ""
                 if flushed is not None:
                     yield flushed
-                yield chunk
+                yield await self._mask_tool_call_arguments_in_chunk(
+                    chunk, presidio_config, request_data
+                )
 
             # End of stream — drain.
             if template is not None:
