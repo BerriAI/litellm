@@ -381,8 +381,9 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name
-        agent_url = agent.agent_card_params.get("url")
-        agent_name = agent.agent_card_params.get("name", agent_id)
+        agent_card_params = agent.agent_card_params or {}
+        agent_url = agent_card_params.get("url")
+        agent_name = agent_card_params.get("name", agent_id)
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}

@@ -143,6 +143,19 @@ def test_defaults_for_missing_skills_and_modes():
     assert merged["defaultOutputModes"] == ["text"]
 
 
+def test_defaults_version_when_upstream_omits_it():
+    sparse = {"name": "x", "description": "y"}
+    merged = merge_agent_card(sparse, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+    assert merged["version"] == "1.0.0"
+
+
+def test_preserves_upstream_version_when_present():
+    merged = merge_agent_card(
+        _full_upstream_card(), proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE
+    )
+    assert merged["version"] == "1.2.3"
+
+
 def test_falls_back_to_litellm_provider_when_upstream_lacks_one():
     sparse = {"name": "x", "description": "y", "version": "1"}
     merged = merge_agent_card(sparse, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)

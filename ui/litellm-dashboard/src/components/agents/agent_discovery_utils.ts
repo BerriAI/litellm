@@ -125,16 +125,10 @@ export const buildDiscoveryRequest = (
     };
   }
 
-  const credentialFields = selectedAgentTypeInfo?.credential_fields ?? [];
-  const baseKey = credentialFields.find((f) =>
-    /(^|_)(url|api_base|endpoint)$/i.test(f.key),
-  )?.key;
-  if (!baseKey) return undefined;
-  const base = stripTrailingSlash(trim(values[baseKey]));
-  if (!base) return undefined;
-  return {
-    url: base,
-    discovery_mode: "well_known_fallback",
-    display_url: `${base}/.well-known/agent-card.json`,
-  };
+  // Non-A2A agent runtimes (Azure AI Foundry, Bedrock AgentCore, Vertex,
+  // etc.) don't expose well-known agent cards on their credential URLs, so
+  // we deliberately don't auto-fire discovery for them. The
+  // ``AgentCardDiscovery`` widget falls back to a manual URL input the admin
+  // can use as an escape hatch.
+  return undefined;
 };

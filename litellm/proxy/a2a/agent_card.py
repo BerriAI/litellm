@@ -86,6 +86,11 @@ _DEFAULT_SKILLS: List[Dict[str, Any]] = [
 
 _DEFAULT_MODES: List[str] = ["text"]
 
+# Fallback ``version`` when the upstream card omits the field. The A2A v1.0
+# schema requires ``version`` on every card, so without this default the
+# merged card would fail validation on clients that ``model_validate`` it.
+_DEFAULT_AGENT_VERSION = "1.0.0"
+
 
 def _filter_capabilities(upstream_capabilities: Any) -> Dict[str, Any]:
     """Return a capabilities dict containing only allowlisted, truthy keys."""
@@ -142,6 +147,9 @@ def merge_agent_card(
         base["name"] = name
     if description:
         base["description"] = description
+
+    if not base.get("version"):
+        base["version"] = _DEFAULT_AGENT_VERSION
 
     base["capabilities"] = _filter_capabilities(base.get("capabilities"))
 
