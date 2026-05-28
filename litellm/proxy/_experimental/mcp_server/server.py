@@ -2595,7 +2595,7 @@ if MCP_AVAILABLE:
         # LIT-3201: instrument mcp.read_resource.
         async with mcp_otel_span(
             "read_resource",
-            resource_uri=url,
+            resource_uri=str(url),
         ):
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
