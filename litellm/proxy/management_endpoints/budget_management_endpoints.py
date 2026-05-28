@@ -182,10 +182,28 @@ async def update_budget(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
+    update_data = budget_obj.model_dump(exclude_unset=True)
+
+    # If the caller updates budget_duration without an explicit
+    # budget_reset_at, recompute the reset time. Otherwise, shortening
+    # the duration would leave budget_reset_at pinned to the prior
+    # (longer) schedule, so the budget would not reset until the old
+    # interval fired — even though a new, shorter duration is in effect.
+    # This mirrors /budget/new, /user/update, and the team budget
+    # path, which already recompute budget_reset_at from the new
+    # duration. Fixes LIT-3362.
+    if (
+        update_data.get("budget_duration") is not None
+        and "budget_reset_at" not in update_data
+    ):
+        update_data["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=update_data["budget_duration"]
+        )
+
     response = await prisma_client.db.litellm_budgettable.update(
         where={"budget_id": budget_obj.budget_id},
         data={
-            **budget_obj.model_dump(exclude_unset=True),  # type: ignore
+            **update_data,  # type: ignore
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         },  # type: ignore
     )
