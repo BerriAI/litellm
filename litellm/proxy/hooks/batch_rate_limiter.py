@@ -212,13 +212,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> bool:
         """True when the key may only call a subset of models (JSONL must be checked)."""
         models = user_api_key_dict.models or []
-        if user_api_key_dict.access_group_ids:
-            return True
-        if not models:
-            return False
         if "*" in models:
             return False
         if SpecialModelNames.all_proxy_models.value in models:
+            return False
+        if user_api_key_dict.access_group_ids:
+            return True
+        if not models:
             return False
         return True
 
@@ -262,16 +262,19 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         model_from_file_id = decode_model_from_file_id(file_id)
         if model_from_file_id:
-            credentials = get_credentials_for_model(
-                llm_router=llm_router,
-                model_id=model_from_file_id,
-                operation_context="batch input file read (rate limiting)",
-            )
-            fetch_kwargs.update(_extract_file_access_credentials(credentials))
-            fetch_kwargs["model"] = model_from_file_id
-            provider = credentials.get("custom_llm_provider")
-            if provider:
-                fetch_kwargs["custom_llm_provider"] = provider
+            try:
+                credentials = get_credentials_for_model(
+                    llm_router=llm_router,
+                    model_id=model_from_file_id,
+                    operation_context="batch input file read (rate limiting)",
+                )
+                fetch_kwargs.update(_extract_file_access_credentials(credentials))
+                fetch_kwargs["model"] = model_from_file_id
+                provider = credentials.get("custom_llm_provider")
+                if provider:
+                    fetch_kwargs["custom_llm_provider"] = provider
+            except HTTPException:
+                pass
             return get_original_file_id(file_id), fetch_kwargs
 
         request_model = data.get("model")
