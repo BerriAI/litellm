@@ -2030,6 +2030,49 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     1,
                 )
 
+                # Cap the pre-call reservation by the smallest TPM bucket
+                # across descriptors -- but ONLY when the client did not
+                # set ``max_tokens`` / ``max_completion_tokens`` explicitly.
+                #
+                # When no explicit budget is given,
+                # ``_estimate_tokens_for_request`` applies a
+                # ``DEFAULT_MAX_TOKENS_ESTIMATE // 4`` (~1024) output-budget
+                # FLOOR -- a heuristic that exists to slow burst-bypass via
+                # concurrency, not to model client intent. Uncapped, that
+                # floor rejects the FIRST request from any key whose
+                # ``tpm_limit`` is below the floor: counter starts at 0,
+                # reservation of 1024 > limit of e.g. 100 -> OVER_LIMIT
+                # before any usage. Capping the floor at the smallest
+                # bucket lets the request through; post-call reconciliation
+                # charges the (actual - reserved) delta. Backpressure still
+                # holds because the reservation fills the bucket --
+                # concurrent requests see no headroom and are rejected.
+                #
+                # When ``max_tokens`` IS set explicitly, the estimate
+                # reflects the client declared output budget; if it
+                # exceeds the limit the request genuinely cannot fit and
+                # must be rejected, so we leave the estimate uncapped.
+                explicit_max_tokens = data.get("max_tokens") or data.get(
+                    "max_completion_tokens"
+                )
+                if explicit_max_tokens is None:
+                    smallest_tpm_limit: Optional[int] = None
+                    for d in descriptors:
+                        tpu = (d.get("rate_limit") or {}).get(
+                            "tokens_per_unit"
+                        )
+                        if tpu is None or tpu <= 0:
+                            continue
+                        smallest_tpm_limit = (
+                            tpu
+                            if smallest_tpm_limit is None
+                            else min(smallest_tpm_limit, tpu)
+                        )
+                    if smallest_tpm_limit is not None:
+                        estimated_tokens = min(
+                            estimated_tokens, smallest_tpm_limit
+                        )
+
                 tpm_response = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
                     estimated_tokens=estimated_tokens,
