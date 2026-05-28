@@ -1345,7 +1345,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     elif content and len(buf) >= flush_chars + tail_overlap:
                         flushable = buf[:-tail_overlap] if tail_overlap else buf
                         safe_len = self._find_safe_flush_boundary(
-                            flushable, flush_chars,
+                            flushable,
+                            flush_chars,
                         )
                         if safe_len == 0:
                             safe_len = max(0, len(buf) - tail_overlap)
@@ -1382,15 +1383,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
         except Exception as e:  # noqa: BLE001
-            verbose_proxy_logger.error(
-                f"Error masking streaming PII output: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
             if template is not None:
                 for idx, remaining in text_buffer.items():
                     if remaining:
-                        yield self._build_text_only_chunk(
-                            template, idx, remaining
-                        )
+                        yield self._build_text_only_chunk(template, idx, remaining)
 
     async def _stream_pii_unmasking(
         self,
@@ -1418,9 +1415,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         metadata = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Dict[str, str] = metadata.get("pii_tokens") or {}
-        max_token_len = max(
-            (len(t) for t in pii_tokens.keys()), default=0
-        )
+        max_token_len = max((len(t) for t in pii_tokens.keys()), default=0)
 
         text_buffer: Dict[int, str] = {}
         template: Optional[ModelResponseStream] = None
@@ -1483,15 +1478,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
         except Exception as e:  # noqa: BLE001
-            verbose_proxy_logger.error(
-                f"Error in PII streaming processing: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             if template is not None:
                 for idx, remaining in text_buffer.items():
                     if remaining:
-                        yield self._build_text_only_chunk(
-                            template, idx, remaining
-                        )
+                        yield self._build_text_only_chunk(template, idx, remaining)
 
     async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
         self,
