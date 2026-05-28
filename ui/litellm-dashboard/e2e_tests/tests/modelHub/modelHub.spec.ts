@@ -42,6 +42,13 @@ test.describe("AI Hub (internal admin view)", () => {
     // (The "Claude Code Plugin Marketplace" tab from the manual-QA checklist was
     // renamed to "Skill Hub" — verify the current label here so the test stays
     // in sync with the UI.)
+    //
+    // Note: unlike the public /ui/model_hub_table view (test below), the admin
+    // ModelHubTable renders all four tabs unconditionally — there are no `&&`
+    // guards around <Tab>Agent Hub</Tab> or <Tab>MCP Hub</Tab> in the source
+    // (ModelHubTable.tsx ~L436-439). Asserting all four here is intentional:
+    // this pins the manual-QA contract that the AI Hub tab strip exposes
+    // exactly these labels regardless of seeded agent/MCP data.
     for (const tabName of ["Model Hub", "Agent Hub", "MCP Hub", "Skill Hub"]) {
       const tab = page.getByRole("tab", { name: tabName });
       await expect(tab, `${tabName} tab should be present`).toBeVisible({ timeout: 5_000 });
