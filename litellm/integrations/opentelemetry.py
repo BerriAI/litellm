@@ -1748,6 +1748,21 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if guardrail_action:
                 guardrail_span.set_attribute("guardrail_action", guardrail_action)
 
+            # Provider-side per-call request ID (e.g. AWS Bedrock's
+            # ``x-amzn-RequestId`` from the ApplyGuardrail response). Stamped
+            # by the provider hook onto StandardLoggingGuardrailInformation,
+            # surfaced here so dashboards can pivot from a LiteLLM trace to
+            # the corresponding provider-side guardrail execution without
+            # re-running the request.
+            guardrail_provider_request_id = guardrail_information.get(
+                "provider_request_id"
+            )
+            if guardrail_provider_request_id:
+                guardrail_span.set_attribute(
+                    "guardrail_provider_request_id",
+                    guardrail_provider_request_id,
+                )
+
             # The provider hook (e.g. Bedrock) extracts violation_categories
             # from the raw response BEFORE redaction and stamps them onto
             # StandardLoggingGuardrailInformation. Surfacing them here as a
