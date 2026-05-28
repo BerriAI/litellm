@@ -158,3 +158,41 @@ class TestSvgDetection:
         result = resolve_validated_local_image_path(str(fake))
 
         assert result is None
+
+
+
+class TestSvgDetectionTightened:
+    """Greptile P2 follow-ups for LIT-2150: an XML element whose name starts
+    with ``svg`` (``<svgIcon>``) and HTML wrapped in an XML comment that
+    embeds an inline ``<svg>`` must both be rejected."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Element name shares the ``svg`` prefix but is not the SVG root.
+            b'<svgIcon xmlns="http://example.com"></svgIcon>',
+            b'<?xml version="1.0"?><svgIcon></svgIcon>',
+            # XML comment prologue wrapping HTML that embeds an inline SVG.
+            b'<!-- attribution --><!DOCTYPE html><html><body><svg></svg></body></html>',
+            # XML comment prologue followed by HTML (no inline SVG).
+            b'<!-- attribution --><html><body></body></html>',
+            # ``<?xml ?>`` prologue introducing HTML must still be rejected.
+            b'<?xml version="1.0"?><html><body><svg></svg></body></html>',
+        ],
+    )
+    def test_rejects_tightened_edge_cases(self, body):
+        assert detect_local_image_media_type(body) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Comment prologue followed by the real SVG root.
+            b'<!-- (c) 2026 Acme --><svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            # Whitespace between <svg and attributes / >.
+            b'<svg\n  xmlns="http://www.w3.org/2000/svg"\n></svg>',
+            # Self-closing svg.
+            b'<svg/>',
+        ],
+    )
+    def test_still_accepts_valid_svg_after_tightening(self, body):
+        assert detect_local_image_media_type(body) == "image/svg+xml"
