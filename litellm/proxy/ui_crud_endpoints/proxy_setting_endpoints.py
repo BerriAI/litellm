@@ -915,7 +915,7 @@ async def update_sso_settings(sso_config: SSOConfig):
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": mask_sensitive_keys(sso_data, _SSO_SENSITIVE_FIELDS),
     }
 
 

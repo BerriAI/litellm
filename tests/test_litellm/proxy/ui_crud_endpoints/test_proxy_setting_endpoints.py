@@ -85,6 +85,30 @@ def mock_auth():
 
 
 class TestProxySettingEndpoints:
+    def test_get_sso_settings_dict_from_db_record_shapes(self):
+        """Test SSO DB record normalization for empty, dict, and JSON string rows."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _get_sso_settings_dict_from_db_record,
+        )
+
+        assert _get_sso_settings_dict_from_db_record(None) == {}
+
+        dict_record = MagicMock()
+        dict_record.sso_settings = {"google_client_id": "dict_google_id"}
+        assert _get_sso_settings_dict_from_db_record(dict_record) == {
+            "google_client_id": "dict_google_id"
+        }
+
+        string_record = MagicMock()
+        string_record.sso_settings = json.dumps(
+            {"google_client_id": "string_google_id"}
+        )
+        assert _get_sso_settings_dict_from_db_record(string_record) == {
+            "google_client_id": "string_google_id"
+        }
+
     def test_get_internal_user_settings(self, mock_proxy_config, mock_auth):
         """Test getting the internal user settings"""
         response = client.get("/get/internal_user_settings")
@@ -435,15 +459,17 @@ class TestProxySettingEndpoints:
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
         assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
+            settings["google_client_secret"] != new_sso_settings["google_client_secret"]
         )
+        assert "*" in settings["google_client_secret"]
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
         assert (
             settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
+            != new_sso_settings["microsoft_client_secret"]
         )
+        assert "*" in settings["microsoft_client_secret"]
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -484,6 +510,13 @@ class TestProxySettingEndpoints:
             "google_client_id": "existing_google_client_id",
             "google_client_secret": "existing_google_secret",
             "microsoft_client_secret": "existing_microsoft_secret",
+            "role_mappings": {
+                "provider": "google",
+                "group_claim": "groups",
+                "default_role": "internal_user",
+                "roles": {"internal_user": ["staff"]},
+            },
+            "team_mappings": {"team_ids_jwt_field": "teams"},
         }
         mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
             return_value=existing_sso_record
@@ -514,8 +547,10 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         settings = response.json()["settings"]
         assert settings["ui_access_mode"] == "admin_only"
-        assert settings["google_client_secret"] == "existing_google_secret"
-        assert settings["microsoft_client_secret"] == "existing_microsoft_secret"
+        assert settings["google_client_secret"] != "existing_google_secret"
+        assert "*" in settings["google_client_secret"]
+        assert settings["microsoft_client_secret"] != "existing_microsoft_secret"
+        assert "*" in settings["microsoft_client_secret"]
         assert os.environ["GOOGLE_CLIENT_SECRET"] == "existing_google_secret"
 
         call_args = mock_prisma.db.litellm_ssoconfig.upsert.call_args
@@ -529,6 +564,8 @@ class TestProxySettingEndpoints:
             stored_sso_settings["microsoft_client_secret"]
             == "existing_microsoft_secret"
         )
+        assert stored_sso_settings["role_mappings"]["provider"] == "google"
+        assert stored_sso_settings["team_mappings"]["team_ids_jwt_field"] == "teams"
 
     def test_update_sso_settings_with_null_values_clears_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
