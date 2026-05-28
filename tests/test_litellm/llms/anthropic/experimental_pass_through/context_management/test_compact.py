@@ -742,6 +742,117 @@ async def test_default_instructions_with_tools_appends_no_tool_suffix():
     assert "tool" in prompt.lower()
 
 
+async def test_system_prompt_forwarded_to_summary_call_as_string():
+    """A bare-string ``system`` is prepended as a system message to the summary call."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>With system</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system="You are a helpful coding agent. The initial task is to fix bug X.",
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    summary_messages = captured_calls[0]["summary_messages"]
+    assert summary_messages[0]["role"] == "system"
+    assert "initial task is to fix bug X" in summary_messages[0]["content"]
+
+
+async def test_system_prompt_forwarded_to_summary_call_as_content_blocks():
+    """An Anthropic-shaped list ``system`` is flattened to text and prepended."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>With list system</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    system_blocks = [
+        {"type": "text", "text": "Agent role: code reviewer."},
+        {"type": "text", "text": "Initial task: review PR #123."},
+    ]
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=system_blocks,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    summary_messages = captured_calls[0]["summary_messages"]
+    assert summary_messages[0]["role"] == "system"
+    content = summary_messages[0]["content"]
+    assert "Agent role: code reviewer." in content
+    assert "Initial task: review PR #123." in content
+
+
+async def test_summary_call_omits_system_message_when_system_is_none():
+    """No system message is prepended when the caller did not provide one."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>No system</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    summary_messages = captured_calls[0]["summary_messages"]
+    assert all(msg.get("role") != "system" for msg in summary_messages)
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher integration: compact_20260112 via apply_context_management
 # ---------------------------------------------------------------------------
