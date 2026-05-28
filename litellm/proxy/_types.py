@@ -3635,6 +3635,8 @@ class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     exception: Optional[Any] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    team_id: Optional[str] = None
+    team_alias: Optional[str] = None
 
 
 class ProxyException(Exception):

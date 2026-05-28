@@ -592,6 +592,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=key,
                         value=value,
                     )
+                self._set_team_attributes_on_span(
+                    span=service_logging_span,
+                    team_id=event_metadata.get("user_api_key_team_id"),
+                    team_alias=event_metadata.get("user_api_key_team_alias"),
+                )
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -655,6 +660,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=key,
                         value=value,
                     )
+                self._set_team_attributes_on_span(
+                    span=service_logging_span,
+                    team_id=event_metadata.get("user_api_key_team_id"),
+                    team_alias=event_metadata.get("user_api_key_team_alias"),
+                )
 
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
@@ -3103,6 +3113,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
+            self._set_team_attributes_on_span(
+                span=management_endpoint_span,
+                team_id=logging_payload.team_id,
+                team_alias=logging_payload.team_alias,
+            )
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
 
@@ -3157,6 +3172,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span=management_endpoint_span,
                 key="exception",
                 value=str(_exception),
+            )
+            self._set_team_attributes_on_span(
+                span=management_endpoint_span,
+                team_id=logging_payload.team_id,
+                team_alias=logging_payload.team_alias,
             )
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)

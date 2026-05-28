@@ -481,6 +481,10 @@ def management_endpoint_wrapper(func):
                                 response=_response,
                                 start_time=start_time,
                                 end_time=end_time,
+                                team_id=getattr(user_api_key_dict, "team_id", None),
+                                team_alias=getattr(
+                                    user_api_key_dict, "team_alias", None
+                                ),
                             )
 
                             await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
@@ -529,6 +533,8 @@ def management_endpoint_wrapper(func):
                         start_time=start_time,
                         end_time=end_time,
                         exception=e,
+                        team_id=getattr(user_api_key_dict, "team_id", None),
+                        team_alias=getattr(user_api_key_dict, "team_alias", None),
                     )
 
                     await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
