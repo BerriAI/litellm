@@ -1085,7 +1085,7 @@ if MCP_AVAILABLE:
                     used_names.add(op_id)
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
-                    input_schema = build_input_schema(resolved_op)
+                    input_schema = build_input_schema(resolved_op, spec=spec)
                     tools.append(
                         {
                             "name": op_id,
