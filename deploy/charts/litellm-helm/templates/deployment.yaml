@@ -30,7 +30,7 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       labels:
         {{- include "litellm.labels" . | nindent 8 }}

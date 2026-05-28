@@ -1644,6 +1644,7 @@ class TestObservabilityCallbackBans:
             "braintrust_api_key",
             "braintrust_project",
             "phoenix_project_name",
+            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -1675,6 +1676,7 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_project",
             "phoenix_project_name",
+            "phoenix_project_name_override",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
