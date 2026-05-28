@@ -3076,3 +3076,81 @@ async def test_lit3408_cap_does_not_apply_when_explicit_max_tokens_set():
             call_type="completion",
         )
     assert excinfo.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_lit3408_cap_does_not_apply_when_max_tokens_set_to_zero():
+    """Greptile P2: max_tokens=0 must be treated as explicitly set, not absent.
+
+    Without the ``is not None`` check, a deliberate ``max_tokens=0`` (or
+    ``max_completion_tokens=0``) would fall into the cap branch because
+    ``data.get("max_tokens") or ...`` is falsy. With the explicit check the
+    cap path is bypassed and the original limiter behavior holds.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-zero-mt"),
+        tpm_limit=10_000,
+    )
+    for field in ("max_tokens", "max_completion_tokens"):
+        data = {
+            "model": "azure-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            field: 0,
+        }
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_lit3408_no_quota_bypass_when_input_alone_exceeds_bucket():
+    """Veria medium: capping at the bucket must not let large prompts through.
+
+    A no-max_tokens request whose KNOWN input alone exceeds the bucket must
+    still be rejected upfront. Otherwise the pre-call reservation would
+    undercount, the upstream call would run, and reconciliation would only
+    record the overage afterward -- a quota bypass.
+    """
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-input-overflow"),
+        tpm_limit=10,
+    )
+    data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "x" * 4000}],
+    }
+    with pytest.raises(HTTPException) as excinfo:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+    assert excinfo.value.status_code == 429
