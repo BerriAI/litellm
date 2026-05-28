@@ -151,8 +151,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
             return True
 
+        # Only honor the metadata-based skip when the key has no model
+        # allowlist to enforce. Otherwise a caller could set this flag in
+        # the request body (it lands in ``litellm_metadata`` for batch
+        # routes) and skip ``_enforce_batch_file_model_access``, smuggling
+        # restricted models into the JSONL.
         litellm_metadata = data.get("litellm_metadata") or {}
-        if litellm_metadata.get("skip_batch_input_file_rate_limiting") is True:
+        if litellm_metadata.get(
+            "skip_batch_input_file_rate_limiting"
+        ) is True and not self._key_requires_batch_model_access_check(
+            user_api_key_dict
+        ):
             return True
 
         batch_model = self._get_batch_routing_model(data)
