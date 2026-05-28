@@ -1,0 +1,578 @@
+"""
+Unit tests for passthrough managed IDs (Scope A).
+
+Tests cover:
+  - managed_id_codec: encode / decode / is_managed round-trip and rejection cases.
+  - managed_id_rewriter._resolve_one: cross-route 404, access-check 403, unknown ID 404,
+    raw pass-through.
+  - managed_id_rewriter.rewrite_response_ids: file create swap, batch create swap,
+    dedup reuse (no duplicate row), null field skip.
+  - managed_id_rewriter.rewrite_path_ids / rewrite_query_ids / rewrite_body_ids:
+    INPUT swap and raw pass-through.
+  - Flag-off: feature flag disabled → no swap at all.
+  - Cross-route: managed ID minted for 'openai' rejected on a different provider.
+  - Forged: unknown base64 → 404.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import sys
+import os
+from typing import Any, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, os.path.abspath("../.."))
+
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+    ManagedIdPayload,
+    decode,
+    encode,
+    is_managed,
+    new_managed_id,
+)
+from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+    _canonical_path,
+    _resolve_one,
+    rewrite_body_ids,
+    rewrite_path_ids,
+    rewrite_query_ids,
+    rewrite_response_ids,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _user(user_id: str = "user-1", team_id: str = "team-1") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id=user_id, team_id=team_id)
+
+
+def _admin_user() -> UserAPIKeyAuth:
+    u = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
+    return u
+
+
+def _prisma_client() -> MagicMock:
+    """Return a MagicMock prisma_client with async db methods."""
+    pc = MagicMock()
+    pc.db = MagicMock()
+    pc.db.litellm_managedfiletable = MagicMock()
+    pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    pc.db.litellm_managedfiletable.create = AsyncMock(return_value=None)
+    pc.db.litellm_managedobjecttable = MagicMock()
+    pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+    return pc
+
+
+def _managed_files_hook(store_side_effect: Any = None) -> MagicMock:
+    hook = MagicMock()
+    hook.get_unified_file_id = AsyncMock(return_value=None)
+    hook.store_unified_file_id = AsyncMock(side_effect=store_side_effect)
+    return hook
+
+
+# ---------------------------------------------------------------------------
+# managed_id_codec — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCodec:
+    def test_encode_decode_roundtrip(self):
+        managed_id = encode("openai", "uuid-abc", "file-xyz")
+        payload = decode(managed_id)
+        assert payload is not None
+        assert payload.provider == "openai"
+        assert payload.unified_uuid == "uuid-abc"
+        assert payload.raw_provider_id == "file-xyz"
+
+    def test_is_managed_true(self):
+        assert is_managed(encode("openai", "u1", "file-abc")) is True
+
+    def test_is_managed_false_for_raw_ids(self):
+        assert is_managed("file-abc123") is False
+        assert is_managed("batch_xyz") is False
+        assert is_managed("resp_abc") is False
+
+    def test_decode_returns_none_for_garbage(self):
+        assert decode("not-base64!!!") is None
+        assert decode("") is None
+        assert decode("abc") is None
+
+    def test_decode_returns_none_for_wrong_type(self):
+        assert decode(None) is None  # type: ignore[arg-type]
+        assert decode(42) is None  # type: ignore[arg-type]
+
+    def test_decode_returns_none_for_unified_endpoint_id(self):
+        # A unified-endpoint ID: starts with litellm_proxy: but lacks passthrough;
+        plaintext = "litellm_proxy:application/octet-stream;unified_id,123;target_model_names,gpt-4"
+        unified_id = base64.urlsafe_b64encode(plaintext.encode()).decode().rstrip("=")
+        assert decode(unified_id) is None
+
+    def test_new_managed_id_produces_valid_id(self):
+        mid = new_managed_id("openai", "batch_abc")
+        payload = decode(mid)
+        assert payload is not None
+        assert payload.provider == "openai"
+        assert payload.raw_provider_id == "batch_abc"
+
+    def test_encode_padding_insensitive(self):
+        """Encoded IDs with varying lengths all decode correctly."""
+        for raw in ("file-x", "file-ab", "file-abc", "file-abcd"):
+            mid = encode("openai", "u", raw)
+            p = decode(mid)
+            assert p is not None and p.raw_provider_id == raw
+
+
+# ---------------------------------------------------------------------------
+# _canonical_path
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalPath:
+    def test_strips_openai_prefix(self):
+        assert _canonical_path("/openai/v1/batches/batch_x") == "/v1/batches/batch_x"
+
+    def test_strips_openai_passthrough_prefix(self):
+        assert _canonical_path("/openai_passthrough/v1/files") == "/v1/files"
+
+    def test_leaves_bare_path_unchanged(self):
+        assert _canonical_path("/v1/responses") == "/v1/responses"
+
+    def test_strips_azure_openai_prefix(self):
+        assert _canonical_path("/azure/openai/files") == "/v1/files"
+
+    def test_strips_azure_openai_batch_with_id(self):
+        assert (
+            _canonical_path("/azure/openai/batches/batch_abc123")
+            == "/v1/batches/batch_abc123"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_one
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOne:
+    @pytest.mark.asyncio
+    async def test_raw_id_passes_through(self):
+        result = await _resolve_one("file-abc", "openai", _user(), None, None)
+        assert result == "file-abc"
+
+    @pytest.mark.asyncio
+    async def test_cross_route_raises_404(self):
+        mid = encode("anthropic", "u", "file-abc")
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_one(mid, "openai", _user(), None, None)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_unknown_managed_id_raises_404(self):
+        mid = encode("openai", "u", "file-abc")
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        # Both lookups return None → 404
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_one(mid, "openai", _user(), pc, hook)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_access_denied_raises_403(self):
+        mid = encode("openai", "u", "file-abc")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "other-user"
+        file_row.team_id = "other-team"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_one(mid, "openai", _user("user-1", "team-1"), None, hook)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_valid_file_id_resolves(self):
+        mid = encode("openai", "u", "file-xyz")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        result = await _resolve_one(mid, "openai", _user(), None, hook)
+        assert result == "file-xyz"
+
+    @pytest.mark.asyncio
+    async def test_valid_batch_id_resolves_via_object_table(self):
+        mid = encode("openai", "u", "batch_abc")
+        pc = _prisma_client()
+        obj_row = MagicMock()
+        obj_row.created_by = "user-1"
+        obj_row.team_id = "team-1"
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=obj_row)
+        result = await _resolve_one(mid, "openai", _user(), pc, None)
+        assert result == "batch_abc"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_access_any_resource(self):
+        mid = encode("openai", "u", "file-xyz")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "other-user"
+        file_row.team_id = "other-team"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        result = await _resolve_one(mid, "openai", _admin_user(), None, hook)
+        assert result == "file-xyz"
+
+
+# ---------------------------------------------------------------------------
+# rewrite_response_ids — OUTPUT
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteResponseIds:
+    @pytest.mark.asyncio
+    async def test_file_create_mints_managed_id(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {"id": "file-abc123", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert result is not body  # mutated copy
+        assert result["id"] != "file-abc123"
+        payload = decode(result["id"])
+        assert payload is not None
+        assert payload.raw_provider_id == "file-abc123"
+        hook.store_unified_file_id.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_batch_create_mints_id_and_input_file_id(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {
+            "id": "batch_xyz",
+            "input_file_id": "file-abc",
+            "output_file_id": None,
+            "error_file_id": None,
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/batches",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert decode(result["id"]).raw_provider_id == "batch_xyz"  # type: ignore[union-attr]
+        assert decode(result["input_file_id"]).raw_provider_id == "file-abc"  # type: ignore[union-attr]
+        # Null fields skipped
+        assert result["output_file_id"] is None
+        assert result["error_file_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_response_create_mints_id(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {"id": "resp_abc", "object": "response"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/responses",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert decode(result["id"]).raw_provider_id == "resp_abc"  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_no_map_entry_returns_body_unchanged(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {"id": "msg_xyz", "object": "message"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/chat/completions",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert result is body  # same object, unchanged
+
+    @pytest.mark.asyncio
+    async def test_dedup_reuses_existing_file_row(self):
+        """File uploaded via passthrough, then referenced in a batch — no new row."""
+        existing_managed_id = new_managed_id("openai", "file-abc")
+        existing_row = MagicMock()
+        existing_row.unified_file_id = existing_managed_id
+
+        pc = _prisma_client()
+        # Dedup lookup finds existing row
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        hook = _managed_files_hook()
+        body = {
+            "id": "batch_xyz",
+            "input_file_id": "file-abc",
+            "output_file_id": None,
+            "error_file_id": None,
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/batches",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        # input_file_id should be the SAME managed ID already in DB
+        assert result["input_file_id"] == existing_managed_id
+        # store_unified_file_id should NOT have been called (reused existing)
+        hook.store_unified_file_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_prefix_normalised(self):
+        """Routes under /openai_passthrough/ work the same as /openai/."""
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {"id": "file-abc", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert decode(result["id"]).raw_provider_id == "file-abc"  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_batch_retrieve_swaps_output_file_id(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {
+            "id": "batch_xyz",
+            "input_file_id": "file-in",
+            "output_file_id": "file-out",
+            "error_file_id": "file-err",
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="GET",
+            route="/openai/v1/batches/batch_xyz",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert decode(result["output_file_id"]).raw_provider_id == "file-out"  # type: ignore[union-attr]
+        assert decode(result["error_file_id"]).raw_provider_id == "file-err"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# rewrite_path_ids — INPUT
+# ---------------------------------------------------------------------------
+
+
+class TestRewritePathIds:
+    @pytest.mark.asyncio
+    async def test_raw_segment_passes_through(self):
+        result = await rewrite_path_ids(
+            "/v1/batches/batch_abc", "openai", _user(), None, None
+        )
+        assert result == "/v1/batches/batch_abc"
+
+    @pytest.mark.asyncio
+    async def test_managed_segment_is_resolved(self):
+        mid = encode("openai", "u", "batch_abc")
+        hook = _managed_files_hook()
+        pc = _prisma_client()
+        obj_row = MagicMock()
+        obj_row.created_by = "user-1"
+        obj_row.team_id = "team-1"
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=obj_row)
+        result = await rewrite_path_ids(
+            f"/v1/batches/{mid}", "openai", _user(), pc, hook
+        )
+        assert result == "/v1/batches/batch_abc"
+
+    @pytest.mark.asyncio
+    async def test_cross_route_in_path_raises_404(self):
+        mid = encode("anthropic", "u", "batch_abc")
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_path_ids(f"/v1/batches/{mid}", "openai", _user(), None, None)
+        assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# rewrite_query_ids — INPUT
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteQueryIds:
+    @pytest.mark.asyncio
+    async def test_raw_params_pass_through(self):
+        params = {"limit": "10", "after": "batch_xyz"}
+        result = await rewrite_query_ids(params, "openai", _user(), None, None)
+        assert result is params  # unchanged same object
+
+    @pytest.mark.asyncio
+    async def test_none_returns_none(self):
+        result = await rewrite_query_ids(None, "openai", _user(), None, None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_managed_param_is_resolved(self):
+        mid = encode("openai", "u", "file-abc")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        params = {"file_id": mid}
+        result = await rewrite_query_ids(params, "openai", _user(), None, hook)
+        assert result is not params
+        assert result["file_id"] == "file-abc"  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# rewrite_body_ids — INPUT
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteBodyIds:
+    @pytest.mark.asyncio
+    async def test_raw_body_passes_through(self):
+        body = {"input_file_id": "file-abc", "model": "gpt-4o"}
+        result = await rewrite_body_ids(body, "openai", _user(), None, None)
+        assert result is body
+
+    @pytest.mark.asyncio
+    async def test_none_returns_none(self):
+        result = await rewrite_body_ids(None, "openai", _user(), None, None)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_managed_id_in_body_resolved(self):
+        mid = encode("openai", "u", "file-xyz")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        body = {"input_file_id": mid}
+        result = await rewrite_body_ids(body, "openai", _user(), None, hook)
+        assert result is not body
+        assert result["input_file_id"] == "file-xyz"  # type: ignore[index]
+
+    @pytest.mark.asyncio
+    async def test_litellm_internal_key_preserved(self):
+        """litellm_logging_obj and similar keys are never walked."""
+        logging_obj = object()
+        body = {"litellm_logging_obj": logging_obj, "model": "gpt-4o"}
+        result = await rewrite_body_ids(body, "openai", _user(), None, None)
+        # Internal key preserved by reference
+        assert result["litellm_logging_obj"] is logging_obj  # type: ignore[index]
+
+    @pytest.mark.asyncio
+    async def test_nested_list_resolved(self):
+        """Managed IDs inside nested lists are resolved."""
+        mid = encode("openai", "u", "file-nested")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        body = {"files": [mid, "raw-string"]}
+        result = await rewrite_body_ids(body, "openai", _user(), None, hook)
+        assert result["files"][0] == "file-nested"  # type: ignore[index]
+        assert result["files"][1] == "raw-string"  # type: ignore[index]
+
+    @pytest.mark.asyncio
+    async def test_forged_managed_id_raises_404(self):
+        """An unknown managed ID in the body raises 404 (not passed to upstream)."""
+        mid = encode("openai", "u", "file-forged")
+        hook = _managed_files_hook()
+        hook.get_unified_file_id = AsyncMock(return_value=None)
+        pc = _prisma_client()
+        body = {"input_file_id": mid}
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_body_ids(body, "openai", _user(), pc, hook)
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_cross_user_access_denied_in_body(self):
+        """A managed ID owned by a different user raises 403."""
+        mid = encode("openai", "u", "file-other")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "other-user"
+        file_row.team_id = "other-team"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+        body = {"input_file_id": mid}
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_body_ids(
+                body, "openai", _user("user-1", "team-1"), None, hook
+            )
+        assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Flag-off: behaviour unchanged when passthrough_managed_object_ids is False
+# ---------------------------------------------------------------------------
+
+
+class TestFlagOff:
+    """
+    When the feature flag is off the pass_through_request code paths skip both
+    hooks entirely.  Here we verify the rewriter modules themselves are pure
+    no-ops when called with no DB / hook: raw IDs pass through.
+    """
+
+    @pytest.mark.asyncio
+    async def test_raw_file_in_response_not_swapped_without_hook(self):
+        body = {"id": "file-abc", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=None,
+            managed_files_hook=None,
+        )
+        # Without DB/hook, _mint_or_reuse_file returns raw_id unchanged
+        assert result is body or result["id"] == "file-abc"
+
+    @pytest.mark.asyncio
+    async def test_decode_failure_body_untouched(self):
+        body = {"id": "file-abc123"}
+        result = await rewrite_body_ids(body, "openai", _user(), None, None)
+        assert result is body
