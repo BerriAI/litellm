@@ -764,3 +764,4 @@ async def test_lit_2698_paginated_endpoint_queries_unwidened_range_for_non_utc()
         timezone_offset_minutes=-330,
     )
     assert captured["where"]["date"] == {"gte": "2026-04-15", "lte": "2026-04-15"}
+# LIT-2698 regression tests appended above.
