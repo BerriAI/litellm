@@ -4243,7 +4243,6 @@ class TestApplyClientTagPolicyPreAuth:
             ),
             patch(
                 "litellm.proxy.auth.auth_checks._is_api_route_allowed",
-                new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
@@ -4325,7 +4324,6 @@ class TestApplyClientTagPolicyPreAuth:
             ),
             patch(
                 "litellm.proxy.auth.auth_checks._is_api_route_allowed",
-                new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
@@ -4403,7 +4401,6 @@ class TestApplyClientTagPolicyPreAuth:
             ),
             patch(
                 "litellm.proxy.auth.auth_checks._is_api_route_allowed",
-                new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
