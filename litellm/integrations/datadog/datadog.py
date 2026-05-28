@@ -398,7 +398,9 @@ class DataDogLogger(
                 await self._handle_413_split(batch_to_send)
                 return
             # Non-413 transport error - preserve events for the next flush.
-            self.log_queue.extend(batch_to_send)
+            # Prepend so retried events stay ahead of newly enqueued ones
+            # (matches the legacy ordering Greptile flagged on PR #29183).
+            self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
@@ -419,7 +421,8 @@ class DataDogLogger(
                     f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
                 )
         except Exception as e:
-            self.log_queue.extend(batch_to_send)
+            # Prepend to keep retried events ahead of newly enqueued ones.
+            self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
@@ -439,7 +442,10 @@ class DataDogLogger(
     async def _handle_413_split(self, batch_to_send: List) -> None:
         """Split a 413-rejected batch in half and retry. Drop single-event 413s."""
         if len(batch_to_send) <= 1:
-            verbose_logger.exception(
+            # Not inside an `except` block - use .error so verbose_logger
+            # doesn't print "NoneType: None" for a non-existent traceback
+            # (Greptile review feedback on PR #29183).
+            verbose_logger.error(
                 "%s Single event still exceeds Datadog's 5MB limit; dropping it "
                 "to avoid an infinite retry loop. Disable request/response body "
                 "logging via `litellm.turn_off_message_logging = True` or lower "
