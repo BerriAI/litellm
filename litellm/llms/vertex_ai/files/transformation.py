@@ -190,7 +190,11 @@ def _iter_openai_file_lines(
     around the 1 GiB mark. Iterating one line at a time keeps peak memory close
     to ``input_size + output_size`` instead of ``~5x input_size``.
     """
-    # Unwrap tuple form: (filename, content, [content_type], [headers])
+    # Unwrap tuple form: (filename, content, [content_type], [headers]).
+    # We carry `file_content` as `Any` because it can be progressively narrowed
+    # (bytes -> str, file-like -> str via read(), PathLike -> opened text) and
+    # the union in FileTypes is too narrow for mypy to follow each branch.
+    file_content: Any
     if isinstance(openai_file_content, tuple):
         file_content = openai_file_content[1]
     else:
