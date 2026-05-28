@@ -41,6 +41,7 @@ from litellm.integrations.datadog.datadog_handler import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
+    MaskedHTTPStatusError,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -66,6 +67,55 @@ from ..additional_logging_utils import AdditionalLoggingUtils
 DD_LOGGED_SUCCESS_SERVICE_TYPES = [
     ServiceTypes.RESET_BUDGET_JOB,
 ]
+
+
+def _resolve_dd_batch_size() -> int:
+    """
+    Resolve the per-flush batch size for the Datadog logger.
+
+    Honors the documented ``DD_BATCH_SIZE`` env var (referenced in
+    ``DD_ERRORS.DATADOG_413_ERROR``) so operators can drop the batch size to
+    work around oversized payloads. Falls back to ``DD_MAX_BATCH_SIZE`` (1000)
+    when the env var is unset / invalid / non-positive. Values greater than
+    ``DD_MAX_BATCH_SIZE`` are clamped down to that ceiling.
+    """
+    raw = os.getenv("DD_BATCH_SIZE")
+    if not raw:
+        return DD_MAX_BATCH_SIZE
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        verbose_logger.warning(
+            "Datadog: ignoring non-integer DD_BATCH_SIZE=%r; falling back to %s",
+            raw,
+            DD_MAX_BATCH_SIZE,
+        )
+        return DD_MAX_BATCH_SIZE
+    if parsed <= 0:
+        verbose_logger.warning(
+            "Datadog: ignoring non-positive DD_BATCH_SIZE=%r; falling back to %s",
+            raw,
+            DD_MAX_BATCH_SIZE,
+        )
+        return DD_MAX_BATCH_SIZE
+    return min(parsed, DD_MAX_BATCH_SIZE)
+
+
+def _is_413_error(exc: BaseException) -> bool:
+    """
+    Detect a Datadog 413 (Payload Too Large) hidden inside an exception.
+
+    The async httpx handler used by this logger converts a 413 Response into
+    a ``MaskedHTTPStatusError`` (subclass of ``httpx.HTTPStatusError``) via
+    ``_raise_masked_async_error``, which means the response never reaches
+    ``async_send_batch`` as a return value. We pull the status code off the
+    exception's ``.response`` attribute so the caller can still recognise
+    and chunk the offending batch.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    return getattr(response, "status_code", None) == 413
 
 
 class DataDogLogger(
@@ -128,7 +178,9 @@ class DataDogLogger(
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
-                **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE
+                **kwargs,
+                flush_lock=self.flush_lock,
+                batch_size=_resolve_dd_batch_size(),
             )
         except Exception as e:
             verbose_logger.exception(
@@ -317,56 +369,129 @@ class DataDogLogger(
 
         DD Ref: https://docs.datadoghq.com/api/latest/logs/
 
+        Behaviour on a 413 (Payload Too Large) response:
+            Datadog enforces a 5 MB uncompressed payload limit per call. Prior
+            to LIT-3407 a 413 was handled by re-queueing the entire oversized
+            batch unchanged, which caused the same batch to be retried every
+            flush interval (and never delivered). We now split the offending
+            batch in half and retry each half independently; if a single
+            event still cannot fit we drop it with a verbose error log to
+            avoid an infinite retry loop.
+
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
-        try:
-            if not self.log_queue:
-                verbose_logger.exception("Datadog: log_queue does not exist")
-                return
+        if not self.log_queue:
+            verbose_logger.exception("Datadog: log_queue does not exist")
+            return
 
-            batch_to_send = self.log_queue[:]
-            self.log_queue = []
+        batch_to_send = self.log_queue[:]
+        self.log_queue = []
 
+        verbose_logger.debug(
+            "Datadog - about to flush %s events on %s",
+            len(batch_to_send),
+            self.intake_url,
+        )
+
+        if self.is_mock_mode:
             verbose_logger.debug(
-                "Datadog - about to flush %s events on %s",
-                len(batch_to_send),
-                self.intake_url,
+                "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
             )
 
-            if self.is_mock_mode:
-                verbose_logger.debug(
-                    "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
-                )
+        try:
+            await self._send_batch_with_413_split(batch_to_send)
+        except Exception as e:
+            # Defence in depth: _send_batch_with_413_split already handles
+            # send failures inline and re-queues. We only reach here on
+            # programmer error inside the helper; preserve the original batch
+            # so events are not lost.
+            self.log_queue = batch_to_send + self.log_queue
+            verbose_logger.exception(
+                f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
+            )
 
+    async def _send_batch_with_413_split(self, batch_to_send: List) -> None:
+        """
+        Send a batch, recursively splitting on 413 (Payload Too Large).
+
+        - On 413 with len(batch) > 1: split in half, retry each half.
+        - On 413 with len(batch) == 1: drop the single event with a verbose
+          error log (it cannot fit under Datadog's 5 MB limit on its own;
+          re-queueing would loop forever).
+        - On any other send failure: re-queue the slice for the next flush
+          attempt (preserves prior behaviour).
+        - On 2xx: log debug success.
+        """
+        if not batch_to_send:
+            return
+
+        try:
             response = await self.async_send_compressed_data(batch_to_send)
-            if response.status_code == 413:
-                verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
-                self.log_queue = batch_to_send + self.log_queue
+        except Exception as e:
+            if _is_413_error(e):
+                await self._handle_413_split(batch_to_send)
                 return
+            # Non-413 transport error - preserve events for the next flush.
+            self.log_queue.extend(batch_to_send)
+            verbose_logger.exception(
+                f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
+            )
+            return
 
+        # Defensive: handle the case where the underlying httpx client returns
+        # a 413 Response instead of raising. The masked httpx handler currently
+        # raises, but this guards against future refactors / sync clients /
+        # mock clients.
+        if getattr(response, "status_code", None) == 413:
+            await self._handle_413_split(batch_to_send)
+            return
+
+        try:
             response.raise_for_status()
             if response.status_code != 202:
                 raise Exception(
                     f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
                 )
-
-            if self.is_mock_mode:
-                verbose_logger.debug(
-                    f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked"
-                )
-            else:
-                verbose_logger.debug(
-                    "Datadog: Response from datadog API status_code: %s, text: %s",
-                    response.status_code,
-                    response.text,
-                )
-
         except Exception as e:
-            self.log_queue = batch_to_send + self.log_queue
+            self.log_queue.extend(batch_to_send)
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
+            return
+
+        if self.is_mock_mode:
+            verbose_logger.debug(
+                f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked"
+            )
+        else:
+            verbose_logger.debug(
+                "Datadog: Response from datadog API status_code: %s, text: %s",
+                response.status_code,
+                response.text,
+            )
+
+    async def _handle_413_split(self, batch_to_send: List) -> None:
+        """Split a 413-rejected batch in half and retry. Drop single-event 413s."""
+        if len(batch_to_send) <= 1:
+            verbose_logger.exception(
+                "%s Single event still exceeds Datadog's 5MB limit; dropping it "
+                "to avoid an infinite retry loop. Disable request/response body "
+                "logging via `litellm.turn_off_message_logging = True` or lower "
+                "the event size to recover.",
+                DD_ERRORS.DATADOG_413_ERROR.value,
+            )
+            return
+        mid = len(batch_to_send) // 2
+        verbose_logger.warning(
+            "Datadog: 413 Payload Too Large on batch of %s events; "
+            "splitting into halves of %s + %s and retrying.",
+            len(batch_to_send),
+            mid,
+            len(batch_to_send) - mid,
+        )
+        await self._send_batch_with_413_split(batch_to_send[:mid])
+        await self._send_batch_with_413_split(batch_to_send[mid:])
 
     async def flush_queue(self):
         if self.flush_lock is None:
