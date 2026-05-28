@@ -140,6 +140,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    def _key_already_covers_model(
+        self,
+        user_api_key_model_max_budget: Optional[dict],
+        model: str,
+    ) -> bool:
+        """Return True iff the requesting key has its own model_max_budget
+        entry for ``model`` (matching by exact name or by the
+        ``{provider}/{model}`` normalization)."""
+        if not user_api_key_model_max_budget:
+            return False
+        key_internal: GenericBudgetConfigType = {}
+        for _model, _budget_info in user_api_key_model_max_budget.items():
+            key_internal[_model] = BudgetConfig(**_budget_info)
+        return (
+            self._get_request_model_budget_config(
+                model=model, internal_model_max_budget=key_internal
+            )
+            is not None
+        )
+
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -164,20 +184,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         # Key precedence: if the requesting key already declares a budget
         # for `model` (or its `{provider}/{model}` form), the team default
         # is irrelevant for this (key, model) pair.
-        if key_model_max_budget:
-            key_internal: GenericBudgetConfigType = {}
-            for _model, _budget_info in key_model_max_budget.items():
-                key_internal[_model] = BudgetConfig(**_budget_info)
-            if (
-                self._get_request_model_budget_config(
-                    model=model, internal_model_max_budget=key_internal
-                )
-                is not None
-            ):
-                verbose_proxy_logger.debug(
-                    f"Team check skipped for model={model}: key has own model_max_budget entry"
-                )
-                return True
+        if self._key_already_covers_model(key_model_max_budget, model):
+            verbose_proxy_logger.debug(
+                f"Team check skipped for model={model}: key has own model_max_budget entry"
+            )
+            return True
 
         internal_model_max_budget: GenericBudgetConfigType = {}
 
@@ -449,22 +460,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             # is_team_within_model_budget). Otherwise a key with its own
             # private cap would still drive the shared team counter and
             # block siblings unnecessarily.
-            _key_covers_model = False
-            if (
-                user_api_key_model_max_budget is not None
-                and len(user_api_key_model_max_budget) > 0
-            ):
-                key_internal_for_model: GenericBudgetConfigType = {}
-                for _model, _budget_info in user_api_key_model_max_budget.items():
-                    key_internal_for_model[_model] = BudgetConfig(**_budget_info)
-                _key_covers_model = (
-                    self._get_request_model_budget_config(
-                        model=model, internal_model_max_budget=key_internal_for_model
-                    )
-                    is not None
-                )
-
-            if not _key_covers_model:
+            if not self._key_already_covers_model(user_api_key_model_max_budget, model):
                 internal_model_max_budget: GenericBudgetConfigType = {}
                 for _model, _budget_info in user_api_key_team_model_max_budget.items():
                     internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
