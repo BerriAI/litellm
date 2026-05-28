@@ -8676,23 +8676,24 @@ class Router:
                 f"upsert_deployment: pattern_router cleanup failed for {deployment_id}: {e}"
             )
 
-        # Team-pattern bucket — scope to the prior deployment's team_id when we
-        # have it; fall back to scanning all team buckets otherwise so a
-        # team-id mutation across the upsert still evicts the stale entry.
-        prev_team_id: Optional[str] = None
-        if previous_deployment is not None:
-            try:
-                prev_team_id = previous_deployment.model_info.get("team_id")
-            except Exception:
-                prev_team_id = None
+        # Team-pattern buckets — defense in depth.
+        #
+        # We always scan EVERY team-pattern-router bucket rather than scoping
+        # to the prior deployment's `team_id`. A `team_id` hint would suffice
+        # for the common case, but a router state that was polluted before
+        # this fix shipped can have stale entries for the same deployment id
+        # in multiple team buckets (e.g. when an earlier upsert moved the
+        # deployment from team-A -> team-B without evicting team-A's entry).
+        # Scoping the cleanup would leave those buckets stale forever.
+        #
+        # The previous_deployment argument is retained as documentation of
+        # intent and so callers don't have to compute it twice; runtime cost
+        # of the full scan is bounded by O(num_teams * num_patterns) — both
+        # numbers are small in practice and the inner call is a no-op for
+        # buckets that don't reference this deployment id.
+        _ = previous_deployment  # currently unused; see docstring above.
 
-        target_team_ids: List[str]
-        if prev_team_id is not None and prev_team_id in self.team_pattern_routers:
-            target_team_ids = [prev_team_id]
-        else:
-            target_team_ids = list(self.team_pattern_routers.keys())
-
-        for tid in target_team_ids:
+        for tid in list(self.team_pattern_routers.keys()):
             try:
                 self.team_pattern_routers[tid].remove_deployment_by_id(deployment_id)
             except Exception as e:
