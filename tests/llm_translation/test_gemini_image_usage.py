@@ -280,3 +280,37 @@ def test_gemini_image_generation_accumulates_multiple_image_prompt_token_details
         else:
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = previous_local_model_cost_map
         litellm.model_cost = previous_model_cost
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"]
+)
+def test_gemini_image_generation_raises_on_safety_block(finish_reason):
+    """A safety/prohibited block returns a candidate with finishReason and no
+    inlineData; GoogleImageGenConfig must raise ContentPolicyViolationError, not
+    return empty data."""
+    import httpx
+
+    from litellm.exceptions import ContentPolicyViolationError
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]
+    }
+    mock_response.headers = {}
+
+    config = GoogleImageGenConfig()
+    with pytest.raises(ContentPolicyViolationError) as exc:
+        config.transform_image_generation_response(
+            model="gemini/gemini-2.5-flash-image",
+            raw_response=mock_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+    assert finish_reason in str(exc.value)
+    assert exc.value.llm_provider == "gemini"
