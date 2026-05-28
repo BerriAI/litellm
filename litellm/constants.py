@@ -398,6 +398,18 @@ REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
     os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 )
+# How long the in-memory cache holds the async Redis client (and its
+# connection pool). The default LLMClientCache TTL is 600s — short enough
+# that on long-running, high-TPS proxy deployments the Redis async client
+# is evicted while still in heavy use, forcing a fresh BlockingConnectionPool
+# every 10 minutes. The cold pool then triggers a wave of concurrent
+# connect attempts which exhaust the pool wait queue and surface as
+# "Timeout connecting to server" / EVALSHA failures from
+# RedisCache.async_increment_pipeline (LIT-3263). Pinning the client cache
+# to a long TTL (24h by default) preserves the pool across the lifetime of
+# the proxy process; the cache instance does not close evicted clients
+# (see LLMClientCache docstring) so longer TTLs are safe.
+REDIS_ASYNC_CLIENT_CACHE_TTL = int(os.getenv("REDIS_ASYNC_CLIENT_CACHE_TTL", 86400))
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
