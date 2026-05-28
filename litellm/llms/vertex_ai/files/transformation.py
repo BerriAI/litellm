@@ -223,7 +223,10 @@ def _iter_openai_file_lines(
         return
 
     if isinstance(file_content, (bytes, bytearray)):
-        file_content = bytes(file_content).decode("utf-8")
+        # Decode directly on the bytes/bytearray instance — avoid the
+        # transient ``bytes(file_content)`` copy that briefly doubled peak
+        # memory for multi-GB uploads.
+        file_content = file_content.decode("utf-8")
 
     if not isinstance(file_content, str):
         return
