@@ -50,6 +50,7 @@ IGNORE_FUNCTIONS = [
     "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
     "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "_inline_schema_refs",  # MCP/OpenAPI: $ref resolver bounded by `_visiting` cycle guard; inlines schemas for LLM providers that do not resolve $ref.
 ]
 
 
