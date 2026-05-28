@@ -240,8 +240,17 @@ export default function ModelInfoView({
         p.provider_display_name?.toLowerCase() === slugLower,
     );
   }, [providerMetadataList, providerSlug]);
+  // Skip fields that are already rendered by the dedicated form items above
+  // (`api_base`, `organization`). Re-rendering them inside the Authentication
+  // section would create a duplicate Form.Item bound to the same key — Ant
+  // Design would silently overwrite the value from the existing top-level
+  // input with the rotate-mode blank, wiping the stored value on save.
+  const PROVIDER_FIELDS_OWNED_BY_MAIN_FORM = ["api_base", "organization"];
   const providerCredentialFields = useMemo(
-    () => providerMetadata?.credential_fields ?? [],
+    () =>
+      (providerMetadata?.credential_fields ?? []).filter(
+        (f) => !PROVIDER_FIELDS_OWNED_BY_MAIN_FORM.includes(f.key),
+      ),
     [providerMetadata],
   );
   const providerCredentialFieldKeys = useMemo(
@@ -1272,6 +1281,7 @@ export default function ModelInfoView({
                               <ProviderSpecificFields
                                 selectedProvider={providerEnumName}
                                 mode="rotate"
+                                skipKeys={PROVIDER_FIELDS_OWNED_BY_MAIN_FORM}
                               />
                             </>
                           ) : (
