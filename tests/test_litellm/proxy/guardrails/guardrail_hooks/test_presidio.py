@@ -2879,3 +2879,157 @@ async def test_lit3222_apply_to_output_passthrough_after_unknown_event(
         assert (
             "tell me a secret" not in t
         ), f"check_pii unexpectedly masked post-event text: {t!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_apply_to_output_masks_tool_call_arguments(mock_user_api_key):
+    """
+    Veria AI feedback (PR #29134): streamed tool_call.arguments must also go
+    through Presidio masking. We accumulate fragments and emit one masked
+    chunk per tool call at end-of-stream.
+    """
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    masked_inputs = []
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        masked_inputs.append(text)
+        return text.replace("Jane Doe", "[PERSON]")
+
+    guardrail.check_pii = mock_check_pii
+
+    def tool_chunk(args_fragment, finish=None):
+        return ModelResponseStream(
+            id="t",
+            object="chat.completion.chunk",
+            created=1,
+            model="gpt-4",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="search", arguments=args_fragment
+                                ),
+                            )
+                        ]
+                    ),
+                    finish_reason=finish,
+                )
+            ],
+        )
+
+    async def mock_stream():
+        yield tool_chunk('{"query": "find ')
+        yield tool_chunk('Jane Doe in directory"}', finish="tool_calls")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # check_pii must have been called on the assembled tool-call arguments
+    assert any(
+        "Jane Doe" in s for s in masked_inputs
+    ), f"Expected check_pii to receive assembled args; got: {masked_inputs!r}"
+
+    # Final emitted args must contain [PERSON] and not Jane Doe.
+    final_args = ""
+    for c in received:
+        for choice in c.choices or []:
+            tc = getattr(choice.delta, "tool_calls", None) or []
+            for t in tc:
+                fn = getattr(t, "function", None)
+                if fn and getattr(fn, "arguments", None):
+                    final_args += fn.arguments
+    assert "[PERSON]" in final_args, f"masked args missing [PERSON]: {final_args!r}"
+    assert "Jane Doe" not in final_args, f"unmasked Jane Doe leaked: {final_args!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_unmask_handles_tool_call_arguments(mock_user_api_key):
+    """
+    Symmetric to the mask test: streamed tool_call.arguments containing
+    placeholder tokens are unmasked when the call completes.
+    """
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_1>": "Jane Doe"}}}
+
+    def tool_chunk(args_fragment, finish=None):
+        return ModelResponseStream(
+            id="t",
+            object="chat.completion.chunk",
+            created=1,
+            model="gpt-4",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="search", arguments=args_fragment
+                                ),
+                            )
+                        ]
+                    ),
+                    finish_reason=finish,
+                )
+            ],
+        )
+
+    async def mock_stream():
+        yield tool_chunk('{"q": "find <PER')
+        yield tool_chunk('SON_1>"}', finish="tool_calls")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data=request_data,
+    ):
+        received.append(chunk)
+
+    final_args = ""
+    for c in received:
+        for choice in c.choices or []:
+            tc = getattr(choice.delta, "tool_calls", None) or []
+            for t in tc:
+                fn = getattr(t, "function", None)
+                if fn and getattr(fn, "arguments", None):
+                    final_args += fn.arguments
+    assert "Jane Doe" in final_args, f"placeholder not unmasked: {final_args!r}"
+    assert "<PERSON_1>" not in final_args, f"placeholder leaked: {final_args!r}"
