@@ -453,21 +453,31 @@ async def _upsert_budget_and_membership(
         and existing_budget_id == team_default_budget_id
     )
 
-    # If multiple memberships still point at this budget row, treat it as
+    # If another membership still points at this budget row, treat it as
     # shared and clone-on-write — otherwise mutating the row here would
     # silently move every other member's cap with it (LIT-3359).
+    #
+    # We use `findFirst` (excluding the caller's own membership) instead of
+    # `count`: it stops at the first other reference, so the probe is O(1)
+    # in the steady-state where each member already has their own budget
+    # row. The cost is one extra indexed DB roundtrip per non-default
+    # `/team/member_update` call — accepted as the price of never silently
+    # overwriting a co-member's cap.
     shared_with_other_memberships = False
     if existing_budget_id is not None and not is_shared_default:
         try:
-            membership_refs = await tx.litellm_teammembership.count(
-                where={"budget_id": existing_budget_id}
+            other_membership = await tx.litellm_teammembership.find_first(
+                where={
+                    "budget_id": existing_budget_id,
+                    "NOT": {"user_id": user_id, "team_id": team_id},
+                },
             )
-            shared_with_other_memberships = (membership_refs or 0) > 1
+            shared_with_other_memberships = other_membership is not None
         except Exception as e:
-            # Refusing to mutate on count failures is safer than risking a
+            # Refusing to mutate on probe failures is safer than risking a
             # cross-member overwrite; fall through to the clone-on-write path.
             verbose_proxy_logger.debug(
-                f"_upsert_budget_and_membership: ref-count probe failed for "
+                f"_upsert_budget_and_membership: shared-row probe failed for "
                 f"budget_id={existing_budget_id} (team_id={team_id}, "
                 f"user_id={user_id}): {e}. Defaulting to clone-on-write."
             )
