@@ -329,14 +329,11 @@ async def aresponses_api_with_mcp(
 
             # LIT-3304: forward request_tags from parent /responses
             # metadata so MCP sub-calls inherit them.
-            _resp_request_tags: Optional[List[str]] = None
-            for _meta_key in ("metadata", "litellm_metadata"):
-                _resp_meta = kwargs.get(_meta_key)
-                if isinstance(_resp_meta, dict):
-                    _resp_tags = _resp_meta.get("tags")
-                    if isinstance(_resp_tags, list) and _resp_tags:
-                        _resp_request_tags = list(_resp_tags)
-                        break
+            from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+                _extract_request_tags_from_kwargs,
+            )
+
+            _resp_request_tags = _extract_request_tags_from_kwargs(kwargs)
 
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
