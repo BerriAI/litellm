@@ -7038,16 +7038,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        try:
-            prefetched_source_data = None
-            prefetch_params = video_provider_config.get_video_edit_prefetch_params(
-                video_id=video_id,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-            if prefetch_params is not None:
-                prefetch_url, prefetch_body = prefetch_params
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
                 prefetch_resp = sync_httpx_client.post(
                     url=prefetch_url,
                     headers=headers,
@@ -7055,29 +7055,32 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
                 prefetch_resp.raise_for_status()
-                prefetched_source_data = prefetch_resp.json()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
-            url, data = video_provider_config.transform_video_edit_request(
-                prompt=prompt,
-                video_id=video_id,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-                extra_body=extra_body,
-                prefetched_source_data=prefetched_source_data,
-            )
+        url, data = video_provider_config.transform_video_edit_request(
+            prompt=prompt,
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            extra_body=extra_body,
+            prefetched_source_data=prefetched_source_data,
+        )
 
-            logging_obj.pre_call(
-                input=prompt,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": url,
-                    "headers": headers,
-                    "video_id": video_id,
-                },
-            )
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+                "video_id": video_id,
+            },
+        )
 
+        try:
             response = sync_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -7130,16 +7133,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        try:
-            prefetched_source_data = None
-            prefetch_params = video_provider_config.get_video_edit_prefetch_params(
-                video_id=video_id,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-            if prefetch_params is not None:
-                prefetch_url, prefetch_body = prefetch_params
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
                 prefetch_resp = await async_httpx_client.post(
                     url=prefetch_url,
                     headers=headers,
@@ -7147,29 +7150,32 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
                 prefetch_resp.raise_for_status()
-                prefetched_source_data = prefetch_resp.json()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
-            url, data = video_provider_config.transform_video_edit_request(
-                prompt=prompt,
-                video_id=video_id,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-                extra_body=extra_body,
-                prefetched_source_data=prefetched_source_data,
-            )
+        url, data = video_provider_config.transform_video_edit_request(
+            prompt=prompt,
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+            extra_body=extra_body,
+            prefetched_source_data=prefetched_source_data,
+        )
 
-            logging_obj.pre_call(
-                input=prompt,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": url,
-                    "headers": headers,
-                    "video_id": video_id,
-                },
-            )
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+                "video_id": video_id,
+            },
+        )
 
+        try:
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,
