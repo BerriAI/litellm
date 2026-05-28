@@ -3218,6 +3218,39 @@ def test_create_output_config_for_response_format():
     assert parsed_schema == expected
 
 
+def test_create_output_config_drops_unsupported_numeric_schema_bounds():
+    """Bedrock rejects minimum/maximum in outputConfig.format.schema."""
+    config = AmazonConverseConfig()
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "A score between zero and one",
+            },
+        },
+        "required": ["score"],
+        "additionalProperties": False,
+    }
+
+    output_config = config._create_output_config_for_response_format(
+        json_schema=schema,
+        name="ScoreResult",
+    )
+
+    parsed_schema = json.loads(
+        output_config["textFormat"]["structure"]["jsonSchema"]["schema"]
+    )
+    score_schema = parsed_schema["properties"]["score"]
+    assert "minimum" not in score_schema
+    assert "maximum" not in score_schema
+    assert "minimum value: 0" in score_schema["description"]
+    assert "maximum value: 1" in score_schema["description"]
+
+
 def test_translate_response_format_native_output_config():
     """For supported models, _translate_response_format_param should produce outputConfig."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
