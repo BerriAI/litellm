@@ -62,6 +62,7 @@ async def apply_context_management(
     context_management_spec: Union[Dict[str, Any], List[Dict[str, Any]], None],
     metadata: Optional[Dict[str, Any]] = None,
     llm_router: Any = None,
+    user_api_key_auth: Any = None,
 ) -> PolyfillResult:
     """Run edits in order; return a single ``PolyfillResult``.
 
@@ -102,6 +103,7 @@ async def apply_context_management(
         if inspect.iscoroutinefunction(editor):
             kwargs["metadata"] = metadata
             kwargs["llm_router"] = llm_router
+            kwargs["user_api_key_auth"] = user_api_key_auth
             raw_result = await cast(Callable[..., Awaitable[Any]], editor)(**kwargs)
         else:
             raw_result = editor(**kwargs)

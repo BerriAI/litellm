@@ -52,6 +52,23 @@ def _messages_have_compaction_block(messages: List[Dict]) -> bool:
     return False
 
 
+def _extract_user_api_key_auth(kwargs: Dict[str, Any]) -> Any:
+    """Pull the parent request's ``UserAPIKeyAuth`` out of ``litellm_metadata``.
+
+    The proxy attaches the full auth object under
+    ``data["litellm_metadata"]["user_api_key_auth"]`` (see
+    ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``).
+    The context-management polyfill uses it to gate the summary subrequest on
+    the parent key/team's model allowlist; without it, the summary call would
+    bypass the proxy auth checks. Returns ``None`` for SDK callers that bypass
+    the proxy entirely.
+    """
+    litellm_metadata = kwargs.get("litellm_metadata")
+    if not isinstance(litellm_metadata, dict):
+        return None
+    return litellm_metadata.get("user_api_key_auth")
+
+
 async def _prepare_context_managed_request(
     *,
     model: str,
@@ -62,6 +79,7 @@ async def _prepare_context_managed_request(
     metadata: Optional[Dict],
     drop_params: Optional[bool],
     llm_router: Any,
+    user_api_key_auth: Any = None,
 ) -> Optional[PolyfillResult]:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
@@ -102,6 +120,7 @@ async def _prepare_context_managed_request(
         metadata=metadata,
         drop_params=drop_params,
         llm_router=llm_router,
+        user_api_key_auth=user_api_key_auth,
     )
 
     if polyfill_result is not None:
@@ -221,6 +240,7 @@ async def _run_polyfill_if_enabled(
     metadata: Optional[Dict],
     drop_params: Optional[bool],
     llm_router: Any,
+    user_api_key_auth: Any = None,
 ) -> Optional[PolyfillResult]:
     """Run the async context_management polyfill if a spec is present.
 
@@ -247,6 +267,7 @@ async def _run_polyfill_if_enabled(
             context_management_spec=context_management_spec,
             metadata=metadata,
             llm_router=llm_router,
+            user_api_key_auth=user_api_key_auth,
         )
     except AnthropicContextManagementError:
         # Surface validation errors so the endpoint can emit an Anthropic-format
@@ -557,6 +578,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 pass
 
+        user_api_key_auth = _extract_user_api_key_auth(kwargs)
+
         polyfill_result = await _prepare_context_managed_request(
             model=model,
             messages=messages,
@@ -566,6 +589,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             metadata=metadata,
             drop_params=drop_params,
             llm_router=litellm_router,
+            user_api_key_auth=user_api_key_auth,
         )
 
         effective_messages = (
@@ -708,6 +732,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 metadata=metadata,
                 drop_params=drop_params,
                 llm_router=litellm_router,
+                user_api_key_auth=_extract_user_api_key_auth(kwargs),
             )
 
         effective_messages = (

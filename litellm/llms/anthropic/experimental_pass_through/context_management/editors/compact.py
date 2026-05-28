@@ -65,6 +65,63 @@ def _read_summary_model_setting() -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def _check_summary_model_access(
+    user_api_key_auth: Any,
+    summary_model: str,
+    llm_router: Any,
+) -> bool:
+    """Return True when the parent key/team is authorized to call ``summary_model``.
+
+    The summary subrequest does not pass through ``user_api_key_auth`` again,
+    so without this gate a caller whose key/team is not allowed to use
+    ``context_management_summary_model`` could still get the proxy to invoke
+    that model and return its ``<summary>`` output as a compaction block.
+
+    Returns True (allow) when ``user_api_key_auth`` is not present — SDK
+    callers and tests run outside the proxy, where no key/team policy exists.
+    Returns False when either the key-level or team-level allowlist denies
+    the summary model.
+    """
+    if user_api_key_auth is None:
+        return True
+    try:
+        from litellm.proxy.auth.auth_checks import _can_object_call_model
+    except Exception:
+        return True
+
+    key_models = list(getattr(user_api_key_auth, "models", None) or [])
+    team_id = getattr(user_api_key_auth, "team_id", None)
+    team_model_aliases = getattr(user_api_key_auth, "team_model_aliases", None)
+    if key_models:
+        try:
+            _can_object_call_model(
+                model=summary_model,
+                llm_router=llm_router,
+                models=key_models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_id,
+                object_type="key",
+            )
+        except Exception:
+            return False
+
+    team_models = list(getattr(user_api_key_auth, "team_models", None) or [])
+    if team_models:
+        try:
+            _can_object_call_model(
+                model=summary_model,
+                llm_router=llm_router,
+                models=team_models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_id,
+                object_type="team",
+            )
+        except Exception:
+            return False
+
+    return True
+
+
 def _find_latest_compaction_index(
     messages: List[Dict[str, Any]],
 ) -> Tuple[Optional[int], Optional[int]]:
@@ -544,7 +601,7 @@ def apply_client_compaction_block_history(
     )
 
 
-async def apply_compact_20260112(
+async def apply_compact_20260112(  # noqa: PLR0915
     *,
     model: str,
     messages: List[Dict[str, Any]],
@@ -553,6 +610,7 @@ async def apply_compact_20260112(
     edit_spec: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
     llm_router: Any = None,
+    user_api_key_auth: Any = None,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
@@ -652,6 +710,23 @@ async def apply_compact_20260112(
     # Phase C: summarize. ``augmented_system`` carries any prior compaction
     # summary so multi-round compaction does not lose accumulated history —
     # ``effective_messages`` only contains turns since the last compaction.
+    if not _check_summary_model_access(
+        user_api_key_auth=user_api_key_auth,
+        summary_model=summary_model,
+        llm_router=llm_router,
+    ):
+        verbose_logger.warning(
+            "compact_20260112: caller not authorized for summary_model=%s; "
+            "skipping summary call",
+            summary_model,
+        )
+        applied["error"] = "summary_model_access_denied"
+        return PolyfillResult(
+            messages=downstream_messages,
+            system=augmented_system,
+            applied_edits=[applied],
+        )
+
     prompt = _build_summary_prompt(edit_spec, tools)
     summary_messages = _build_summary_messages(
         effective_messages, prompt, system=augmented_system

@@ -1050,6 +1050,151 @@ async def test_summary_call_sends_default_max_tokens():
 
 
 # ---------------------------------------------------------------------------
+# Editor: summary model key/team access gate
+# ---------------------------------------------------------------------------
+
+
+def _fake_user_api_key_auth(*, key_models=None, team_models=None, team_id=None):
+    """Build a minimal stand-in for ``UserAPIKeyAuth`` with just the fields
+    consulted by ``_check_summary_model_access``. Avoids pulling the proxy
+    deps into this unit test."""
+
+    class _Auth:
+        pass
+
+    auth = _Auth()
+    auth.models = list(key_models) if key_models is not None else []
+    auth.team_models = list(team_models) if team_models is not None else []
+    auth.team_id = team_id
+    auth.team_model_aliases = None
+    return auth
+
+
+async def test_summary_model_denied_when_key_not_in_allowlist():
+    """Caller key restricted to specific models cannot trigger an unauthorized summary model."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=_fake_user_api_key_auth(key_models=["gpt-4o"]),
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+    assert result.applied_edits[0]["type"] == "compact_20260112"
+    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+
+
+async def test_summary_model_denied_when_team_not_in_allowlist():
+    """Team-level model allowlist is enforced even if the key allows all models."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=_fake_user_api_key_auth(
+                key_models=["all-proxy-models"], team_models=["gpt-4o"]
+            ),
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+
+
+async def test_summary_model_allowed_when_in_key_allowlist():
+    """Caller key that explicitly allows the summary model is permitted to use it."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=_fake_user_api_key_auth(
+                key_models=["claude-haiku-4-5", "gpt-4o"]
+            ),
+        )
+
+    mock_call.assert_awaited_once()
+    assert result.compaction_block is not None
+    assert result.compaction_block["content"] == "ok"
+    assert not result.applied_edits[0].get("error")
+
+
+async def test_summary_model_allowed_when_no_user_api_key_auth():
+    """SDK callers (no proxy auth object) are not gated."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    mock_call.assert_awaited_once()
+    assert result.compaction_block is not None
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher integration: compact_20260112 via apply_context_management
 # ---------------------------------------------------------------------------
 
