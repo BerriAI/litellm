@@ -109,7 +109,7 @@ class TickerrLogger(CustomLogger):
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
             latency = round((end_time - start_time).total_seconds() * 1000)
         else:
-            latency = round((float(end_time) - float(start_time)) * 1000)
+            latency = round((float(end_time) - float(start_time)) * 1000)  # type: ignore[arg-type]
 
         payload = {
             k: v
