@@ -3062,3 +3062,34 @@ def test_lit3057_is_precomputed_helper_unit():
     helper_pt = lo_pt._is_precomputed_response_cost_authoritative
     assert helper_pt({"response_cost": 0.0}, _FakeResponse(_FakeUsage(10, 5, 15))) is True
 
+
+
+def test_lit3057_helper_rejects_negative_precomputed_cost():
+    """Greptile P2 (PR #29150): negative precomputed cost must never be treated
+    as authoritative. Negative cost is always an upstream bug; recompute."""
+
+    class _FakeUsage:
+        def __init__(self, p=0, c=0, t=0):
+            self.prompt_tokens = p
+            self.completion_tokens = c
+            self.total_tokens = t
+
+    class _FakeResponse:
+        def __init__(self, usage=None):
+            self.usage = usage
+
+    lo = _lit3057_make_logging_obj("acompletion")
+    helper = lo._is_precomputed_response_cost_authoritative
+
+    # Negative with non-zero usage -> not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+    # Negative with zero usage -> still not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(_FakeUsage(0, 0, 0))) is False
+    # Negative with no usage attribute -> still not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(None)) is False
+    # Negative on a pass-through call_type is still not authoritative
+    # — pass-through trust only lifts the zero-with-usage clamp, not the
+    # negative guard.
+    lo_pt = _lit3057_make_logging_obj("pass_through_endpoint")
+    helper_pt = lo_pt._is_precomputed_response_cost_authoritative
+    assert helper_pt({"response_cost": -0.5}, _FakeResponse(_FakeUsage(10, 5, 15))) is False

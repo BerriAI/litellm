@@ -1481,6 +1481,8 @@ class Logging(LiteLLMLoggingBaseClass):
                                               (likely a stale early seed).
               - response usage is absent
                 or all zeros                -> authoritative.
+          * Negative numeric                -> not authoritative
+            (negative cost is always a bug upstream).
           * Non-numeric / un-coercible      -> not authoritative.
         """
         if "response_cost" not in hidden_params:
@@ -1494,7 +1496,10 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         if precomputed_value > 0:
             return True
-        # precomputed_value <= 0 (typically 0.0). Pass-through handlers
+        if precomputed_value < 0:
+            # Negative cost is always a bug upstream; do not silently trust it.
+            return False
+        # precomputed_value == 0.0. Pass-through handlers
         # explicitly set _hidden_params['response_cost'] including 0.0;
         # keep that contract intact.
         if getattr(self, "call_type", None) == "pass_through_endpoint":
