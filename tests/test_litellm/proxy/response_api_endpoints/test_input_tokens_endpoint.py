@@ -231,6 +231,60 @@ class TestResponsesInputTokens:
         assert "input" in r.text
 
 
+
+    def test_proxy_exception_preserves_status_code(self, client, monkeypatch):
+        """A ProxyException raised by token_counter must surface as its original
+        HTTP status code, not be masked as a 500.
+
+        Regression for the Greptile P2 in PR #29215: prior to the fix, the
+        generic ``except Exception`` block caught ProxyException and rewrote
+        it to 500, dropping the original 401/403/429 etc. that drives client
+        retry / billing logic.
+        """
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import ProxyException
+
+        async def raise_proxy_429(*args, **kwargs):
+            raise ProxyException(
+                message="rate limit exceeded",
+                type="rate_limit_error",
+                param=None,
+                code="429",
+            )
+
+        monkeypatch.setattr(proxy_server, "token_counter", raise_proxy_429)
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "input": "hello"},
+        )
+        assert r.status_code == 429, r.text
+        assert "rate limit" in r.text
+
+    def test_proxy_exception_non_numeric_code_falls_back_to_500(
+        self, client, monkeypatch
+    ):
+        """A ProxyException with a non-numeric ``code`` falls back to 500 so
+        FastAPI doesn't crash when the upstream code can't be coerced to int."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import ProxyException
+
+        async def raise_proxy_garbage(*args, **kwargs):
+            raise ProxyException(
+                message="boom",
+                type="server_error",
+                param=None,
+                code="not-a-number",
+            )
+
+        monkeypatch.setattr(proxy_server, "token_counter", raise_proxy_garbage)
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "input": "hi"},
+        )
+        assert r.status_code == 500, r.text
+
 class TestNormalizeResponsesInputToMessages:
     """Direct unit tests for the input-shape normalizer helper."""
 
