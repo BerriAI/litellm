@@ -421,6 +421,17 @@ async def responses_input_tokens(
         return {"input_tokens": token_response_dict.get("total_tokens", 0)}
     except HTTPException:
         raise
+    except ProxyException as e:
+        # Preserve the originating status code (e.g. 401 auth, 403 access denied,
+        # 429 rate-limit/budget) rather than masking it as a 500.
+        try:
+            status_code = int(e.code) if e.code is not None else 500
+        except (TypeError, ValueError):
+            status_code = 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": e.message},
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.response_api_endpoints.responses_input_tokens(): "
