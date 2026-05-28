@@ -389,5 +389,130 @@ class TestEdgeCases:
         assert ttl == "3600s"
 
 
+class TestToolChoiceContextCaching:
+    """Tests for tool_choice handling in context caching.
+
+    Regression tests for https://github.com/BerriAI/litellm/issues/29088
+
+    Before the fix, `tool_choice` was never popped from `optional_params` during
+    cache creation.  It then reached `_transform_request_body()` where the guard
+    ``can_send_cache_incompatible_fields`` silently dropped it because
+    ``cached_content`` was already set.  Result: `toolConfig` appeared in neither
+    the cached-content request nor the final API call.
+
+    The fix mirrors the existing `tools` handling: pop `tool_choice` from
+    `optional_params` at cache-creation time, include it in the cache key, and
+    set it on the `CachedContentRequestBody` as `toolConfig`.
+    """
+
+    def _make_cached_messages(self) -> list:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "stable prefix",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+    def test_tool_choice_popped_from_optional_params(self) -> None:
+        """tool_choice must be removed from optional_params so the downstream
+        guard in transformation.py cannot silently drop it."""
+        from unittest.mock import MagicMock, patch
+        from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
+            ContextCachingEndpoints,
+        )
+
+        endpoint = ContextCachingEndpoints()
+        tool_choice = {"mode": "ANY", "allowedFunctionNames": ["my_func"]}
+        optional_params = {
+            "tools": [{"function_declarations": [{"name": "my_func"}]}],
+            "tool_choice": tool_choice,
+        }
+
+        with (
+            patch.object(endpoint, "_get_token_and_url_context_caching", return_value=("token", "http://url")),
+            patch.object(endpoint, "check_cache", return_value=None),
+            patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt", return_value=True),
+            patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.HTTPHandler") as mock_http,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"name": "cached/123", "model": "gemini-1.5-pro"}
+            mock_http.return_value.post.return_value = mock_resp
+
+            endpoint.check_and_create_cache(
+                messages=self._make_cached_messages(),
+                optional_params=optional_params,
+                api_key="test-key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=None,
+                timeout=None,
+                logging_obj=MagicMock(),
+                custom_llm_provider="gemini",
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+            )
+
+        assert "tool_choice" not in optional_params, (
+            "tool_choice must be popped from optional_params so the downstream "
+            "can_send_cache_incompatible_fields guard cannot drop it silently"
+        )
+
+    def test_tool_choice_included_in_cached_content_body(self) -> None:
+        """toolConfig must appear in the body sent to the cache-creation endpoint."""
+        from unittest.mock import MagicMock, call, patch
+        from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
+            ContextCachingEndpoints,
+        )
+
+        endpoint = ContextCachingEndpoints()
+        tool_choice = {"mode": "ANY", "allowedFunctionNames": ["my_func"]}
+        optional_params = {
+            "tools": [{"function_declarations": [{"name": "my_func"}]}],
+            "tool_choice": tool_choice,
+        }
+
+        with (
+            patch.object(endpoint, "_get_token_and_url_context_caching", return_value=("token", "http://url")),
+            patch.object(endpoint, "check_cache", return_value=None),
+            patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt", return_value=True),
+            patch("litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.HTTPHandler") as mock_http,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"name": "cached/123", "model": "gemini-1.5-pro"}
+            mock_client = MagicMock()
+            mock_client.post.return_value = mock_resp
+            mock_http.return_value = mock_client
+
+            endpoint.check_and_create_cache(
+                messages=self._make_cached_messages(),
+                optional_params=optional_params,
+                api_key="test-key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=None,
+                timeout=None,
+                logging_obj=MagicMock(),
+                custom_llm_provider="gemini",
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+            )
+
+        post_calls = mock_client.post.call_args_list
+        assert len(post_calls) == 1, "exactly one POST to the cache endpoint expected"
+        sent_body = post_calls[0].kwargs.get("json") or post_calls[0].args[1]
+        assert "toolConfig" in sent_body, (
+            "toolConfig must be present in the cached-content request body"
+        )
+        assert sent_body["toolConfig"] == tool_choice
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
