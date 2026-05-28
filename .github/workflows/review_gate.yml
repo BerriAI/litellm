@@ -119,7 +119,10 @@ jobs:
             python3 .github/scripts/triage_with_llm.py --repo "${{ github.repository }}" --pr "${TARGET_PR}" "${COMMON[@]}"
           else
             echo "::notice::Sweeping all open PRs."
-            mapfile -t NUMBERS < <(gh pr list --repo "${{ github.repository }}" --state open --limit 1000 --json number --jq '.[].number')
+            # Match GH_LIST_ALL_LIMIT in agent_shin_shared.py: gh lists newest-first,
+            # so any cap below the real backlog silently drops the *oldest* PRs —
+            # exactly the stale ones this daily sweep is meant to reconcile.
+            mapfile -t NUMBERS < <(gh pr list --repo "${{ github.repository }}" --state open --limit 100000 --json number --jq '.[].number')
             for n in "${NUMBERS[@]}"; do
               echo "::group::PR #${n}"
               python3 .github/scripts/triage_with_llm.py --repo "${{ github.repository }}" --pr "${n}" "${COMMON[@]}" || echo "::warning::review gate errored on #${n}"
