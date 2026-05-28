@@ -82,6 +82,12 @@ export default function ModelInfoView({
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
   const { data: providerMetadataList } = useProviderFields();
+  // Form-field name prefix for the Authentication section. Keeps the rotate
+  // inputs out of the same Form.Item namespace as the top-level fields above
+  // (e.g. `organization`, `api_base`) so editing a rotate input never mutates
+  // an unrelated top-level form value, and a blank rotate input never picks
+  // up a pre-existing top-level value.
+  const AUTH_FIELD_PREFIX = "auth_";
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -240,10 +246,7 @@ export default function ModelInfoView({
         p.provider_display_name?.toLowerCase() === slugLower,
     );
   }, [providerMetadataList, providerSlug]);
-  const providerCredentialFields = useMemo(
-    () => providerMetadata?.credential_fields ?? [],
-    [providerMetadata],
-  );
+  const providerCredentialFields = useMemo(() => providerMetadata?.credential_fields ?? [], [providerMetadata]);
   const providerCredentialFieldKeys = useMemo(
     () => providerCredentialFields.map((f) => f.key),
     [providerCredentialFields],
@@ -262,9 +265,7 @@ export default function ModelInfoView({
     }
     return providerSlug as unknown as Providers;
   }, [providerSlug]);
-  const usingNamedCredential: boolean = Boolean(
-    localModelData?.litellm_params?.litellm_credential_name,
-  );
+  const usingNamedCredential: boolean = Boolean(localModelData?.litellm_params?.litellm_credential_name);
 
   const handleModelUpdate = async (values: any) => {
     try {
@@ -306,11 +307,7 @@ export default function ModelInfoView({
 
       // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).
       if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
-        if (
-          values.cache_read_cost !== undefined &&
-          values.cache_read_cost !== null &&
-          values.cache_read_cost !== ""
-        ) {
+        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
           updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
         } else if (updatedLitellmParams.input_cost_per_token !== undefined) {
           updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
@@ -362,13 +359,13 @@ export default function ModelInfoView({
       // parsedExtraParams above). For deployments using a shared named
       // credential the Authentication section is not rendered, so no overrides
       // will be present in `values`.
+      // The Authentication section registers Form.Items under the `auth_`
+      // prefix to avoid colliding with top-level fields in this same form
+      // (e.g. `organization`, `api_base`). We strip the prefix when writing
+      // back into litellm_params so the upstream contract is unchanged.
       for (const fieldKey of providerCredentialFieldKeys) {
-        const newValue = values[fieldKey];
-        if (
-          newValue !== undefined &&
-          newValue !== null &&
-          newValue !== ""
-        ) {
+        const newValue = values[AUTH_FIELD_PREFIX + fieldKey];
+        if (newValue !== undefined && newValue !== null && newValue !== "") {
           updatedLitellmParams[fieldKey] = newValue;
         }
       }
@@ -547,10 +544,11 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["model-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -661,10 +659,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -1121,7 +1119,7 @@ export default function ModelInfoView({
                                         >
                                           {vsId}
                                         </span>
-                                      )
+                                      ),
                                     )}
                                   </div>
                                 ) : (
@@ -1224,18 +1222,20 @@ export default function ModelInfoView({
                                 allowClear
                                 options={(() => {
                                   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
-                                  return modelHubData?.data
-                                    ?.filter((model: any) => {
-                                      // Filter by provider to match the wildcard provider
-                                      return (
-                                        model.providers?.includes(wildcardProvider) &&
-                                        model.model_group !== modelData.litellm_model_name
-                                      );
-                                    })
-                                    .map((model: any) => ({
-                                      value: model.model_group,
-                                      label: model.model_group,
-                                    })) || [];
+                                  return (
+                                    modelHubData?.data
+                                      ?.filter((model: any) => {
+                                        // Filter by provider to match the wildcard provider
+                                        return (
+                                          model.providers?.includes(wildcardProvider) &&
+                                          model.model_group !== modelData.litellm_model_name
+                                        );
+                                      })
+                                      .map((model: any) => ({
+                                        value: model.model_group,
+                                        label: model.model_group,
+                                      })) || []
+                                  );
                                 })()}
                               />
                             </Form.Item>
@@ -1256,29 +1256,26 @@ export default function ModelInfoView({
                             data-testid="auth-section-shared"
                           >
                             This deployment uses the shared credential{" "}
-                            <span className="font-mono">
-                              {localModelData.litellm_params.litellm_credential_name}
-                            </span>
-                            . Rotate the credential on the <strong>Credentials</strong>{" "}
-                            tab.
+                            <span className="font-mono">{localModelData.litellm_params.litellm_credential_name}</span>.
+                            Rotate the credential on the <strong>Credentials</strong> tab.
                           </div>
                         ) : isEditing ? (
                           providerCredentialFields.length > 0 ? (
                             <>
                               <Text className="text-xs text-gray-500 mb-2 block">
-                                Leave any field blank to keep the current value. Only
-                                values you enter will be sent in the update.
+                                Leave any field blank to keep the current value. Only values you enter will be sent in
+                                the update.
                               </Text>
                               <ProviderSpecificFields
                                 selectedProvider={providerEnumName}
                                 mode="rotate"
+                                fieldNamePrefix={AUTH_FIELD_PREFIX}
                               />
                             </>
                           ) : (
                             <div className="mt-1 p-2 bg-gray-50 rounded text-gray-500 text-sm">
                               No provider-specific authentication fields for{" "}
-                              <span className="font-mono">{providerSlug || "this provider"}</span>
-                              .
+                              <span className="font-mono">{providerSlug || "this provider"}</span>.
                             </div>
                           )
                         ) : (

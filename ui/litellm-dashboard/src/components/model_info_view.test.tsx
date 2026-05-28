@@ -607,8 +607,7 @@ describe("ModelInfoView", () => {
       .getAllByRole("textbox")
       .find(
         (input) =>
-          input.tagName === "TEXTAREA" &&
-          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
       );
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
@@ -737,7 +736,6 @@ describe("ModelInfoView", () => {
       expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
     });
   });
-
 
   it("should display model access groups field", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -883,6 +881,33 @@ describe("ModelInfoView", () => {
       // value that came through parsedExtraParams — the seeded
       // "org-EXISTING" should flow through unchanged.
       expect(updateData.litellm_params.organization).toBe("org-EXISTING");
+    });
+
+    it("isolates rotate-mode fields from top-level form fields with the same name (e.g. organization)", async () => {
+      // Regression for Greptile's PR #29170 review: the existing model edit
+      // form has a top-level Form.Item with name="organization" that is
+      // pre-filled from litellm_params.organization. If the rotate-mode
+      // Authentication section also registered name="organization", the two
+      // would share antd Form state — the rotate input would show the
+      // existing org value and typing into it would mutate the top-level
+      // Organization field. The fieldNamePrefix ("auth_") prop on
+      // ProviderSpecificFields keeps the namespaces isolated.
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI Organization")).toBeInTheDocument();
+      });
+      // The rotate organization field should render with the leave-blank
+      // placeholder, NOT pre-filled with "org-EXISTING" from
+      // litellm_params.organization.
+      const rotateInputs = screen
+        .getAllByPlaceholderText(/leave blank to keep current/i)
+        .filter((el) => (el as HTMLInputElement).type !== "password");
+      expect(rotateInputs.length).toBeGreaterThan(0);
+      const orgRotate = rotateInputs[0] as HTMLInputElement;
+      expect(orgRotate.value).toBe("");
     });
 
     it("falls back to a no-fields message when the provider has no credential metadata", async () => {

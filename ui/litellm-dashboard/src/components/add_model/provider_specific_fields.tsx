@@ -20,6 +20,21 @@ interface ProviderSpecificFieldsProps {
    *   (and are interpreted by the caller as "keep current").
    */
   mode?: "create" | "rotate";
+  /**
+   * Optional prefix applied to every `Form.Item.name` (and to the upload
+   * setFieldsValue / getFieldValue lookups) registered by this component.
+   *
+   * Use this in edit flows where the parent form already registers
+   * `Form.Item`s whose `name` collides with provider credential field keys
+   * (for example, `ModelInfoView` has a top-level `organization` field that
+   * collides with the OpenAI provider's `organization` credential field).
+   * Without a prefix the two would share antd Form state, defeating the
+   * "Leave blank to keep current value" contract.
+   *
+   * The parent reads each rotate-form value back as
+   * `values[fieldNamePrefix + field.key]`.
+   */
+  fieldNamePrefix?: string;
 }
 
 interface ProviderCredentialField {
@@ -108,6 +123,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   uploadProps,
   mode = "create",
+  fieldNamePrefix = "",
 }) => {
   const isRotateMode = mode === "rotate";
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
@@ -194,7 +210,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           if (e.target) {
             const jsonStr = e.target.result as string;
             console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
-            form.setFieldsValue({ vertex_credentials: jsonStr });
+            form.setFieldsValue({ [fieldNamePrefix + "vertex_credentials"]: jsonStr });
             console.log("Form values after setting:", form.getFieldsValue());
           }
         };
@@ -235,14 +251,8 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
-            name={field.key}
-            rules={
-              isRotateMode
-                ? undefined
-                : field.required
-                  ? [{ required: true, message: "Required" }]
-                  : undefined
-            }
+            name={fieldNamePrefix + field.key}
+            rules={isRotateMode ? undefined : field.required ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
@@ -268,8 +278,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
 
                   // Check the field value after a short delay
                   setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
+                    const namespacedKey = fieldNamePrefix + field.key;
+                    const value = form.getFieldValue(namespacedKey);
+                    console.log(`${namespacedKey} value after upload:`, JSON.stringify(value));
                   }, 500);
                 }}
               >
