@@ -1311,6 +1311,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
 
         async def query_raw(self, sql_query, session_id, page_size, skip):
             # Endpoint uses raw SQL for pagination - verify params
+            assert 'ORDER BY "startTime" DESC' in sql_query
             assert session_id == "session-123"
             assert page_size == 1
             assert skip == 1  # page=2, page_size=1
