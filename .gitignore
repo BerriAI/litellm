@@ -2,7 +2,10 @@
 .venv
 .venv_policy_test
 .env
-.claude
+# User-specific Claude Code settings (ignored)
+.claude/*
+# But track project-specific skills
+!.claude/skills/
 .newenv
 newenv/*
 litellm/proxy/myenv/*
