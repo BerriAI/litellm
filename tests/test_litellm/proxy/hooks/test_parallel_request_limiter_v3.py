@@ -2947,17 +2947,13 @@ async def test_lit_2792_key_model_override_takes_precedence_over_team_v3():
     assert (
         "model_per_key" in descriptor_keys
     ), f"model_per_key must still be added, got: {descriptor_keys}"
-    assert (
-        "model_per_team" not in descriptor_keys
-    ), (
+    assert "model_per_team" not in descriptor_keys, (
         "LIT-2792 regression: model_per_team must be SKIPPED for gpt-4 when "
         f"the key has its own override, got: {descriptor_keys}"
     )
 
     # The key override values must be the ones forwarded to the rate-limit script.
-    model_per_key = next(
-        d for d in captured_descriptors if d["key"] == "model_per_key"
-    )
+    model_per_key = next(d for d in captured_descriptors if d["key"] == "model_per_key")
     assert model_per_key["rate_limit"]["requests_per_unit"] == 50
     assert model_per_key["rate_limit"]["tokens_per_unit"] == 5000
 
@@ -3006,9 +3002,7 @@ async def test_lit_2792_team_model_limit_still_applied_for_unconstrained_model_v
     )
 
     descriptor_keys = [d["key"] for d in captured_descriptors]
-    assert (
-        "model_per_team" in descriptor_keys
-    ), (
+    assert "model_per_team" in descriptor_keys, (
         "Team model limit must still apply when the key does not override the "
         f"requested model, got: {descriptor_keys}"
     )
@@ -3059,9 +3053,7 @@ async def test_lit_2792_no_key_override_team_model_limit_applied_v3():
     )
 
     descriptor_keys = [d["key"] for d in captured_descriptors]
-    assert (
-        "model_per_team" in descriptor_keys
-    ), (
+    assert "model_per_team" in descriptor_keys, (
         "Team model_per_team must be enforced when the key does not override, "
         f"got: {descriptor_keys}"
     )
@@ -3113,9 +3105,7 @@ async def test_lit_2792_key_model_max_budget_override_suppresses_team_v3():
     )
 
     descriptor_keys = [d["key"] for d in captured_descriptors]
-    assert (
-        "model_per_team" not in descriptor_keys
-    ), (
+    assert "model_per_team" not in descriptor_keys, (
         "Key model_max_budget override must suppress team model_per_team, "
         f"got: {descriptor_keys}"
     )
@@ -3172,9 +3162,7 @@ async def test_lit_2792_partial_key_override_preserves_team_other_dimension_v3()
     )
 
     descriptor_keys = [d["key"] for d in captured_descriptors]
-    assert (
-        "model_per_team" in descriptor_keys
-    ), (
+    assert "model_per_team" in descriptor_keys, (
         "Team's TPM dimension must still produce a model_per_team descriptor "
         f"under a partial key override, got: {descriptor_keys}"
     )
