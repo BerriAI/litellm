@@ -7333,7 +7333,7 @@ async def test_list_team_v1_batches_key_queries():
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
             new_callable=AsyncMock,
-            return_value=[team1, team2],
+            return_value=([team1, team2], False),
         ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships",
