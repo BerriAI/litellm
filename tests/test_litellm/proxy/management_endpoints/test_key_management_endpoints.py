@@ -11234,3 +11234,261 @@ async def test_ghsa_q775_admin_bypasses_budget_ceiling():
             litellm_changed_by=None,
         )
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# LIT-3387: `expires` filter on GET /key/list
+# ---------------------------------------------------------------------------
+
+
+class _MissingArgSentinel:
+    """Used in tests below to assert the helper inserted an explicit clause."""
+
+    pass
+
+
+def _has_expires_clause(where, expected_op):
+    """
+    Walk a Prisma `where` dict produced by _build_key_filter_conditions and
+    look for at least one mapping containing {"expires": {expected_op: ...}}
+    or {"expires": None} (for the active branch). Returns True if found.
+    """
+    if isinstance(where, dict):
+        if "expires" in where:
+            v = where["expires"]
+            if isinstance(v, dict) and expected_op in v:
+                return True
+            if v is None and expected_op == "is_null":
+                return True
+        for k in ("AND", "OR"):
+            if k in where:
+                for child in where[k]:
+                    if _has_expires_clause(child, expected_op):
+                        return True
+        for v in where.values():
+            if isinstance(v, dict):
+                if _has_expires_clause(v, expected_op):
+                    return True
+    return False
+
+
+def test_build_expires_filter_clause_expired():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_filter_clause,
+    )
+
+    clause = _build_expires_filter_clause("expired")
+    # Shape: {"AND": [{"expires": {"not": None}}, {"expires": {"lt": <now>}}]}
+    assert isinstance(clause, dict) and "AND" in clause
+    parts = clause["AND"]
+    assert {"expires": {"not": None}} in parts
+    lt_part = next(p for p in parts if p != {"expires": {"not": None}})
+    assert "expires" in lt_part and "lt" in lt_part["expires"]
+
+
+def test_build_expires_filter_clause_active():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_filter_clause,
+    )
+
+    clause = _build_expires_filter_clause("active")
+    # Shape: {"OR": [{"expires": None}, {"expires": {"gte": <now>}}]}
+    assert isinstance(clause, dict) and "OR" in clause
+    parts = clause["OR"]
+    assert {"expires": None} in parts
+    gte_part = next(p for p in parts if p != {"expires": None})
+    assert "expires" in gte_part and "gte" in gte_part["expires"]
+
+
+def test_build_expires_filter_clause_none_and_garbage():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_filter_clause,
+    )
+
+    # Defensive: anything outside the validated set is treated as "no filter".
+    # The endpoint already 400s on garbage; this is a belt-and-suspenders
+    # safety net for direct callers (e.g. Prometheus, internal cleanup jobs).
+    assert _build_expires_filter_clause(None) is None
+    assert _build_expires_filter_clause("EXPIRED") is None  # case-sensitive
+    assert _build_expires_filter_clause("expires") is None
+    assert _build_expires_filter_clause("") is None
+
+
+def test_build_key_filter_conditions_no_expires_filter():
+    """No expires_filter -> the where clause must not constrain `expires`."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter=None,
+    )
+    assert not _has_expires_clause(where, "lt")
+    assert not _has_expires_clause(where, "gte")
+
+
+def test_build_key_filter_conditions_expired_filter_anded():
+    """expires_filter='expired' must be ANDed with the visibility clause."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="expired",
+    )
+    assert _has_expires_clause(where, "lt"), where
+
+
+def test_build_key_filter_conditions_active_filter_anded():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="u1",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        expires_filter="active",
+    )
+    assert _has_expires_clause(where, "gte"), where
+
+
+def test_expires_clause_uses_server_side_now():
+    """Two consecutive calls should produce monotonic-non-decreasing `now`."""
+    import time
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_expires_filter_clause,
+    )
+
+    c1 = _build_expires_filter_clause("expired")
+    time.sleep(0.001)
+    c2 = _build_expires_filter_clause("expired")
+    # Extract the `lt` value from {"AND": [..., {"expires": {"lt": <dt>}}]}
+    def _lt(c):
+        for p in c["AND"]:
+            if "expires" in p and isinstance(p["expires"], dict) and "lt" in p["expires"]:
+                return p["expires"]["lt"]
+        raise AssertionError("no lt")
+
+    assert _lt(c2) >= _lt(c1)
+
+
+@pytest.mark.asyncio
+async def test_list_keys_endpoint_400s_on_garbage_expires():
+    """Endpoint must reject typo'd `expires` values with HTTP 400 instead of
+    silently returning all keys."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        list_keys,
+    )
+
+    mock_request = MagicMock()
+    mock_user = MagicMock()
+    mock_user.user_role = LitellmUserRoles.PROXY_ADMIN.value
+    mock_user.user_id = "admin-user"
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await list_keys(
+                request=mock_request,
+                user_api_key_dict=mock_user,
+                page=1,
+                size=10,
+                user_id=None,
+                team_id=None,
+                organization_id=None,
+                key_hash=None,
+                key_alias=None,
+                return_full_object=False,
+                include_team_keys=False,
+                include_created_by_keys=False,
+                sort_by=None,
+                sort_order="desc",
+                expand=None,
+                status=None,
+                project_id=None,
+                access_group_id=None,
+                expires="expred",  # typo
+            )
+        # ProxyException wraps HTTPExceptions raised inside the try block.
+        # Either way the message must mention the supported values.
+        msg = str(exc_info.value)
+        assert "expired" in msg and "active" in msg, msg
+
+
+@pytest.mark.asyncio
+async def test_list_keys_endpoint_passes_expires_through(monkeypatch):
+    """When the endpoint receives a validated `expires` value it must forward
+    that value verbatim to _list_key_helper as expires_filter."""
+    from litellm.proxy.management_endpoints import key_management_endpoints as kme
+
+    captured = {}
+
+    async def fake_validate_key_list_check(**_kwargs):
+        return MagicMock(user_id="admin-user")
+
+    async def fake_list_key_helper(**kwargs):
+        captured.update(kwargs)
+        return {"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+
+    monkeypatch.setattr(kme, "validate_key_list_check", fake_validate_key_list_check)
+    monkeypatch.setattr(kme, "_list_key_helper", fake_list_key_helper)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    )
+
+    mock_user = MagicMock()
+    mock_user.user_role = LitellmUserRoles.PROXY_ADMIN.value
+    mock_user.user_id = "admin-user"
+    mock_request = MagicMock()
+
+    base = dict(
+        request=mock_request,
+        user_api_key_dict=mock_user,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
+        expand=None,
+        status=None,
+        project_id=None,
+        access_group_id=None,
+    )
+    await kme.list_keys(**base, expires="expired")
+    assert captured.get("expires_filter") == "expired", captured
+
+    captured.clear()
+    await kme.list_keys(**base, expires="active")
+    assert captured.get("expires_filter") == "active", captured
+
+    captured.clear()
+    await kme.list_keys(**base, expires=None)
+    assert captured.get("expires_filter") is None, captured
