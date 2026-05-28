@@ -117,21 +117,50 @@ async def test_lit_3095_pattern_match_returns_400():
 
 def test_lit_3095_no_403_left_in_content_filter_raise_sites():
     """
-    Static guard: there should be zero `raise HTTPException(status_code=403, ...)`
-    sites left in content_filter.py. Any future regression that re-introduces a
-    403 will fail this test immediately, independent of category coverage.
+    Static guard: there should be zero `raise HTTPException(... status_code=403 ...)`
+    sites left in content_filter.py — neither multi-line, single-line, nor reordered.
+    Any future regression that re-introduces a 403 will fail this test immediately,
+    independent of category coverage.
+
+    Uses an AST walk to find every `raise` statement whose value is a Call to
+    `HTTPException` (or `fastapi.HTTPException`) with `status_code=403` passed
+    either as a keyword argument or as the first positional argument. This catches
+    multi-line, single-line, and any future stylistic reordering of the raise.
     """
-    import re
+    import ast
 
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
         content_filter as _module,
     )
 
     src = open(_module.__file__).read()
-    matches = re.findall(
-        r"raise HTTPException\(\s*\n\s*status_code=403,", src
-    )
-    assert matches == [], (
-        f"LIT-3095 regression: {len(matches)} `raise HTTPException(status_code=403, ...)` "
-        f"site(s) reintroduced in content_filter.py; expected 400 for content policy violations."
+    tree = ast.parse(src)
+
+    def _is_http_exception(call_func):
+        # Either `HTTPException(...)` or `fastapi.HTTPException(...)`
+        if isinstance(call_func, ast.Name):
+            return call_func.id == "HTTPException"
+        if isinstance(call_func, ast.Attribute):
+            return call_func.attr == "HTTPException"
+        return False
+
+    def _is_403(call):
+        # status_code passed as kw
+        for kw in call.keywords:
+            if kw.arg == "status_code" and isinstance(kw.value, ast.Constant) and kw.value.value == 403:
+                return True
+        # HTTPException(status_code, detail) positional form
+        if call.args and isinstance(call.args[0], ast.Constant) and call.args[0].value == 403:
+            return True
+        return False
+
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+            if _is_http_exception(node.exc.func) and _is_403(node.exc):
+                offenders.append(node.lineno)
+
+    assert offenders == [], (
+        f"LIT-3095 regression: HTTPException(status_code=403) raised at line(s) "
+        f"{offenders} in content_filter.py; expected 400 for content policy violations."
     )
