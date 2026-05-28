@@ -12394,16 +12394,24 @@ async def model_info_v1(  # noqa: PLR0915
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
+    # LIT-3038: PROXY_ADMIN sees every model the proxy serves; bypass any
+    # stale `models=["no-default-models"]` restriction inherited from a
+    # prior internal_user role (mirrors the same guard in
+    # `get_available_models_for_user`).
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        key_models: List[str] = []
+        team_models: List[str] = []
+    else:
+        key_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+        team_models = get_team_models(
+            team_models=user_api_key_dict.team_models,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
     all_models_str = get_complete_model_list(
         key_models=key_models,
         team_models=team_models,
