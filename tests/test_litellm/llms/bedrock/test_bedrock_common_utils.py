@@ -21,8 +21,10 @@ def _reset_bedrock_response_stream_shape_cache():
     import litellm.llms.bedrock.common_utils as mod
 
     mod.get_bedrock_response_stream_shape.cache_clear()
+    mod._get_local_model_cost_map.cache_clear()
     yield
     mod.get_bedrock_response_stream_shape.cache_clear()
+    mod._get_local_model_cost_map.cache_clear()
 
 
 def test_bedrock_response_stream_shape_lazy_loads_once():

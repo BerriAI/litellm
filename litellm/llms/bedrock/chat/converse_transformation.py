@@ -448,16 +448,19 @@ class AmazonConverseConfig(BaseConfig):
                             value=reasoning_effort,
                             llm_provider="bedrock_converse",
                         )
-                    output_config = {"effort": mapped_effort}
+                    existing_output_config = optional_params.get("output_config")
+                    if not isinstance(existing_output_config, dict):
+                        existing_output_config = {}
+                    existing_output_config.setdefault("effort", mapped_effort)
                     normalize_bedrock_opus_output_config_effort(
                         model=model,
-                        output_config=output_config,
+                        output_config=existing_output_config,
                     )
-                    mapped_effort = output_config["effort"]
+                    mapped_effort = existing_output_config["effort"]
                     self._validate_anthropic_adaptive_effort(
                         model=model, effort=mapped_effort
                     )
-                    optional_params["output_config"] = output_config
+                    optional_params["output_config"] = existing_output_config
                     optional_params["_output_config_normalized"] = True
 
     @staticmethod
