@@ -537,11 +537,11 @@ async def test_full_summary_path_uses_router_when_available():
     assert result.compaction_block["content"] == "Router summary"
 
 
-async def test_metadata_propagated_to_summary_call():
-    """Auth metadata from the parent request is forwarded to the summary call."""
+async def test_litellm_metadata_propagated_to_summary_call():
+    """Auth fields from the proxy ``litellm_metadata`` are forwarded to the summary call."""
     messages = _simple_messages()
     mock_response = _make_mock_response("<summary>Summary</summary>")
-    parent_metadata = {
+    parent_litellm_metadata = {
         "user_api_key": "sk-test",
         "user_api_key_team_id": "team-123",
         "user_api_key_user_id": "user-456",
@@ -567,7 +567,7 @@ async def test_metadata_propagated_to_summary_call():
             tools=None,
             system=None,
             edit_spec=_EDIT_SPEC_DEFAULT,
-            metadata=parent_metadata,
+            litellm_metadata=parent_litellm_metadata,
         )
 
     call_kwargs = mock_call.call_args.kwargs
@@ -1255,7 +1255,7 @@ async def test_run_polyfill_skipped_when_drop_params_true():
         tools=None,
         system=None,
         context_management_spec={"edits": [{"type": "compact_20260112"}]},
-        metadata={},
+        litellm_metadata={},
         drop_params=True,
         llm_router=None,
     )
@@ -1274,11 +1274,60 @@ async def test_run_polyfill_skipped_when_spec_empty():
         tools=None,
         system=None,
         context_management_spec=None,
-        metadata={},
+        litellm_metadata={},
         drop_params=False,
         llm_router=None,
     )
     assert result is None
+
+
+async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata():
+    """The handler must hand the polyfill the proxy ``litellm_metadata`` (which
+    carries ``user_api_key`` / ``user_api_key_team_id`` / ...), not the
+    Anthropic-shape ``metadata`` arg (which only carries ``user_id``). Otherwise
+    the summary subcall lands on the router with no parent attribution, and
+    those tokens go unbilled to the caller's key/team."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+        _prepare_context_managed_request,
+    )
+
+    captured_summary_metadata: Dict[str, Any] = {}
+
+    class _RouterStub:
+        async def acompletion(self, **kwargs):
+            captured_summary_metadata.update(kwargs.get("metadata", {}))
+            return _make_mock_response("<summary>s</summary>")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+    ):
+        result = await _prepare_context_managed_request(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            context_management_spec={"edits": [_EDIT_SPEC_DEFAULT]},
+            litellm_metadata={
+                "user_api_key": "sk-parent",
+                "user_api_key_team_id": "team-abc",
+                "user_api_key_user_id": "user-xyz",
+                "litellm_call_id": "call-1",
+            },
+            drop_params=False,
+            llm_router=_RouterStub(),
+        )
+
+    assert result is not None
+    assert captured_summary_metadata.get("user_api_key") == "sk-parent"
+    assert captured_summary_metadata.get("user_api_key_team_id") == "team-abc"
+    assert captured_summary_metadata.get("user_api_key_user_id") == "user-xyz"
+    assert captured_summary_metadata.get("litellm_call_id") == "call-1"
+    # Anthropic-shape ``metadata.user_id`` must not leak in as a propagated field.
+    assert "user_id" not in captured_summary_metadata
 
 
 # ---------------------------------------------------------------------------

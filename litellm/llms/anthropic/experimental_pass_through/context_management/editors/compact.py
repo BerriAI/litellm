@@ -269,13 +269,23 @@ def _build_summary_prompt(
     return prompt
 
 
-def _propagate_metadata(parent_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not parent_metadata:
+def _propagate_metadata(
+    parent_litellm_metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Extract the parent request's auth/spend-attribution fields for the summary subcall.
+
+    The proxy attaches ``user_api_key``, ``user_api_key_team_id`` etc. to
+    ``data["litellm_metadata"]`` (see
+    ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``).
+    Without these on the summary subrequest, the router's post-call hooks
+    cannot attribute summary tokens to the caller's key/team budget.
+    """
+    if not parent_litellm_metadata:
         return {}
     propagated: Dict[str, Any] = {}
     for key in _PROPAGATED_METADATA_KEYS:
-        if key in parent_metadata:
-            propagated[key] = parent_metadata[key]
+        if key in parent_litellm_metadata:
+            propagated[key] = parent_litellm_metadata[key]
     return propagated
 
 
@@ -615,7 +625,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
     tools: Optional[List[Dict[str, Any]]],
     system: Optional[Union[str, List[Dict[str, Any]]]],
     edit_spec: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None,
+    litellm_metadata: Optional[Dict[str, Any]] = None,
     llm_router: Any = None,
     user_api_key_auth: Any = None,
 ) -> PolyfillResult:
@@ -738,7 +748,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
     summary_messages = _build_summary_messages(
         effective_messages, prompt, system=augmented_system
     )
-    propagated_metadata = _propagate_metadata(metadata)
+    propagated_metadata = _propagate_metadata(litellm_metadata)
 
     try:
         response = await _call_summary_model(

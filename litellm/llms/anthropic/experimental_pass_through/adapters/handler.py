@@ -52,21 +52,30 @@ def _messages_have_compaction_block(messages: List[Dict]) -> bool:
     return False
 
 
-def _extract_user_api_key_auth(kwargs: Dict[str, Any]) -> Any:
-    """Pull the parent request's ``UserAPIKeyAuth`` out of ``litellm_metadata``.
+def _extract_proxy_litellm_metadata(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return ``kwargs["litellm_metadata"]`` when it's a dict; ``None`` otherwise.
 
-    The proxy attaches the full auth object under
-    ``data["litellm_metadata"]["user_api_key_auth"]`` (see
-    ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``).
-    The context-management polyfill uses it to gate the summary subrequest on
-    the parent key/team's model allowlist; without it, the summary call would
-    bypass the proxy auth checks. Returns ``None`` for SDK callers that bypass
-    the proxy entirely.
+    The proxy attaches its auth/spend-attribution fields (``user_api_key``,
+    ``user_api_key_team_id``, ``litellm_call_id``, the full ``UserAPIKeyAuth``
+    object under ``user_api_key_auth``, ...) to ``data["litellm_metadata"]``
+    for ``/v1/messages`` (see
+    ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata`` and
+    ``LITELLM_METADATA_ROUTES``). The Anthropic-shape ``metadata`` arg only
+    carries ``user_id`` and must not be conflated. Returns ``None`` for SDK
+    callers that bypass the proxy entirely.
     """
     litellm_metadata = kwargs.get("litellm_metadata")
     if not isinstance(litellm_metadata, dict):
         return None
-    return litellm_metadata.get("user_api_key_auth")
+    return litellm_metadata
+
+
+def _extract_user_api_key_auth(kwargs: Dict[str, Any]) -> Any:
+    """Pull the parent request's ``UserAPIKeyAuth`` out of ``litellm_metadata``."""
+    proxy_metadata = _extract_proxy_litellm_metadata(kwargs)
+    if proxy_metadata is None:
+        return None
+    return proxy_metadata.get("user_api_key_auth")
 
 
 async def _prepare_context_managed_request(
@@ -76,7 +85,7 @@ async def _prepare_context_managed_request(
     tools: Optional[List[Dict]],
     system: Optional[Any],
     context_management_spec: Any,
-    metadata: Optional[Dict],
+    litellm_metadata: Optional[Dict],
     drop_params: Optional[bool],
     llm_router: Any,
     user_api_key_auth: Any = None,
@@ -117,7 +126,7 @@ async def _prepare_context_managed_request(
         tools=tools,
         system=working_system,
         context_management_spec=context_management_spec,
-        metadata=metadata,
+        litellm_metadata=litellm_metadata,
         drop_params=drop_params,
         llm_router=llm_router,
         user_api_key_auth=user_api_key_auth,
@@ -237,7 +246,7 @@ async def _run_polyfill_if_enabled(
     tools: Optional[List[Dict]],
     system: Optional[Any],
     context_management_spec: Any,
-    metadata: Optional[Dict],
+    litellm_metadata: Optional[Dict],
     drop_params: Optional[bool],
     llm_router: Any,
     user_api_key_auth: Any = None,
@@ -265,7 +274,7 @@ async def _run_polyfill_if_enabled(
             tools=tools,
             system=system,
             context_management_spec=context_management_spec,
-            metadata=metadata,
+            litellm_metadata=litellm_metadata,
             llm_router=llm_router,
             user_api_key_auth=user_api_key_auth,
         )
@@ -578,7 +587,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             except Exception:
                 pass
 
-        user_api_key_auth = _extract_user_api_key_auth(kwargs)
+        proxy_litellm_metadata = _extract_proxy_litellm_metadata(kwargs)
+        user_api_key_auth = (
+            proxy_litellm_metadata.get("user_api_key_auth")
+            if proxy_litellm_metadata is not None
+            else None
+        )
 
         polyfill_result = await _prepare_context_managed_request(
             model=model,
@@ -586,7 +600,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=tools,
             system=system,
             context_management_spec=context_management,
-            metadata=metadata,
+            litellm_metadata=proxy_litellm_metadata,
             drop_params=drop_params,
             llm_router=litellm_router,
             user_api_key_auth=user_api_key_auth,
@@ -722,6 +736,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if context_management is None and not _messages_have_compaction_block(messages):
             polyfill_result: Optional[PolyfillResult] = None
         else:
+            proxy_litellm_metadata = _extract_proxy_litellm_metadata(kwargs)
+            user_api_key_auth = (
+                proxy_litellm_metadata.get("user_api_key_auth")
+                if proxy_litellm_metadata is not None
+                else None
+            )
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
                 model=model,
@@ -729,10 +749,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tools=tools,
                 system=system,
                 context_management_spec=context_management,
-                metadata=metadata,
+                litellm_metadata=proxy_litellm_metadata,
                 drop_params=drop_params,
                 llm_router=litellm_router,
-                user_api_key_auth=_extract_user_api_key_auth(kwargs),
+                user_api_key_auth=user_api_key_auth,
             )
 
         effective_messages = (

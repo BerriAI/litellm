@@ -60,7 +60,7 @@ async def apply_context_management(
     tools: Optional[List[Dict[str, Any]]],
     system: Any,
     context_management_spec: Union[Dict[str, Any], List[Dict[str, Any]], None],
-    metadata: Optional[Dict[str, Any]] = None,
+    litellm_metadata: Optional[Dict[str, Any]] = None,
     llm_router: Any = None,
     user_api_key_auth: Any = None,
 ) -> PolyfillResult:
@@ -101,7 +101,7 @@ async def apply_context_management(
         # Only async editors accept these — passing them to sync v0 editors
         # would break their signature.
         if inspect.iscoroutinefunction(editor):
-            kwargs["metadata"] = metadata
+            kwargs["litellm_metadata"] = litellm_metadata
             kwargs["llm_router"] = llm_router
             kwargs["user_api_key_auth"] = user_api_key_auth
             raw_result = await cast(Callable[..., Awaitable[Any]], editor)(**kwargs)
