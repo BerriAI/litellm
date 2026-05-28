@@ -1546,3 +1546,4 @@ def test_lyria_model_pricing_in_model_cost_map():
     pro = cost_map["vertex_ai/lyria-3-pro-preview"]
     assert pro["litellm_provider"] == "vertex_ai"
     assert pro["supports_audio_output"] is True
+    assert pro["output_cost_per_image"] == 0.08
