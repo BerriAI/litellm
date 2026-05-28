@@ -2497,7 +2497,6 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
 
 
-
 # ---------------------------------------------------------------------------
 # LIT-3222: Presidio guardrails buffer SSE streaming responses
 # ---------------------------------------------------------------------------
@@ -2541,8 +2540,14 @@ async def test_lit3222_unmask_stream_is_incremental(mock_user_api_key):
     }
     # Tokens deliberately split across chunk boundaries.
     pieces = [
-        "Hello ", "<PER", "SON_1", ">, your ",
-        "email is ", "<EMAIL_", "ADDRESS_", "1>",
+        "Hello ",
+        "<PER",
+        "SON_1",
+        ">, your ",
+        "email is ",
+        "<EMAIL_",
+        "ADDRESS_",
+        "1>",
         ". Bye.",
     ]
 
@@ -2559,16 +2564,18 @@ async def test_lit3222_unmask_stream_is_incremental(mock_user_api_key):
     ):
         received.append(chunk)
 
-    assert len(received) >= 2, f"Expected progressive streaming, got {len(received)} chunks"
+    assert (
+        len(received) >= 2
+    ), f"Expected progressive streaming, got {len(received)} chunks"
 
     full_text = "".join(
         (c.choices[0].delta.content or "")
         for c in received
         if hasattr(c, "choices") and c.choices
     )
-    assert full_text == "Hello Jane Doe, your email is jane@university.ca. Bye.", (
-        f"reassembled: {full_text!r}"
-    )
+    assert (
+        full_text == "Hello Jane Doe, your email is jane@university.ca. Bye."
+    ), f"reassembled: {full_text!r}"
 
 
 @pytest.mark.asyncio
@@ -2583,22 +2590,38 @@ async def test_lit3222_unmask_passes_through_non_text_chunks(mock_user_api_key):
     )
 
     guardrail = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, output_parse_pii=True,
+        mock_testing=True,
+        output_parse_pii=True,
     )
     request_data = {"metadata": {"pii_tokens": {"<PERSON_1>": "John"}}}
 
     role_chunk = ModelResponseStream(
-        id="x", object="chat.completion.chunk", created=1, model="gpt-4",
+        id="x",
+        object="chat.completion.chunk",
+        created=1,
+        model="gpt-4",
         choices=[StreamingChoices(index=0, delta=Delta(role="assistant"))],
     )
     tool_chunk = ModelResponseStream(
-        id="x", object="chat.completion.chunk", created=1, model="gpt-4",
-        choices=[StreamingChoices(
-            index=0,
-            delta=Delta(tool_calls=[ChatCompletionDeltaToolCall(
-                index=0, id="call_1", type="function",
-                function=Function(name="search", arguments=""))]),
-        )],
+        id="x",
+        object="chat.completion.chunk",
+        created=1,
+        model="gpt-4",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            index=0,
+                            id="call_1",
+                            type="function",
+                            function=Function(name="search", arguments=""),
+                        )
+                    ]
+                ),
+            )
+        ],
     )
 
     async def mock_stream():
@@ -2628,7 +2651,8 @@ async def test_lit3222_unmask_passes_through_non_text_chunks(mock_user_api_key):
 async def test_lit3222_apply_to_output_is_incremental(mock_user_api_key):
     """apply_to_output=True must stream incrementally at safe boundaries."""
     guardrail = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, apply_to_output=True,
+        mock_testing=True,
+        apply_to_output=True,
     )
 
     async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
@@ -2659,12 +2683,13 @@ async def test_lit3222_apply_to_output_is_incremental(mock_user_api_key):
         received.append(chunk)
 
     non_empty = [
-        c for c in received
+        c
+        for c in received
         if hasattr(c, "choices") and c.choices and (c.choices[0].delta.content or "")
     ]
-    assert len(non_empty) >= 2, (
-        f"Expected progressive streaming (>=2 text chunks), got {len(non_empty)}"
-    )
+    assert (
+        len(non_empty) >= 2
+    ), f"Expected progressive streaming (>=2 text chunks), got {len(non_empty)}"
     full_text = "".join(c.choices[0].delta.content for c in non_empty)
     assert "[PERSON]" in full_text
     assert "Jane Doe" not in full_text
@@ -2675,7 +2700,8 @@ async def test_lit3222_apply_to_output_is_incremental(mock_user_api_key):
 async def test_lit3222_apply_to_output_final_chunk_flushes_buffer(mock_user_api_key):
     """Short responses below flush window still emit at finish_reason."""
     guardrail = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, apply_to_output=True,
+        mock_testing=True,
+        apply_to_output=True,
     )
 
     async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
@@ -2696,17 +2722,19 @@ async def test_lit3222_apply_to_output_final_chunk_flushes_buffer(mock_user_api_
         received.append(chunk)
 
     full_text = "".join(
-        (c.choices[0].delta.content or "")
-        for c in received if c.choices
+        (c.choices[0].delta.content or "") for c in received if c.choices
     )
     assert full_text == "Tell me a [REDACTED]."
 
 
 @pytest.mark.asyncio
-async def test_lit3222_apply_to_output_flush_warning_when_text_buffered(mock_user_api_key):
+async def test_lit3222_apply_to_output_flush_warning_when_text_buffered(
+    mock_user_api_key,
+):
     """Mixed-stream warning still fires when real text was buffered."""
     guardrail = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, apply_to_output=True,
+        mock_testing=True,
+        apply_to_output=True,
     )
 
     async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
@@ -2749,7 +2777,8 @@ async def test_lit3222_apply_to_output_flush_warning_when_text_buffered(mock_use
 async def test_lit3222_unmask_no_tokens_passes_through(mock_user_api_key):
     """Empty pii_tokens => unmask still streams progressively (no-op)."""
     guardrail = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, output_parse_pii=True,
+        mock_testing=True,
+        output_parse_pii=True,
     )
 
     async def mock_stream():
@@ -2765,8 +2794,7 @@ async def test_lit3222_unmask_no_tokens_passes_through(mock_user_api_key):
         received.append(chunk)
 
     full_text = "".join(
-        (c.choices[0].delta.content or "")
-        for c in received if c.choices
+        (c.choices[0].delta.content or "") for c in received if c.choices
     )
     assert full_text == "Hello world."
 
@@ -2783,9 +2811,12 @@ async def test_lit3222_find_safe_flush_boundary_prefers_punctuation():
 def test_lit3222_build_text_only_chunk_carries_template_ids():
     """Helper unit test for synthetic flush chunk builder."""
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
     tmpl = ModelResponseStream(
-        id="abc", object="chat.completion.chunk",
-        created=42, model="m",
+        id="abc",
+        object="chat.completion.chunk",
+        created=42,
+        model="m",
         choices=[StreamingChoices(index=0, delta=Delta(content="x"))],
     )
     out = _OPTIONAL_PresidioPIIMasking._build_text_only_chunk(tmpl, 0, "Hello")
