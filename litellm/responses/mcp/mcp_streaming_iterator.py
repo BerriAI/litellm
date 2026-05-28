@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+    _extract_request_tags_from_kwargs,
+)
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     MCPCallArgumentsDeltaEvent,
@@ -658,6 +661,19 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.tool_execution_events.extend(call_events[:-1])
 
             # Execute the tools
+            # LIT-3304: forward parent /responses request_tags so MCP
+            # sub-calls inherit them on SpendLogs / Tag Usage. Reuse the
+            # central helper so /responses streaming honors both `metadata`
+            # and `litellm_metadata` tag locations, matching the
+            # non-streaming and /chat/completions paths.
+            _iter_request_tags = None
+            try:
+                _iter_request_tags = _extract_request_tags_from_kwargs(
+                    self.original_request_params or {}
+                )
+            except Exception:
+                _iter_request_tags = None
+
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=self.tool_server_map,
                 tool_calls=tool_calls,
@@ -668,6 +684,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
+                request_tags=_iter_request_tags,
             )
 
             # Create completion events and output_item.done events for tool execution

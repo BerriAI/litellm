@@ -401,3 +401,212 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+# ----- LIT-3304: propagate parent-request auth metadata + tags to MCP sub-calls -----
+
+class _FakeUserAPIKeyAuth:
+    """Minimal stand-in for UserAPIKeyAuth used by the auto-execute path."""
+
+    def __init__(self, **kwargs):
+        defaults = {
+            "api_key": "hash-abc",
+            "key_alias": "playground-key",
+            "team_id": "team-pfizer",
+            "team_alias": "pfizer-research",
+            "user_id": "user-99",
+            "end_user_id": None,
+            "org_id": "org-1",
+            "organization_alias": "org-alias-1",
+            "spend": 0.0,
+            "max_budget": None,
+            "project_id": None,
+            "project_alias": None,
+            "user_email": "alice@example.com",
+            "metadata": {},
+            "request_route": None,
+            "budget_reset_at": None,
+        }
+        defaults.update(kwargs)
+        for k, v in defaults.items():
+            setattr(self, k, v)
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_propagates_proxy_auth_metadata_to_function_setup(
+    monkeypatch,
+):
+    """LIT-3304: auto-executed MCP sub-calls must inherit team_id / aliases /
+    user_id / etc. from the parent UserAPIKeyAuth so they roll up into
+    team-budget tracking and Logs UI alias filters."""
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=_FakeUserAPIKeyAuth(),
+    )
+
+    md = captured.get("metadata", {})
+    assert md.get("user_api_key_team_id") == "team-pfizer"
+    assert md.get("user_api_key_team_alias") == "pfizer-research"
+    assert md.get("user_api_key_alias") == "playground-key"
+    assert md.get("user_api_key_user_id") == "user-99"
+    assert md.get("user_api_key_org_id") == "org-1"
+    assert md.get("user_api_key") == "hash-abc"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_sets_request_tags_when_provided(monkeypatch):
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=_FakeUserAPIKeyAuth(),
+        request_tags=["prod", "claude-code"],
+    )
+
+    md = captured.get("metadata", {})
+    assert md.get("tags") == ["prod", "claude-code"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_no_request_tags_does_not_set_tags(monkeypatch):
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=_FakeUserAPIKeyAuth(),
+    )
+
+    md = captured.get("metadata", {})
+    assert "tags" not in md
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_handles_none_user_api_key_auth(monkeypatch):
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+        request_tags=["prod"],
+    )
+
+    md = captured.get("metadata", {})
+    assert md.get("user_api_key_team_id") is None
+    assert md.get("user_api_key_alias") is None
+    assert md.get("tags") == ["prod"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_swallows_metadata_helper_failures(monkeypatch):
+    """If LiteLLMProxyRequestSetup helper raises, _execute_tool_calls must
+    still record the sub-call without re-raising — defends against partial
+    auth objects pushed through e.g. integration tests or third-party code."""
+    _setup_proxy_logging(monkeypatch)
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    pre_call_utils = importlib.import_module(
+        "litellm.proxy.litellm_pre_call_utils"
+    )
+
+    def boom(**_kwargs):
+        raise RuntimeError("synthetic helper failure")
+
+    monkeypatch.setattr(
+        pre_call_utils.LiteLLMProxyRequestSetup,
+        "get_sanitized_user_information_from_key",
+        staticmethod(boom),
+    )
+
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=_FakeUserAPIKeyAuth(),
+        request_tags=["prod"],
+    )
+
+    assert call_tool_mock.await_count == 1
+    md = captured.get("metadata", {})
+    assert md.get("tags") == ["prod"]
+
+
+def test_extract_request_tags_from_kwargs_supports_metadata_and_litellm_metadata():
+    """LIT-3304: helper accepts tags from either metadata key proxy uses."""
+    from litellm.responses.mcp.chat_completions_handler import (
+        _extract_request_tags_from_kwargs,
+    )
+
+    assert _extract_request_tags_from_kwargs({}) is None
+    assert _extract_request_tags_from_kwargs({"metadata": {"tags": ["a"]}}) == ["a"]
+    assert _extract_request_tags_from_kwargs({"litellm_metadata": {"tags": ["b"]}}) == ["b"]
+    assert _extract_request_tags_from_kwargs({"metadata": {"tags": []}}) is None
+    assert _extract_request_tags_from_kwargs({"metadata": {"tags": "prod"}}) is None
