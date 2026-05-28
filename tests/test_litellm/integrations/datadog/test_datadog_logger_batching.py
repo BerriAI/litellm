@@ -75,7 +75,16 @@ async def test_failure_hook_threshold_flush_uses_flush_queue(datadog_env):
 
 
 @pytest.mark.asyncio
-async def test_async_send_batch_requeues_events_on_413(datadog_env):
+async def test_async_send_batch_splits_and_drops_on_413_response(datadog_env):
+    """
+    LIT-3407 - When Datadog returns 413 (Payload Too Large), the batch must be
+    split in half and retried. If every event still 413s individually, drop
+    them with a verbose error log instead of re-queueing forever.
+
+    Pre-LIT-3407 behaviour (re-queue whole batch unchanged) caused an
+    infinite retry loop because the same oversize payload would fire 413 on
+    every subsequent flush, and no events were ever delivered.
+    """
     with patch("asyncio.create_task"):
         logger = DataDogLogger()
 
@@ -101,12 +110,10 @@ async def test_async_send_batch_requeues_events_on_413(datadog_env):
 
     await logger.async_send_batch()
 
-    assert logger.async_send_compressed_data.await_count == 1
-    assert len(logger.log_queue) == 2
-    assert [event["message"] for event in logger.log_queue] == [
-        '{"event": 0}',
-        '{"event": 1}',
-    ]
+    # 1 attempt for the full batch + 2 attempts for the two single-event halves
+    assert logger.async_send_compressed_data.await_count == 3
+    # Single-event 413s are dropped (would loop forever otherwise).
+    assert logger.log_queue == []
 
 
 @pytest.mark.asyncio
