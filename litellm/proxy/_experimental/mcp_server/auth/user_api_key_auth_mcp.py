@@ -719,6 +719,81 @@ class MCPRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
+    async def _get_team_unified_access_group_ids(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        LIT-3399: fetch the unified access_group_ids attached to the team.
+        Returns [] if no team / no prisma / team has no unified access groups.
+
+        Uses the same cached get_team_object() call as _get_team_object_permission,
+        so this is not an extra DB round-trip in the hot path.
+        """
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            return []
+
+        try:
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            return []
+
+        if team_obj is None:
+            return []
+        return list(getattr(team_obj, "access_group_ids", None) or [])
+
+    @staticmethod
+    async def _get_unified_access_group_mcp_servers_for_object(
+        access_group_ids: List[str],
+    ) -> List[str]:
+        """
+        Resolve unified access_group_ids (LiteLLM_AccessGroupTable rows) to the
+        MCP server IDs they grant, then expand any name/alias entries to
+        canonical server IDs via global_mcp_server_manager.
+
+        LIT-3399: a key or team that has an access group attached via its
+        `access_group_ids` field is granted that group's
+        `access_mcp_server_ids` without requiring the key/team to also be
+        listed in the group's `assigned_key_ids` / `assigned_team_ids`. This
+        matches the unified-access-group semantics already used for models in
+        `can_token_call_model` and `can_team_access_model`.
+        """
+        if not access_group_ids:
+            return []
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+            )
+
+            raw_ids = await _get_mcp_server_ids_from_access_groups(
+                access_group_ids=access_group_ids,
+            )
+            if not raw_ids:
+                return []
+            # Entries may be server_ids OR names/aliases — expand to ids.
+            return global_mcp_server_manager.expand_permission_list(raw_ids)
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to resolve unified access_group_ids to MCP servers: {str(e)}"
+            )
+            return []
+
+    @staticmethod
     async def get_allowed_tools_for_server(
         server_id: str,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -902,8 +977,26 @@ class MCPRequestHandler:
                         parent_otel_span=user_api_key_auth.parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+
+            # LIT-3399: resolve unified key.access_group_ids -> MCP server IDs.
+            # This mirrors how can_token_call_model resolves unified access
+            # groups for models: an access group attached to the key (via
+            # access_group_ids) grants its access_mcp_server_ids without
+            # requiring the key to also be listed in the group's
+            # assigned_key_ids. Done independently of object_permission so a
+            # key with ONLY unified access groups (no object_permission row)
+            # still gets MCP access.
+            unified_access_group_servers = await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=(
+                    list(user_api_key_auth.access_group_ids)
+                    if user_api_key_auth and user_api_key_auth.access_group_ids
+                    else []
+                ),
+            )
+
             if key_object_permission is None:
-                return []
+                # No legacy MCP grants; only unified access-group grants apply.
+                return list(set(unified_access_group_servers))
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -929,7 +1022,12 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + access_group_servers
+                + tool_perm_servers
+                + unified_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
@@ -952,8 +1050,26 @@ class MCPRequestHandler:
                 user_api_key_auth
             )
 
+            # LIT-3399: also resolve the team's unified access_group_ids ->
+            # MCP server IDs (mirrors can_team_access_model). This grants
+            # MCP servers via an access group attached to the team, without
+            # requiring the team to also be listed in the group's
+            # assigned_team_ids. Both this helper and
+            # _get_team_object_permission go through the same cached
+            # get_team_object() call, so the second call is served from
+            # cache.
+            team_access_group_ids = (
+                await MCPRequestHandler._get_team_unified_access_group_ids(
+                    user_api_key_auth
+                )
+            )
+            unified_access_group_servers = await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=team_access_group_ids,
+            )
+
             if object_permissions is None:
-                return []
+                # No legacy MCP grants; only unified access-group grants apply.
+                return list(set(unified_access_group_servers))
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -979,7 +1095,12 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + access_group_servers
+                + tool_perm_servers
+                + unified_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
