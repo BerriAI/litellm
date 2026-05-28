@@ -3624,20 +3624,24 @@ async def _assert_user_can_view_request_id(
     if row is None:
         return
 
-    # Team-scoped key: only rows belonging to the key's own team are visible
-    # (LIT-3301). Any cross-team row falls through to a 403.
+    # Team-scoped key: rows that belong to a *different* team are denied
+    # (LIT-3301). Rows with no team_id ("orphan" historical rows that pre-date
+    # team attribution, or rows from non-team requests) fall through to the
+    # regular user-based check below so a key whose owning user posted the row
+    # can still see it.
     if _is_team_scoped_key(user_api_key_dict):
-        if row.team_id is not None and row.team_id == user_api_key_dict.team_id:
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": (
-                    "Team-scoped key cannot view spend log for "
-                    "request_id={}".format(request_id)
-                )
-            },
-        )
+        if row.team_id is not None:
+            if row.team_id == user_api_key_dict.team_id:
+                return
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Team-scoped key cannot view spend log for "
+                        "request_id={}".format(request_id)
+                    )
+                },
+            )
 
     if row.user is not None and row.user == user_api_key_dict.user_id:
         return
