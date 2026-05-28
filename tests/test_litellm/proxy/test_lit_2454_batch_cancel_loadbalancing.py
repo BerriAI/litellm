@@ -39,7 +39,6 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import LiteLLMBatch
 
-
 _client = TestClient(app)
 _TEAM_KEY = "sk-team-openai-xxxx"
 
