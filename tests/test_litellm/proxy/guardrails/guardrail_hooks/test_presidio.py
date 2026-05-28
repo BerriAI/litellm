@@ -2863,3 +2863,112 @@ def test_lit3222_split_unmask_safe_prefix_signature():
     )
     assert safe == "Hi <PERSON_1>!"
     assert tail == ""
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_content_with_finish_reason_in_same_chunk(monkeypatch):
+    """
+    LIT-3222 (Greptile P2): a chunk that carries BOTH `delta.content` and
+    `finish_reason` (Bedrock Converse / some OpenAI-compatible providers)
+    must still have its content masked, then a separate finish-only chunk
+    must be emitted for the finish_reason.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    async def fake_check_pii(text, **_kwargs):
+        return text.replace("Jane", "<PERSON>")
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    combined = _mrs_text_chunk("Hello Jane!", finish="stop")
+
+    async def upstream():
+        yield combined
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Must NOT yield the original chunk unmasked — content has to be processed.
+    text_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
+    ]
+    finish_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and c.choices[0].finish_reason
+    ]
+    assert len(text_chunks) == 1, f"expected 1 text chunk, got {len(text_chunks)}"
+    assert "<PERSON>" in text_chunks[0].choices[0].delta.content
+    assert "Jane" not in text_chunks[0].choices[0].delta.content
+    assert (
+        text_chunks[0].choices[0].finish_reason is None
+    ), "text chunk must NOT carry finish"
+    assert len(finish_chunks) == 1
+    assert finish_chunks[0].choices[0].finish_reason == "stop"
+    assert (
+        finish_chunks[0].choices[0].delta.content is None
+    ), "finish chunk must NOT carry content"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_unmask_content_with_finish_reason_in_same_chunk():
+    """
+    LIT-3222 (Greptile P2): a chunk that carries BOTH `delta.content` and
+    `finish_reason` in the unmask path must have its content unmasked, then
+    a separate finish-only chunk emitted.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    pii_tokens = {"<PERSON_1>": "Alice"}
+
+    combined = _mrs_text_chunk("Hi <PERSON_1>!", finish="stop")
+
+    async def upstream():
+        yield combined
+
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data=request_data,
+    ):
+        received.append(chunk)
+
+    text_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
+    ]
+    finish_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and c.choices[0].finish_reason
+    ]
+    assert len(text_chunks) == 1, f"expected 1 text chunk, got {len(text_chunks)}"
+    assert "Alice" in text_chunks[0].choices[0].delta.content
+    assert "<PERSON_1>" not in text_chunks[0].choices[0].delta.content
+    assert text_chunks[0].choices[0].finish_reason is None
+    assert len(finish_chunks) == 1
+    assert finish_chunks[0].choices[0].finish_reason == "stop"
+    assert finish_chunks[0].choices[0].delta.content is None
