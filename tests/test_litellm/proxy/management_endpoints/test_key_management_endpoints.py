@@ -1857,8 +1857,13 @@ async def test_update_key_nonexistent_key_returns_404(monkeypatch):
     mock_user_api_key_cache = MagicMock()
     mock_proxy_logging_obj = MagicMock()
 
-    # find_unique returns None → key does not exist
+    # find_unique returns None → token lookup misses
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    # find_first returns None → key_alias fallback also misses, so endpoint
+    # must surface the 404 instead of swallowing it as auth failure.
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
         return_value=None
     )
 
@@ -5623,6 +5628,11 @@ async def test_get_and_validate_existing_key():
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=None
     )
+    # LIT-2820: token lookup miss now falls back to a key_alias lookup; stub
+    # that miss too so the helper surfaces its 404.
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
 
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
@@ -5646,6 +5656,180 @@ async def test_get_and_validate_existing_key():
 
     assert exc_info.value.status_code == 500
     assert "Database not connected" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_and_validate_existing_key_resolves_via_key_alias():
+    """
+    LIT-2820: callers should be able to look up a key by its ``key_alias``.
+
+    When ``find_unique`` on the ``token`` column misses, we fall back to a
+    ``find_first`` on ``key_alias``. The hashed-token must never be passed
+    into the alias lookup — we match the raw alias verbatim.
+    """
+    mock_prisma_client = AsyncMock()
+    alias = "my-production-key"
+    aliased_row = LiteLLM_VerificationToken(
+        token="hashed-real-token-abc",
+        key_alias=alias,
+        user_id="user-123",
+        models=["gpt-4"],
+        team_id=None,
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=aliased_row
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value=alias,  # alias does not start with sk-, so passthrough
+    ):
+        result = await _get_and_validate_existing_key(
+            token=alias,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert result is aliased_row
+    mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once_with(
+        where={"token": alias}
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first.assert_called_once_with(
+        where={"key_alias": alias}
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_and_validate_existing_key_alias_miss_still_404():
+    """
+    If neither the token lookup nor the key_alias fallback finds a row,
+    surface 404 — not a misleading auth-related error.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value="not-an-alias-or-token",
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _get_and_validate_existing_key(
+                token="not-an-alias-or-token",
+                prisma_client=mock_prisma_client,
+            )
+
+    assert str(exc_info.value.code) == "404"
+    assert "Key not found" in exc_info.value.message
+    # Both lookups attempted exactly once.
+    mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_awaited_once()
+    mock_prisma_client.db.litellm_verificationtoken.find_first.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_resolves_via_key_alias(monkeypatch):
+    """
+    LIT-2820: full update_key_fn flow when the caller passes a key_alias in
+    the ``key`` field. The hashed/real token from the resolved row must be
+    used for the DB update + cache invalidation; the alias string must
+    never reach ``prisma_client.update_data``.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    alias = "my-prod-key"
+    real_hashed_token = "hashed-real-token-xyz"
+
+    existing_key_row = LiteLLM_VerificationToken(
+        token=real_hashed_token,
+        key_alias=alias,
+        user_id="user-123",
+        team_id=None,
+        models=["gpt-4"],
+        max_budget=None,
+        tags=None,
+    )
+
+    mock_prisma_client = AsyncMock()
+    # First call (token column) misses, fallback (key_alias) hits.
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=existing_key_row
+    )
+    # update_data echoes back what it wrote so we can assert on the token.
+    mock_prisma_client.update_data = AsyncMock(
+        return_value={"token": real_hashed_token, "data": {"key_alias": alias}}
+    )
+
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", None)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin_user",
+    )
+
+    data = UpdateKeyRequest(key=alias, max_budget=42.0)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data",
+            new_callable=AsyncMock,
+            return_value={"max_budget": 42.0},
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_update_key_data",
+            new_callable=AsyncMock,
+        ),
+    ):
+        result = await update_key_fn(
+            request=MagicMock(),
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    # DB write used the real hashed token, NOT the alias.
+    mock_prisma_client.update_data.assert_awaited_once()
+    call = mock_prisma_client.update_data.await_args
+    assert call.kwargs["token"] == real_hashed_token
+    assert call.kwargs["data"]["token"] == real_hashed_token
+    # Returned dict still echoes the caller-supplied identifier (the alias),
+    # preserving the existing input-echo contract.
+    assert result["key"] == alias
 
 
 @pytest.mark.asyncio
@@ -5952,9 +6136,14 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
         "tags": ["production"],
     }
 
-    # First key exists, second key doesn't exist
+    # First key exists, second key doesn't exist via token OR key_alias lookup
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         side_effect=[existing_key_1, None]  # Second key not found
+    )
+    # LIT-2820: alias fallback is exercised only when token lookup misses;
+    # the missing key must also miss the alias lookup to surface 404.
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=None
     )
     mock_updated_key_1_obj = MagicMock()
     mock_updated_key_1_obj.model_dump.return_value = updated_key_1_data
