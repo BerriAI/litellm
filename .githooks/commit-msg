@@ -13,7 +13,9 @@
 #   - Merge commits (subject starts with "Merge ")
 #   - Revert commits (subject starts with "Revert ")  — Conventional Commits
 #       reverts using `revert:` are still accepted by the regex below
-#   - Fixup / squash commits (subject starts with "fixup!" or "squash!")
+#   - Fixup / squash / amend commits (subject starts with "fixup!", "squash!",
+#       or "amend!" — `amend!` is git's autosquash-amend prefix, used by
+#       `git rebase --autosquash`)
 #
 # Bypass:
 #   - Run `git commit --no-verify` to skip this hook entirely.
