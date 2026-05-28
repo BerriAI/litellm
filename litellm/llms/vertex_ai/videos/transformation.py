@@ -40,6 +40,29 @@ else:
     BaseLLMException = Any
 
 
+def _build_vertex_video_usage_from_request_data(
+    request_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build usage metadata (duration, resolution) for video cost calculation."""
+    usage_data: Dict[str, Any] = {}
+    if not request_data:
+        return usage_data
+
+    parameters = request_data.get("parameters", {})
+    duration = (
+        parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+    )
+    if duration is not None:
+        try:
+            usage_data["duration_seconds"] = float(duration)
+        except (ValueError, TypeError):
+            pass
+    res = parameters.get("resolution")
+    if res is not None and str(res).strip() != "":
+        usage_data["video_resolution"] = str(res).strip().lower()
+    return usage_data
+
+
 def _convert_image_to_vertex_format(image_file) -> Dict[str, str]:
     """
     Convert image file to Vertex AI format with base64 encoding and MIME type.
@@ -363,23 +386,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             id=video_id, object="video", status="processing", model=model
         )
 
-        usage_data: Dict[str, Any] = {}
-        if request_data:
-            parameters = request_data.get("parameters", {})
-            duration = (
-                parameters.get("durationSeconds")
-                or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
-            )
-            if duration is not None:
-                try:
-                    usage_data["duration_seconds"] = float(duration)
-                except (ValueError, TypeError):
-                    pass
-            res = parameters.get("resolution")
-            if res is not None and str(res).strip() != "":
-                usage_data["video_resolution"] = str(res).strip().lower()
-
-        video_obj.usage = usage_data
+        video_obj.usage = _build_vertex_video_usage_from_request_data(request_data)
         return video_obj
 
     def transform_video_status_retrieve_request(
@@ -730,12 +737,16 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         """
         Transform the Veo video edit response.
 
         Veo returns the same operation response as video generation:
         {"name": "projects/.../operations/OPERATION_ID"}
+
+        usage includes duration_seconds and optional video_resolution from the
+        edit request parameters for cost calculation.
         """
         response_data = raw_response.json()
 
@@ -752,12 +763,14 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             video_id = operation_name
 
-        return VideoObject(
+        video_obj = VideoObject(
             id=video_id,
             object="video",
             status="processing",
             model=model,
         )
+        video_obj.usage = _build_vertex_video_usage_from_request_data(request_data)
+        return video_obj
 
     def transform_video_extension_request(
         self,

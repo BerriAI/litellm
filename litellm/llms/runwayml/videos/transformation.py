@@ -635,7 +635,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video edit is not supported for RunwayML")
 
     def transform_video_edit_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
+        self,
+        raw_response,
+        logging_obj,
+        custom_llm_provider=None,
+        request_data=None,
     ):
         raise NotImplementedError("video edit is not supported for RunwayML")
 

@@ -556,6 +556,27 @@ class TestVertexAIVideoConfig:
         assert video_obj.id
         assert video_obj.model == "veo-3.1-generate-001"
 
+    def test_transform_video_edit_response_includes_usage_for_cost(self):
+        """Edit responses include duration/resolution usage for spend accounting."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/new-op-123"
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"name": operation_name}
+        request_data = {
+            "instances": [{"prompt": "Make it brighter", "video": {}}],
+            "parameters": {"durationSeconds": 8, "resolution": "1080p"},
+        }
+
+        video_obj = self.config.transform_video_edit_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+            request_data=request_data,
+        )
+
+        assert video_obj.usage is not None
+        assert video_obj.usage["duration_seconds"] == 8.0
+        assert video_obj.usage["video_resolution"] == "1080p"
+
     def test_transform_video_remix_request_not_supported(self):
         """Test that video remix raises NotImplementedError."""
         with pytest.raises(NotImplementedError, match="Video remix is not supported"):

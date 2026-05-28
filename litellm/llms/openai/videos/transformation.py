@@ -548,6 +548,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: Any,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         video_obj = VideoObject(**raw_response.json())
         if custom_llm_provider and video_obj.id:

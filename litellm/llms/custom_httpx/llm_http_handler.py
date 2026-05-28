@@ -7092,6 +7092,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
@@ -7187,6 +7188,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
