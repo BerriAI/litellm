@@ -915,6 +915,13 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
+    # Propagate to merged per-provider lookup so wildcard expansion / UI
+    # dropdowns see the new models. On the very first call (at module init
+    # below) ``models_by_provider`` has not been built yet — guard accordingly.
+    # See LIT-1695.
+    if "models_by_provider" in globals() and "_refresh_models_by_provider" in globals():
+        _refresh_models_by_provider()
+
 
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
@@ -1033,106 +1040,137 @@ model_list_set = set(model_list)
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
-models_by_provider: dict = {
-    "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
-    "text-completion-openai": open_ai_text_completion_models,
-    "cohere": cohere_models | cohere_chat_models,
-    "cohere_chat": cohere_chat_models,
-    "anthropic": anthropic_models,
-    "replicate": replicate_models,
-    "huggingface": huggingface_models,
-    "together_ai": together_ai_models,
-    "baseten": baseten_models,
-    "openrouter": openrouter_models,
-    "vercel_ai_gateway": vercel_ai_gateway_models,
-    "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models
-    | vertex_text_models
-    | vertex_anthropic_models
-    | vertex_vision_models
-    | vertex_language_models
-    | vertex_deepseek_models
-    | vertex_minimax_models
-    | vertex_moonshot_models
-    | vertex_zai_models,
-    "ai21": ai21_models,
-    "bedrock": bedrock_models | bedrock_converse_models,
-    "petals": petals_models,
-    "ollama": ollama_models,
-    "ollama_chat": ollama_models,
-    "deepinfra": deepinfra_models,
-    "perplexity": perplexity_models,
-    "maritalk": maritalk_models,
-    "watsonx": watsonx_models,
-    "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
-    "aleph_alpha": aleph_alpha_models,
-    "text-completion-codestral": text_completion_codestral_models,
-    "xai": xai_models,
-    "zai": zai_models,
-    "fal_ai": fal_ai_models,
-    "deepseek": deepseek_models,
-    "runwayml": runwayml_models,
-    "mistral": mistral_chat_models,
-    "azure_ai": azure_ai_models,
-    "voyage": voyage_models,
-    "infinity": infinity_models,
-    "databricks": databricks_models,
-    "cloudflare": cloudflare_models,
-    "codestral": codestral_models,
-    "nlp_cloud": nlp_cloud_models,
-    "friendliai": friendliai_models,
-    "palm": palm_models,
-    "groq": groq_models,
-    "azure": azure_models | azure_text_models,
-    "azure_anthropic": azure_anthropic_models,
-    "azure_text": azure_text_models,
-    "anyscale": anyscale_models,
-    "cerebras": cerebras_models,
-    "galadriel": galadriel_models,
-    "nvidia_nim": nvidia_nim_models,
-    "nvidia_riva": nvidia_riva_models,
-    "sambanova": sambanova_models | sambanova_embedding_models,
-    "novita": novita_models,
-    "nebius": nebius_models | nebius_embedding_models,
-    "aiml": aiml_models,
-    "assemblyai": assemblyai_models,
-    "jina_ai": jina_ai_models,
-    "snowflake": snowflake_models,
-    "gradient_ai": gradient_ai_models,
-    "meta_llama": llama_models,
-    "nscale": nscale_models,
-    "featherless_ai": featherless_ai_models,
-    "deepgram": deepgram_models,
-    "elevenlabs": elevenlabs_models,
-    "heroku": heroku_models,
-    "dashscope": dashscope_models,
-    "moonshot": moonshot_models,
-    "publicai": publicai_models,
-    "v0": v0_models,
-    "morph": morph_models,
-    "lambda_ai": lambda_ai_models,
-    "hyperbolic": hyperbolic_models,
-    "black_forest_labs": black_forest_labs_models,
-    "recraft": recraft_models,
-    "cometapi": cometapi_models,
-    "oci": oci_models,
-    "volcengine": volcengine_models,
-    "wandb": wandb_models,
-    "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
-    "lemonade": lemonade_models,
-    "clarifai": clarifai_models,
-    "amazon_nova": amazon_nova_models,
-    "stability": stability_models,
-    "github_copilot": github_copilot_models,
-    "chatgpt": chatgpt_models,
-    "minimax": minimax_models,
-    "aws_polly": aws_polly_models,
-    "gigachat": gigachat_models,
-    "llamagate": llamagate_models,
-    "reducto": reducto_models,
-    "bedrock_mantle": bedrock_mantle_models,
-}
+def _compute_models_by_provider() -> dict:
+    """Build the per-provider merged model list from the current per-provider sets.
+
+    Several entries in ``models_by_provider`` are eager set unions
+    (e.g. ``open_ai_chat_completion_models | open_ai_text_completion_models``)
+    which produce **new** set objects frozen at evaluation time. Whenever the
+    underlying per-provider sets are mutated later — via :func:`add_known_models`
+    (called at import time and when the proxy ``/reload/model_cost_map`` admin
+    endpoint runs) or :func:`register_model` — those frozen unions become stale.
+
+    This helper re-derives the dict so callers like ``get_provider_models`` /
+    ``get_valid_models`` (used by wildcard expansion for UI hub/playground
+    dropdowns) see newly registered models. See LIT-1695.
+    """
+    return {
+        "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
+        "text-completion-openai": open_ai_text_completion_models,
+        "cohere": cohere_models | cohere_chat_models,
+        "cohere_chat": cohere_chat_models,
+        "anthropic": anthropic_models,
+        "replicate": replicate_models,
+        "huggingface": huggingface_models,
+        "together_ai": together_ai_models,
+        "baseten": baseten_models,
+        "openrouter": openrouter_models,
+        "vercel_ai_gateway": vercel_ai_gateway_models,
+        "datarobot": datarobot_models,
+        "vertex_ai": vertex_chat_models
+        | vertex_text_models
+        | vertex_anthropic_models
+        | vertex_vision_models
+        | vertex_language_models
+        | vertex_deepseek_models
+        | vertex_minimax_models
+        | vertex_moonshot_models
+        | vertex_zai_models,
+        "ai21": ai21_models,
+        "bedrock": bedrock_models | bedrock_converse_models,
+        "petals": petals_models,
+        "ollama": ollama_models,
+        "ollama_chat": ollama_models,
+        "deepinfra": deepinfra_models,
+        "perplexity": perplexity_models,
+        "maritalk": maritalk_models,
+        "watsonx": watsonx_models,
+        "gemini": gemini_models,
+        "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
+        "aleph_alpha": aleph_alpha_models,
+        "text-completion-codestral": text_completion_codestral_models,
+        "xai": xai_models,
+        "zai": zai_models,
+        "fal_ai": fal_ai_models,
+        "deepseek": deepseek_models,
+        "runwayml": runwayml_models,
+        "mistral": mistral_chat_models,
+        "azure_ai": azure_ai_models,
+        "voyage": voyage_models,
+        "infinity": infinity_models,
+        "databricks": databricks_models,
+        "cloudflare": cloudflare_models,
+        "codestral": codestral_models,
+        "nlp_cloud": nlp_cloud_models,
+        "friendliai": friendliai_models,
+        "palm": palm_models,
+        "groq": groq_models,
+        "azure": azure_models | azure_text_models,
+        "azure_anthropic": azure_anthropic_models,
+        "azure_text": azure_text_models,
+        "anyscale": anyscale_models,
+        "cerebras": cerebras_models,
+        "galadriel": galadriel_models,
+        "nvidia_nim": nvidia_nim_models,
+        "nvidia_riva": nvidia_riva_models,
+        "sambanova": sambanova_models | sambanova_embedding_models,
+        "novita": novita_models,
+        "nebius": nebius_models | nebius_embedding_models,
+        "aiml": aiml_models,
+        "assemblyai": assemblyai_models,
+        "jina_ai": jina_ai_models,
+        "snowflake": snowflake_models,
+        "gradient_ai": gradient_ai_models,
+        "meta_llama": llama_models,
+        "nscale": nscale_models,
+        "featherless_ai": featherless_ai_models,
+        "deepgram": deepgram_models,
+        "elevenlabs": elevenlabs_models,
+        "heroku": heroku_models,
+        "dashscope": dashscope_models,
+        "moonshot": moonshot_models,
+        "publicai": publicai_models,
+        "v0": v0_models,
+        "morph": morph_models,
+        "lambda_ai": lambda_ai_models,
+        "hyperbolic": hyperbolic_models,
+        "black_forest_labs": black_forest_labs_models,
+        "recraft": recraft_models,
+        "cometapi": cometapi_models,
+        "oci": oci_models,
+        "volcengine": volcengine_models,
+        "wandb": wandb_models,
+        "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
+        "lemonade": lemonade_models,
+        "clarifai": clarifai_models,
+        "amazon_nova": amazon_nova_models,
+        "stability": stability_models,
+        "github_copilot": github_copilot_models,
+        "chatgpt": chatgpt_models,
+        "minimax": minimax_models,
+        "aws_polly": aws_polly_models,
+        "gigachat": gigachat_models,
+        "llamagate": llamagate_models,
+        "reducto": reducto_models,
+        "bedrock_mantle": bedrock_mantle_models,
+    }
+
+
+models_by_provider: dict = _compute_models_by_provider()
+
+
+def _refresh_models_by_provider() -> None:
+    """Re-derive ``models_by_provider`` from the current per-provider sets.
+
+    Call this whenever the per-provider sets mutate so wildcard expansion
+    (UI hub/playground dropdowns, ``get_provider_models`` / ``get_valid_models``)
+    reflects the change. ``add_known_models`` and ``register_model`` call this
+    automatically. See LIT-1695.
+    """
+    fresh = _compute_models_by_provider()
+    models_by_provider.clear()
+    models_by_provider.update(fresh)
+
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
