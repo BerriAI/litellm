@@ -220,11 +220,15 @@ def _count_effective_tokens(
     effective_messages: List[Dict[str, Any]],
     compaction_block: Optional[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]],
+    system: Optional[Union[str, List[Dict[str, Any]]]] = None,
 ) -> int:
     """Token-count the conversation as it will appear downstream.
 
     The compaction block (if any) becomes a system prefix on the downstream
     call, so its content still counts even though it isn't in ``messages``.
+    The system prompt (which may already include a prior compaction summary
+    prepended via ``_augment_system_with_summary``) is also counted so the
+    threshold check matches the downstream ``input_tokens`` metric.
     """
     # Local import to avoid pulling the adapter at module load time.
     from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
@@ -274,7 +278,28 @@ def _count_effective_tokens(
         content = compaction_block.get("content") or ""
         if content:
             total += litellm.token_counter(model=model, text=content)
+    system_text = _system_to_text(system)
+    if system_text:
+        total += litellm.token_counter(model=model, text=system_text)
     return total
+
+
+def _system_to_text(
+    system: Optional[Union[str, List[Dict[str, Any]]]],
+) -> str:
+    """Flatten an Anthropic-style ``system`` value into a single string for
+    token counting. Returns ``""`` when ``system`` carries no text."""
+    if system is None:
+        return ""
+    if isinstance(system, str):
+        return system
+    parts: List[str] = []
+    for block in system:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+    return "\n".join(parts)
 
 
 def _select_last_user_question(
@@ -591,8 +616,12 @@ async def apply_compact_20260112(
         current_tokens = _count_effective_tokens(
             model=model,
             effective_messages=effective_messages,
-            compaction_block=prior_compaction_block,
+            # ``augmented_system`` already carries the prior compaction summary
+            # (prepended via ``_augment_system_with_summary``); pass ``None``
+            # here so we don't double-count the summary text.
+            compaction_block=None,
             tools=tools,
+            system=augmented_system,
         )
     except Exception as e:
         verbose_logger.warning(
