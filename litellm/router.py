@@ -8641,6 +8641,66 @@ class Router:
         # Update team_model index for O(1) team-scoped lookup
         self._update_team_model_index(model, idx)
 
+    def _evict_stale_pattern_entries(
+        self,
+        deployment_id: Optional[str],
+        previous_deployment: Optional[Deployment],
+    ) -> None:
+        """
+        Remove any stale wildcard-pattern entries for ``deployment_id`` from
+        ``self.pattern_router`` and ``self.team_pattern_routers``.
+
+        Called from :meth:`upsert_deployment` after the prior deployment dict
+        has been popped from ``self.model_list`` but before the corrected
+        deployment is re-added via :meth:`add_deployment`. Without this,
+        :class:`PatternMatchRouter.add_pattern` appends a new entry alongside
+        the stale one and the router silently round-robins between them
+        (LIT-3412 / #29064).
+
+        Args:
+            deployment_id: ``deployment.model_info.id`` of the upserted
+                deployment.
+            previous_deployment: the prior :class:`Deployment` already loaded
+                from the router (used to scope the team-pattern-router lookup
+                so we only touch buckets the deployment actually lived in).
+        """
+        if not deployment_id:
+            return
+
+        # Non-team wildcard bucket — always attempt removal; the call is a
+        # cheap no-op if the deployment was never in any pattern.
+        try:
+            self.pattern_router.remove_deployment_by_id(deployment_id)
+        except Exception as e:
+            verbose_router_logger.debug(
+                f"upsert_deployment: pattern_router cleanup failed for {deployment_id}: {e}"
+            )
+
+        # Team-pattern buckets — defense in depth.
+        #
+        # We always scan EVERY team-pattern-router bucket rather than scoping
+        # to the prior deployment's `team_id`. A `team_id` hint would suffice
+        # for the common case, but a router state that was polluted before
+        # this fix shipped can have stale entries for the same deployment id
+        # in multiple team buckets (e.g. when an earlier upsert moved the
+        # deployment from team-A -> team-B without evicting team-A's entry).
+        # Scoping the cleanup would leave those buckets stale forever.
+        #
+        # The previous_deployment argument is retained as documentation of
+        # intent and so callers don't have to compute it twice; runtime cost
+        # of the full scan is bounded by O(num_teams * num_patterns) — both
+        # numbers are small in practice and the inner call is a no-op for
+        # buckets that don't reference this deployment id.
+        _ = previous_deployment  # currently unused; see docstring above.
+
+        for tid in list(self.team_pattern_routers.keys()):
+            try:
+                self.team_pattern_routers[tid].remove_deployment_by_id(deployment_id)
+            except Exception as e:
+                verbose_router_logger.debug(
+                    f"upsert_deployment: team_pattern_routers[{tid}] cleanup failed for {deployment_id}: {e}"
+                )
+
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
         Add or update deployment
@@ -8683,6 +8743,15 @@ class Router:
                             model_id=deployment_id, removal_idx=removal_idx
                         )
 
+                # LIT-3412: also evict any stale pattern_router entries for this
+                # deployment_id. Without this, wildcard deployments accumulate
+                # stale dicts in self.pattern_router / self.team_pattern_routers
+                # on every upsert, causing intermittent routing failures.
+                self._evict_stale_pattern_entries(
+                    deployment_id=deployment_id,
+                    previous_deployment=_deployment_on_router,
+                )
+
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
             return deployment
@@ -8716,6 +8785,21 @@ class Router:
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
+                )
+                # LIT-3412: wildcard deployments deleted via DELETE /model/{id}
+                # were previously left registered in pattern_router /
+                # team_pattern_routers — same root cause as the upsert path.
+                # Build a previous_deployment shape for the team_id scope hint.
+                _prev: Optional[Deployment] = None
+                try:
+                    if isinstance(item, dict):
+                        _prev = Deployment(**item)
+                    elif isinstance(item, Deployment):
+                        _prev = item
+                except Exception:
+                    _prev = None
+                self._evict_stale_pattern_entries(
+                    deployment_id=id, previous_deployment=_prev
                 )
                 return item
             else:

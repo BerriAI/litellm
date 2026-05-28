@@ -75,6 +75,51 @@ class PatternMatchRouter:
             self.patterns[regex] = []
         self.patterns[regex].append(llm_deployment)
 
+    def remove_deployment_by_id(self, model_id: str) -> int:
+        """
+        Remove any deployment dicts whose ``model_info.id`` matches ``model_id``
+        from every registered pattern. Prune patterns whose deployment list
+        becomes empty.
+
+        This is used by :meth:`litellm.router.Router.upsert_deployment` to
+        prevent stale entries from accumulating in the pattern router when a
+        wildcard deployment's ``litellm_params`` are updated.
+
+        Args:
+            model_id: ``deployment.model_info.id`` of the deployment to evict.
+
+        Returns:
+            int: Number of deployment dicts removed across all patterns.
+        """
+        if not model_id:
+            return 0
+
+        removed = 0
+        empty_regexes: List[str] = []
+        for regex, deployments in self.patterns.items():
+            kept: List[Dict] = []
+            for entry in deployments:
+                entry_id = (entry.get("model_info") or {}).get("id")
+                if entry_id == model_id:
+                    removed += 1
+                    continue
+                kept.append(entry)
+            if kept:
+                self.patterns[regex] = kept
+            else:
+                empty_regexes.append(regex)
+
+        for regex in empty_regexes:
+            self.patterns.pop(regex, None)
+
+        if removed:
+            verbose_router_logger.debug(
+                "PatternMatchRouter: removed %d stale pattern entries for model_id=%s",
+                removed,
+                model_id,
+            )
+        return removed
+
     def _pattern_to_regex(self, pattern: str) -> str:
         """
         Convert a wildcard pattern to a regex pattern
