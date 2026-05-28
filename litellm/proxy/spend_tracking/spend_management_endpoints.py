@@ -2299,9 +2299,7 @@ async def view_spend_logs(  # noqa: PLR0915
     # legacy /spend/logs endpoint, regardless of the creator's user_role
     # (LIT-3301).
     enforced_team_id: Optional[str] = (
-        user_api_key_dict.team_id
-        if _is_team_scoped_key(user_api_key_dict)
-        else None
+        user_api_key_dict.team_id if _is_team_scoped_key(user_api_key_dict) else None
     )
 
     try:
