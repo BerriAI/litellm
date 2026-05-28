@@ -341,3 +341,27 @@ async def test_key_spend_report_missing_dates_400(monkeypatch):
             user_api_key_dict=_admin(),
         )
     assert ei.value.status_code == 400
+
+
+def test_build_spend_by_model_sql_rejects_unknown_column():
+    """Future-proofing: any column outside the allowlist must raise ValueError."""
+    for bad in ("evil; DROP TABLE", "metadata", ""):
+        with pytest.raises(ValueError):
+            sme._build_spend_by_model_sql(filter_column=bad, filter_param_index=3)
+
+
+@pytest.mark.asyncio
+async def test_key_spend_report_db_failure_returns_500(monkeypatch):
+    """A non-HTTPException from prisma_client must surface as HTTP 500."""
+    pc = MagicMock()
+    pc.db.query_raw = AsyncMock(side_effect=RuntimeError("connection refused"))
+    monkeypatch.setattr(ps, "prisma_client", pc, raising=False)
+    monkeypatch.setattr(ps, "premium_user", True, raising=False)
+    with pytest.raises(HTTPException) as ei:
+        await sme.get_key_spend_report(
+            start_date="2026-05-01",
+            end_date="2026-05-28",
+            api_key=None,
+            user_api_key_dict=_admin(),
+        )
+    assert ei.value.status_code == 500
