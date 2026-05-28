@@ -1243,6 +1243,45 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     _STREAM_MASK_FLUSH_CHARS: int = 80
     _STREAM_MASK_SENTENCE_ENDERS: tuple = (".", "!", "?", "\n")
 
+    async def _mask_buffer_to_chunk(
+        self,
+        buffer: str,
+        template: "ModelResponseStream",
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> Optional["ModelResponseStream"]:
+        """Run Presidio masking on `buffer` and return one synthetic streaming chunk.
+
+        Returns None when there is nothing to emit. On Presidio failure, logs and
+        emits the buffer unmasked so the client still receives partial output.
+        """
+        if not buffer:
+            return None
+        try:
+            masked = await self.check_pii(
+                text=buffer,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+        except Exception as flush_exc:  # noqa: BLE001 — degrade gracefully
+            verbose_proxy_logger.error(
+                "Presidio apply_to_output: incremental mask failed (%s); emitting %d chars unmasked",
+                type(flush_exc).__name__,
+                len(buffer),
+            )
+            masked = buffer
+        if not masked:
+            return None
+        return self._build_streaming_text_chunk(template, masked)
+
+    def _mask_flush_due(self, buffer: str) -> bool:
+        """Return True when `buffer` has reached a Presidio-mask flush boundary."""
+        if len(buffer) >= self._STREAM_MASK_FLUSH_CHARS:
+            return True
+        stripped = buffer.rstrip()
+        return bool(stripped) and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
+
     async def _stream_apply_output_masking(
         self,
         response: Any,
@@ -1261,92 +1300,77 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data or {}
         )
 
-        buffer: str = ""
+        buffer = ""
         template: Optional[ModelResponseStream] = None
-        saw_unknown_event_warning_emitted = False
-        had_any_modelresponsestream = False
-        had_any_byte_chunk = False
-
-        async def _flush() -> AsyncGenerator[ModelResponseStream, None]:
-            """Mask `buffer` via Presidio and emit a single synthetic chunk, then reset."""
-            nonlocal buffer, template
-            if not buffer or template is None:
-                buffer = ""
-                return
-            text_to_mask = buffer
-            buffer = ""
-            try:
-                masked = await self.check_pii(
-                    text=text_to_mask,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
-            except Exception as flush_exc:  # noqa: BLE001 — degrade gracefully
-                verbose_proxy_logger.error(
-                    "Presidio apply_to_output: incremental mask failed (%s); emitting %d chars unmasked",
-                    type(flush_exc).__name__,
-                    len(text_to_mask),
-                )
-                masked = text_to_mask
-            if masked:
-                yield self._build_streaming_text_chunk(template, masked)
+        had_mrs = False
+        had_bytes = False
+        warned_mixed = False
 
         try:
             async for chunk in response:
                 if isinstance(chunk, bytes):
-                    had_any_byte_chunk = True
-                    async for flushed in _flush():
-                        yield flushed
+                    had_bytes = True
+                    if template is not None:
+                        flushed = await self._mask_buffer_to_chunk(
+                            buffer, template, presidio_config, request_data
+                        )
+                        buffer = ""
+                        if flushed is not None:
+                            yield flushed
                     yield chunk  # type: ignore[misc]
                     continue
 
                 if not isinstance(chunk, ModelResponseStream):
-                    # Unknown event object (e.g. /v1/responses lifecycle event).
-                    # Flush any pending masked text first, then pass the event through.
-                    async for flushed in _flush():
-                        yield flushed
-                    if (
-                        not saw_unknown_event_warning_emitted
-                        and had_any_modelresponsestream
-                    ):
+                    if template is not None:
+                        flushed = await self._mask_buffer_to_chunk(
+                            buffer, template, presidio_config, request_data
+                        )
+                        buffer = ""
+                        if flushed is not None:
+                            yield flushed
+                    if not warned_mixed and had_mrs:
                         verbose_proxy_logger.warning(
                             "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
                             "Switching to transparent passthrough for non-ModelResponseStream events; "
                             "previously buffered text was masked and emitted before this point."
                         )
-                        saw_unknown_event_warning_emitted = True
+                        warned_mixed = True
                     yield chunk
                     continue
 
-                had_any_modelresponsestream = True
-                # Keep latest ModelResponseStream as the envelope template for synthetic flush chunks.
-                template = chunk
+                had_mrs = True
+                template = chunk  # latest envelope for synthetic flush chunks
 
                 if self._is_streaming_chunk_with_content(chunk):
-                    delta = chunk.choices[0].delta
-                    content = delta.content
-                    buffer += content
-                    stripped = buffer.rstrip()
-                    should_flush = len(buffer) >= self._STREAM_MASK_FLUSH_CHARS or (
-                        stripped and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
-                    )
-                    if should_flush:
-                        async for flushed in _flush():
+                    buffer += chunk.choices[0].delta.content
+                    if self._mask_flush_due(buffer):
+                        flushed = await self._mask_buffer_to_chunk(
+                            buffer, template, presidio_config, request_data
+                        )
+                        buffer = ""
+                        if flushed is not None:
                             yield flushed
                     continue
 
-                # Non-text MRS chunk (role-only, tool_calls, finish_reason, empty choices).
-                # Flush pending buffer first so client sees consistent ordering, then pass through.
-                async for flushed in _flush():
+                # Non-text MRS chunk — flush pending masked text first, then pass through.
+                flushed = await self._mask_buffer_to_chunk(
+                    buffer, template, presidio_config, request_data
+                )
+                buffer = ""
+                if flushed is not None:
                     yield flushed
                 yield chunk
 
-            # End of stream — flush any pending text.
-            async for flushed in _flush():
-                yield flushed
+            # End of stream — drain.
+            if template is not None:
+                flushed = await self._mask_buffer_to_chunk(
+                    buffer, template, presidio_config, request_data
+                )
+                buffer = ""
+                if flushed is not None:
+                    yield flushed
 
-            if not had_any_modelresponsestream and had_any_byte_chunk:
+            if not had_mrs and had_bytes:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response contained only "
                     "bytes chunks (Anthropic native SSE). Output PII masking was "
@@ -1355,13 +1379,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
-            # Best-effort: emit whatever text we accumulated (unmasked) so the client
-            # at least gets the partial response instead of nothing.
             if buffer and template is not None:
                 try:
                     yield self._build_streaming_text_chunk(template, buffer)
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _unmask_buffer_to_chunk(
+        self,
+        text: str,
+        template: Optional["ModelResponseStream"],
+        pii_tokens: Dict[str, str],
+    ) -> Optional["ModelResponseStream"]:
+        """Unmask `text` and return a synthetic streaming chunk; None if nothing to emit."""
+        if not text or template is None:
+            return None
+        return self._build_streaming_text_chunk(
+            template, self._unmask_pii_text(text, pii_tokens)
+        )
 
     async def _stream_pii_unmasking(
         self,
@@ -1371,81 +1406,64 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """Apply PII unmasking to streaming output (output_parse_pii=True path).
 
         Streams progressively: each text-content chunk is unmasked as it arrives.
-        A trailing buffer equal in length to the longest `<ENTITY_N>` token is held
-        back so PII tokens that span chunk boundaries are still rewritten correctly
-        before being flushed at end-of-stream. Non-text events pass through
-        immediately. Replaces the prior buffer-the-whole-stream behaviour (LIT-3222).
+        A trailing buffer (via `_split_unmask_safe_prefix`) holds back any unclosed
+        `<...` prefix so PII tokens that span upstream chunk boundaries are still
+        rewritten atomically. Non-text events pass through immediately. Replaces
+        the prior buffer-the-whole-stream behaviour (LIT-3222).
         """
         metadata = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Dict[str, str] = metadata.get("pii_tokens") or {}
-        # Caller already gates on `pii_tokens` truthiness; defensive guard for direct callers.
         if not pii_tokens:
             async for chunk in response:
                 yield chunk
             return
 
-        # Hold back enough characters at the buffer tail to cover the longest known
-        # token, so a token split across chunk boundaries still gets rewritten.
         max_token_len = max(len(t) for t in pii_tokens.keys())
-
-        buffer: str = ""
+        buffer = ""
         template: Optional[ModelResponseStream] = None
-
-        def _flush_immediately(text: str) -> Optional[ModelResponseStream]:
-            if not text or template is None:
-                return None
-            return self._build_streaming_text_chunk(
-                template, self._unmask_pii_text(text, pii_tokens)
-            )
 
         try:
             async for chunk in response:
-                if isinstance(chunk, bytes):
-                    flushed = _flush_immediately(buffer)
+                if isinstance(chunk, bytes) or not isinstance(
+                    chunk, ModelResponseStream
+                ):
+                    flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
                     buffer = ""
                     if flushed is not None:
                         yield flushed
                     yield chunk  # type: ignore[misc]
                     continue
 
-                if not isinstance(chunk, ModelResponseStream):
-                    flushed = _flush_immediately(buffer)
-                    buffer = ""
-                    if flushed is not None:
-                        yield flushed
-                    yield chunk
-                    continue
-
                 template = chunk
-
                 if self._is_streaming_chunk_with_content(chunk):
                     buffer += chunk.choices[0].delta.content
                     safe, tail = self._split_unmask_safe_prefix(
                         buffer, pii_tokens, max_token_len
                     )
                     if safe:
-                        flushed = _flush_immediately(safe)
+                        flushed = self._unmask_buffer_to_chunk(
+                            safe, template, pii_tokens
+                        )
                         buffer = tail
                         if flushed is not None:
                             yield flushed
                     continue
 
                 # Non-text MRS chunk — flush pending text first, then pass through.
-                flushed = _flush_immediately(buffer)
+                flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
                 buffer = ""
                 if flushed is not None:
                     yield flushed
                 yield chunk
 
             # End of stream — drain the trailing buffer.
-            flushed = _flush_immediately(buffer)
+            flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
             buffer = ""
             if flushed is not None:
                 yield flushed
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
-            # Best-effort: emit pending buffer unmasked so the client still gets data.
             if buffer and template is not None:
                 try:
                     yield self._build_streaming_text_chunk(template, buffer)
