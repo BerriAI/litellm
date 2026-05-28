@@ -1626,6 +1626,50 @@ async def test_reject_clientside_metadata_tags_non_llm_route():
 
 
 @pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_allows_key_tags_without_client_tags():
+    """Key metadata.tags are injected after the reject check; requests without
+    client metadata.tags must not be blocked when reject_clientside_metadata_tags is on."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+    mock_request = MagicMock(spec=Request)
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=["gpt-3.5-turbo"],
+        metadata={"tags": ["engineering"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings=general_settings,
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+        )
+
+    assert result is True
+    assert request_body["metadata"]["tags"] == ["engineering"]
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
     alert_triggered = False
