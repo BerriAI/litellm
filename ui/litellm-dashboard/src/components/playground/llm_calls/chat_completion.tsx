@@ -31,6 +31,7 @@ export async function makeOpenAIChatCompletionRequest(
   onMCPEvent?: (event: MCPEvent) => void,
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
+  stream?: boolean,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -112,91 +113,63 @@ export async function makeOpenAIChatCompletionRequest(
       }
     }
 
-    // @ts-ignore
-    const response = await client.chat.completions.create(
-      {
-        model: selectedModel,
-        stream: true,
-        stream_options: {
-          include_usage: true,
-        },
-        litellm_trace_id: traceId,
-        messages: chatHistory as ChatCompletionMessageParam[],
-        ...(vector_store_ids ? { vector_store_ids } : {}),
-        ...(guardrails ? { guardrails } : {}),
-        ...(policies ? { policies } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(max_tokens !== undefined ? { max_tokens } : {}),
-        ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
-      },
-      { signal },
-    );
+    // Default to streaming so existing callers/UX are unchanged.
+    const useStream = stream !== false;
+    const baseRequest = {
+      model: selectedModel,
+      litellm_trace_id: traceId,
+      messages: chatHistory as ChatCompletionMessageParam[],
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
+      ...(policies ? { policies } : {}),
+      ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(max_tokens !== undefined ? { max_tokens } : {}),
+      ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
+    } as any;
 
-    for await (const chunk of response) {
-      console.log("Stream chunk:", chunk);
+    if (!useStream) {
+      // Non-streaming branch — single response object, no async iteration.
+      // @ts-ignore
+      const response = await client.chat.completions.create(
+        { ...baseRequest, stream: false },
+        { signal },
+      );
+      const choice = (response as any)?.choices?.[0];
+      const message = choice?.message ?? {};
+      const responseModel = (response as any)?.model ?? selectedModel;
 
-      // Process content and measure time to first token
-      const delta = chunk.choices[0]?.delta as any;
+      // Surface time-to-first-token for parity with streaming UX (non-stream returns everything at once).
+      timeToFirstToken = Date.now() - startTime;
+      if (onTimingData) {
+        onTimingData(timeToFirstToken);
+      }
+      firstTokenReceived = true;
 
-      // Debug what's in the delta
-      console.log("Delta content:", chunk.choices[0]?.delta?.content);
-      console.log("Delta reasoning content:", delta?.reasoning_content);
+      const content = typeof message.content === "string" ? message.content : "";
+      if (content) {
+        updateUI(content, responseModel);
+        fullResponseContent = content;
+      }
 
-      // Measure time to first token for either content or reasoning_content
-      if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
-        firstTokenReceived = true;
-        timeToFirstToken = Date.now() - startTime;
-        console.log("First token received! Time:", timeToFirstToken, "ms");
-        if (onTimingData) {
-          console.log("Calling onTimingData with:", timeToFirstToken);
-          onTimingData(timeToFirstToken);
-        } else {
-          console.log("onTimingData callback is not defined!");
+      if (message.reasoning_content && onReasoningContent) {
+        onReasoningContent(message.reasoning_content);
+        fullReasoningContent = String(message.reasoning_content);
+      }
+
+      // Provider-specific fields can also appear on non-streaming responses.
+      const providerFields = message.provider_specific_fields;
+      if (providerFields) {
+        if (providerFields.search_results && onSearchResults) {
+          onSearchResults(providerFields.search_results);
         }
-      }
-
-      // Process content
-      if (chunk.choices[0]?.delta?.content) {
-        const content = chunk.choices[0].delta.content;
-        updateUI(content, chunk.model);
-        fullResponseContent += content;
-      }
-
-      // Process image generation if present
-      if (delta && delta.image && onImageGenerated) {
-        console.log("Image generated:", delta.image);
-        onImageGenerated(delta.image.url, chunk.model);
-      }
-
-      // Process reasoning content if present - using type assertion
-      if (delta && delta.reasoning_content) {
-        const reasoningContent = delta.reasoning_content;
-        if (onReasoningContent) {
-          onReasoningContent(reasoningContent);
-        }
-        fullReasoningContent += reasoningContent;
-      }
-
-      // Check for search results in provider_specific_fields
-      if (delta && delta.provider_specific_fields?.search_results && onSearchResults) {
-        console.log("Search results found:", delta.provider_specific_fields.search_results);
-        onSearchResults(delta.provider_specific_fields.search_results);
-      }
-
-      // Check for MCP metadata in provider_specific_fields
-      if (delta && delta.provider_specific_fields) {
-        const providerFields = delta.provider_specific_fields;
-        
-        // Merge MCP metadata cumulatively (don't overwrite)
-        if (providerFields.mcp_list_tools && !mcpMetadata.mcp_list_tools) {
+        if (providerFields.mcp_list_tools) {
           mcpMetadata.mcp_list_tools = providerFields.mcp_list_tools;
-          // Process mcp_list_tools immediately when found (typically in first chunk)
           if (onMCPEvent && !mcpListToolsProcessed) {
             mcpListToolsProcessed = true;
             const toolsEvent: MCPEvent = {
               type: "response.output_item.done",
-              item_id: "mcp_list_tools", // Add item_id to prevent duplicate detection issues
+              item_id: "mcp_list_tools",
               item: {
                 type: "mcp_list_tools",
                 tools: providerFields.mcp_list_tools.map((tool: any) => ({
@@ -208,50 +181,171 @@ export async function makeOpenAIChatCompletionRequest(
               timestamp: Date.now(),
             };
             onMCPEvent(toolsEvent);
-            console.log("MCP list_tools event sent:", toolsEvent);
           }
         }
-        
         if (providerFields.mcp_tool_calls) {
           mcpMetadata.mcp_tool_calls = providerFields.mcp_tool_calls;
         }
-        
         if (providerFields.mcp_call_results) {
           mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
         }
-        
-        if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
-          console.log("MCP metadata found in chunk:", {
-            mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
-            mcp_tool_calls: providerFields.mcp_tool_calls ? "present" : "absent",
-            mcp_call_results: providerFields.mcp_call_results ? "present" : "absent",
-          });
-        }
       }
 
-      // Check for usage data using type assertion
-      const chunkWithUsage = chunk as any;
-      if (chunkWithUsage.usage && onUsageData) {
-        console.log("Usage data found:", chunkWithUsage.usage);
+      // Image generation on non-streaming responses (delta.image equivalent).
+      const messageImage = (message as any).image;
+      if (messageImage?.url && onImageGenerated) {
+        onImageGenerated(messageImage.url, responseModel);
+      }
+
+      const responseUsage = (response as any)?.usage;
+      if (responseUsage && onUsageData) {
         const usageData: TokenUsage = {
-          completionTokens: chunkWithUsage.usage.completion_tokens,
-          promptTokens: chunkWithUsage.usage.prompt_tokens,
-          totalTokens: chunkWithUsage.usage.total_tokens,
+          completionTokens: responseUsage.completion_tokens,
+          promptTokens: responseUsage.prompt_tokens,
+          totalTokens: responseUsage.total_tokens,
         };
-
-        // Check for reasoning tokens
-        if (chunkWithUsage.usage.completion_tokens_details?.reasoning_tokens) {
-          usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
+        if (responseUsage.completion_tokens_details?.reasoning_tokens) {
+          usageData.reasoningTokens = responseUsage.completion_tokens_details.reasoning_tokens;
         }
-
-        // Extract cost from usage object if available
-        if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
-          usageData.cost = parseFloat(chunkWithUsage.usage.cost);
+        if (responseUsage.cost !== undefined && responseUsage.cost !== null) {
+          usageData.cost = parseFloat(responseUsage.cost);
         }
-
         onUsageData(usageData);
       }
-    }
+    } else {
+      // Streaming branch — existing behavior, unchanged.
+      // @ts-ignore
+      const response = await client.chat.completions.create(
+        {
+          ...baseRequest,
+          stream: true,
+          stream_options: {
+            include_usage: true,
+          },
+        },
+        { signal },
+      );
+
+      for await (const chunk of response as any) {
+        console.log("Stream chunk:", chunk);
+
+        // Process content and measure time to first token
+        const delta = chunk.choices[0]?.delta as any;
+
+        // Debug what's in the delta
+        console.log("Delta content:", chunk.choices[0]?.delta?.content);
+        console.log("Delta reasoning content:", delta?.reasoning_content);
+
+        // Measure time to first token for either content or reasoning_content
+        if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
+          firstTokenReceived = true;
+          timeToFirstToken = Date.now() - startTime;
+          console.log("First token received! Time:", timeToFirstToken, "ms");
+          if (onTimingData) {
+            console.log("Calling onTimingData with:", timeToFirstToken);
+            onTimingData(timeToFirstToken);
+          } else {
+            console.log("onTimingData callback is not defined!");
+          }
+        }
+
+        // Process content
+        if (chunk.choices[0]?.delta?.content) {
+          const content = chunk.choices[0].delta.content;
+          updateUI(content, chunk.model);
+          fullResponseContent += content;
+        }
+
+        // Process image generation if present
+        if (delta && delta.image && onImageGenerated) {
+          console.log("Image generated:", delta.image);
+          onImageGenerated(delta.image.url, chunk.model);
+        }
+
+        // Process reasoning content if present - using type assertion
+        if (delta && delta.reasoning_content) {
+          const reasoningContent = delta.reasoning_content;
+          if (onReasoningContent) {
+            onReasoningContent(reasoningContent);
+          }
+          fullReasoningContent += reasoningContent;
+        }
+
+        // Check for search results in provider_specific_fields
+        if (delta && delta.provider_specific_fields?.search_results && onSearchResults) {
+          console.log("Search results found:", delta.provider_specific_fields.search_results);
+          onSearchResults(delta.provider_specific_fields.search_results);
+        }
+
+        // Check for MCP metadata in provider_specific_fields
+        if (delta && delta.provider_specific_fields) {
+          const providerFields = delta.provider_specific_fields;
+          
+          // Merge MCP metadata cumulatively (don't overwrite)
+          if (providerFields.mcp_list_tools && !mcpMetadata.mcp_list_tools) {
+            mcpMetadata.mcp_list_tools = providerFields.mcp_list_tools;
+            // Process mcp_list_tools immediately when found (typically in first chunk)
+            if (onMCPEvent && !mcpListToolsProcessed) {
+              mcpListToolsProcessed = true;
+              const toolsEvent: MCPEvent = {
+                type: "response.output_item.done",
+                item_id: "mcp_list_tools", // Add item_id to prevent duplicate detection issues
+                item: {
+                  type: "mcp_list_tools",
+                  tools: providerFields.mcp_list_tools.map((tool: any) => ({
+                    name: tool.function?.name || tool.name || "",
+                    description: tool.function?.description || tool.description || "",
+                    input_schema: tool.function?.parameters || tool.input_schema || {},
+                  })),
+                },
+                timestamp: Date.now(),
+              };
+              onMCPEvent(toolsEvent);
+              console.log("MCP list_tools event sent:", toolsEvent);
+            }
+          }
+          
+          if (providerFields.mcp_tool_calls) {
+            mcpMetadata.mcp_tool_calls = providerFields.mcp_tool_calls;
+          }
+          
+          if (providerFields.mcp_call_results) {
+            mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
+          }
+          
+          if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
+            console.log("MCP metadata found in chunk:", {
+              mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
+              mcp_tool_calls: providerFields.mcp_tool_calls ? "present" : "absent",
+              mcp_call_results: providerFields.mcp_call_results ? "present" : "absent",
+            });
+          }
+        }
+
+        // Check for usage data using type assertion
+        const chunkWithUsage = chunk as any;
+        if (chunkWithUsage.usage && onUsageData) {
+          console.log("Usage data found:", chunkWithUsage.usage);
+          const usageData: TokenUsage = {
+            completionTokens: chunkWithUsage.usage.completion_tokens,
+            promptTokens: chunkWithUsage.usage.prompt_tokens,
+            totalTokens: chunkWithUsage.usage.total_tokens,
+          };
+
+          // Check for reasoning tokens
+          if (chunkWithUsage.usage.completion_tokens_details?.reasoning_tokens) {
+            usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
+          }
+
+          // Extract cost from usage object if available
+          if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
+            usageData.cost = parseFloat(chunkWithUsage.usage.cost);
+          }
+
+          onUsageData(usageData);
+        }
+      }
+    } // end stream branch
 
     // Process remaining MCP metadata (mcp_tool_calls and mcp_call_results) after stream completes
     // Note: mcp_list_tools is already processed when found in the first chunk

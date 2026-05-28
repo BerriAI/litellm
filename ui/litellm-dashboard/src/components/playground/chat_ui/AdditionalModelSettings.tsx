@@ -12,6 +12,8 @@ interface AdditionalModelSettingsProps {
   onUseAdvancedParamsChange?: (value: boolean) => void;
   mockTestFallbacks?: boolean;
   onMockTestFallbacksChange?: (value: boolean) => void;
+  stream?: boolean;
+  onStreamChange?: (value: boolean) => void;
 }
 
 const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
@@ -23,6 +25,8 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
   onUseAdvancedParamsChange,
   mockTestFallbacks,
   onMockTestFallbacksChange,
+  stream,
+  onStreamChange,
 }) => {
   const [internalUseAdvancedParams, setInternalUseAdvancedParams] = useState(false);
   const useAdvancedParams =
@@ -67,6 +71,35 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
       <Checkbox checked={useAdvancedParams} onChange={(e) => handleUseAdvancedParamsChange(e.target.checked)}>
         <span className="font-medium">Use Advanced Parameters</span>
       </Checkbox>
+
+      {onStreamChange && (
+        <div className="flex items-center gap-1">
+          <Checkbox
+            checked={stream ?? true}
+            onChange={(e) => onStreamChange(e.target.checked)}
+          >
+            <span className="font-medium">Stream response</span>
+          </Checkbox>
+          <Popover
+            trigger="hover"
+            placement="right"
+            content={
+              <div style={{ maxWidth: 340 }}>
+                <Typography.Paragraph className="text-sm" style={{ marginBottom: 0 }}>
+                  Enable Server-Sent Events streaming. Disable to receive the full
+                  response in a single chunk &mdash; useful when comparing streaming
+                  vs. non-streaming behavior.
+                </Typography.Paragraph>
+              </div>
+            }
+          >
+            <InfoCircleOutlined
+              className="text-xs text-gray-400 cursor-pointer shrink-0 hover:text-gray-600"
+              aria-label="Help: Stream response"
+            />
+          </Popover>
+        </div>
+      )}
 
       {onMockTestFallbacksChange && (
         <div className="flex items-center gap-1">

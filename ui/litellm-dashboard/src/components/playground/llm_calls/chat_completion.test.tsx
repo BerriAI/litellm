@@ -256,4 +256,116 @@ describe("chat_completion", () => {
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs).not.toHaveProperty("mock_testing_fallbacks");
   });
+
+  it("should default to streaming when stream parameter is undefined", async () => {
+    await makeOpenAIChatCompletionRequest(mockChatHistory, mockUpdateUI, "gpt-4", "test-token");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.stream).toBe(true);
+    expect(callArgs.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("should still stream when stream=true is passed explicitly", async () => {
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      true, // stream
+    );
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.stream).toBe(true);
+    expect(callArgs.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("should send stream:false and process a single response when stream=false", async () => {
+    const onUsageData = vi.fn();
+    const onTimingData = vi.fn();
+    const onTotalLatency = vi.fn();
+
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({
+      id: "chatcmpl-1",
+      model: "gpt-4",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "Hello world" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    });
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, undefined, undefined, onTimingData, onUsageData,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, onTotalLatency, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      false, // stream
+    );
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.stream).toBe(false);
+    expect(callArgs).not.toHaveProperty("stream_options");
+
+    expect(mockUpdateUI).toHaveBeenCalledTimes(1);
+    expect(mockUpdateUI).toHaveBeenCalledWith("Hello world", "gpt-4");
+
+    expect(onUsageData).toHaveBeenCalledTimes(1);
+    expect(onUsageData).toHaveBeenCalledWith({
+      completionTokens: 2,
+      promptTokens: 3,
+      totalTokens: 5,
+    });
+
+    expect(onTimingData).toHaveBeenCalledTimes(1);
+    expect(onTotalLatency).toHaveBeenCalledTimes(1);
+  });
+
+  it("non-streaming branch should still invoke reasoning callback when reasoning_content is present", async () => {
+    const onReasoningContent = vi.fn();
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({
+      id: "chatcmpl-2",
+      model: "gpt-4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Answer",
+            reasoning_content: "thought process",
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, undefined, onReasoningContent, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined,
+      false, // stream
+    );
+
+    expect(onReasoningContent).toHaveBeenCalledTimes(1);
+    expect(onReasoningContent).toHaveBeenCalledWith("thought process");
+  });
 });
