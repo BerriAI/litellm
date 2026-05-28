@@ -664,12 +664,14 @@ async def test_custom_instructions_used_verbatim():
 
     assert len(captured_calls) == 1
     summary_messages = captured_calls[0]["summary_messages"]
-    # The last message should be the custom instruction prompt
+    # The custom instruction prompt is appended to the trailing user turn so
+    # we don't end up with two consecutive ``role=user`` messages (some
+    # providers reject that).
     last_msg = summary_messages[-1]
     assert last_msg["role"] == "user"
-    assert last_msg["content"] == "Summarize everything briefly."
+    assert "Summarize everything briefly." in last_msg["content"]
     # The "do not call tools" suffix should NOT be in the prompt since custom was set
-    assert "tool" not in last_msg["content"].lower()
+    assert "do not call" not in last_msg["content"].lower()
 
 
 async def test_default_instructions_appended_with_no_tool_suffix_when_no_tools():
@@ -851,6 +853,82 @@ async def test_summary_call_omits_system_message_when_system_is_none():
 
     summary_messages = captured_calls[0]["summary_messages"]
     assert all(msg.get("role") != "system" for msg in summary_messages)
+
+
+async def test_summary_call_does_not_emit_consecutive_user_turns():
+    """When the trailing message is already a user turn, the summarization
+    prompt is merged into it instead of appended as a second user message.
+
+    Some providers (and strict OpenAI-compatible endpoints) reject two
+    consecutive ``role=user`` messages, which would silently fall into the
+    ``summary_call_failed`` error path.
+    """
+    messages = _simple_messages()
+    assert messages[-1]["role"] == "user"
+    mock_response = _make_mock_response("<summary>x</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    summary_messages = captured_calls[0]["summary_messages"]
+    user_indices = [
+        idx for idx, msg in enumerate(summary_messages) if msg.get("role") == "user"
+    ]
+    # No two adjacent indices.
+    assert all(
+        b - a > 1 for a, b in zip(user_indices, user_indices[1:])
+    ), f"two consecutive user turns produced: {summary_messages}"
+
+
+async def test_summary_call_sends_default_max_tokens():
+    """``max_tokens`` is set on the summary call so providers like Anthropic
+    (which require it) don't reject the request and silently fall back to
+    ``summary_call_failed``.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_SUMMARY_MAX_TOKENS,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={},
+        llm_router=_FakeRouter(),
+    )
+
+    assert captured_kwargs.get("max_tokens") == COMPACT_SUMMARY_MAX_TOKENS
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,11 @@ CLEARED_TOOL_RESULT_PLACEHOLDER = "[Cleared by context management]"
 COMPACT_EDIT_TYPE = "compact_20260112"
 COMPACT_DEFAULT_TRIGGER_TOKENS = 150_000
 COMPACT_MIN_TRIGGER_TOKENS = 50_000
+# Default ``max_tokens`` for the summary call. Required by providers like
+# Anthropic that reject requests without it; safely accepted by providers that
+# don't strictly require it. Chosen to comfortably fit a long structured
+# summary.
+COMPACT_SUMMARY_MAX_TOKENS = 4096
 COMPACT_SUMMARY_MODEL_SETTING_KEY = "context_management_summary_model"
 COMPACT_SUMMARY_SYSTEM_PREFIX = "Previous conversation summary: "
 

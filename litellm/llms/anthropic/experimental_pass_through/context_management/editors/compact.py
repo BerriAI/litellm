@@ -29,6 +29,7 @@ from ..constants import (
     COMPACT_EDIT_TYPE,
     COMPACT_MIN_TRIGGER_TOKENS,
     COMPACT_NO_TOOL_CALLS_SUFFIX,
+    COMPACT_SUMMARY_MAX_TOKENS,
     COMPACT_SUMMARY_MODEL_SETTING_KEY,
     COMPACT_SUMMARY_SYSTEM_PREFIX,
 )
@@ -389,8 +390,38 @@ def _build_summary_messages(
     if system_message is not None:
         summary_messages.append(system_message)
     summary_messages.extend(openai_messages)
-    summary_messages.append({"role": "user", "content": prompt})
+    # If the last turn is already a user message, merge the summarization
+    # prompt into it. Some providers (and strict OpenAI-compatible endpoints)
+    # reject two consecutive ``role=user`` messages, which would otherwise
+    # silently fall into the ``summary_call_failed`` error path.
+    if summary_messages and _is_user_message(summary_messages[-1]):
+        last_msg = summary_messages[-1]
+        summary_messages[-1] = {
+            **last_msg,
+            "content": _append_text_to_content(last_msg.get("content"), prompt),
+        }
+    else:
+        summary_messages.append({"role": "user", "content": prompt})
     return summary_messages
+
+
+def _is_user_message(msg: Any) -> bool:
+    return isinstance(msg, dict) and msg.get("role") == "user"
+
+
+def _append_text_to_content(content: Any, extra_text: str) -> Any:
+    """Append ``extra_text`` to an OpenAI-shape message ``content`` field.
+
+    Handles the two common shapes: ``str`` and ``list`` of content parts.
+    For unexpected/empty shapes, fall back so the caller gets a usable value.
+    """
+    if content is None or content == "":
+        return extra_text
+    if isinstance(content, str):
+        return f"{content}\n\n{extra_text}"
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": extra_text}]
+    return [content, {"type": "text", "text": extra_text}]
 
 
 async def _call_summary_model(
@@ -406,9 +437,14 @@ async def _call_summary_model(
     proxy's ``model_list``; falls back to ``litellm.acompletion`` if no router
     is available (e.g. SDK usage outside the proxy).
     """
+    # ``max_tokens`` is required by providers like Anthropic and silently
+    # accepted by providers that don't strictly require it (OpenAI etc.).
+    # Setting a sensible default here means the feature works regardless of
+    # which model an admin configures as ``context_management_summary_model``.
     call_kwargs: Dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
+        "max_tokens": COMPACT_SUMMARY_MAX_TOKENS,
         "metadata": metadata,
     }
     if llm_router is not None and hasattr(llm_router, "acompletion"):
