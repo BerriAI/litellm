@@ -233,6 +233,97 @@ def resolve_operation_params(
     return result
 
 
+def _lookup_ref(ref: str, spec: Optional[Dict[str, Any]]) -> Optional[Any]:
+    """Resolve a local JSON-Pointer ``$ref`` against the OpenAPI spec root.
+
+    Supports OpenAPI 3.x (``#/components/schemas/...``) and Swagger 2.0
+    (``#/definitions/...``) refs, plus any other in-document JSON Pointer.
+
+    Returns ``None`` for external refs (``http(s)://...``, file URIs), unknown
+    targets, or when ``spec`` is None.  Callers preserve the original ``$ref``
+    node in that case so the schema is at worst no worse than today.
+    """
+    if not spec or not isinstance(ref, str) or not ref.startswith("#/"):
+        return None
+    cur: Any = spec
+    for raw_part in ref[2:].split("/"):
+        # JSON Pointer unescape (RFC 6901): "~1" -> "/", "~0" -> "~"
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        elif isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return cur
+
+
+def _inline_schema_refs(
+    schema: Any,
+    spec: Optional[Dict[str, Any]],
+    _visiting: Optional[frozenset] = None,
+) -> Any:
+    """Recursively inline local JSON Schema ``$ref`` nodes against ``spec``.
+
+    LLM providers (Anthropic, Bedrock, Fireworks, Gemini, ...) reject tool
+    ``input_schema`` documents that contain unresolved ``$ref`` pointers - they
+    do not run a JSON-Schema resolver. When LiteLLM registers MCP tools from an
+    OpenAPI spec, the request-body and parameter schemas commonly use
+    ``$ref: "#/components/schemas/X"`` (Google Workspace ``Presentations`` /
+    ``Sheets``, GitHub REST, etc.). Without inlining, those refs reach the
+    provider and the tool call 400s with "Invalid tool schema, $ref is not
+    supported" or "PointerToNowhere".
+
+    Behaviour:
+
+    * Walks ``dict`` / ``list`` nodes and replaces ``{"$ref": "#/..."}`` with
+      the resolved subtree.
+    * Sibling fields next to a ``$ref`` (e.g. ``description``, ``nullable``)
+      are preserved by merging them into the resolved subtree - sibling values
+      win over the referenced target so descriptions next to a ``$ref`` are not
+      lost (this matches OpenAPI 3.1 ``$ref`` sibling semantics).
+    * Cycle-safe: a ``$ref`` already on the resolution stack is left in place
+      rather than expanded infinitely. The on-disk schema still has the cycle
+      defined, so downstream consumers that *do* support ``$ref`` can still
+      follow it.
+    * Returns the input unchanged when ``spec`` is ``None`` (zero-cost no-op
+      for legacy callers).
+    """
+    if spec is None:
+        return schema
+    if isinstance(schema, list):
+        return [_inline_schema_refs(item, spec, _visiting) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        visiting = _visiting or frozenset()
+        if ref in visiting:
+            # Cycle: leave the original $ref so callers do not blow the stack.
+            return schema
+        target = _lookup_ref(ref, spec)
+        if target is None:
+            # Unresolvable - leave $ref intact; this is the legacy behaviour
+            # and keeps the bug from getting silently *worse*.
+            return schema
+        resolved = _inline_schema_refs(target, spec, visiting | {ref})
+        if isinstance(resolved, dict):
+            merged = dict(resolved)
+            for k, v in schema.items():
+                if k == "$ref":
+                    continue
+                # Sibling wins, matching OpenAPI 3.1 ``$ref`` overlay semantics.
+                merged[k] = v
+            return merged
+        return resolved
+
+    return {k: _inline_schema_refs(v, spec, _visiting) for k, v in schema.items()}
+
+
 def extract_parameters(operation: Dict[str, Any]) -> tuple:
     """Extract parameter names from OpenAPI operation."""
     path_params = []
@@ -259,10 +350,25 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
-    """Build MCP input schema from OpenAPI operation."""
-    properties = {}
-    required = []
+def build_input_schema(
+    operation: Dict[str, Any],
+    spec: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build MCP input schema from an OpenAPI operation.
+
+    When ``spec`` is provided, local ``$ref`` pointers inside parameter
+    schemas and the JSON request body schema are inlined via
+    :func:`_inline_schema_refs`. LLM providers do not resolve ``$ref`` in
+    tool schemas and reject any unresolved pointer, so leaving refs in
+    place (the legacy behaviour) breaks OpenAPI-registered MCP tools that
+    use ``#/components/schemas/...`` (Google Workspace ``Presentations`` /
+    ``Sheets`` create calls, GitHub REST, etc.).
+
+    ``spec`` defaults to ``None`` so existing call sites that build a
+    schema from a free-standing operation continue to behave as before.
+    """
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
 
     # Process parameters
     if "parameters" in operation:
@@ -270,7 +376,13 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
             if "name" not in param:
                 continue
             param_name = param["name"]
-            param_schema = param.get("schema", {})
+            # Inline refs inside the per-parameter schema before reading
+            # ``type`` so e.g. ``{"$ref": "#/components/schemas/Cursor"}``
+            # resolves to its actual primitive type instead of silently
+            # falling back to ``"string"``.
+            param_schema = _inline_schema_refs(param.get("schema", {}), spec)
+            if not isinstance(param_schema, dict):
+                param_schema = {}
             param_type = param_schema.get("type", "string")
 
             properties[param_name] = {
@@ -289,11 +401,25 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
         # Try to get JSON schema
         if "application/json" in content:
             schema = content["application/json"].get("schema", {})
-            properties["body"] = {
+            # Recursively inline ``$ref`` so the body schema is fully
+            # self-contained for downstream LLM providers.
+            schema = _inline_schema_refs(schema, spec)
+            if not isinstance(schema, dict):
+                schema = {}
+
+            body: Dict[str, Any] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
                 "properties": schema.get("properties", {}),
             }
+            # Propagate a body-level ``required`` list when the resolved
+            # schema declares one (common with ``#/components/schemas/...``
+            # request bodies). Without this we drop hard requirements like
+            # "title" on Google Workspace create calls.
+            body_required = schema.get("required")
+            if isinstance(body_required, list) and body_required:
+                body["required"] = body_required
+            properties["body"] = body
             if request_body.get("required", False):
                 required.append("body")
 
@@ -499,8 +625,10 @@ def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
                     "summary", operation.get("description", f"{method.upper()} {path}")
                 )
 
-                # Build input schema
-                input_schema = build_input_schema(operation)
+                # Build input schema. Pass the spec so $refs in the
+                # operation's request body / parameter schemas get inlined
+                # before we register the tool with the LLM-facing registry.
+                input_schema = build_input_schema(operation, spec=spec)
 
                 # Create tool function
                 tool_func = create_tool_function(path, method, operation, base_url)
