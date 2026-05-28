@@ -1820,9 +1820,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self._is_precomputed_response_cost_authoritative(
             hidden_params, logging_result
         ):  # trust pre-computed cost only when authoritative (LIT-3057)
-            self.model_call_details["response_cost"] = hidden_params[
-                "response_cost"
-            ]
+            self.model_call_details["response_cost"] = hidden_params["response_cost"]
         elif (
             existing_cost := self.model_call_details.get("response_cost")
         ) is not None and existing_cost != 0:
