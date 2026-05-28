@@ -2691,7 +2691,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if remaining_requests is not None:
                 """
                 "model_group",
                 "api_provider",
@@ -2705,7 +2705,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,
