@@ -10,6 +10,31 @@ const { Link } = Typography;
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
   uploadProps?: UploadProps;
+  /**
+   * Form rendering mode:
+   * - "create" (default): standard create flow — `required` fields validate and
+   *   the field metadata's placeholder/defaultValue are honored.
+   * - "rotate": edit/rotate flow — all fields are optional, the placeholder is
+   *   overridden to instruct the user to leave blank to keep the current value,
+   *   and field-level defaults are suppressed so empty submissions stay empty
+   *   (and are interpreted by the caller as "keep current").
+   */
+  mode?: "create" | "rotate";
+  /**
+   * Optional prefix applied to every `Form.Item.name` (and to the upload
+   * setFieldsValue / getFieldValue lookups) registered by this component.
+   *
+   * Use this in edit flows where the parent form already registers
+   * `Form.Item`s whose `name` collides with provider credential field keys
+   * (for example, `ModelInfoView` has a top-level `organization` field that
+   * collides with the OpenAI provider's `organization` credential field).
+   * Without a prefix the two would share antd Form state, defeating the
+   * "Leave blank to keep current value" contract.
+   *
+   * The parent reads each rotate-form value back as
+   * `values[fieldNamePrefix + field.key]`.
+   */
+  fieldNamePrefix?: string;
 }
 
 interface ProviderCredentialField {
@@ -92,7 +117,15 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+const ROTATE_PLACEHOLDER = "Leave blank to keep current value";
+
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  uploadProps,
+  mode = "create",
+  fieldNamePrefix = "",
+}) => {
+  const isRotateMode = mode === "rotate";
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -177,7 +210,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           if (e.target) {
             const jsonStr = e.target.result as string;
             console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
-            form.setFieldsValue({ vertex_credentials: jsonStr });
+            form.setFieldsValue({ [fieldNamePrefix + "vertex_credentials"]: jsonStr });
             console.log("Form values after setting:", form.getFieldsValue());
           }
         };
@@ -218,13 +251,16 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
-            name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
+            name={fieldNamePrefix + field.key}
+            rules={isRotateMode ? undefined : field.required ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
             {field.type === "select" ? (
-              <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
+              <Select
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
+              >
                 {field.options?.map((option) => (
                   <Select.Option key={option} value={option}>
                     {option}
@@ -242,8 +278,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
 
                   // Check the field value after a short delay
                   setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
+                    const namespacedKey = fieldNamePrefix + field.key;
+                    const value = form.getFieldValue(namespacedKey);
+                    console.log(`${namespacedKey} value after upload:`, JSON.stringify(value));
                   }, 500);
                 }}
               >
@@ -251,16 +288,16 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               </Upload>
             ) : field.type === "textarea" ? (
               <Input.TextArea
-                placeholder={field.placeholder}
-                defaultValue={field.defaultValue}
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
                 rows={6}
                 style={{ fontFamily: "monospace", fontSize: "12px" }}
               />
             ) : (
               <TextInput
-                placeholder={field.placeholder}
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
                 type={field.type === "password" ? "password" : "text"}
-                defaultValue={field.defaultValue}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
               />
             )}
           </Form.Item>

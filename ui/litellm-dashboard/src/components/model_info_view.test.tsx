@@ -40,6 +40,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useModelHub: (...args: any[]) => mockUseModelHub(...args),
 }));
 
+const mockUseProviderFields = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
+  useProviderFields: (...args: any[]) => mockUseProviderFields(...args),
+}));
+
 const mockUseModelCostMap = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
@@ -109,6 +114,51 @@ describe("ModelInfoView", () => {
       data: {
         data: [],
       },
+      isLoading: false,
+      error: null,
+    });
+
+    mockUseProviderFields.mockReturnValue({
+      data: [
+        {
+          provider: "openai",
+          provider_display_name: "OpenAI",
+          litellm_provider: "openai",
+          credential_fields: [
+            {
+              key: "api_key",
+              label: "OpenAI API Key",
+              field_type: "password",
+              required: true,
+            },
+            {
+              key: "organization",
+              label: "OpenAI Organization",
+              field_type: "text",
+              required: false,
+            },
+          ],
+        },
+        {
+          provider: "bedrock",
+          provider_display_name: "Amazon Bedrock",
+          litellm_provider: "bedrock",
+          credential_fields: [
+            {
+              key: "aws_access_key_id",
+              label: "AWS Access Key ID",
+              field_type: "text",
+              required: true,
+            },
+            {
+              key: "aws_secret_access_key",
+              label: "AWS Secret Access Key",
+              field_type: "password",
+              required: true,
+            },
+          ],
+        },
+      ],
       isLoading: false,
       error: null,
     });
@@ -557,8 +607,7 @@ describe("ModelInfoView", () => {
       .getAllByRole("textbox")
       .find(
         (input) =>
-          input.tagName === "TEXTAREA" &&
-          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
       );
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
@@ -688,7 +737,6 @@ describe("ModelInfoView", () => {
     });
   });
 
-
   it("should display model access groups field", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
@@ -716,6 +764,174 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
+    });
+  });
+
+  describe("Authentication section (LIT-3169)", () => {
+    const manualCredentialModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        // Seed BOTH credential fields so the "blank preserves existing" test
+        // can prove that leaving the form field empty does not wipe the
+        // already-stored upstream value.
+        api_key: "sk-EXISTING-KEY",
+        organization: "org-EXISTING",
+        litellm_credential_name: undefined,
+      },
+    };
+
+    const mountWithManualCredentialModel = () => {
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [manualCredentialModelData] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({
+        data: [manualCredentialModelData],
+      });
+      mockCredentialListCall.mockResolvedValue({ credentials: [] });
+    };
+
+    const mountWithSharedCredentialModel = () => {
+      const shared = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          litellm_credential_name: "shared-openai-creds",
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [shared] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [shared] });
+    };
+
+    const startEditing = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.getByText("Model Settings")).toBeInTheDocument();
+      });
+      const editButton = screen.getByRole("button", { name: /edit settings/i });
+      await user.click(editButton);
+    };
+
+    it("shows the Authentication heading", async () => {
+      mountWithManualCredentialModel();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await waitFor(() => {
+        expect(screen.getByText("Authentication")).toBeInTheDocument();
+      });
+    });
+
+    it("shows a shared-credential pointer when the deployment uses a named credential", async () => {
+      mountWithSharedCredentialModel();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await waitFor(() => {
+        expect(screen.getByTestId("auth-section-shared")).toBeInTheDocument();
+      });
+      const sharedSection = screen.getByTestId("auth-section-shared");
+      expect(sharedSection.textContent).toMatch(/uses the shared credential/i);
+      expect(sharedSection.textContent).toMatch(/shared-openai-creds/);
+      expect(screen.queryByPlaceholderText(/leave blank to keep current/i)).not.toBeInTheDocument();
+    });
+
+    it("renders rotate-mode provider auth fields with the leave-blank placeholder when editing a manual-credential deployment", async () => {
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI API Key")).toBeInTheDocument();
+      });
+      const placeholders = screen.getAllByPlaceholderText(/leave blank to keep current/i);
+      expect(placeholders.length).toBeGreaterThan(0);
+    });
+
+    it("PATCHes only non-empty Authentication values; blanks preserve existing credentials", async () => {
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI API Key")).toBeInTheDocument();
+      });
+
+      const apiKeyInput = screen
+        .getAllByPlaceholderText(/leave blank to keep current/i)
+        .find((el) => (el as HTMLInputElement).type === "password");
+      // Defensive: surface a meaningful failure if the password rotate input
+      // isn't rendered, rather than a cryptic TypeError on the next line.
+      expect(apiKeyInput).toBeDefined();
+      await user.type(apiKeyInput as HTMLInputElement, "sk-ROTATED-KEY");
+
+      const saveButton = screen.getByRole("button", { name: /save changes/i });
+      await user.click(saveButton);
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+      const lastCall = mockModelPatchUpdateCall.mock.calls.at(-1)!;
+      const updateData = lastCall[1] as any;
+      // The filled rotate field wins over the existing api_key merged from
+      // parsedExtraParams above.
+      expect(updateData.litellm_params.api_key).toBe("sk-ROTATED-KEY");
+      // The blank rotate field must NOT clobber the existing organization
+      // value that came through parsedExtraParams — the seeded
+      // "org-EXISTING" should flow through unchanged.
+      expect(updateData.litellm_params.organization).toBe("org-EXISTING");
+    });
+
+    it("isolates rotate-mode fields from top-level form fields with the same name (e.g. organization)", async () => {
+      // Regression for Greptile's PR #29170 review: the existing model edit
+      // form has a top-level Form.Item with name="organization" that is
+      // pre-filled from litellm_params.organization. If the rotate-mode
+      // Authentication section also registered name="organization", the two
+      // would share antd Form state — the rotate input would show the
+      // existing org value and typing into it would mutate the top-level
+      // Organization field. The fieldNamePrefix ("auth_") prop on
+      // ProviderSpecificFields keeps the namespaces isolated.
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI Organization")).toBeInTheDocument();
+      });
+      // The rotate organization field should render with the leave-blank
+      // placeholder, NOT pre-filled with "org-EXISTING" from
+      // litellm_params.organization.
+      const rotateInputs = screen
+        .getAllByPlaceholderText(/leave blank to keep current/i)
+        .filter((el) => (el as HTMLInputElement).type !== "password");
+      expect(rotateInputs.length).toBeGreaterThan(0);
+      const orgRotate = rotateInputs[0] as HTMLInputElement;
+      expect(orgRotate.value).toBe("");
+    });
+
+    it("falls back to a no-fields message when the provider has no credential metadata", async () => {
+      const unknownProviderModel = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          custom_llm_provider: "unknown-fake-provider",
+          litellm_credential_name: undefined,
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [unknownProviderModel] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [unknownProviderModel] });
+
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText(/No provider-specific authentication fields/i)).toBeInTheDocument();
+      });
     });
   });
 });
