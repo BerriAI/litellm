@@ -2833,3 +2833,106 @@ def test_bedrock_converse_messages_pt_document_ignores_malformed_citations():
     assert "citations" not in document
     assert "context" not in document
     assert document["name"].startswith("Document_")
+
+
+def test_bedrock_converse_messages_pt_document_title_sanitized_for_bedrock_name():
+    """LIT-3401: Bedrock DocumentBlock.name must match `[a-zA-Z0-9 ()\\[\\]-]`
+    with no consecutive whitespace and max 200 chars. Caller titles containing
+    common punctuation (period, comma, colon, apostrophe, underscore, ...) must
+    be sanitized so we don't trigger a 400 from Bedrock.
+    """
+    pdf_b64 = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoK"
+        "dHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y="
+    )
+
+    cases = [
+        # raw_title, expected_name
+        ("Report: v2.0, by Jane", "Report v2 0 by Jane"),
+        ("Jane's_Notes (final).pdf", "Jane s Notes (final) pdf"),
+        ("file_2024.pdf", "file 2024 pdf"),
+        ("  multiple   spaces   between   words ", "multiple spaces between words"),
+        # Already-compliant titles must pass through unchanged.
+        ("My Research Paper", "My Research Paper"),
+        ("Doc [v1] (final)", "Doc [v1] (final)"),
+    ]
+
+    for raw, expected in cases:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": pdf_b64,
+                        },
+                        "title": raw,
+                    },
+                ],
+            }
+        ]
+        result = _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
+        document = result[0]["content"][0]["document"]
+        assert document["name"] == expected, (
+            f"title={raw!r} -> name={document['name']!r}, expected={expected!r}"
+        )
+
+
+def test_bedrock_converse_messages_pt_document_title_clamped_to_200_chars():
+    """Bedrock caps DocumentBlock.name at 200 characters."""
+    pdf_b64 = "JVBERi0xLjQK"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                    "title": "A" * 300,
+                },
+            ],
+        }
+    ]
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    name = result[0]["content"][0]["document"]["name"]
+    assert len(name) == 200
+    assert name == "A" * 200
+
+
+def test_bedrock_converse_messages_pt_document_title_all_disallowed_falls_back_to_hash():
+    """If sanitizing the title strips every character (e.g. all-punctuation),
+    fall back to the deterministic hash-based name rather than sending an empty
+    string."""
+    pdf_b64 = "JVBERi0xLjQK"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                    "title": "!@#$%^&*",  # nothing in the allowlist
+                },
+            ],
+        }
+    ]
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    name = result[0]["content"][0]["document"]["name"]
+    assert name.startswith("Document_")
