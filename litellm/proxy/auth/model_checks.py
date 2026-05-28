@@ -330,6 +330,13 @@ def _get_wildcard_models(
                     model_name=model, team_id=team_id
                 )
                 if model_list:
+                    # LIT-2861: drop the literal wildcard ("openai/*", etc.)
+                    # from the result when expansion succeeded — mirrors the
+                    # fallback branch below and prevents the "<provider>/*"
+                    # token from leaking into /v1/models alongside the
+                    # concrete model IDs. The literal is re-added above when
+                    # the caller passes return_wildcard_routes=True.
+                    expansion_yielded_models = False
                     for router_model in model_list:
                         wildcard_models = get_known_models_from_wildcard(
                             wildcard_model=model,
@@ -337,7 +344,11 @@ def _get_wildcard_models(
                                 **router_model["litellm_params"]  # type: ignore
                             ),
                         )
+                        if wildcard_models:
+                            expansion_yielded_models = True
                         all_wildcard_models.extend(wildcard_models)
+                    if expansion_yielded_models:
+                        models_to_remove.add(model)
                 else:
                     # Router has no deployment for this wildcard (e.g., BYOK team models)
                     # Fall back to expanding from known provider models
