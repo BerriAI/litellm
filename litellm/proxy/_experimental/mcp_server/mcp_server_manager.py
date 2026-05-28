@@ -640,8 +640,11 @@ class MCPServerManager:
                         operation.get("description", f"{method.upper()} {path}"),
                     )
 
-                    # Build input schema using imported function
-                    input_schema = build_input_schema(resolved_operation)
+                    # Build input schema using imported function.
+                    # Pass spec so $ref pointers in the request body /
+                    # parameter schemas are inlined before the tool is
+                    # registered with the LLM-facing registry.
+                    input_schema = build_input_schema(resolved_operation, spec=spec)
 
                     # Create tool function with headers using imported function
                     tool_func = create_tool_function(
