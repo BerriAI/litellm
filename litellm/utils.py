@@ -408,6 +408,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    ModelNotMappedError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -5362,8 +5363,10 @@ def get_max_tokens(model: str) -> Optional[int]:
             raise Exception()
         return None
     except Exception:
-        raise Exception(
-            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+        raise ModelNotMappedError(
+            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+            model=model,
+            llm_provider=None,
         )
 
 
@@ -5838,8 +5841,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                         _model_info = None
 
             if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                raise ModelNotMappedError(
+                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+                    model=model,
+                    llm_provider=custom_llm_provider,
                 )
 
             _input_cost_per_token: Optional[float] = _model_info.get(
@@ -6052,13 +6057,17 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
             )
+    except ModelNotMappedError:
+        raise
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
-        raise Exception(
+        raise ModelNotMappedError(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
-            )
-        )
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        ) from e
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)

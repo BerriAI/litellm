@@ -1273,6 +1273,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    ModelNotMappedError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
