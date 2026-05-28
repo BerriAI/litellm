@@ -12,13 +12,13 @@ These tests pin two contracts:
 1. The SSE generator (`async_data_generator` in `proxy_server.py`) skips
    the `data: [DONE]\\n\\n` tail when `request_data` carries the
    `_litellm_skip_sse_done_terminator=True` flag.
-2. `common_request_processing.py` sets that flag whenever the streaming
-   `select_data_generator` branch fires with
-   `route_type == "agenerate_content_stream"` (the Google-native route).
+2. The Google `:streamGenerateContent` endpoint handler sets that flag
+   on the request body it hands to `ProxyBaseLLMRequestProcessing`.
 """
 
-import asyncio
-import inspect
+import os
+import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -60,15 +60,15 @@ async def _drain(gen):
 
 
 # ---------------------------------------------------------------------------
-# 1. async_data_generator gating
+# 1. async_data_generator gating — the SSE writer respects the flag
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_async_data_generator_emits_done_by_default():
-    """Sanity check: OpenAI-style streaming still gets the `[DONE]`
-    terminator. This pins the existing behavior for chat-completions and
-    every other caller that does NOT set the new flag."""
+    """OpenAI-style streaming still gets the `[DONE]` terminator. Pins
+    the existing contract for chat-completions and every caller that
+    does NOT set the new flag."""
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
 
@@ -111,8 +111,8 @@ async def test_async_data_generator_skips_done_when_flag_set():
 
 @pytest.mark.asyncio
 async def test_async_data_generator_skips_done_when_flag_set_falsy_off():
-    """An explicit `False` flag still emits `[DONE]` — the gate is
-    truthy-check only."""
+    """An explicit `False` flag still emits `[DONE]` — the gate is a
+    truthy check only."""
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
 
@@ -130,36 +130,93 @@ async def test_async_data_generator_skips_done_when_flag_set_falsy_off():
 
 
 # ---------------------------------------------------------------------------
-# 2. common_request_processing.py wires the flag for the right route_type
+# 2. The Google streamGenerateContent endpoint sets the flag — behavioral
 # ---------------------------------------------------------------------------
 
 
-def test_common_request_processing_sets_flag_for_generate_content_stream():
-    """Static check that common_request_processing.py installs the flag
-    for `route_type == "agenerate_content_stream"` immediately before
-    calling `select_data_generator`. Tests this by reading the source of
-    `base_process_llm_request` so we catch regressions where the flag
-    move out of the streaming branch."""
-    from litellm.proxy import common_request_processing
+def _build_test_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    src = inspect.getsource(
-        common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request
-    )
+    from litellm.proxy.google_endpoints.endpoints import router as google_router
 
-    assert (
-        '"_litellm_skip_sse_done_terminator"' in src
-    ), "_litellm_skip_sse_done_terminator flag must be set in base_process_llm_request"
-    assert (
-        'route_type == "agenerate_content_stream"' in src
-    ), "Flag must be gated on the Google-native streamGenerateContent route_type"
+    app = FastAPI()
+    app.include_router(google_router)
+    return TestClient(app)
 
-    # The flag-set must live IN the `elif select_data_generator:` branch
-    # — that's the streaming-passthrough path. We verify the flag-set
-    # appears between the elif and the select_data_generator(...) call.
-    idx_elif = src.index("elif select_data_generator:")
-    idx_call = src.index("selected_data_generator = select_data_generator(", idx_elif)
-    flag_set_idx = src.index('"_litellm_skip_sse_done_terminator"')
-    assert idx_elif < flag_set_idx < idx_call, (
-        "Flag must be set inside the `elif select_data_generator:` branch, "
-        "before the generator is constructed."
-    )
+
+def test_stream_generate_content_endpoint_sets_skip_done_flag():
+    """LIT-3411 behavioral wiring test.
+
+    The Google `:streamGenerateContent` endpoint handler must put
+    `_litellm_skip_sse_done_terminator=True` on the request body it
+    passes to `ProxyBaseLLMRequestProcessing`. We patch the processor
+    and inspect the `data` it was constructed with — this verifies the
+    *runtime behavior* of the endpoint, not its source layout, so the
+    test still passes under whitespace/structural refactors and still
+    fails if a reviewer accidentally inverts the conditional or drops
+    the flag-set."""
+    try:
+        client = _build_test_client()
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+
+    with (
+        patch(
+            "litellm.proxy.google_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True},
+        ),
+        patch(
+            "litellm.proxy.google_endpoints.endpoints.ProxyBaseLLMRequestProcessing.__init__",
+            return_value=None,
+        ) as mock_init,
+    ):
+        resp = client.post(
+            "/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        )
+        assert resp.status_code == 200, resp.text
+        mock_init.assert_called_once()
+        data = mock_init.call_args.kwargs["data"]
+        # Existing contract: stream is forced True on this route.
+        assert data["stream"] is True
+        # New LIT-3411 contract: the [DONE]-suppression flag is set.
+        assert data.get("_litellm_skip_sse_done_terminator") is True, (
+            "Google-native streamGenerateContent endpoint must mark "
+            "request_data with `_litellm_skip_sse_done_terminator=True` "
+            "so async_data_generator does not append the OpenAI-style "
+            "`data: [DONE]` terminator (LIT-3411)."
+        )
+
+
+def test_generate_content_endpoint_does_not_set_skip_done_flag():
+    """The non-streaming `:generateContent` route returns a single JSON
+    body and never goes through `async_data_generator`. It must NOT set
+    the suppression flag — this guards against accidental coupling
+    creeping into the non-streaming handler."""
+    try:
+        client = _build_test_client()
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+
+    with (
+        patch(
+            "litellm.proxy.google_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new_callable=AsyncMock,
+            return_value={"ok": True},
+        ),
+        patch(
+            "litellm.proxy.google_endpoints.endpoints.ProxyBaseLLMRequestProcessing.__init__",
+            return_value=None,
+        ) as mock_init,
+    ):
+        resp = client.post(
+            "/v1beta/models/gemini-2.0-flash:generateContent",
+            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        )
+        assert resp.status_code == 200, resp.text
+        data = mock_init.call_args.kwargs["data"]
+        assert (
+            "_litellm_skip_sse_done_terminator" not in data
+        ), "Non-streaming generateContent must not set the SSE done-terminator flag"
