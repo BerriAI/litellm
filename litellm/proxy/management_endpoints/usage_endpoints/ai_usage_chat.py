@@ -32,6 +32,9 @@ ENTITY_FIELD_TAG = "tag"
 
 PAGINATED_PAGE_SIZE = 200
 MAX_CHAT_MESSAGES = 20
+# Cap how many tool-call rounds the model may take in a single user turn.
+# Keeps latency bounded and prevents the model from looping on bad tool output.
+MAX_TOOL_ROUNDS = 3
 TOP_N_MODELS = 15
 TOP_N_PROVIDERS = 10
 TOP_N_KEYS = 10
@@ -169,15 +172,21 @@ _SYSTEM_PROMPT_BASE = (
     "You are an AI assistant embedded in the LiteLLM Usage dashboard. "
     "You help users understand their LLM API spend and usage data.\n\n"
     "ALWAYS call the appropriate tool(s) first to fetch data before answering. "
-    "You may call multiple tools if the question spans different dimensions.\n\n"
+    "You may call multiple tools if the question spans different dimensions, "
+    "and you may call additional tools after seeing the first results if you "
+    "need complementary or follow-up data to answer the question.\n\n"
     "Guidelines:\n"
     "- Be concise and specific. Use exact numbers from the data.\n"
     "- Format costs as dollar amounts (e.g. $12.34).\n"
     "- When comparing entities, show a ranked list.\n"
     "- If data is empty or no results found, say so clearly.\n"
-    "- Do not hallucinate data — only use what the tools return.\n"
-    "- Today's date will be provided below. Use it to interpret relative dates "
-    "like 'this week', 'this month', 'last 7 days', etc."
+    "- Do not hallucinate data \u2014 only use what the tools return.\n"
+    "- Today\u2019s date will be provided below. Use it to interpret relative dates "
+    "like \u2018this week\u2019, \u2018this month\u2019, \u2018last 7 days\u2019, etc.\n"
+    "- If the user does not specify a date range, default to the last 30 days "
+    "ending on today\u2019s date. Do NOT ask the user to clarify the date range; "
+    "pick that sensible default and briefly state which range you used at the "
+    "start of your answer (for example: \u2018Showing usage for 2026-04-29 \u2192 2026-05-28.\u2019)."
 )
 
 _TOOL_DESCRIPTIONS_ADMIN = (
@@ -542,7 +551,21 @@ async def stream_usage_ai_chat(
     user_id: Optional[str] = None,
     is_admin: bool = False,
 ) -> AsyncIterator[str]:
-    """Stream SSE events: status → tool_call → chunk → done."""
+    """Stream SSE events: status → tool_call → chunk → done.
+
+    Runs a bounded multi-round tool-calling loop (cap=``MAX_TOOL_ROUNDS``).
+    Each round, the model is given the conversation so far plus the tool
+    schema and may either (a) request one or more tool calls, in which case
+    we execute them and feed the summarised results back for another round,
+    or (b) produce a natural-language answer, in which case we stream it to
+    the client and terminate.
+
+    This lets a single user turn naturally chain follow-up tool calls
+    (e.g. fetch global usage → then drill into the top team) without the
+    user having to send a second message, and prevents the UX where the
+    assistant returns a clarifying question (“what date range?”) instead
+    of an answer on the very first turn.
+    """
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
     truncated = (
         messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
@@ -551,28 +574,36 @@ async def stream_usage_ai_chat(
         {"role": "system", "content": _build_system_prompt(is_admin)},
         *truncated,
     ]
+    tools = get_tools_for_role(is_admin)
 
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
-        tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
-            model=resolved_model,
-            messages=chat_messages,
-            tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
-        )
-        choice = response.choices[0]  # type: ignore
 
-        if not choice.message.tool_calls:
-            if choice.message.content:
-                yield _sse({"type": "chunk", "content": choice.message.content})
-            yield _sse({"type": "done"})
-            return
+        for _round in range(MAX_TOOL_ROUNDS):
+            response = await litellm.acompletion(
+                model=resolved_model,
+                messages=chat_messages,
+                tools=tools,
+                temperature=USAGE_AI_TEMPERATURE,
+            )
+            choice = response.choices[0]  # type: ignore
 
-        chat_messages.append(choice.message.model_dump())
-        for tc in choice.message.tool_calls:
-            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
-                yield event
+            if not choice.message.tool_calls:
+                if choice.message.content:
+                    yield _sse({"type": "chunk", "content": choice.message.content})
+                yield _sse({"type": "done"})
+                return
+
+            chat_messages.append(choice.message.model_dump())
+            for tc in choice.message.tool_calls:
+                async for event in _process_tool_call(
+                    tc, chat_messages, user_id, is_admin
+                ):
+                    yield event
+
+        # Hit MAX_TOOL_ROUNDS without the model producing a final answer.
+        # Drop the tool schema for the closing call so the model is forced to
+        # synthesise a natural-language response from the data it already has.
         async for event in _stream_final_response(resolved_model, chat_messages):
             yield event
         yield _sse({"type": "done"})
