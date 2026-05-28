@@ -1149,6 +1149,13 @@ async def test_apply_guardrail_not_found(mocker):
         "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
     )
 
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
     # Create request
     request = ApplyGuardrailRequest(
         guardrail_name="non-existent-guardrail", text="Test input text"
