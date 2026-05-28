@@ -6,6 +6,9 @@ to the JSON file are caught in CI.
 """
 
 import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -49,22 +52,76 @@ def test_azure_ai_model_metadata(model_cost, model, inp, out, max_in, max_out, m
     assert info["max_tokens"] == max_out
 
 
-def test_azure_ai_get_model_info_routing(monkeypatch):
-    """End-to-end check via litellm.get_model_info — forces local map so
-    we exercise the same code path used at proxy runtime."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    # Re-import to force re-evaluation under the env var.
-    import importlib
-    import litellm
-    importlib.reload(litellm)
+def test_azure_ai_model_metadata_in_backup(model_cost):
+    """The bundled backup JSON must contain the same entries — that is the
+    file litellm.get_model_info() actually loads at runtime when
+    LITELLM_LOCAL_MODEL_COST_MAP=True (or when the remote fetch fails)."""
+    backup_path = (
+        Path(__file__).resolve().parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
+    with backup_path.open() as f:
+        backup = json.load(f)
 
-    sample_models = [
-        "azure_ai/AI21-Jamba-1.5-Large",
-        "azure_ai/Cohere-command-r-plus",
-        "azure_ai/Meta-Llama-3-8B-Instruct",
-    ]
-    for m in sample_models:
-        info = litellm.get_model_info(m)
+    for model, inp, out, max_in, max_out, mode in _EXPECTED:
+        info = backup.get(model)
+        assert info is not None, (
+            f"{model} missing from model_prices_and_context_window_backup.json — "
+            "main JSON and bundled backup must stay in sync."
+        )
         assert info["litellm_provider"] == "azure_ai"
-        assert info["input_cost_per_token"] > 0
-        assert info["output_cost_per_token"] > 0
+        assert info["mode"] == mode
+        assert info["input_cost_per_token"] == pytest.approx(inp)
+        assert info["output_cost_per_token"] == pytest.approx(out)
+        assert info["max_input_tokens"] == max_in
+
+
+def test_azure_ai_get_model_info_routing():
+    """End-to-end check via litellm.get_model_info — runs in a fresh
+    Python subprocess so the in-session pytest module state isn't polluted
+    by importing litellm with LITELLM_LOCAL_MODEL_COST_MAP=True."""
+    repo_root = Path(__file__).resolve().parents[2]
+    script = textwrap.dedent(
+        """
+        import json
+        import sys
+
+        import litellm
+
+        sample_models = [
+            "azure_ai/AI21-Jamba-1.5-Large",
+            "azure_ai/Cohere-command-r-plus",
+            "azure_ai/Meta-Llama-3-8B-Instruct",
+        ]
+        out = {}
+        for m in sample_models:
+            info = litellm.get_model_info(m)
+            out[m] = {
+                "litellm_provider": info["litellm_provider"],
+                "input_cost_per_token": info["input_cost_per_token"],
+                "output_cost_per_token": info["output_cost_per_token"],
+            }
+        json.dump(out, sys.stdout)
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(repo_root),
+        env={
+            "PATH": "/usr/bin:/usr/local/bin",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "HOME": "/tmp",
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, (
+        f"subprocess failed: stdout={proc.stdout!r} stderr={proc.stderr[-1500:]!r}"
+    )
+    payload = json.loads(proc.stdout)
+    for m in payload:
+        assert payload[m]["litellm_provider"] == "azure_ai"
+        assert payload[m]["input_cost_per_token"] > 0
+        assert payload[m]["output_cost_per_token"] > 0
