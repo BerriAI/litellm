@@ -175,7 +175,11 @@ def _normalize_spec_edits(
     context_management_spec: Any,
     drop_params: Optional[bool],
 ) -> Optional[List[Dict[str, Any]]]:
-    """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run."""
+    """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
+
+    Delegates spec-shape normalization to the dispatcher's ``_normalize_spec``
+    so the prediction here can't drift from what the dispatcher actually does.
+    """
     if not context_management_spec:
         return None
 
@@ -185,19 +189,14 @@ def _normalize_spec_edits(
     if effective_drop_params:
         return None
 
-    spec = context_management_spec
-    if isinstance(spec, list):
-        try:
-            from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.anthropic.experimental_pass_through.context_management.dispatcher import (
+        _normalize_spec,
+    )
 
-            spec = AnthropicConfig.map_openai_context_management_to_anthropic(spec)
-        except Exception:
-            return None
-
-    edits = spec.get("edits") if isinstance(spec, dict) else None
-    if not isinstance(edits, list):
+    try:
+        return _normalize_spec(context_management_spec)
+    except Exception:
         return None
-    return edits
 
 
 async def _run_polyfill_if_enabled(
