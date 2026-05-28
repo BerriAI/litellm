@@ -263,6 +263,18 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
         if scan_params := inputs.get("structured_messages"):
             last_msg: Final = scan_params[-1]
+            content = last_msg.get("content")
+            scan_contents = []
+
+            # Remove images from multimodal content before sending to HiddenLayer v1
+            if content and isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and not item.get("type") == "image_url":
+                        scan_contents.append(item)
+                effective_content: Final = str(scan_contents) if scan_contents else ""
+            else:
+                effective_content: Final = str(content or "")
+
             result: _HiddenlayerResponse = await self._call_hiddenlayer(
                 project_id,
                 hl_request_metadata,
@@ -270,7 +282,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": str(last_msg.get("content", "")),
+                            "content": effective_content
                         }
                     ]
                 },
