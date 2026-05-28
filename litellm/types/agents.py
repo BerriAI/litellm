@@ -307,7 +307,16 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
 
     # A2A response fields
-    id: str
+    #
+    # Per JSON-RPC 2.0, the response ``id`` MAY be a string, a number, or
+    # ``null`` (an error response that could not be correlated to a request
+    # MUST use ``null``). The upstream a2a SDK matches this contract with
+    # ``id: str | int | None = None`` on both ``SendMessageSuccessResponse``
+    # and ``JSONRPCErrorResponse``. Pinning ``id: str`` (required) here
+    # made the proxy raise ``ValidationError`` on legitimate JSON-RPC error
+    # responses (numeric or null id), surfacing as a 500 on the
+    # error-response path. Track the SDK contract instead.
+    id: Optional[Union[str, int]] = None
     jsonrpc: str = "2.0"
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
