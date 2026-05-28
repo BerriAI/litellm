@@ -18,6 +18,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/team/",
     "/v2/team/",
     "/organization/",
+    "/org/",  # caller-scoped /org/spend/report etc. (LIT-2401)
     "/customer/",
     "/end_user/",
     "/sso/",

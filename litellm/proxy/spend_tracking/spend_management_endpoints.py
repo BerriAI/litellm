@@ -1310,6 +1310,521 @@ async def get_global_spend_report(
         )
 
 
+# ============================================================================
+# LIT-2401: Caller-scoped /spend/report variants.
+#
+# ``/global/spend/report`` returns spend across the whole proxy. The four
+# endpoints below mirror its response shape but auto-scope to the caller's
+# identity (api_key, user_id, team_id, org_id), so non-admin callers can view
+# their own slice without depending on admin-only paths. Proxy admins may
+# still pass an override query param to inspect any scope.
+# ============================================================================
+
+
+# Hard allowlist of every column ``_build_spend_by_model_sql`` is allowed to
+# splice into its f-string. Adding a column here is intentional and reviewable.
+_SPEND_REPORT_FILTER_COLUMNS = frozenset({"api_key", "user", "team_id"})
+
+
+def _build_spend_by_model_sql(filter_column: str, filter_param_index: int) -> str:
+    """
+    Build a parameterized SQL that returns spend grouped by api_key, with a
+    per-model breakdown, optionally filtered by a single scope column.
+
+    ``filter_column`` MUST be one of ``_SPEND_REPORT_FILTER_COLUMNS`` - it is
+    f-string-interpolated into the query, so callers must never pass user
+    input directly. ``filter_param_index`` is 1-based.
+    """
+    if filter_column not in _SPEND_REPORT_FILTER_COLUMNS:
+        raise ValueError(
+            f"Unsupported filter_column: {filter_column!r}. "
+            f"Allowed: {sorted(_SPEND_REPORT_FILTER_COLUMNS)}"
+        )
+    return f"""
+        WITH SpendByModelApiKey AS (
+            SELECT
+                sl.api_key,
+                sl.model,
+                SUM(sl.spend) AS model_cost,
+                SUM(sl.prompt_tokens) AS model_input_tokens,
+                SUM(sl.completion_tokens) AS model_output_tokens
+            FROM
+                "LiteLLM_SpendLogs" sl
+            WHERE
+                sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                AND sl.{filter_column} = ${filter_param_index}
+            GROUP BY
+                sl.api_key,
+                sl.model
+        )
+        SELECT
+            api_key,
+            SUM(model_cost) AS total_cost,
+            SUM(model_input_tokens) AS total_input_tokens,
+            SUM(model_output_tokens) AS total_output_tokens,
+            jsonb_agg(jsonb_build_object(
+                'model', model,
+                'total_cost', model_cost,
+                'total_input_tokens', model_input_tokens,
+                'total_output_tokens', model_output_tokens
+            )) AS model_details
+        FROM
+            SpendByModelApiKey
+        GROUP BY
+            api_key
+        ORDER BY
+            total_cost DESC;
+    """
+
+
+def _parse_spend_report_date_range(start_date, end_date):
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return start_date_obj, end_date_obj
+
+
+def _resolve_api_key_scope(
+    user_api_key_dict: UserAPIKeyAuth, api_key: Optional[str]
+) -> str:
+    """
+    Return the hashed api_key the caller is authorized to query spend for.
+
+    - Proxy admins may pass any ``api_key`` (or omit for their own key).
+    - Non-admins may only query their own api_key.
+    """
+    is_admin = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    if api_key:
+        if api_key.startswith("sk-"):
+            api_key = hash_token(token=api_key)
+        if not is_admin and api_key != user_api_key_dict.api_key:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Not authorized to view spend for a different api_key."
+                },
+            )
+        return api_key
+    if user_api_key_dict.api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "No api_key associated with caller; pass ?api_key=..."},
+        )
+    return user_api_key_dict.api_key
+
+
+def _resolve_user_scope(
+    user_api_key_dict: UserAPIKeyAuth, internal_user_id: Optional[str]
+) -> str:
+    """
+    Return the internal_user_id the caller is authorized to query spend for.
+
+    - Proxy admins may pass any ``internal_user_id`` (or omit for their own).
+    - All other callers may only query their own user_id.
+    """
+    is_admin = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    if internal_user_id:
+        if not is_admin and internal_user_id != user_api_key_dict.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Not authorized to view spend for a different user_id."
+                },
+            )
+        return internal_user_id
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "No user_id associated with caller; pass ?internal_user_id=..."
+            },
+        )
+    return user_api_key_dict.user_id
+
+
+def _resolve_team_scope(
+    user_api_key_dict: UserAPIKeyAuth, team_id: Optional[str]
+) -> str:
+    """
+    Return the team_id the caller is authorized to query spend for.
+
+    - Proxy admins may pass any ``team_id`` (or omit for their key's team).
+    - Non-admins may only query the team their key currently belongs to.
+    """
+    is_admin = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    if team_id:
+        if not is_admin and team_id != user_api_key_dict.team_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Not authorized to view spend for a different team_id."
+                },
+            )
+        return team_id
+    if user_api_key_dict.team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "No team_id associated with caller; pass ?team_id=..."},
+        )
+    return user_api_key_dict.team_id
+
+
+async def _resolve_org_scope(
+    user_api_key_dict: UserAPIKeyAuth,
+    organization_id: Optional[str],
+    prisma_client,
+) -> List[str]:
+    """
+    Return the list of team_ids that make up the organization the caller is
+    authorized to query spend for.
+
+    - Proxy admins may pass any ``organization_id`` (or omit for their own).
+    - Org admins may only query their own ``organization_id``.
+    - All other callers are denied.
+    """
+    is_admin = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    is_org_admin = user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN
+    if not is_admin and not is_org_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Only proxy or organization admins may call /org/spend/report."
+            },
+        )
+    target_org = organization_id or user_api_key_dict.org_id
+    if not target_org:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "No organization_id resolved for caller; pass ?organization_id=..."
+            },
+        )
+    if not is_admin and is_org_admin and target_org != user_api_key_dict.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Not authorized to view spend for a different organization_id."
+            },
+        )
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        where={"organization_id": target_org}
+    )
+    return [t.team_id for t in (teams or [])]
+
+
+@router.get(
+    "/key/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": List[LiteLLM_SpendLogs]}},
+)
+async def get_key_spend_report(
+    start_date: Optional[str] = fastapi.Query(
+        default=None, description="Start date (YYYY-MM-DD) inclusive."
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None, description="End date (YYYY-MM-DD) inclusive."
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description=(
+            "Override the queried api_key. Proxy admins only - non-admin callers "
+            "are auto-scoped to their own key."
+        ),
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Spend report scoped to a single api_key.
+
+    Returns the same shape as ``/global/spend/report?api_key=...`` - one row
+    per api_key with a per-model breakdown - but auto-scopes to the caller's
+    own api_key when no override is supplied. Non-admin callers may not pass
+    an ``api_key`` that does not match their own.
+    """
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Database not connected."},
+        )
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "/spend/report endpoint "
+                + CommonProxyErrors.not_premium_user.value
+            },
+        )
+    try:
+        start_date_obj, end_date_obj = _parse_spend_report_date_range(
+            start_date, end_date
+        )
+        resolved_api_key = _resolve_api_key_scope(
+            user_api_key_dict=user_api_key_dict, api_key=api_key
+        )
+        sql_query = _build_spend_by_model_sql(
+            filter_column="api_key", filter_param_index=3
+        )
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, resolved_api_key
+        )
+        return db_response or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
+    "/user/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": List[LiteLLM_SpendLogs]}},
+)
+async def get_user_spend_report(
+    start_date: Optional[str] = fastapi.Query(default=None),
+    end_date: Optional[str] = fastapi.Query(default=None),
+    internal_user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description=(
+            "Override the queried internal_user_id. Proxy admins only - "
+            "non-admin callers are auto-scoped to their own user_id."
+        ),
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Spend report scoped to a single internal_user_id.
+
+    Returns the same shape as ``/global/spend/report?internal_user_id=...`` -
+    one row per api_key used by the user with a per-model breakdown - but
+    auto-scopes to the caller's own ``user_id`` when no override is supplied.
+    """
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Database not connected."},
+        )
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "/spend/report endpoint "
+                + CommonProxyErrors.not_premium_user.value
+            },
+        )
+    try:
+        start_date_obj, end_date_obj = _parse_spend_report_date_range(
+            start_date, end_date
+        )
+        resolved_user_id = _resolve_user_scope(
+            user_api_key_dict=user_api_key_dict, internal_user_id=internal_user_id
+        )
+        # The LiteLLM_SpendLogs schema uses the column name ``user`` (legacy).
+        # The existing /global/spend/report query references it as ``sl.user``.
+        sql_query = _build_spend_by_model_sql(
+            filter_column="user", filter_param_index=3
+        )
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, resolved_user_id
+        )
+        return db_response or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
+    "/team/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": List[LiteLLM_SpendLogs]}},
+)
+async def get_team_spend_report(
+    start_date: Optional[str] = fastapi.Query(default=None),
+    end_date: Optional[str] = fastapi.Query(default=None),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description=(
+            "Override the queried team_id. Proxy admins only - non-admin "
+            "callers are auto-scoped to the team_id on their key."
+        ),
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Spend report scoped to a single team_id.
+
+    One row per api_key used by the team with a per-model breakdown.
+    Auto-scopes to the caller's key.team_id when no override is supplied.
+    """
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Database not connected."},
+        )
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "/spend/report endpoint "
+                + CommonProxyErrors.not_premium_user.value
+            },
+        )
+    try:
+        start_date_obj, end_date_obj = _parse_spend_report_date_range(
+            start_date, end_date
+        )
+        resolved_team_id = _resolve_team_scope(
+            user_api_key_dict=user_api_key_dict, team_id=team_id
+        )
+        sql_query = _build_spend_by_model_sql(
+            filter_column="team_id", filter_param_index=3
+        )
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, resolved_team_id
+        )
+        return db_response or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
+    "/org/spend/report",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": List[LiteLLM_SpendLogs]}},
+)
+async def get_org_spend_report(
+    start_date: Optional[str] = fastapi.Query(default=None),
+    end_date: Optional[str] = fastapi.Query(default=None),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description=(
+            "Override the queried organization_id. Proxy admins only - "
+            "org admins are auto-scoped to their own organization."
+        ),
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Spend report scoped to a single organization (all of its teams).
+
+    One row per api_key used by any team in the org, with a per-model
+    breakdown. Auto-scopes to the caller's ``org_id`` when no override is
+    supplied. Returns ``[]`` if the org has no teams.
+    """
+    from litellm.proxy.proxy_server import premium_user, prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Database not connected."},
+        )
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "/spend/report endpoint "
+                + CommonProxyErrors.not_premium_user.value
+            },
+        )
+    try:
+        start_date_obj, end_date_obj = _parse_spend_report_date_range(
+            start_date, end_date
+        )
+        team_ids = await _resolve_org_scope(
+            user_api_key_dict=user_api_key_dict,
+            organization_id=organization_id,
+            prisma_client=prisma_client,
+        )
+        if not team_ids:
+            return []
+        sql_query = """
+            WITH SpendByModelApiKey AS (
+                SELECT
+                    sl.api_key,
+                    sl.team_id,
+                    sl.model,
+                    SUM(sl.spend) AS model_cost,
+                    SUM(sl.prompt_tokens) AS model_input_tokens,
+                    SUM(sl.completion_tokens) AS model_output_tokens
+                FROM
+                    "LiteLLM_SpendLogs" sl
+                WHERE
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                    AND sl.team_id = ANY($3::text[])
+                GROUP BY
+                    sl.api_key,
+                    sl.team_id,
+                    sl.model
+            )
+            SELECT
+                api_key,
+                SUM(model_cost) AS total_cost,
+                SUM(model_input_tokens) AS total_input_tokens,
+                SUM(model_output_tokens) AS total_output_tokens,
+                jsonb_agg(jsonb_build_object(
+                    'team_id', team_id,
+                    'model', model,
+                    'total_cost', model_cost,
+                    'total_input_tokens', model_input_tokens,
+                    'total_output_tokens', model_output_tokens
+                )) AS model_details
+            FROM
+                SpendByModelApiKey
+            GROUP BY
+                api_key
+            ORDER BY
+                total_cost DESC;
+        """
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, team_ids
+        )
+        return db_response or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
 @router.get(
     "/global/spend/all_tag_names",
     tags=["Budget & Spend Tracking"],
