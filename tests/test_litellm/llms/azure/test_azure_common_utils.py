@@ -1825,6 +1825,123 @@ def test_azure_v1_api_explicit_api_key_beats_token_provider():
         assert client.api_key == "primary-static-key"
 
 
+def test_azure_v1_api_dynamic_bearer_client_is_not_cached():
+    """LIT-3074 / Veria PR #29113: the dynamic-bearer subclass MUST NOT be
+    stored in the in-memory client cache.
+
+    The shared cache key is derived from the top-level
+    ``api_key`` / ``api_base`` / ``api_version`` arguments and does NOT
+    include the ``azure_ad_token`` / ``azure_ad_token_provider`` that live
+    inside ``litellm_params``. With ``api_key=None``, two callers using the
+    same Azure endpoint with different AD providers would otherwise alias to
+    the same cached client and one caller's requests would silently be signed
+    with the other caller's AD credentials.
+    """
+    from litellm.llms.azure.common_utils import (
+        _AsyncOpenAIAzureADBearerClient,
+        _OpenAIAzureADBearerClient,
+    )
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    # Caller A: provider returns "TOKEN.A"
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: "TOKEN.A",
+        }
+        client_a = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version="preview",
+            _is_async=False,
+        )
+    assert isinstance(client_a, _OpenAIAzureADBearerClient)
+    # The cache MUST be empty after building a dynamic-bearer client.
+    assert not litellm.in_memory_llm_clients_cache.cache_dict, (
+        "dynamic-bearer client should not be inserted into the OpenAI client "
+        "cache because the cache key cannot distinguish AD credentials"
+    )
+
+    # Caller B: same api_key/api_base/api_version, DIFFERENT provider
+    # ("TOKEN.B"). Without the no-cache rule, caller B would receive
+    # caller A's cached client and ship A's credentials on B's requests.
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: "TOKEN.B",
+        }
+        client_b = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version="preview",
+            _is_async=False,
+        )
+    assert client_a is not client_b, (
+        "caller B must not receive caller A's cached dynamic-bearer client"
+    )
+    assert client_a._bearer_auth == {"Authorization": "Bearer TOKEN.A"}
+    assert client_b._bearer_auth == {"Authorization": "Bearer TOKEN.B"}
+
+    # Async path keeps the same property.
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: "TOKEN.ASYNC",
+        }
+        async_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version="preview",
+            _is_async=True,
+        )
+    assert isinstance(async_client, _AsyncOpenAIAzureADBearerClient)
+    assert not litellm.in_memory_llm_clients_cache.cache_dict
+
+
+def test_azure_v1_api_static_bearer_client_is_still_cached():
+    """Sanity check: the no-cache rule applies ONLY to the dynamic-bearer
+    subclass. The standard ``OpenAI`` / ``AsyncOpenAI`` clients built from a
+    static credential (api_key or static azure_ad_token) continue to be
+    cached, matching pre-LIT-3074 behavior."""
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "static-api-key",
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+        client = base_llm.get_azure_openai_client(
+            api_key="static-api-key",
+            api_base=api_base,
+            api_version="preview",
+            _is_async=False,
+        )
+    assert isinstance(client, OpenAI)
+    assert litellm.in_memory_llm_clients_cache.cache_dict, (
+        "static-credential v1 client should still be cached"
+    )
+
+
 def test_resolve_v1_static_bearer_precedence():
     """Direct unit coverage for the static-bearer precedence helper:
     api_key > azure_ad_token > None. Empty strings count as "not set" so we
