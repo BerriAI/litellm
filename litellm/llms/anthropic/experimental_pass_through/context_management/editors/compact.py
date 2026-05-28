@@ -277,42 +277,38 @@ def _count_effective_tokens(
     return total
 
 
-def _is_tool_result_only_user_turn(msg: Dict[str, Any]) -> bool:
-    """Return True if ``msg`` is a ``role=user`` turn that carries only
-    ``tool_result`` blocks (i.e. an Anthropic tool-use response).
-
-    Such turns are not real "user question" turns and must not be used as
-    the sole downstream message after a full compaction: the adapter
-    translates them to OpenAI ``tool``-role messages, which require a
-    preceding assistant ``tool_calls`` turn that no longer exists once the
-    history has been summarized away.
-    """
-    if msg.get("role") != "user":
-        return False
-    content = msg.get("content")
-    if not isinstance(content, list) or not content:
-        return False
-    for block in content:
-        if not isinstance(block, dict):
-            return False
-        if block.get("type") != "tool_result":
-            return False
-    return True
-
-
 def _select_last_user_question(
     messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """Pick the most recent ``user`` turn that is a real question.
 
-    Returns a one-element message list, or a synthetic continuation prompt
-    if no eligible turn exists (e.g. the conversation only ever contained
-    ``tool_result`` turns, or contained no user turns at all). The
-    downstream call always needs a non-empty user message.
+    Returns a one-element message list with any ``tool_result`` blocks
+    stripped: after compaction the paired ``tool_use`` assistant turn no
+    longer exists in the downstream context, so forwarding ``tool_result``
+    blocks would translate to orphaned ``role=tool`` messages on
+    non-Anthropic providers (OpenAI, Gemini, …) and cause a 400 error.
+
+    Falls back to a synthetic continuation prompt if no eligible turn
+    exists (e.g. the conversation only ever contained ``tool_result``
+    turns, or contained no user turns at all). The downstream call always
+    needs a non-empty user message.
     """
     for msg in reversed(messages):
-        if msg.get("role") == "user" and not _is_tool_result_only_user_turn(msg):
-            return [msg]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            filtered = [
+                blk
+                for blk in content
+                if not (isinstance(blk, dict) and blk.get("type") == "tool_result")
+            ]
+            if not filtered:
+                # Purely tool_result — skip and look for an earlier turn.
+                continue
+            if len(filtered) < len(content):
+                return [{**msg, "content": filtered}]
+        return [msg]
     return [
         {
             "role": "user",

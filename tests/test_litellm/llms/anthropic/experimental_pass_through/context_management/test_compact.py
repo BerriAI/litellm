@@ -24,6 +24,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
     _augment_system_with_summary,
     _extract_summary_text,
+    _select_last_user_question,
     _slice_around_compaction_block,
     _strip_compaction_blocks,
     apply_client_compaction_block_history,
@@ -88,8 +89,8 @@ def _make_mock_response(
 # ---------------------------------------------------------------------------
 
 
-def test_applied_edits_for_response_omits_compact_without_compaction_block():
-    """Slice-only / under-threshold: no client-visible context_management edit."""
+def test_applied_edits_for_response_omits_compact_without_block_or_error():
+    """No compaction block and no error: omit the compact_20260112 edit."""
     result = PolyfillResult(
         messages=[],
         system="summary on system",
@@ -97,6 +98,24 @@ def test_applied_edits_for_response_omits_compact_without_compaction_block():
         compaction_block=None,
     )
     assert result.applied_edits_for_response() is None
+
+
+def test_applied_edits_for_response_includes_compact_when_error_present():
+    """Error states must surface to the client so operators can debug."""
+    for error in (
+        "summary_model_not_configured",
+        "summary_call_failed",
+        "summary_extraction_failed",
+    ):
+        result = PolyfillResult(
+            messages=[],
+            system=None,
+            applied_edits=[{"type": "compact_20260112", "error": error}],
+            compaction_block=None,
+        )
+        visible = result.applied_edits_for_response()
+        assert visible is not None, error
+        assert visible[0]["error"] == error
 
 
 def test_applied_edits_for_response_includes_compact_when_block_present():
@@ -152,6 +171,62 @@ def test_strip_compaction_blocks_removes_block():
     assert all(b["type"] != "compaction" for b in content)
     assert len(content) == 1
     assert content[0]["type"] == "text"
+
+
+def test_select_last_user_question_strips_tool_result_from_mixed_turn():
+    """Mixed [tool_result, text] turn: keep text, drop tool_result blocks."""
+    messages = [
+        {"role": "user", "content": "earlier"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "a", "content": "res"},
+                {"type": "text", "text": "follow-up question"},
+            ],
+        },
+    ]
+    selected = _select_last_user_question(messages)
+    assert len(selected) == 1
+    assert selected[0]["role"] == "user"
+    content = selected[0]["content"]
+    assert isinstance(content, list)
+    assert all(b.get("type") != "tool_result" for b in content)
+    assert any(
+        b.get("type") == "text" and b.get("text") == "follow-up question"
+        for b in content
+    )
+
+
+def test_select_last_user_question_skips_pure_tool_result_turn():
+    """Pure tool_result turn: skip and walk back to a real user turn."""
+    messages = [
+        {"role": "user", "content": "real question"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "a", "name": "x", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "a", "content": "res"}],
+        },
+    ]
+    selected = _select_last_user_question(messages)
+    assert len(selected) == 1
+    assert selected[0]["content"] == "real question"
+
+
+def test_select_last_user_question_falls_back_when_no_eligible_turn():
+    """Only tool_result-only user turns: emit a synthetic continuation prompt."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "a", "content": "res"}],
+        },
+    ]
+    selected = _select_last_user_question(messages)
+    assert len(selected) == 1
+    assert selected[0]["role"] == "user"
+    assert isinstance(selected[0]["content"], str)
 
 
 def test_strip_compaction_blocks_drops_compaction_only_turn():

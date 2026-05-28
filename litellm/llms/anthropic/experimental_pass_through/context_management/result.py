@@ -28,14 +28,19 @@ class PolyfillResult:
     def applied_edits_for_response(self) -> Optional[List[AppliedEdit]]:
         """``applied_edits`` to attach on the client-visible response.
 
-        ``compact_20260112`` is included only when a new compaction block was
-        synthesized (slice-only / under-threshold paths omit it). Other edit
-        types are included when the editor returned an ``AppliedEdit``.
+        ``compact_20260112`` is included when a new compaction block was
+        synthesized (success) OR when the edit carries an ``error`` field
+        (``summary_model_not_configured``, ``summary_call_failed``,
+        ``summary_extraction_failed``) — operators and clients need to see
+        why compaction was requested but not applied. Slice-only /
+        under-threshold paths that produced no edit at all are omitted.
+        Other edit types are included when the editor returned an
+        ``AppliedEdit``.
         """
         visible: List[AppliedEdit] = []
         for edit in self.applied_edits:
             if edit.get("type") == COMPACT_EDIT_TYPE:
-                if self.compaction_block is not None:
+                if self.compaction_block is not None or edit.get("error"):
                     visible.append(edit)
             else:
                 visible.append(edit)
