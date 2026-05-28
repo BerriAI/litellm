@@ -5831,6 +5831,12 @@ async def test_update_key_fn_resolves_via_key_alias(monkeypatch):
     # Returned dict still echoes the caller-supplied identifier (the alias),
     # preserving the existing input-echo contract.
     assert result["key"] == alias
+    # LIT-2820: the resolved verification-token hash must NOT leak in the
+    # response of an alias-authenticated update. A caller that only knows
+    # the alias should not learn the hashed `token` identifier of the row.
+    assert "token" not in result, (
+        "alias-based /key/update response leaked the resolved token hash"
+    )
 
 
 @pytest.mark.asyncio
