@@ -50,6 +50,14 @@ make help
 
 That's it! Your local development environment is ready.
 
+To install the optional Conventional Commits + Conventional Branches git hooks, run:
+
+```bash
+make install-hooks
+```
+
+Bypass for a single commit/push: `git commit --no-verify` / `git push --no-verify`.
+
 ### 2. Development Workflow
 
 Here's the recommended workflow for making changes:
