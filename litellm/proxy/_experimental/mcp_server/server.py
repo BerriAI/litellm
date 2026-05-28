@@ -1940,13 +1940,15 @@ if MCP_AVAILABLE:
         ) as _span:
             managed_resource_templates: List[ResourceTemplate] = []
             try:
-                managed_resource_templates = await _get_resource_templates_from_mcp_servers(
-                    user_api_key_auth=user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_servers=mcp_servers,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
+                managed_resource_templates = (
+                    await _get_resource_templates_from_mcp_servers(
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_servers=mcp_servers,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                    )
                 )
                 verbose_logger.debug(
                     "Successfully fetched %s resource templates from managed MCP servers",
@@ -2451,9 +2453,11 @@ if MCP_AVAILABLE:
                     if allowed_server is not None:
                         allowed_mcp_servers.append(allowed_server)
 
-                allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
-                    mcp_servers=mcp_servers,
-                    allowed_mcp_servers=allowed_mcp_servers,
+                allowed_mcp_servers = (
+                    await _get_allowed_mcp_servers_from_mcp_server_names(
+                        mcp_servers=mcp_servers,
+                        allowed_mcp_servers=allowed_mcp_servers,
+                    )
                 )
                 if not allowed_mcp_servers:
                     raise HTTPException(
@@ -2475,7 +2479,9 @@ if MCP_AVAILABLE:
                     **kwargs,
                 )
             except Exception as e:
-                traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+                traceback_str = traceback.format_exc(
+                    limit=MAXIMUM_TRACEBACK_LINES_TO_LOG
+                )
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
                 if proxy_logging_obj and user_api_key_auth:
@@ -2526,7 +2532,9 @@ if MCP_AVAILABLE:
         """
         # LIT-3201: instrument mcp.get_prompt with the prompt + server name
         # extracted from the prefixed identifier.
-        _prompt_name_for_span, _server_name_for_span = split_server_prefix_from_name(name)
+        _prompt_name_for_span, _server_name_for_span = split_server_prefix_from_name(
+            name
+        )
         async with mcp_otel_span(
             "get_prompt",
             server_name=_server_name_for_span or None,
@@ -2547,7 +2555,9 @@ if MCP_AVAILABLE:
             # Extract server name from prefixed prompt name
             original_prompt_name, server_name = split_server_prefix_from_name(name)
 
-            server = next((s for s in allowed_mcp_servers if s.name == server_name), None)
+            server = next(
+                (s for s in allowed_mcp_servers if s.name == server_name), None
+            )
             if server is None:
                 raise HTTPException(
                     status_code=403,
