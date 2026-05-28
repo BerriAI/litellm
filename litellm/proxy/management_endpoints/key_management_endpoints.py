@@ -4933,6 +4933,15 @@ async def list_keys(
     access_group_id: Optional[str] = Query(
         None, description="Filter keys by access group ID"
     ),
+    expires: Optional[str] = Query(
+        None,
+        description=(
+            "Filter keys by expiration state relative to the proxy's wall-clock now. "
+            "'expired' = only keys whose `expires` is set and in the past. "
+            "'active'  = keys with no `expires` set OR `expires` in the future. "
+            "Omit (or pass any other value) to return all keys."
+        ),
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -4967,6 +4976,23 @@ async def list_keys(
                 status_code=400,
                 detail={
                     "error": "Invalid status value. Currently only 'deleted' is supported."
+                },
+            )
+
+        # Validate expires parameter; surface a 400 instead of silently
+        # returning all keys when the caller typoed "expred" / "Active" / etc.
+        # `isinstance(..., str)` guard so direct in-process callers that omit
+        # the kwarg (and inherit the FastAPI Query sentinel default) are not
+        # falsely flagged — only validate values FastAPI parsed from the URL.
+        if isinstance(expires, str) and expires not in VALID_EXPIRES_FILTER_VALUES:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Invalid expires value. Supported: "
+                        + ", ".join(sorted(VALID_EXPIRES_FILTER_VALUES))
+                        + "."
+                    )
                 },
             )
 
@@ -5042,6 +5068,7 @@ async def list_keys(
             project_id=project_id,
             access_group_id=access_group_id,
             use_substring_matching=use_substring_matching,
+            expires_filter=expires if isinstance(expires, str) else None,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5267,6 +5294,27 @@ def _validate_sort_params(
     return order_by
 
 
+VALID_EXPIRES_FILTER_VALUES = {"expired", "active"}
+
+
+def _build_expires_filter_clause(expires_filter: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Build the Prisma where-clause fragment for the optional `expires` filter.
+
+    Returns None when `expires_filter` is missing or not in the validated
+    allowlist (the endpoint surfaces a 400 in that case; this is a belt-and-
+    suspenders fallback for direct helper callers).
+    """
+    if expires_filter not in VALID_EXPIRES_FILTER_VALUES:
+        return None
+    now = datetime.now(timezone.utc)
+    if expires_filter == "expired":
+        # Only keys with an `expires` set AND in the past. Keys with NULL
+        # `expires` are non-expiring and must be excluded here.
+        return {"AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]}
+    # "active": keys with NULL expires (non-expiring) OR expires >= now.
+    return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
+
+
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5280,6 +5328,7 @@ def _build_key_filter_conditions(
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: Optional[str] = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5390,6 +5439,10 @@ def _build_key_filter_conditions(
     if access_group_id:
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
 
+    expires_clause = _build_expires_filter_clause(expires_filter)
+    if expires_clause is not None:
+        where = {"AND": [where, expires_clause]}
+
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
 
@@ -5419,6 +5472,7 @@ async def _list_key_helper(
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
     use_substring_matching: bool = False,
+    expires_filter: Optional[str] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5455,6 +5509,7 @@ async def _list_key_helper(
         project_id=project_id,
         access_group_id=access_group_id,
         use_substring_matching=use_substring_matching,
+        expires_filter=expires_filter,
     )
 
     # Calculate skip for pagination
