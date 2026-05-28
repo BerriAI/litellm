@@ -2893,3 +2893,336 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     ):
         leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
         assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
+
+
+# --------------------------------------------------------------------------
+# LIT-2792: Key model-specific RPM/TPM override must take precedence over
+# team model-specific RPM/TPM override
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_lit_2792_key_model_override_takes_precedence_over_team_v3():
+    """
+    LIT-2792: when both a key-level metadata.model_rpm_limit override and a
+    team-level team_metadata.model_rpm_limit override exist for the same
+    model, the team descriptor must be skipped so the key override is
+    authoritative for that model.
+    """
+    _api_key = hash_token("sk-lit-2792-key-precedence")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    # Key override: 50 RPM / 5000 TPM on gpt-4
+    # Team override: 10 RPM / 1000 TPM on gpt-4  (stricter; would clamp below key)
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792",
+        metadata={
+            "model_rpm_limit": {"gpt-4": 50},
+            "model_tpm_limit": {"gpt-4": 5000},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 10},
+            "model_tpm_limit": {"gpt-4": 1000},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert (
+        "model_per_key" in descriptor_keys
+    ), f"model_per_key must still be added, got: {descriptor_keys}"
+    assert "model_per_team" not in descriptor_keys, (
+        "LIT-2792 regression: model_per_team must be SKIPPED for gpt-4 when "
+        f"the key has its own override, got: {descriptor_keys}"
+    )
+
+    # The key override values must be the ones forwarded to the rate-limit script.
+    model_per_key = next(d for d in captured_descriptors if d["key"] == "model_per_key")
+    assert model_per_key["rate_limit"]["requests_per_unit"] == 50
+    assert model_per_key["rate_limit"]["tokens_per_unit"] == 5000
+
+
+@pytest.mark.asyncio
+async def test_lit_2792_team_model_limit_still_applied_for_unconstrained_model_v3():
+    """
+    LIT-2792 guardrail: the key override only suppresses the team descriptor
+    for the SAME model. If the request is for a different model that the key
+    does not constrain, the team-level model_rpm_limit/model_tpm_limit must
+    still be enforced.
+    """
+    _api_key = hash_token("sk-lit-2792-other-model")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-other",
+        metadata={
+            # Key only overrides gpt-4; the request below is for gpt-3.5-turbo.
+            "model_rpm_limit": {"gpt-4": 50},
+        },
+        team_metadata={
+            # Team has limits for the actually-requested model.
+            "model_rpm_limit": {"gpt-3.5-turbo": 7},
+            "model_tpm_limit": {"gpt-3.5-turbo": 700},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" in descriptor_keys, (
+        "Team model limit must still apply when the key does not override the "
+        f"requested model, got: {descriptor_keys}"
+    )
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    assert model_per_team["value"] == "team-lit-2792-other:gpt-3.5-turbo"
+    assert model_per_team["rate_limit"]["requests_per_unit"] == 7
+    assert model_per_team["rate_limit"]["tokens_per_unit"] == 700
+
+
+@pytest.mark.asyncio
+async def test_lit_2792_no_key_override_team_model_limit_applied_v3():
+    """
+    LIT-2792 baseline: when the key has no metadata.model_rpm_limit override
+    at all, the team-level model_rpm_limit must continue to apply (existing
+    behaviour preserved).
+    """
+    _api_key = hash_token("sk-lit-2792-no-key-override")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-baseline",
+        metadata={},  # no key-level model override
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 10},
+            "model_tpm_limit": {"gpt-4": 1000},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" in descriptor_keys, (
+        "Team model_per_team must be enforced when the key does not override, "
+        f"got: {descriptor_keys}"
+    )
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    assert model_per_team["rate_limit"]["requests_per_unit"] == 10
+    assert model_per_team["rate_limit"]["tokens_per_unit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_lit_2792_key_model_max_budget_override_suppresses_team_v3():
+    """
+    LIT-2792: a key-level model_max_budget entry with rpm_limit/tpm_limit also
+    counts as a key override and suppresses the team-level model descriptor.
+    """
+    _api_key = hash_token("sk-lit-2792-budget-override")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-budget",
+        metadata={},  # no metadata.model_rpm_limit, but model_max_budget below
+        model_max_budget={
+            "gpt-4": {"rpm_limit": 25, "tpm_limit": 2500},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 5},
+            "model_tpm_limit": {"gpt-4": 500},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" not in descriptor_keys, (
+        "Key model_max_budget override must suppress team model_per_team, "
+        f"got: {descriptor_keys}"
+    )
+
+
+# --------------------------------------------------------------------------
+# LIT-2792 — Greptile follow-up: partial key override must not silently drop
+# the other dimension of the team-level model descriptor.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_lit_2792_partial_key_override_preserves_team_other_dimension_v3():
+    """
+    LIT-2792 partial override:
+
+    - Key overrides only RPM for gpt-4 (model_rpm_limit).
+    - Team configures BOTH RPM and TPM for gpt-4.
+
+    The team's RPM dimension for gpt-4 must be suppressed (key wins per
+    LIT-2792), but the team's TPM cap for gpt-4 must still apply — otherwise
+    a key with a partial override would silently bypass the team's TPM
+    budget.
+    """
+    _api_key = hash_token("sk-lit-2792-partial-rpm-only")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-partial",
+        metadata={
+            "model_rpm_limit": {"gpt-4": 50},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 10},
+            "model_tpm_limit": {"gpt-4": 1000},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" in descriptor_keys, (
+        "Team's TPM dimension must still produce a model_per_team descriptor "
+        f"under a partial key override, got: {descriptor_keys}"
+    )
+
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    # The team's RPM dimension is suppressed by the key override.
+    assert model_per_team["rate_limit"]["requests_per_unit"] is None, (
+        "Team RPM must be suppressed when key overrides RPM for gpt-4, got "
+        f"{model_per_team['rate_limit']}"
+    )
+    # The team's TPM dimension is preserved.
+    assert (
+        model_per_team["rate_limit"]["tokens_per_unit"] == 1000
+    ), f"Team TPM must remain enforced, got {model_per_team['rate_limit']}"
+
+
+@pytest.mark.asyncio
+async def test_lit_2792_partial_key_override_tpm_only_preserves_team_rpm_v3():
+    """
+    Mirror of the partial-RPM case: key overrides only TPM, team configures
+    only RPM. The team's RPM cap must remain enforced.
+    """
+    _api_key = hash_token("sk-lit-2792-partial-tpm-only")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-partial-tpm",
+        metadata={
+            "model_tpm_limit": {"gpt-4": 5000},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 7},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" in descriptor_keys, descriptor_keys
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    assert model_per_team["rate_limit"]["requests_per_unit"] == 7
+    assert model_per_team["rate_limit"]["tokens_per_unit"] is None
