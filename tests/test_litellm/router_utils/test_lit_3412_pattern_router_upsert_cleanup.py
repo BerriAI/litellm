@@ -382,3 +382,80 @@ def test_evict_stale_pattern_entries_no_id_is_safe_noop():
 
     assert _pattern_entries(router.pattern_router) == snapshot_before
 
+
+# ---------------------------------------------------------------------------
+# Router.delete_deployment regression tests (Greptile follow-up)
+#
+# `delete_deployment` previously suffered from the same stale-pattern-entry
+# problem as `upsert_deployment`: wildcard deployments removed via
+# `DELETE /model/{id}` stayed registered in `pattern_router` /
+# `team_pattern_routers` and continued to receive traffic until the proxy
+# was restarted.
+# ---------------------------------------------------------------------------
+
+
+def test_delete_deployment_evicts_non_team_wildcard_entry():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {"id": "deploy-A"},
+            }
+        ]
+    )
+    assert len(_pattern_entries(router.pattern_router)) == 1
+
+    router.delete_deployment(id="deploy-A")
+
+    assert router.delete_deployment(id="deploy-A") is None  # idempotent
+    assert _pattern_entries(router.pattern_router) == []
+    assert router.model_list == []
+
+
+def test_delete_deployment_evicts_team_wildcard_entry():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "model-team-A-internal",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {
+                    "id": "deploy-T",
+                    "team_id": "team-1",
+                    "team_public_model_name": "openai/*",
+                },
+            }
+        ]
+    )
+    assert len(_pattern_entries(router.team_pattern_routers["team-1"])) == 1
+
+    router.delete_deployment(id="deploy-T")
+
+    entries = (
+        _pattern_entries(router.team_pattern_routers["team-1"])
+        if "team-1" in router.team_pattern_routers
+        else []
+    )
+    assert entries == []
+    assert router.model_list == []
+
+
+def test_delete_deployment_non_wildcard_does_not_touch_pattern_router():
+    """Non-wildcard delete must remain a byte-identical no-op on the pattern
+    router buckets."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                "model_info": {"id": "deploy-N"},
+            }
+        ]
+    )
+    assert router.pattern_router.patterns == {}
+
+    router.delete_deployment(id="deploy-N")
+
+    assert router.pattern_router.patterns == {}
+    assert router.model_list == []
+
