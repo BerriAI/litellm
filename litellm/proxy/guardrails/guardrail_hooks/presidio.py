@@ -1245,6 +1245,54 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return i
         return 0
 
+    async def _mask_emit_safe_prefix(
+        self,
+        buf: str,
+        flush_chars: int,
+        tail_overlap: int,
+        mask_fn,
+    ):
+        """Compute the safe prefix to flush, mask it, and return (masked, remainder)."""
+        flushable = buf[:-tail_overlap] if tail_overlap else buf
+        safe_len = self._find_safe_flush_boundary(flushable, flush_chars)
+        if safe_len == 0:
+            safe_len = max(0, len(buf) - tail_overlap)
+        if not safe_len:
+            return None, buf
+        masked = await mask_fn(buf[:safe_len])
+        return masked, buf[safe_len:]
+
+    async def _mask_apply_to_choice_delta(
+        self,
+        choice,
+        buf: str,
+        had_text: bool,
+        is_final: bool,
+        flush_chars: int,
+        tail_overlap: int,
+        mask_fn,
+    ) -> str:
+        """Apply incremental masking to a single ``StreamingChoices`` delta in
+        place. Returns the new per-choice buffer after handling this chunk."""
+        delta = choice.delta
+        if is_final:
+            if buf:
+                delta.content = await mask_fn(buf)
+                return ""
+            return buf
+        if had_text and len(buf) >= flush_chars + tail_overlap:
+            masked, remainder = await self._mask_emit_safe_prefix(
+                buf, flush_chars, tail_overlap, mask_fn
+            )
+            if masked is not None:
+                delta.content = masked
+                return remainder
+            delta.content = ""
+            return buf
+        if had_text:
+            delta.content = ""
+        return buf
+
     async def _stream_apply_output_masking(
         self,
         response: Any,
@@ -1336,28 +1384,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         text_buffer[choice.index] = (
                             text_buffer.get(choice.index, "") + content
                         )
-                    buf = text_buffer.get(choice.index, "")
-
-                    if is_final:
-                        if buf:
-                            delta.content = await _mask(buf)
-                            text_buffer[choice.index] = ""
-                    elif content and len(buf) >= flush_chars + tail_overlap:
-                        flushable = buf[:-tail_overlap] if tail_overlap else buf
-                        safe_len = self._find_safe_flush_boundary(
-                            flushable,
-                            flush_chars,
-                        )
-                        if safe_len == 0:
-                            safe_len = max(0, len(buf) - tail_overlap)
-                        if safe_len:
-                            safe_prefix = buf[:safe_len]
-                            delta.content = await _mask(safe_prefix)
-                            text_buffer[choice.index] = buf[safe_len:]
-                        else:
-                            delta.content = ""
-                    elif content:
-                        delta.content = ""
+                    text_buffer[choice.index] = await self._mask_apply_to_choice_delta(
+                        choice,
+                        text_buffer.get(choice.index, ""),
+                        bool(content),
+                        is_final,
+                        flush_chars,
+                        tail_overlap,
+                        _mask,
+                    )
 
                 yield chunk
 
