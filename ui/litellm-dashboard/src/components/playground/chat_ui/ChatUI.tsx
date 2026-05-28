@@ -1214,7 +1214,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             mockTestFallbacks={mockTestFallbacks}
                             onMockTestFallbacksChange={setMockTestFallbacks}
                             stream={streamEnabled}
-                            onStreamChange={setStreamEnabled}
+                            onStreamChange={
+                              endpointType === EndpointType.CHAT ? setStreamEnabled : undefined
+                            }
                           />
                         }
                         title="Model Settings"

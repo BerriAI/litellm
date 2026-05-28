@@ -75,7 +75,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
       {onStreamChange && (
         <div className="flex items-center gap-1">
           <Checkbox
-            checked={stream !== false}
+            checked={stream ?? true}
             onChange={(e) => onStreamChange(e.target.checked)}
           >
             <span className="font-medium">Stream response</span>
