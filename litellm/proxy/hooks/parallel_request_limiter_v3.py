@@ -1555,11 +1555,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user,
         model-specific, agent, and agent-session limits.
         """
-        from litellm.proxy.auth.auth_utils import (
-            get_team_model_rpm_limit,
-            get_team_model_tpm_limit,
-        )
-
         descriptors = []
 
         # API Key rate limits
