@@ -20,6 +20,14 @@ interface ProviderSpecificFieldsProps {
    *   (and are interpreted by the caller as "keep current").
    */
   mode?: "create" | "rotate";
+  /**
+   * Optional list of field keys to skip. Used by callers that already own a
+   * dedicated form item for those keys elsewhere in the same Form (e.g. the
+   * model edit view has dedicated `api_base` / `organization` inputs above
+   * its rotate-mode Authentication section, so it skips them here to avoid
+   * binding two Form.Items to the same name).
+   */
+  skipKeys?: string[];
 }
 
 interface ProviderCredentialField {
@@ -108,8 +116,10 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   uploadProps,
   mode = "create",
+  skipKeys,
 }) => {
   const isRotateMode = mode === "rotate";
+  const skipSet = React.useMemo(() => new Set(skipKeys ?? []), [skipKeys]);
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -231,7 +241,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           </Col>
         </Row>
       )}
-      {allFields.map((field) => (
+      {allFields
+        .filter((field) => !skipSet.has(field.key))
+        .map((field) => (
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
