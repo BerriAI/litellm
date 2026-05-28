@@ -1005,7 +1005,7 @@ class LiteLLMCompletionResponsesConfig:
                 else None
             )
             if cache_control is not None:
-                message["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
+                message["cache_control"] = cache_control
             return [message]
 
     @staticmethod
