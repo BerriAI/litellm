@@ -455,9 +455,8 @@ async def _upsert_budget_and_membership(
 
     # If another membership still points at this budget row, treat it as
     # shared and clone-on-write — otherwise mutating the row here would
-    # silently move every other member's cap with it (LIT-3359).
-    #
-    # We use `findFirst` (excluding the caller's own membership) instead of
+    # silently move every other member's cap with it (LIT-3359). We use
+    # `find_first` (excluding the caller's own membership) instead of
     # `count`: it stops at the first other reference, so the probe is O(1)
     # in the steady-state where each member already has their own budget
     # row. The cost is one extra indexed DB roundtrip per non-default
@@ -466,21 +465,12 @@ async def _upsert_budget_and_membership(
     shared_with_other_memberships = False
     if existing_budget_id is not None and not is_shared_default:
         try:
-            other_membership = await tx.litellm_teammembership.find_first(
-                where={
-                    "budget_id": existing_budget_id,
-                    "NOT": {"user_id": user_id, "team_id": team_id},
-                },
-            )
+            _probe_where = {"budget_id": existing_budget_id, "NOT": {"user_id": user_id, "team_id": team_id}}
+            other_membership = await tx.litellm_teammembership.find_first(where=_probe_where)
             shared_with_other_memberships = other_membership is not None
         except Exception as e:
-            # Refusing to mutate on probe failures is safer than risking a
-            # cross-member overwrite; fall through to the clone-on-write path.
-            verbose_proxy_logger.debug(
-                f"_upsert_budget_and_membership: shared-row probe failed for "
-                f"budget_id={existing_budget_id} (team_id={team_id}, "
-                f"user_id={user_id}): {e}. Defaulting to clone-on-write."
-            )
+            # Refuse to mutate on probe failures; fall through to clone-on-write.
+            verbose_proxy_logger.debug("_upsert_budget_and_membership: shared-row probe failed for budget_id=%s (team_id=%s, user_id=%s): %s. Defaulting to clone-on-write.", existing_budget_id, team_id, user_id, e)
             shared_with_other_memberships = True
 
     if (
