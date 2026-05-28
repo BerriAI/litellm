@@ -1649,25 +1649,24 @@ def test_azure_v1_api_uses_openai_client(api_version):
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_uses_token_provider_when_api_key_missing(api_version):
     """LIT-3074 regression: Azure v1 API path must fall back to
-    azure_ad_token_provider when api_key is None, not raise
-    OpenAIError("api_key client option must be set").
+    azure_ad_token_provider when api_key is None.
 
     Prior to the fix, the v1 API builder copied only ``api_key`` from
     ``azure_client_params``, dropping ``azure_ad_token`` and
     ``azure_ad_token_provider``. With ``enable_azure_ad_token_refresh=True``
     (a documented config flag) ``api_key`` is None, so OpenAI/AsyncOpenAI
-    construction raised at client init time. The fix resolves the bearer
-    credential and passes it as ``api_key`` (the OpenAI SDK then sends
-    ``Authorization: Bearer <token>``).
+    construction raised ``OpenAIError("api_key client option must be set ...")``
+    at client init time.
     """
-    from openai import AsyncOpenAI, OpenAI
+    from litellm.llms.azure.common_utils import (
+        _AsyncOpenAIAzureADBearerClient,
+        _OpenAIAzureADBearerClient,
+    )
 
     base_llm = BaseAzureLLM()
     api_base = "https://test.openai.azure.com"
     fake_token = "EYJ.FAKE.AAD.TOKEN.FROM.PROVIDER"
 
-    # Clear the in-memory client cache so parameterised cases do not
-    # mutually contaminate via the per-config client cache.
     litellm.in_memory_llm_clients_cache.cache_dict.clear()
 
     with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
@@ -1679,15 +1678,21 @@ def test_azure_v1_api_uses_token_provider_when_api_key_missing(api_version):
             "azure_ad_token_provider": lambda: fake_token,
         }
 
-        # Async path
+        # Async path: dynamic-bearer subclass that resolves token per request.
         async_client = base_llm.get_azure_openai_client(
             api_key=None,
             api_base=api_base,
             api_version=api_version,
             _is_async=True,
         )
-        assert isinstance(async_client, AsyncOpenAI)
-        assert async_client.api_key == fake_token
+        assert isinstance(async_client, _AsyncOpenAIAzureADBearerClient)
+        # api_key on the client itself is a sentinel placeholder, never sent.
+        assert async_client.api_key != fake_token
+        # _bearer_auth is what the OpenAI SDK reads per request -- this MUST
+        # call the provider and emit the live token.
+        assert async_client._bearer_auth == {
+            "Authorization": f"Bearer {fake_token}"
+        }
         assert "/openai/v1/" in str(async_client.base_url)
 
     litellm.in_memory_llm_clients_cache.cache_dict.clear()
@@ -1708,13 +1713,61 @@ def test_azure_v1_api_uses_token_provider_when_api_key_missing(api_version):
             api_version=api_version,
             _is_async=False,
         )
-        assert isinstance(sync_client, OpenAI)
-        assert sync_client.api_key == fake_token
+        assert isinstance(sync_client, _OpenAIAzureADBearerClient)
+        assert sync_client.api_key != fake_token
+        assert sync_client._bearer_auth == {
+            "Authorization": f"Bearer {fake_token}"
+        }
+
+
+def test_azure_v1_api_provider_invoked_per_request():
+    """LIT-3074 regression: the dynamic-bearer subclass must invoke
+    azure_ad_token_provider on *every* request, not once at client init.
+
+    Reading ``_bearer_auth`` simulates what the OpenAI SDK does when
+    building each outgoing request; the rotating counter proves the provider
+    is not memoized in the client.
+    """
+    from litellm.llms.azure.common_utils import _OpenAIAzureADBearerClient
+
+    state = {"i": 0}
+
+    def rotating() -> str:
+        state["i"] += 1
+        return f"AAD.TOKEN.v{state['i']}"
+
+    client = _OpenAIAzureADBearerClient(
+        base_url="https://example.com/openai/v1/",
+        ad_token_provider=rotating,
+    )
+    assert client._bearer_auth == {"Authorization": "Bearer AAD.TOKEN.v1"}
+    assert client._bearer_auth == {"Authorization": "Bearer AAD.TOKEN.v2"}
+    assert client._bearer_auth == {"Authorization": "Bearer AAD.TOKEN.v3"}
+    assert state["i"] == 3
+
+
+def test_azure_v1_api_provider_raising_does_not_crash_client():
+    """LIT-3074: a provider exception must surface as an empty bearer (the
+    OpenAI SDK then raises its own clearer error) rather than crashing the
+    client itself; this matches the behavior of the non-v1 ``AzureOpenAI``
+    path where the SDK swallows + re-raises provider failures."""
+    from litellm.llms.azure.common_utils import _OpenAIAzureADBearerClient
+
+    def boom() -> str:
+        raise RuntimeError("transient AD failure")
+
+    client = _OpenAIAzureADBearerClient(
+        base_url="https://example.com/openai/v1/",
+        ad_token_provider=boom,
+    )
+    assert client._bearer_auth == {}
 
 
 def test_azure_v1_api_uses_static_ad_token_when_api_key_missing():
     """LIT-3074 regression: a static ``azure_ad_token`` string is used as the
-    bearer credential when no ``api_key`` is set on the Azure v1 API path."""
+    bearer credential when no ``api_key`` is set on the Azure v1 API path,
+    and the standard ``OpenAI`` client (not the dynamic-bearer subclass) is
+    constructed because no provider rotation is needed."""
     from openai import OpenAI
 
     base_llm = BaseAzureLLM()
@@ -1737,13 +1790,16 @@ def test_azure_v1_api_uses_static_ad_token_when_api_key_missing():
             api_version="preview",
             _is_async=False,
         )
+        # Plain OpenAI (no dynamic-bearer subclass needed for a static token).
         assert isinstance(client, OpenAI)
+        assert type(client).__name__ == "OpenAI"
         assert client.api_key == static_token
 
 
 def test_azure_v1_api_explicit_api_key_beats_token_provider():
     """LIT-3074 regression: when an explicit ``api_key`` is set it must
-    continue to win over an AD token / provider (precedence preserved)."""
+    continue to win over an AD token / provider (precedence preserved). The
+    standard ``OpenAI`` client is used even if a provider is also present."""
     from openai import OpenAI
 
     base_llm = BaseAzureLLM()
@@ -1765,29 +1821,21 @@ def test_azure_v1_api_explicit_api_key_beats_token_provider():
             api_version="v1",
             _is_async=False,
         )
-        assert isinstance(client, OpenAI)
+        assert type(client).__name__ == "OpenAI"
         assert client.api_key == "primary-static-key"
 
 
-def test_resolve_v1_bearer_credential_precedence_and_fallback():
-    """Direct unit coverage for the precedence/fallback helper:
-    api_key > azure_ad_token > azure_ad_token_provider() > None.
+def test_resolve_v1_static_bearer_precedence():
+    """Direct unit coverage for the static-bearer precedence helper:
+    api_key > azure_ad_token > None. Empty strings count as "not set" so we
+    do not bake a meaningless bearer into the cached client.
     """
-    fn = BaseAzureLLM._resolve_v1_bearer_credential
-    # 1) explicit api_key wins
-    assert fn(api_key="K", azure_ad_token="T", azure_ad_token_provider=lambda: "P") == "K"
-    # 2) static azure_ad_token next
-    assert fn(api_key=None, azure_ad_token="T", azure_ad_token_provider=lambda: "P") == "T"
-    # 3) callable provider as last resort
-    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=lambda: "P") == "P"
-    # 4) nothing -> None (SDK will raise its own clearer error)
-    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=None) is None
-    # 5) provider that raises -> None (defensive, no crash on AD glitches)
-    def boom():
-        raise RuntimeError("transient AD failure")
-    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=boom) is None
-    # 6) provider returning empty string -> None (not a usable bearer)
-    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=lambda: "") is None
+    fn = BaseAzureLLM._resolve_v1_static_bearer
+    assert fn(api_key="K", azure_ad_token="T") == "K"
+    assert fn(api_key=None, azure_ad_token="T") == "T"
+    assert fn(api_key="", azure_ad_token="T") == "T"   # empty string -> next
+    assert fn(api_key=None, azure_ad_token="") is None
+    assert fn(api_key=None, azure_ad_token=None) is None
 
 
 def test_azure_traditional_api_uses_azure_openai_client():
