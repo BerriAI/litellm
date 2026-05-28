@@ -547,3 +547,48 @@ class TestPerformRedaction:
         perform_redaction({"additional_args": {"complete_input_dict": None}}, None)
         # additional_args is not a dict
         perform_redaction({"additional_args": "not-a-dict"}, None)
+
+    def test_redacts_system_prompt_in_proxy_server_request_body(self):
+        """The Anthropic-native top-level `system` prompt (and the
+        `system_prompt` / `instructions` variants) carry user content just
+        like messages — they must be scrubbed from the proxy body snapshot."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "claude-3-7-sonnet",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "system": "CANARY_SYSTEM_should_be_redacted",
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["system"] == "redacted-by-litellm"
+
+    def test_redacts_system_prompt_in_complete_input_dict(self):
+        """Provider-native system-prompt keys (Anthropic `system`, the
+        `system_prompt` variant, Responses API `instructions`) must be
+        scrubbed from the wire-format request body too."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "claude-3-7-sonnet",
+                    "system": [
+                        {"type": "text", "text": "CANARY_SYSTEM_should_be_redacted"}
+                    ],
+                    "system_prompt": "CANARY_should_be_redacted",
+                    "instructions": "CANARY_should_be_redacted",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid["system"] == "redacted-by-litellm"
+        assert cid["system_prompt"] == "redacted-by-litellm"
+        assert cid["instructions"] == "redacted-by-litellm"

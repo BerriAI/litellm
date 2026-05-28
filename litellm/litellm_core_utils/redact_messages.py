@@ -67,6 +67,11 @@ def _redact_choice_content(choice):
 # content already covered by the flat-field scrub. Anthropic populates
 # "thinking_blocks" / "reasoning_content" (the latter also carries the
 # raw "signature" blob); Bedrock converse populates "reasoningContentBlocks".
+#
+# This is an intentional allowlist: we redact known reasoning-bearing keys
+# rather than wiping all of provider_specific_fields (which also carries
+# benign provider metadata). Any future provider field that embeds raw
+# reasoning or prompt content must be added here to be redacted.
 _PROVIDER_SPECIFIC_REASONING_KEYS = (
     "reasoning_content",
     "thinking_blocks",
@@ -160,6 +165,25 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
+# Input-bearing keys that show up in request-body snapshots
+# (proxy_server_request.body and additional_args.complete_input_dict).
+# "messages"/"prompt"/"input" are the OpenAI-style payload entry points;
+# "system"/"system_prompt"/"instructions" are the provider-native top-level
+# system-prompt fields (Anthropic `system`, Responses API `instructions`),
+# which carry user content just as the messages do.
+def _redact_request_body_dict(body: dict):
+    """Scrub the input/system-prompt keys on a materialised request-body dict."""
+    if "messages" in body:
+        body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    if "prompt" in body:
+        body["prompt"] = ""
+    if "input" in body:
+        body["input"] = ""
+    for key in ("system", "system_prompt", "instructions"):
+        if key in body:
+            body[key] = "redacted-by-litellm"
+
+
 def _redact_proxy_server_request_body(model_call_details: dict):
     """Redact the input-bearing keys inside the proxy's body snapshot.
 
@@ -179,12 +203,7 @@ def _redact_proxy_server_request_body(model_call_details: dict):
     if not isinstance(body, dict):
         return
 
-    if "messages" in body:
-        body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
-    if "prompt" in body:
-        body["prompt"] = ""
-    if "input" in body:
-        body["input"] = ""
+    _redact_request_body_dict(body)
 
 
 def _redact_additional_args_complete_input_dict(model_call_details: dict):
@@ -205,14 +224,7 @@ def _redact_additional_args_complete_input_dict(model_call_details: dict):
     if not isinstance(complete_input_dict, dict):
         return
 
-    if "messages" in complete_input_dict:
-        complete_input_dict["messages"] = [
-            {"role": "user", "content": "redacted-by-litellm"}
-        ]
-    if "prompt" in complete_input_dict:
-        complete_input_dict["prompt"] = ""
-    if "input" in complete_input_dict:
-        complete_input_dict["input"] = ""
+    _redact_request_body_dict(complete_input_dict)
 
 
 def _redact_model_response_dict_choices(choices, redacted_str: str):
