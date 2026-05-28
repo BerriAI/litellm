@@ -8,6 +8,7 @@ This is the "dashboard" half of LIT-3391 - once it's a span attribute, every
 OTEL backend (Langfuse, Honeycomb, Datadog APM, Tempo, Grafana Cloud, etc.)
 can filter / pivot on it without re-parsing the redacted guardrail_response.
 """
+
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -62,11 +63,13 @@ def _capture_attrs(otel_handler, kwargs):
 
     fake_tracer = MagicMock()
     fake_tracer.start_span.return_value = _SpanCapture()
-    with patch.object(
-        otel_handler, "get_tracer_to_use_for_request", return_value=fake_tracer
-    ), patch.object(otel_handler, "_emit_once", return_value=True), patch.object(
-        otel_handler, "safe_set_attribute"
-    ) as safe_set:
+    with (
+        patch.object(
+            otel_handler, "get_tracer_to_use_for_request", return_value=fake_tracer
+        ),
+        patch.object(otel_handler, "_emit_once", return_value=True),
+        patch.object(otel_handler, "safe_set_attribute") as safe_set,
+    ):
         safe_set.side_effect = lambda span, key, value: span.set_attribute(key, value)
         otel_handler._create_guardrail_span(kwargs=kwargs, context=None)
     return attrs
