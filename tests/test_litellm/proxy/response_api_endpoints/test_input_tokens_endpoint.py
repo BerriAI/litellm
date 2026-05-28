@@ -196,6 +196,41 @@ class TestResponsesInputTokens:
             assert captured["call_endpoint"] is True
 
 
+    def test_instructions_without_input_returns_400(self, client, fake_token_counter):
+        """Regression: a payload with only ``instructions`` (no ``input``) must 400.
+
+        Pre-fix the validation looked at the post-normalisation messages list,
+        so an instructions-only payload produced one message and silently
+        bypassed the required-``input`` check. The validation is now done
+        against the raw body so this returns 400 as expected.
+        """
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "instructions": "You are helpful."},
+        )
+        assert r.status_code == 400, r.text
+        assert "input" in r.text
+
+    def test_empty_input_string_returns_400(self, client, fake_token_counter):
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "input": ""},
+        )
+        assert r.status_code == 400, r.text
+        assert "input" in r.text
+
+    def test_empty_input_list_returns_400(self, client, fake_token_counter):
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "input": []},
+        )
+        assert r.status_code == 400, r.text
+        assert "input" in r.text
+
+
 class TestNormalizeResponsesInputToMessages:
     """Direct unit tests for the input-shape normalizer helper."""
 
