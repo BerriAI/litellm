@@ -1321,14 +1321,25 @@ async def get_global_spend_report(
 # ============================================================================
 
 
+# Hard allowlist of every column ``_build_spend_by_model_sql`` is allowed to
+# splice into its f-string. Adding a column here is intentional and reviewable.
+_SPEND_REPORT_FILTER_COLUMNS = frozenset({"api_key", "user", "team_id"})
+
+
 def _build_spend_by_model_sql(filter_column: str, filter_param_index: int) -> str:
     """
     Build a parameterized SQL that returns spend grouped by api_key, with a
     per-model breakdown, optionally filtered by a single scope column.
 
-    ``filter_column`` must be a trusted, hard-coded column name (never user
-    input). ``filter_param_index`` is 1-based.
+    ``filter_column`` MUST be one of ``_SPEND_REPORT_FILTER_COLUMNS`` - it is
+    f-string-interpolated into the query, so callers must never pass user
+    input directly. ``filter_param_index`` is 1-based.
     """
+    if filter_column not in _SPEND_REPORT_FILTER_COLUMNS:
+        raise ValueError(
+            f"Unsupported filter_column: {filter_column!r}. "
+            f"Allowed: {sorted(_SPEND_REPORT_FILTER_COLUMNS)}"
+        )
     return f"""
         WITH SpendByModelApiKey AS (
             SELECT
@@ -1570,8 +1581,10 @@ async def get_key_spend_report(
     except HTTPException:
         raise
     except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
         )
 
@@ -1635,8 +1648,10 @@ async def get_user_spend_report(
     except HTTPException:
         raise
     except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
         )
 
@@ -1697,8 +1712,10 @@ async def get_team_spend_report(
     except HTTPException:
         raise
     except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
         )
 
@@ -1800,8 +1817,10 @@ async def get_org_spend_report(
     except HTTPException:
         raise
     except Exception as e:
+        # Unexpected fault below the HTTP-level checks (database driver, SQL
+        # error, serialisation, ...) is a server-side fault, not a bad request.
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
         )
 
