@@ -1264,6 +1264,77 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     pass
         return chunk
 
+    async def _mask_all_choices_text_and_tool_calls(
+        self,
+        chunk: "ModelResponseStream",
+        presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
+    ) -> "ModelResponseStream":
+        """Mask delta.content and function.arguments for EVERY choice in chunk.
+
+        Veria HIGH (round 2): when a client requests n>1 parallel completions,
+        Presidio masking previously only inspected choices[0]; choices 1..N
+        leaked PII unmasked. This helper iterates every choice and masks each
+        text delta plus each tool_call function arguments in place. Falls back
+        to passthrough on per-call failure so the client still receives a
+        response if Presidio errors mid-stream.
+        """
+        for choice in chunk.choices or []:
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if isinstance(content, str) and content:
+                try:
+                    masked = await self.check_pii(
+                        text=content,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+                    try:
+                        delta.content = masked
+                    except Exception:  # noqa: BLE001 — pydantic v2 frozen models
+                        try:
+                            delta.__dict__["content"] = masked  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                except Exception as exc:  # noqa: BLE001
+                    verbose_proxy_logger.error(
+                        "Presidio multi-choice mask failed on choice %s (%s); emitting unmasked",
+                        getattr(choice, "index", "?"),
+                        type(exc).__name__,
+                    )
+            tool_calls = getattr(delta, "tool_calls", None) or []
+            for tc in tool_calls:
+                fn = getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                args = getattr(fn, "arguments", None)
+                if not isinstance(args, str) or not args:
+                    continue
+                try:
+                    masked_args = await self.check_pii(
+                        text=args,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    verbose_proxy_logger.error(
+                        "Presidio multi-choice tool_call mask failed (%s)",
+                        type(exc).__name__,
+                    )
+                    continue
+                try:
+                    fn.arguments = masked_args
+                except Exception:
+                    try:
+                        fn.__dict__["arguments"] = masked_args  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+        return chunk
+
     @staticmethod
     def _build_streaming_text_chunk(
         template: "ModelResponseStream", text: str
@@ -1372,21 +1443,35 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return self._build_streaming_text_chunk(template, masked)
 
     def _mask_flush_due(self, buffer: str) -> bool:
-        """Return True when `buffer` ends on a sentence boundary that is safe to flush.
+        r"""Return True when buffer ends on a sentence boundary that is safe to flush.
 
-        Boundaries: `.`, `!`, `?`, newline — natural semantic units. A PII entity
-        that legitimately spans two sentences is exceedingly rare for the entity
-        classes Presidio detects (names, emails, phone numbers, credit cards,
-        addresses), so flushing at these boundaries gives progressive streaming
-        without the entity-fragmentation risk a char-limit-only fallback would
-        introduce (Veria HIGH: `4111 ` / `1111 1111 1111` split bypass).
+        A "safe" boundary is one that cannot occur inside any common PII entity
+        type Presidio detects (emails, phone numbers, URLs, credit cards,
+        addresses). We therefore require:
 
-        A pathological stream that never emits a sentence ender accumulates the
-        whole response into `buffer` and is flushed exactly once at end-of-stream,
-        matching the prior buffered behaviour for that case.
+        * a trailing newline (buffer ends in \n), OR
+        * a sentence-end punctuation (., !, ?) **followed by whitespace
+          inside buffer** — i.e. stripped ends in the punctuation AND
+          buffer != stripped (there is trailing whitespace).
+
+        This rules out jane@example. / com and +1.555. / 0123 splits
+        Veria flagged as a HIGH-risk bypass class: those buffers do NOT have
+        trailing whitespace after the ., so they keep accumulating until a
+        true sentence boundary appears (or end-of-stream).
         """
+        if not buffer:
+            return False
+        # Buffer ending in any whitespace AFTER a newline (or being a newline) flushes.
+        if buffer.endswith(("\n", "\r")):
+            return True
         stripped = buffer.rstrip()
-        return bool(stripped) and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
+        if not stripped:
+            return False
+        if stripped[-1] not in (".", "!", "?"):
+            return False
+        # Punctuation must be followed by whitespace inside the buffer — i.e.
+        # buffer extends past stripped by at least one whitespace char.
+        return buffer != stripped
 
     async def _stream_apply_output_masking(
         self,
@@ -1445,6 +1530,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     continue
 
                 had_mrs = True
+                # Multi-choice (n>1) — handle each choice in place; bypass the
+                # single-choice buffer logic which only inspects choices[0]
+                # (Veria HIGH round 2).
+                if len(chunk.choices) > 1:
+                    flushed = await self._mask_buffer_to_chunk(
+                        buffer, template, presidio_config, request_data
+                    )
+                    buffer = ""
+                    if flushed is not None:
+                        yield flushed
+                    yield await self._mask_all_choices_text_and_tool_calls(
+                        chunk, presidio_config, request_data
+                    )
+                    continue
                 template = chunk  # latest envelope for synthetic flush chunks
 
                 if self._is_streaming_chunk_with_content(chunk):
@@ -1548,6 +1647,43 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if flushed is not None:
                         yield flushed
                     yield chunk  # type: ignore[misc]
+                    continue
+
+                # Multi-choice (n>1) — unmask each choice in place (Veria HIGH round 2).
+                if len(chunk.choices) > 1:
+                    flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
+                    buffer = ""
+                    if flushed is not None:
+                        yield flushed
+                    for choice in chunk.choices:
+                        delta = getattr(choice, "delta", None)
+                        if delta is None:
+                            continue
+                        content = getattr(delta, "content", None)
+                        if isinstance(content, str) and content:
+                            unmasked = self._unmask_pii_text(content, pii_tokens)
+                            try:
+                                delta.content = unmasked
+                            except Exception:  # noqa: BLE001
+                                try:
+                                    delta.__dict__["content"] = unmasked
+                                except Exception:
+                                    pass
+                        for tc in getattr(delta, "tool_calls", None) or []:
+                            fn = getattr(tc, "function", None)
+                            if fn is None:
+                                continue
+                            args = getattr(fn, "arguments", None)
+                            if isinstance(args, str) and args:
+                                unmasked_args = self._unmask_pii_text(args, pii_tokens)
+                                try:
+                                    fn.arguments = unmasked_args
+                                except Exception:
+                                    try:
+                                        fn.__dict__["arguments"] = unmasked_args
+                                    except Exception:
+                                        pass
+                    yield chunk
                     continue
 
                 template = chunk
