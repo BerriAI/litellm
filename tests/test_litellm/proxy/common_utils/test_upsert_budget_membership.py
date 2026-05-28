@@ -23,6 +23,10 @@ def mock_tx():
     membership = MagicMock()
     membership.update = AsyncMock()
     membership.upsert = AsyncMock()
+    # LIT-3359: default the shared-row probe to "no other reference" so
+    # tests that exercise the in-place update path are not nudged into
+    # clone-on-write by an unset mock.
+    membership.find_first = AsyncMock(return_value=None)
 
     # budget “table”
     budget = MagicMock()
