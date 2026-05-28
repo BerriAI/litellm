@@ -273,3 +273,103 @@ def test_mcp_span_records_arguments_count_not_values(exporter):
     assert span.attributes["mcp.arguments_count"] == 2
     for k, v in span.attributes.items():
         assert "s3kret-token" not in str(v), (k, v)
+
+
+# ---------------------------------------------------------------------------
+# Greptile P1: span must be the active context inside the block so any
+# child spans (e.g. HTTP auto-instrumentation) are parented to it.
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_span_is_current_inside_block_and_detached_after(exporter):
+    """Child spans created inside the helper's block must parent to the MCP
+    span, and after the block the active span must revert to the prior
+    context (no leaked detach)."""
+
+    # Use the proxy's tracer for the helper, and the same provider for the
+    # child tracer so they share context.
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel_trace.set_tracer_provider(provider)
+    parent_tracer = provider.get_tracer("test.parent")
+    proxy_server.open_telemetry_logger = _FakeOtelLogger(
+        provider.get_tracer(MCP_OTEL_TRACER_NAME)
+    )
+
+    async def run():
+        outer_span_id_before = otel_trace.get_current_span().get_span_context().span_id
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            # Now the MCP span must be the active span on the OTEL context.
+            mcp_active = otel_trace.get_current_span()
+            assert mcp_active.is_recording(), "MCP span should be recording"
+            # Create a child via a separate tracer - it must parent to MCP.
+            with parent_tracer.start_as_current_span("http.client.GET") as child:
+                pass
+            assert mcp_active.get_span_context().span_id != 0
+            mcp_span_id_inside = mcp_active.get_span_context().span_id
+        # After the block, the context must revert to what it was before
+        # (no INVALID span_id == 0 leftover unless it was 0 to begin with).
+        outer_span_id_after = otel_trace.get_current_span().get_span_context().span_id
+        assert outer_span_id_after == outer_span_id_before
+        return mcp_span_id_inside
+
+    mcp_span_id = _run(run())
+
+    finished = _finished(exporter)
+    mcp_spans = [s for s in finished if s.name == "mcp.tool.call"]
+    child_spans = [s for s in finished if s.name == "http.client.GET"]
+    assert len(mcp_spans) == 1
+    assert len(child_spans) == 1
+    # Critical: child must parent to MCP span, not to the prior context.
+    assert child_spans[0].parent is not None
+    assert child_spans[0].parent.span_id == mcp_span_id
+
+
+# ---------------------------------------------------------------------------
+# Greptile P2: 4xx HTTPException should NOT mark the span as ERROR.
+# It should still record the exception event and the HTTP status code.
+# ---------------------------------------------------------------------------
+
+
+class _HttpExc(Exception):
+    """Minimal HTTPException-shape - mirrors Starlette/FastAPI surface."""
+
+    def __init__(self, status_code, detail=""):
+        super().__init__(detail)
+        self.status_code = status_code
+
+
+def test_mcp_span_4xx_http_exception_does_not_mark_error(exporter):
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            raise _HttpExc(403, "User not allowed")
+
+    with pytest.raises(_HttpExc):
+        _run(run())
+
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    # 4xx must not inflate the ERROR rate.
+    assert span.status.status_code in (StatusCode.OK, StatusCode.UNSET)
+    # But the exception event AND http.status_code attr must be there.
+    assert "exception" in [e.name for e in span.events]
+    assert span.attributes["mcp.http.status_code"] == 403
+    assert span.attributes["mcp.error.type"] == "_HttpExc"
+
+
+def test_mcp_span_5xx_http_exception_still_marks_error(exporter):
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            raise _HttpExc(502, "Bad gateway")
+
+    with pytest.raises(_HttpExc):
+        _run(run())
+
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    # Server-side error -> ERROR status (operator-visible).
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["mcp.http.status_code"] == 502
+    assert span.attributes["mcp.error.type"] == "_HttpExc"
