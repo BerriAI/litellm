@@ -1623,18 +1623,8 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
         )
 
-    def _should_dispatch_sync_success_only(
-        self, litellm_params: dict, *, prefer_async_handlers: bool
-    ) -> bool:
-        """Sync-only dispatch for sync SDK calls; proxy pass-through always uses async."""
-        if prefer_async_handlers:
-            return False
-        if self.call_type == CallTypes.pass_through.value:
-            return False
-        return self._is_sync_litellm_request(litellm_params)
-
     def _is_assembled_stream_success(self, result=None) -> bool:
-        """True when exporting an assembled streaming response (not a per-chunk call)."""
+        """Final assembled stream export (not a per-chunk success call)."""
         if self.stream is not True:
             return False
         if result is not None:
@@ -1643,15 +1633,6 @@ class Logging(LiteLLMLoggingBaseClass):
             "async_complete_streaming_response" in self.model_call_details
             or self.model_call_details.get("complete_streaming_response") is not None
         )
-
-    def _skip_repeat_final_stream_dispatch(self, result=None) -> bool:
-        """True if this final-stream dispatch should be dropped (already handled)."""
-        if not self._is_assembled_stream_success(result):
-            return False
-        if self.model_call_details.get("has_dispatched_final_stream_success"):
-            return True
-        self.model_call_details["has_dispatched_final_stream_success"] = True
-        return False
 
     async def dispatch_success_handlers(
         self,
@@ -1665,13 +1646,15 @@ class Logging(LiteLLMLoggingBaseClass):
         """Route success logging to async and/or sync handlers for this request."""
         from litellm.litellm_core_utils.thread_pool_executor import executor
 
-        if self._skip_repeat_final_stream_dispatch(result):
-            return
+        if self._is_assembled_stream_success(result):
+            if self.model_call_details.get("has_dispatched_final_stream_success"):
+                return
+            self.model_call_details["has_dispatched_final_stream_success"] = True
 
         litellm_params = self.model_call_details.get("litellm_params", {}) or {}
-        if self._should_dispatch_sync_success_only(
-            litellm_params, prefer_async_handlers=prefer_async_handlers
-        ):
+        sync_sdk = self._is_sync_litellm_request(litellm_params)
+        passthrough = self.call_type == CallTypes.pass_through.value
+        if sync_sdk and not prefer_async_handlers and not passthrough:
             self.success_handler(
                 result,
                 start_time=start_time,
@@ -1689,18 +1672,20 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-        if prefer_async_handlers:
+        if (
+            prefer_async_handlers
+            or not self._should_run_sync_callbacks_for_async_calls()
+        ):
             return
 
-        if self._should_run_sync_callbacks_for_async_calls():
-            executor.submit(
-                self.success_handler,
-                result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
-            )
+        executor.submit(
+            self.success_handler,
+            result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
 
     def should_run_logging(
         self,
@@ -3391,79 +3376,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_combined_callback_list(
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
-        """Merge dynamic and global callbacks; dedupe duplicate list entries only."""
-        combined_callbacks = (dynamic_success_callbacks or []) + list(global_callbacks)
-
-        string_integration_slugs: set[str] = set()
-        for callback in combined_callbacks:
-            if isinstance(callback, str):
-                slug = self._integration_slug_from_callback(callback)
-                if slug is not None:
-                    string_integration_slugs.add(slug)
-
-        deduped_callbacks: List[Any] = []
-        seen_callback_keys: set[Any] = set()
-        object_claimed_integration_slugs: set[str] = set()
-
-        for callback in combined_callbacks:
-            integration_slug = self._integration_slug_from_callback(callback)
-
-            if isinstance(callback, str) and integration_slug is not None:
-                callback_key = ("integration", integration_slug)
-            elif isinstance(callback, CustomLogger) and integration_slug is not None:
-                if (
-                    integration_slug in string_integration_slugs
-                    and integration_slug not in object_claimed_integration_slugs
-                ):
-                    object_claimed_integration_slugs.add(integration_slug)
-                    callback_key = ("integration", integration_slug)
-                else:
-                    callback_key = ("instance", id(callback))
-            elif isinstance(callback, str):
-                callback_key = ("string", callback.lower())
-            elif callable(callback):
-                callback_key = ("callable", self._get_callback_name(callback))
-            else:
-                callback_key = ("object", str(callback))
-
-            if callback_key in seen_callback_keys:
-                continue
-            seen_callback_keys.add(callback_key)
-            deduped_callbacks.append(callback)
-
-        return deduped_callbacks
-
-    @staticmethod
-    def _normalize_callback_slug(raw_name: str) -> str:
-        normalized = (
-            raw_name.lower()
-            .replace("-", "")
-            .replace("_", "")
-            .replace(" ", "")
-            .replace("logger", "")
-        )
-        return normalized
-
-    def _integration_slug_from_callback(self, callback: Any) -> Optional[str]:
-        raw_name: Optional[str] = None
-        if isinstance(callback, str):
-            raw_name = callback.lower()
-        elif isinstance(callback, CustomLogger):
-            raw_name = (
-                getattr(callback, "callback_name", None) or callback.__class__.__name__
-            ).lower()
-
-        if raw_name is None:
-            return None
-
-        if raw_name in litellm._known_custom_logger_compatible_callbacks:
-            return self._normalize_callback_slug(raw_name)
-
-        normalized = self._normalize_callback_slug(raw_name)
-        for known_callback in litellm._known_custom_logger_compatible_callbacks:
-            if self._normalize_callback_slug(known_callback) == normalized:
-                return normalized
-        return None
+        if dynamic_success_callbacks is None:
+            return list(global_callbacks)
+        return list(set(dynamic_success_callbacks + global_callbacks))
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """

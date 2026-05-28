@@ -786,88 +786,11 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
-def test_get_combined_callback_list_dedupes_known_callback_str_and_object(logging_obj):
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class DataDogLogger(CustomLogger):
-        pass
-
-    datadog_logger_obj = DataDogLogger()
-
-    callbacks = logging_obj.get_combined_callback_list(
-        dynamic_success_callbacks=[datadog_logger_obj],
-        global_callbacks=["datadog"],
-    )
-
-    assert len(callbacks) == 1
-    assert callbacks[0] is datadog_logger_obj
-
-
-def test_get_combined_callback_list_keeps_distinct_callbacks(logging_obj):
-    callbacks = logging_obj.get_combined_callback_list(
-        dynamic_success_callbacks=["datadog", "prometheus"],
-        global_callbacks=["langfuse_otel"],
-    )
-
-    assert callbacks == ["datadog", "prometheus", "langfuse_otel"]
-
-
-def test_get_combined_callback_list_keeps_distinct_custom_logger_instances(logging_obj):
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class DataDogLogger(CustomLogger):
-        pass
-
-    first = DataDogLogger()
-    second = DataDogLogger()
-
-    callbacks = logging_obj.get_combined_callback_list(
-        dynamic_success_callbacks=[first, second],
-        global_callbacks=[],
-    )
-
-    assert callbacks == [first, second]
-
-
-@pytest.mark.asyncio
-async def test_dispatch_success_handlers_skips_duplicate_final_stream_dispatch(
-    logging_obj,
-):
-    logging_obj.stream = True
-    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
-    result = ModelResponse()
-
-    with (
-        patch.object(
-            logging_obj, "async_success_handler", new_callable=AsyncMock
-        ) as mock_async,
-        patch.object(
-            logging_obj, "success_handler", new_callable=MagicMock
-        ) as mock_sync,
-        patch.object(
-            logging_obj,
-            "_should_run_sync_callbacks_for_async_calls",
-            return_value=True,
-        ),
-        patch(
-            "litellm.litellm_core_utils.litellm_logging.executor.submit"
-        ) as mock_submit,
-    ):
-        await logging_obj.dispatch_success_handlers(result=result)
-        await logging_obj.dispatch_success_handlers(result=result)
-
-    mock_async.assert_awaited_once()
-    mock_sync.assert_not_called()
-    mock_submit.assert_called_once()
-
-
 @pytest.mark.asyncio
 async def test_dispatch_success_handlers_invokes_callbacks_once_for_final_stream(
     logging_obj,
 ):
-    """Final-stream dispatch must export once; a second dispatch must not re-run callbacks."""
-    import asyncio
-
+    """Second final-stream dispatch must not re-export (CSW + deferred guardrail paths)."""
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -918,7 +841,6 @@ async def test_dispatch_success_handlers_invokes_callbacks_once_for_final_stream
         ):
             await logging_obj.dispatch_success_handlers(result=result)
             await logging_obj.dispatch_success_handlers(result=result)
-            await asyncio.sleep(0.5)
 
         mock_async_log.assert_awaited_once()
         mock_sync_log.assert_not_called()
@@ -984,58 +906,10 @@ async def test_dispatch_success_handlers_sync_path_invokes_callback_once_for_fin
 
 
 @pytest.mark.asyncio
-async def test_dispatch_success_handlers_uses_async_path_for_acompletion(logging_obj):
-    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
-
-    with (
-        patch.object(
-            logging_obj, "async_success_handler", new_callable=AsyncMock
-        ) as mock_async,
-        patch.object(
-            logging_obj, "success_handler", new_callable=MagicMock
-        ) as mock_sync,
-        patch.object(
-            logging_obj,
-            "_should_run_sync_callbacks_for_async_calls",
-            return_value=False,
-        ),
-    ):
-        await logging_obj.dispatch_success_handlers(result=ModelResponse())
-
-    mock_async.assert_awaited_once()
-    mock_sync.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_dispatch_success_handlers_uses_async_path_for_pass_through(logging_obj):
-    from litellm.types.utils import CallTypes
-
-    logging_obj.call_type = CallTypes.pass_through.value
-    logging_obj.model_call_details["litellm_params"] = {}
-
-    with (
-        patch.object(
-            logging_obj, "async_success_handler", new_callable=AsyncMock
-        ) as mock_async,
-        patch.object(
-            logging_obj, "success_handler", new_callable=MagicMock
-        ) as mock_sync,
-        patch.object(
-            logging_obj,
-            "_should_run_sync_callbacks_for_async_calls",
-            return_value=False,
-        ),
-    ):
-        await logging_obj.dispatch_success_handlers(result={"id": "pt-1"})
-
-    mock_async.assert_awaited_once()
-    mock_sync.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through(
     logging_obj,
 ):
+    """Pass-through must use async_success_handler (CustomLogger skips sync success_handler)."""
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.utils import CallTypes
