@@ -8,15 +8,20 @@ from litellm._logging import verbose_proxy_logger
 LOCAL_IMAGE_HEADER_BYTES = 512
 
 
+_SVG_TAG_BOUNDARY = (b" ", b"\t", b"\r", b"\n", b">", b"/")
+
+
 def _is_svg_header(header: bytes) -> bool:
-    """Detect SVG by checking for an ``<svg`` start tag in the leading bytes.
+    """Detect SVG by checking for an ``<svg`` root tag in the leading bytes.
 
     SVGs may begin with an optional UTF-8 BOM, leading whitespace, an XML
-    declaration (``<?xml … ?>``), an SVG ``<!DOCTYPE svg …>``, or XML
-    comments before the root ``<svg>`` element. We accept those prologues but
-    only return True when an ``<svg`` token actually appears in the leading
-    window, so HTML (``<!DOCTYPE html`` / ``<html``) and unrelated XML payloads
-    are never misclassified as SVG.
+    declaration (``<?xml … ?>``), an SVG-specific ``<!DOCTYPE svg …>``,
+    or an XML comment prologue before the root ``<svg>`` element. We accept
+    those prologues but only return True when an ``<svg`` *tag* actually
+    appears in the leading window and no ``<html`` / ``<!doctype html`` marker
+    precedes it, so HTML pages (even those that embed an inline SVG) and
+    unrelated XML payloads — including elements whose names merely *start*
+    with ``svg`` (e.g. ``<svgIcon>``) — are never misclassified as SVG.
     """
     if not header:
         return False
@@ -26,14 +31,28 @@ def _is_svg_header(header: bytes) -> bool:
     stripped = header.lstrip()
     if not stripped:
         return False
-    if stripped.startswith(b"<svg"):
+    # Bare ``<svg`` root tag — require a tag-boundary character after ``svg``
+    # so element names that happen to start with ``svg`` (e.g. ``<svgIcon>``)
+    # are not misclassified as the SVG root.
+    if stripped[:4] == b"<svg" and stripped[4:5] in _SVG_TAG_BOUNDARY:
         return True
+    lowered = header.lower()
+    # Never accept HTML pages, even if they embed an inline ``<svg>`` element.
+    if b"<html" in lowered or b"<!doctype html" in lowered:
+        return False
     if (
         stripped[:5].lower() == b"<?xml"
         or stripped[:13].lower() == b"<!doctype svg"
         or stripped[:4] == b"<!--"
     ):
-        return b"<svg" in header.lower()
+        idx = 0
+        while True:
+            idx = lowered.find(b"<svg", idx)
+            if idx == -1:
+                return False
+            if lowered[idx + 4: idx + 5] in _SVG_TAG_BOUNDARY:
+                return True
+            idx += 4
     return False
 
 
