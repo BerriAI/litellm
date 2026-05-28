@@ -1,15 +1,11 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Tickerr — Outage Radar for AI Agents
+# Tickerr - Outage Radar for AI Agents
 
-[Tickerr](https://tickerr.ai) is a crowd-sourced outage detector for LLM APIs. When your agent hits a 5xx error or rate limit, Tickerr tells you:
+[Tickerr](https://tickerr.ai) is a crowd-sourced outage detector for LLM APIs. When your agent hits a 5xx or rate limit, it reports anonymously so every agent can see the issue in real time.
 
-- How many other agents are seeing the same issue right now
-- Current signal state: `quiet` → `detecting` → `confirmed` → `recovering`
-- Which model to fall back to
-
-**No API key required. Anonymous. Zero overhead on success paths.**
+**No API key. No account. Failure-only by default. Success sampling is opt-in.**
 
 ## Quick Start
 
@@ -21,10 +17,8 @@ import litellm
 
 litellm.callbacks = ["tickerr"]
 
-# Every failed LiteLLM call is now reported to Tickerr automatically.
-# Tickerr fires in a background thread — your agent is never blocked.
 response = litellm.completion(
-    model="claude-haiku-4-5",
+    model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello"}]
 )
 ```
@@ -33,12 +27,6 @@ response = litellm.completion(
 <TabItem value="proxy" label="LiteLLM Proxy config.yaml">
 
 ```yaml
-model_list:
-  - model_name: claude-haiku
-    litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
-
 litellm_settings:
   callbacks: ["tickerr"]
 ```
@@ -48,60 +36,28 @@ litellm_settings:
 
 ## What Gets Reported
 
-Tickerr receives only:
+When the tickerr callback is explicitly enabled, anonymous failure metadata is reported. No prompts, responses, API keys, or personal data are sent.
 
 | Field | Example |
 |-------|---------|
 | Provider | `anthropic` |
 | Model | `claude-haiku-4-5` |
-| HTTP status code | `529` |
-| Error type | `overloaded` |
+| Status code | `529` |
 | Latency (ms) | `1240` |
-
-No prompts, no responses, no personal data.
-
-## What You Get Back
-
-Each report updates the live signal at [tickerr.ai/agent-reports](https://tickerr.ai/agent-reports).
-
-To read the signal from your agent, use the [Tickerr MCP server](https://tickerr.ai/mcp-server) `report_incident` tool. It returns a structured response:
-
-```
-CURRENT SIGNAL (anthropic/claude-haiku-4-5)
-Status: CONFIRMED
-Agents reporting (last 10 min): 14
-Total reports (last 10 min): 31
-
-RECOMMENDATION
-Action: FALLBACK
-Switch to: gpt-4o-mini (openai)
-```
+| Event type | `failure` or `success` |
 
 ## Optional Configuration
 
-```python
-import os
-
-os.environ["TICKERR_CLIENT_TIER"] = "pro"    # free | pro | team | enterprise | api_pay_as_you_go
-os.environ["TICKERR_REGION"] = "us-east-1"   # optional, for regional breakdown
+```bash
+TICKERR_DISABLED=true          # disable all reporting (kill switch)
+TICKERR_REGION=us-east-1       # for regional signal breakdown
+TICKERR_SAMPLE_RATE=0.01       # report 1% of successes for latency benchmarks (default: 0 = off)
 ```
 
-## Signal States
-
-| State | Meaning |
-|-------|---------|
-| `quiet` | No reports in last 10 min |
-| `detecting` | 1–2 agents reporting |
-| `confirmed` | 3+ distinct agents — issue verified |
-| `recovering` | Reports dropping, recovery signals arriving |
-
-## Opt Out
-
-[tickerr.ai/mcp/opt-out](https://tickerr.ai/mcp/opt-out)
+Failures are reported by default once Tickerr is enabled. Success sampling is opt-in.
 
 ## Links
 
-- [Tickerr](https://tickerr.ai) — live AI status dashboard (90+ tools)
-- [Agent reports](https://tickerr.ai/agent-reports) — live feed
-- [Tickerr MCP server](https://tickerr.ai/mcp-server) — 9-tool MCP for agents
-- [REST API](https://tickerr.ai/api/v1/report) — report without LiteLLM
+- [Live dashboard](https://tickerr.ai) - status for 90+ AI tools
+- [Agent reports feed](https://tickerr.ai/agent-reports) - real-time signal
+- [Opt out](https://tickerr.ai/mcp/opt-out)
