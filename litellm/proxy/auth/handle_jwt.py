@@ -1196,6 +1196,21 @@ class JWTAuthManager:
         return user_id, user_email, valid_user_email
 
     @staticmethod
+    def _canonical_user_id_from_db(
+        user_id: Optional[str],
+        user_object: Optional[LiteLLM_UserTable],
+    ) -> Optional[str]:
+        """Id used for spend / team-membership attribution.
+
+        JWT claim (often email) is only a lookup key. If fuzzy match in
+        ``get_user_object`` resolved a legacy row with a different ``user_id``,
+        use that row's id; otherwise keep the claim. GH #26789.
+        """
+        if user_object is not None and user_object.user_id:
+            return user_object.user_id
+        return user_id
+
+    @staticmethod
     async def get_objects(
         user_id: Optional[str],
         user_email: Optional[str],
@@ -1215,8 +1230,13 @@ class JWTAuthManager:
         Optional[LiteLLM_OrganizationTable],
         Optional[LiteLLM_EndUserTable],
         Optional[LiteLLM_TeamMembership],
+        Optional[str],
     ]:
-        """Get user, org, and end user objects. Also resolves org aliases to IDs if configured."""
+        """Get user, org, end-user, and team-membership objects.
+
+        Returns ``(..., effective_user_id)``: JWT claim unless fuzzy lookup
+        matched a legacy row (GH #26789).
+        """
 
         # Get org object - first try by ID, then by alias
         org_object: Optional[LiteLLM_OrganizationTable] = None
@@ -1291,6 +1311,18 @@ class JWTAuthManager:
                 else None
             )
 
+        # Rebind to resolved DB user_id for team_membership + auth_builder (GH #26789).
+        effective_user_id = JWTAuthManager._canonical_user_id_from_db(
+            user_id=user_id, user_object=user_object
+        )
+        if effective_user_id != user_id:
+            verbose_proxy_logger.info(
+                "JWT Auth: rebinding user_id %r -> DB user_id %r (email/sso match)",
+                user_id,
+                effective_user_id,
+            )
+        user_id = effective_user_id
+
         team_membership_object: Optional[LiteLLM_TeamMembership] = None
         if user_id and team_id:
             team_membership_object = (
@@ -1306,7 +1338,13 @@ class JWTAuthManager:
                 else None
             )
 
-        return user_object, org_object, end_user_object, team_membership_object
+        return (
+            user_object,
+            org_object,
+            end_user_object,
+            team_membership_object,
+            user_id,
+        )
 
     @staticmethod
     def validate_object_id(
@@ -1732,12 +1770,13 @@ class JWTAuthManager:
         # Extract alias fields for resolution (if configured)
         org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
 
-        # Get other objects
+        # get_objects returns effective_user_id for downstream spend attribution (GH #26789).
         (
             user_object,
             org_object,
             end_user_object,
             team_membership_object,
+            user_id,
         ) = await JWTAuthManager.get_objects(
             user_id=user_id,
             user_email=user_email,
