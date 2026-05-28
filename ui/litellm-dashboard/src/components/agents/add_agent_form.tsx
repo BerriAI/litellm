@@ -210,6 +210,44 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     setCurrentStep((s) => Math.max(0, s - 1));
   };
 
+  // Overlay the user's discovery selections onto the agent_card_params built
+  // from the form. Form-driven fields (name, description, version, url) stay
+  // as-is; only skills, capabilities, input/output modes, provider, and
+  // icon/doc URLs are overlaid because dynamic agent forms (e.g. LangGraph)
+  // don't register Form.Items for them, so AntD's setFieldsValue silently
+  // drops those keys and the values never make it back through buildAgentData.
+  const overlayDiscoveredCardParams = (
+    agentData: Record<string, any>,
+  ): Record<string, any> => {
+    if (!appliedDiscoveredSelection) return agentData;
+    const discovered = appliedDiscoveredSelection.selected_card;
+    return {
+      ...agentData,
+      agent_card_params: {
+        ...agentData.agent_card_params,
+        ...(Array.isArray(discovered.skills) && {
+          skills: discovered.skills,
+        }),
+        ...(discovered.capabilities && {
+          capabilities: discovered.capabilities,
+        }),
+        ...(Array.isArray(discovered.defaultInputModes) &&
+          discovered.defaultInputModes.length > 0 && {
+            defaultInputModes: discovered.defaultInputModes,
+          }),
+        ...(Array.isArray(discovered.defaultOutputModes) &&
+          discovered.defaultOutputModes.length > 0 && {
+            defaultOutputModes: discovered.defaultOutputModes,
+          }),
+        ...(discovered.provider && { provider: discovered.provider }),
+        ...(discovered.iconUrl && { iconUrl: discovered.iconUrl }),
+        ...(discovered.documentationUrl && {
+          documentationUrl: discovered.documentationUrl,
+        }),
+      },
+    };
+  };
+
   const buildAgentData = (values: any) => {
     if (agentType === CUSTOM_AGENT_TYPE) {
       return {
@@ -226,10 +264,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           skills: [],
         },
       };
-    } else if (agentType === "a2a") {
-      return buildAgentDataFromForm(values);
+    }
+
+    let agentData: Record<string, any>;
+    if (agentType === "a2a") {
+      agentData = buildAgentDataFromForm(values);
     } else if (selectedAgentTypeInfo?.use_a2a_form_fields) {
-      const agentData = buildAgentDataFromForm(values);
+      agentData = buildAgentDataFromForm(values);
       if (selectedAgentTypeInfo.litellm_params_template) {
         agentData.litellm_params = {
           ...agentData.litellm_params,
@@ -242,42 +283,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           agentData.litellm_params[field.key] = value;
         }
       }
-      return agentData;
     } else if (selectedAgentTypeInfo) {
-      const agentData = buildDynamicAgentData(values, selectedAgentTypeInfo);
-      // The dynamic form has no UI for skills, capabilities, or input/output
-      // modes — buildDynamicAgentData fills those with a generic stub. If the
-      // admin ran discovery, their selections are the only real source of
-      // truth for these fields, so we overlay them here. Form-driven fields
-      // (name, description, version, url) stay as-is.
-      if (appliedDiscoveredSelection) {
-        const discovered = appliedDiscoveredSelection.selected_card;
-        agentData.agent_card_params = {
-          ...agentData.agent_card_params,
-          ...(Array.isArray(discovered.skills) && {
-            skills: discovered.skills,
-          }),
-          ...(discovered.capabilities && {
-            capabilities: discovered.capabilities,
-          }),
-          ...(Array.isArray(discovered.defaultInputModes) &&
-            discovered.defaultInputModes.length > 0 && {
-              defaultInputModes: discovered.defaultInputModes,
-            }),
-          ...(Array.isArray(discovered.defaultOutputModes) &&
-            discovered.defaultOutputModes.length > 0 && {
-              defaultOutputModes: discovered.defaultOutputModes,
-            }),
-          ...(discovered.provider && { provider: discovered.provider }),
-          ...(discovered.iconUrl && { iconUrl: discovered.iconUrl }),
-          ...(discovered.documentationUrl && {
-            documentationUrl: discovered.documentationUrl,
-          }),
-        };
-      }
-      return agentData;
+      agentData = buildDynamicAgentData(values, selectedAgentTypeInfo);
+    } else {
+      return null;
     }
-    return null;
+
+    return overlayDiscoveredCardParams(agentData);
   };
 
   const handleCreateAgent = async () => {

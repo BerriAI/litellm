@@ -14,7 +14,7 @@ export interface DiscoveryRequestPlan {
 export const skillId = (skill: any, idx: number): string =>
   skill?.id ?? skill?.name ?? `skill-${idx}`;
 
-const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
+export const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
 
 export const filterCapabilitiesForUI = (
   capabilities: Record<string, any> | undefined,

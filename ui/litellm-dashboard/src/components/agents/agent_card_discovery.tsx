@@ -29,6 +29,7 @@ import {
   discoverAgentCardCall,
 } from "../networking";
 import {
+  ALLOWED_CAPABILITY_KEYS,
   selectionsFromSavedAgentCard,
   selectionsFromUpstreamCard,
   skillId,
@@ -69,8 +70,6 @@ interface AgentCardDiscoveryProps {
    *  here are pre-selected. */
   savedAgentCard?: DiscoveredAgentCard | null;
 }
-
-const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
 
 const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   accessToken,
