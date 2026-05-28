@@ -245,12 +245,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             "type": "content_block_stop",
             "index": compaction_index,
         }
-        # Advance state atomically with returning the terminal event so
-        # outside observers never see ``sent_content_block_finish=True``
-        # before the client has received ``content_block_stop``.
+        # Don't touch ``sent_content_block_finish`` here: that flag is the
+        # state machine for the regular text/tool_use/thinking block and is
+        # independent of the synthetic compaction block lifecycle. Conflating
+        # them would let outside observers (subclass overrides, introspection
+        # hooks, exception paths) see ``sent_content_block_finish=True``
+        # without any regular content block ever having started.
         self._increment_content_block_index()
         self.sent_compaction_block = True
-        self.sent_content_block_finish = True
         return stop_event
 
     def _create_initial_usage_delta(self) -> UsageDelta:

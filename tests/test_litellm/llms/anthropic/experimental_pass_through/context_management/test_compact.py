@@ -1295,7 +1295,7 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
 
     class _RouterStub:
         async def acompletion(self, **kwargs):
-            captured_summary_metadata.update(kwargs.get("metadata", {}))
+            captured_summary_metadata.update(kwargs.get("litellm_metadata", {}))
             return _make_mock_response("<summary>s</summary>")
 
     with (

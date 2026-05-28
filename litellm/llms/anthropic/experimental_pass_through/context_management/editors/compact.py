@@ -536,11 +536,16 @@ async def _call_summary_model(
     # accepted by providers that don't strictly require it (OpenAI etc.).
     # Setting a sensible default here means the feature works regardless of
     # which model an admin configures as ``context_management_summary_model``.
+    # The propagated proxy auth/spend-attribution fields (``user_api_key`` etc.)
+    # must travel as ``litellm_metadata`` — that is the parameter the proxy's
+    # post-call spend hooks read for budget attribution. The provider-level
+    # ``metadata`` kwarg corresponds to the upstream API request body and would
+    # not flow into spend tracking.
     call_kwargs: Dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
         "max_tokens": COMPACT_SUMMARY_MAX_TOKENS,
-        "metadata": metadata,
+        "litellm_metadata": metadata,
     }
     if llm_router is not None and hasattr(llm_router, "acompletion"):
         return await llm_router.acompletion(**call_kwargs)
