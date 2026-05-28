@@ -453,7 +453,31 @@ async def _upsert_budget_and_membership(
         and existing_budget_id == team_default_budget_id
     )
 
+    # If multiple memberships still point at this budget row, treat it as
+    # shared and clone-on-write — otherwise mutating the row here would
+    # silently move every other member's cap with it (LIT-3359).
+    shared_with_other_memberships = False
     if existing_budget_id is not None and not is_shared_default:
+        try:
+            membership_refs = await tx.litellm_teammembership.count(
+                where={"budget_id": existing_budget_id}
+            )
+            shared_with_other_memberships = (membership_refs or 0) > 1
+        except Exception as e:
+            # Refusing to mutate on count failures is safer than risking a
+            # cross-member overwrite; fall through to the clone-on-write path.
+            verbose_proxy_logger.debug(
+                f"_upsert_budget_and_membership: ref-count probe failed for "
+                f"budget_id={existing_budget_id} (team_id={team_id}, "
+                f"user_id={user_id}): {e}. Defaulting to clone-on-write."
+            )
+            shared_with_other_memberships = True
+
+    if (
+        existing_budget_id is not None
+        and not is_shared_default
+        and not shared_with_other_memberships
+    ):
         # Update the existing budget in-place to preserve fields not being changed.
         # Only write fields that the caller explicitly provided (non-None).
         update_data: Dict[str, Any] = {
@@ -483,7 +507,7 @@ async def _upsert_budget_and_membership(
 
     # If we're forking off the shared default, seed the new row with the
     # default's values so fields the caller did not change carry over.
-    if is_shared_default:
+    if is_shared_default or shared_with_other_memberships:
         default_budget_row = await tx.litellm_budgettable.find_unique(
             where={"budget_id": existing_budget_id}
         )
