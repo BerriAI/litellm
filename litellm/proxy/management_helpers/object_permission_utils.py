@@ -458,27 +458,6 @@ def _extract_requested_mcp_toolsets(
     return set()
 
 
-async def _get_stale_mcp_server_ids(
-    requested_servers: Set[str],
-    prisma_client: Optional[PrismaClient],
-) -> Set[str]:
-    """
-    Return the subset of *requested_servers* that no longer exist.
-
-    Queries the DB when *prisma_client* is available (authoritative); falls back
-    to the in-memory registry for config-only deployments without a DB.
-    """
-    identifier_to_server_ids = await _resolve_mcp_server_identifiers_to_ids(
-        identifiers=requested_servers,
-        prisma_client=prisma_client,
-    )
-    return {
-        identifier
-        for identifier in requested_servers
-        if not identifier_to_server_ids.get(identifier)
-    }
-
-
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
