@@ -2200,7 +2200,9 @@ async def user_api_key_auth(
     user_api_key_auth_obj.budget_reservation = None
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
-    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
+    RouteChecks.should_call_route(
+        route=route, valid_token=user_api_key_auth_obj, request=request
+    )
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -2275,6 +2277,10 @@ async def _return_user_api_key_auth_obj(
             end_time=end_time,
             duration=end_time.timestamp() - start_time.timestamp(),
             parent_otel_span=parent_otel_span,
+            event_metadata={
+                "user_api_key_team_id": valid_token_dict.get("team_id"),
+                "user_api_key_team_alias": valid_token_dict.get("team_alias"),
+            },
         )
     )
 
