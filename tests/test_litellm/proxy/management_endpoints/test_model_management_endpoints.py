@@ -1130,6 +1130,161 @@ class TestTeamModelUpdate:
             assert "403" in str(exc_info.value)
 
 
+
+class TestGetPublicModelName:
+    """Regression for LIT-2682.
+
+    The Admin UI PATCH `/model/{id}/update` payload re-sends the
+    generated internal `model_name` verbatim while keeping the intended
+    team-facing alias in `model_info.team_public_model_name`.
+
+    `_get_public_model_name` must:
+    * prefer the explicit `patch_data.model_info.team_public_model_name`;
+    * only honor `patch_data.model_name` as a rename when it differs from
+      `db_model.model_name`;
+    * fall through to the existing `db_model.model_info.team_public_model_name`;
+    * and finally to `db_model.model_name` for legacy rows.
+    """
+
+    def _make_db_model(self):
+        from litellm.types.router import ModelInfo
+        return Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(
+                model="azure/gpt-5.2-low-rpm-testing"
+            ),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+
+    def test_explicit_team_public_model_name_wins(self):
+        """Explicit `model_info.team_public_model_name` is the source of truth."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = self._make_db_model()
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_dashboard_resend_preserves_existing_public_name(self):
+        """Dashboard resend (no team_public_model_name in patch.model_info,
+        and patch.model_name == db_model.model_name) must NOT clobber the
+        existing public name.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = self._make_db_model()
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            model_info=ModelInfo(team_id="test-team"),
+        )
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_genuine_top_level_rename_is_honored(self):
+        """A real rename via top-level `model_name` (no
+        team_public_model_name in patch) must still be honored.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = self._make_db_model()
+        patch_data = updateDeployment(
+            model_name="gpt-5.2-renamed",
+            model_info=ModelInfo(team_id="test-team"),
+        )
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-renamed"
+        )
+
+    def test_explicit_team_public_model_name_beats_top_level_rename(self):
+        """If both signals are present, the explicit
+        `model_info.team_public_model_name` wins. This avoids ambiguous
+        intent — the dashboard's "rename" UI lives behind the explicit
+        field, the top-level `model_name` is the internal handle.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = self._make_db_model()
+        patch_data = updateDeployment(
+            model_name="gpt-5.2-via-top-level",
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-via-model-info",
+            ),
+        )
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-via-model-info"
+        )
+
+    def test_legacy_row_falls_back_to_db_model_name(self):
+        """Legacy `LiteLLM_ProxyModelTable` rows that pre-date team-scoped
+        public names have no `model_info.team_public_model_name`. With an
+        empty patch we fall back to the existing `db_model.model_name`.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+
+        db_model = Deployment(
+            model_name="legacy-public-name",
+            litellm_params=LiteLLM_Params(model="azure/x"),
+        )
+        patch_data = updateDeployment()
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "legacy-public-name"
+        )
+
+    def test_empty_string_team_public_model_name_does_not_match(self):
+        """An empty-string `team_public_model_name` (treated as falsy by
+        the precedence rules) falls through to the next layer.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = self._make_db_model()
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            model_info=ModelInfo(team_id="test-team", team_public_model_name=""),
+        )
+        # patch_data.model_info.team_public_model_name is empty (falsy);
+        # patch_data.model_name equals db_model.model_name; existing public
+        # name must be preserved.
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+
+
 class TestModelInfoEndpoint:
     """Test the model_info endpoint for retrieving individual model information"""
 
