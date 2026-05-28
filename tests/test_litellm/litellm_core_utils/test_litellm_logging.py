@@ -2872,3 +2872,224 @@ class TestFirstApiCallStartTimeSetOnce:
         assert obj.model_call_details["api_call_start_time"] > first
         assert obj.model_call_details["first_api_call_start_time"] == first
         assert user_meta == {}
+
+
+# ---------------------------------------------------------------------------
+# LIT-3057: stale `_hidden_params['response_cost']` (0 / '') must not be
+# treated as authoritative for normal completion paths when the response
+# usage has non-zero tokens.
+# ---------------------------------------------------------------------------
+
+
+def _lit3057_make_logging_obj(call_type: str = "acompletion"):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+
+    obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What's the capital of France?"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.now(),
+        litellm_call_id="test-lit3057",
+        function_id="test-lit3057",
+    )
+    obj.optional_params = {}
+    obj.standard_built_in_tools_params = {}
+    obj.model_call_details["custom_llm_provider"] = "openai"
+    obj.model_call_details["litellm_params"] = {"model": "gpt-4o-mini"}
+    return obj
+
+
+def _lit3057_make_response(precomputed_cost, usage_tuple=(10, 5, 15)):
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    pt, ct, tt = usage_tuple
+    resp = ModelResponse(
+        id="chatcmpl-test-lit3057",
+        choices=[
+            Choices(
+                message=Message(role="assistant", content="Paris"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        created=1700000000,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=pt, completion_tokens=ct, total_tokens=tt),
+    )
+    resp._hidden_params["response_cost"] = precomputed_cost
+    return resp
+
+
+def test_lit3057_response_cost_calculator_recomputes_stale_zero_with_usage():
+    """LIT-3057: a pre-computed 0.0 must be recomputed for a chat completion
+    when the response carries non-zero usage."""
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(10, 5, 15))
+    cost = lo._response_cost_calculator(result=resp)
+    assert isinstance(cost, float) and cost > 0, (
+        "stale 0 with non-zero usage should be recomputed to >0"
+    )
+
+
+def test_lit3057_response_cost_calculator_recomputes_stale_empty_string():
+    """LIT-3057: an empty-string sentinel must be recomputed."""
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost="", usage_tuple=(10, 5, 15))
+    cost = lo._response_cost_calculator(result=resp)
+    assert isinstance(cost, float) and cost > 0, (
+        "empty-string sentinel should be recomputed to a real cost"
+    )
+
+
+def test_lit3057_response_cost_calculator_preserves_positive_precomputed():
+    """LIT-3057: a positive pre-computed cost is authoritative."""
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost=0.0001234, usage_tuple=(10, 5, 15))
+    cost = lo._response_cost_calculator(result=resp)
+    assert cost == 0.0001234
+
+
+def test_lit3057_response_cost_calculator_zero_usage_keeps_zero():
+    """LIT-3057: precomputed 0.0 with zero usage is genuine (empty response /
+    free tier) — no recompute needed."""
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(0, 0, 0))
+    cost = lo._response_cost_calculator(result=resp)
+    assert cost == 0.0
+
+
+def test_lit3057_response_cost_calculator_cache_hit_pins_zero():
+    """LIT-3057 must not regress the cache-hit pinning to 0.0."""
+    lo = _lit3057_make_logging_obj("acompletion")
+    lo.model_call_details["cache_hit"] = True
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(10, 5, 15))
+    cost = lo._response_cost_calculator(result=resp)
+    assert cost == 0.0
+
+
+def test_lit3057_response_cost_calculator_passthrough_trusts_zero():
+    """LIT-3057: pass-through handlers set `_hidden_params['response_cost']`
+    intentionally (including 0.0 for batch-pending). Preserve that contract."""
+    lo = _lit3057_make_logging_obj("pass_through_endpoint")
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(100, 10, 110))
+    cost = lo._response_cost_calculator(result=resp)
+    assert cost == 0.0
+
+
+def test_lit3057_process_hidden_params_recomputes_stale_empty_string():
+    """LIT-3057 end-to-end via the spend-log pathway: empty-string sentinel ->
+    recomputed cost lands in StandardLoggingPayload."""
+    from datetime import datetime
+
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost="", usage_tuple=(10, 5, 15))
+    lo._process_hidden_params_and_response_cost(resp, datetime.now(), datetime.now())
+    mcd_cost = lo.model_call_details.get("response_cost")
+    assert isinstance(mcd_cost, float) and mcd_cost > 0
+    slo = lo.model_call_details.get("standard_logging_object") or {}
+    slo_cost = slo.get("response_cost") if isinstance(slo, dict) else None
+    assert isinstance(slo_cost, float) and slo_cost > 0
+
+
+def test_lit3057_process_hidden_params_recomputes_stale_zero_for_acompletion():
+    """LIT-3057 end-to-end: stale 0 on chat completion path -> recomputed."""
+    from datetime import datetime
+
+    lo = _lit3057_make_logging_obj("acompletion")
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(10, 5, 15))
+    lo._process_hidden_params_and_response_cost(resp, datetime.now(), datetime.now())
+    mcd_cost = lo.model_call_details.get("response_cost")
+    assert isinstance(mcd_cost, float) and mcd_cost > 0
+
+
+def test_lit3057_process_hidden_params_preserves_passthrough_zero():
+    """LIT-3057 must keep the existing pass-through contract intact: 0.0 set
+    by a pass-through handler is preserved verbatim, even with non-zero
+    usage on the response."""
+    from datetime import datetime
+
+    lo = _lit3057_make_logging_obj("pass_through_endpoint")
+    resp = _lit3057_make_response(precomputed_cost=0.0, usage_tuple=(100, 10, 110))
+    lo._process_hidden_params_and_response_cost(resp, datetime.now(), datetime.now())
+    assert lo.model_call_details.get("response_cost") == 0.0
+    slo = lo.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == 0.0
+
+
+def test_lit3057_is_precomputed_helper_unit():
+    """Direct exercise of the `_is_precomputed_response_cost_authoritative`
+    helper across all branches."""
+
+    class _FakeUsage:
+        def __init__(self, prompt_tokens=0, completion_tokens=0, total_tokens=0):
+            self.prompt_tokens = prompt_tokens
+            self.completion_tokens = completion_tokens
+            self.total_tokens = total_tokens
+
+    class _FakeResponse:
+        def __init__(self, usage=None):
+            self.usage = usage
+
+    lo = _lit3057_make_logging_obj("acompletion")
+    helper = lo._is_precomputed_response_cost_authoritative
+
+    # Missing key -> not authoritative.
+    assert helper({}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+    # None / empty -> not authoritative.
+    assert helper({"response_cost": None}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+    assert helper({"response_cost": ""}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+    # Positive numeric -> authoritative.
+    assert helper({"response_cost": 0.5}, _FakeResponse(_FakeUsage(10, 5, 15))) is True
+    assert helper({"response_cost": "0.5"}, _FakeResponse(_FakeUsage(10, 5, 15))) is True
+    # Zero with non-zero usage on a chat completion path -> not authoritative.
+    assert helper({"response_cost": 0.0}, _FakeResponse(_FakeUsage(10, 0, 10))) is False
+    assert helper({"response_cost": 0}, _FakeResponse(_FakeUsage(0, 5, 5))) is False
+    # Zero with zero usage -> authoritative.
+    assert helper({"response_cost": 0.0}, _FakeResponse(_FakeUsage(0, 0, 0))) is True
+    # Zero with no usage attribute -> authoritative (defensive default).
+    assert helper({"response_cost": 0.0}, _FakeResponse(None)) is True
+    # Non-numeric / un-coercible -> not authoritative.
+    assert helper({"response_cost": "abc"}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+
+    # Pass-through call_type trusts zero unconditionally.
+    lo_pt = _lit3057_make_logging_obj("pass_through_endpoint")
+    helper_pt = lo_pt._is_precomputed_response_cost_authoritative
+    assert helper_pt({"response_cost": 0.0}, _FakeResponse(_FakeUsage(10, 5, 15))) is True
+
+
+
+def test_lit3057_helper_rejects_negative_precomputed_cost():
+    """Greptile P2 (PR #29150): negative precomputed cost must never be treated
+    as authoritative. Negative cost is always an upstream bug; recompute."""
+
+    class _FakeUsage:
+        def __init__(self, p=0, c=0, t=0):
+            self.prompt_tokens = p
+            self.completion_tokens = c
+            self.total_tokens = t
+
+    class _FakeResponse:
+        def __init__(self, usage=None):
+            self.usage = usage
+
+    lo = _lit3057_make_logging_obj("acompletion")
+    helper = lo._is_precomputed_response_cost_authoritative
+
+    # Negative with non-zero usage -> not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(_FakeUsage(10, 5, 15))) is False
+    # Negative with zero usage -> still not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(_FakeUsage(0, 0, 0))) is False
+    # Negative with no usage attribute -> still not authoritative.
+    assert helper({"response_cost": -0.5}, _FakeResponse(None)) is False
+    # Negative on a pass-through call_type is still not authoritative
+    # — pass-through trust only lifts the zero-with-usage clamp, not the
+    # negative guard.
+    lo_pt = _lit3057_make_logging_obj("pass_through_endpoint")
+    helper_pt = lo_pt._is_precomputed_response_cost_authoritative
+    assert helper_pt({"response_cost": -0.5}, _FakeResponse(_FakeUsage(10, 5, 15))) is False

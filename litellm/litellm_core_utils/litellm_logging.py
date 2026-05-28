@@ -1452,6 +1452,68 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def _is_precomputed_response_cost_authoritative(
+        self, hidden_params: dict, response_obj: Any
+    ) -> bool:
+        """
+        Decide whether ``hidden_params['response_cost']`` is a trustworthy
+        pre-computed value or a stale default that should be recomputed.
+
+        LIT-3057: response objects can carry a ``response_cost`` default set
+        earlier in the request flow (e.g. an empty-string sentinel seeded
+        by pre-stream metadata, or a transient ``0.0`` from an early
+        cost lookup that ran before pricing/usage was fully resolved).
+        When such a default is read back later in the logging path it
+        becomes authoritative and the spend log records ``0.0`` even
+        though ``litellm.completion_cost`` would return a non-zero value
+        for the same usage.
+
+        Rules:
+          * Missing key                     -> not authoritative.
+          * ``None`` or empty string        -> not authoritative.
+          * Positive numeric                -> authoritative.
+          * ``0`` for a pass-through call   -> authoritative
+            (pass-through handlers seed the cost intentionally, e.g. a
+            batch-pending response with no cost yet).
+          * ``0`` for any other call type:
+              - response usage has
+                non-zero tokens             -> not authoritative
+                                              (likely a stale early seed).
+              - response usage is absent
+                or all zeros                -> authoritative.
+          * Negative numeric                -> not authoritative
+            (negative cost is always a bug upstream).
+          * Non-numeric / un-coercible      -> not authoritative.
+        """
+        if "response_cost" not in hidden_params:
+            return False
+        precomputed = hidden_params["response_cost"]
+        if precomputed is None or precomputed == "":
+            return False
+        try:
+            precomputed_value = float(precomputed)
+        except (TypeError, ValueError):
+            return False
+        if precomputed_value > 0:
+            return True
+        if precomputed_value < 0:
+            # Negative cost is always a bug upstream; do not silently trust it.
+            return False
+        # precomputed_value == 0.0. Pass-through handlers
+        # explicitly set _hidden_params['response_cost'] including 0.0;
+        # keep that contract intact.
+        if getattr(self, "call_type", None) == "pass_through_endpoint":
+            return True
+        usage = getattr(response_obj, "usage", None)
+        if usage is None:
+            return True
+        for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(usage, field, None)
+            if isinstance(value, (int, float)) and value > 0:
+                # Stale early seed with real usage -> recompute.
+                return False
+        return True
+
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1492,12 +1554,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
-            if (
-                "response_cost" in hidden_params
-                and hidden_params["response_cost"] is not None
-            ):  # use cost if already calculated
+            if self._is_precomputed_response_cost_authoritative(
+                hidden_params, result
+            ):  # use cost if already calculated and trustworthy (LIT-3057)
                 return hidden_params["response_cost"]
-            elif (
+            if (
                 router_model_id is None and "model_id" in hidden_params
             ):  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
@@ -1761,7 +1822,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-        elif "response_cost" in hidden_params:
+        elif self._is_precomputed_response_cost_authoritative(
+            hidden_params, logging_result
+        ):  # trust pre-computed cost only when authoritative (LIT-3057)
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
         elif (
             existing_cost := self.model_call_details.get("response_cost")
