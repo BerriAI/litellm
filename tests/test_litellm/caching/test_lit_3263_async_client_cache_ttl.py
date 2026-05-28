@@ -44,9 +44,10 @@ def redis_no_ping():
 @pytest.fixture
 def redis_cache_instance(redis_no_ping):
     """Build a RedisCache without actually opening a sync connection."""
-    with patch("litellm._redis.get_redis_client") as gc, patch(
-        "litellm._redis.get_redis_connection_pool"
-    ) as gp:
+    with (
+        patch("litellm._redis.get_redis_client") as gc,
+        patch("litellm._redis.get_redis_connection_pool") as gp,
+    ):
         gc.return_value = MagicMock(name="sync_redis_client")
         gp.return_value = MagicMock(name="sync_pool")
         yield RedisCache(host="lit-3263-host", port=6379)
@@ -77,13 +78,11 @@ def test_init_async_client_passes_ttl_to_in_memory_cache(redis_cache_instance):
     fake_async_client = MagicMock(name="fake_async_redis_client")
     fake_pool = MagicMock(name="fake_pool")
 
-    with patch(
-        "litellm._redis.get_redis_connection_pool", return_value=fake_pool
-    ), patch(
-        "litellm._redis.get_redis_async_client", return_value=fake_async_client
-    ), patch(
-        "litellm.in_memory_llm_clients_cache"
-    ) as fake_in_memory:
+    with (
+        patch("litellm._redis.get_redis_connection_pool", return_value=fake_pool),
+        patch("litellm._redis.get_redis_async_client", return_value=fake_async_client),
+        patch("litellm.in_memory_llm_clients_cache") as fake_in_memory,
+    ):
         fake_in_memory.get_cache.return_value = None
 
         result = cache.init_async_client()
@@ -110,13 +109,11 @@ def test_init_async_client_reuses_cached_client_no_pool_churn(redis_cache_instan
 
     fake_async_client = MagicMock(name="cached_client")
 
-    with patch(
-        "litellm._redis.get_redis_connection_pool"
-    ) as fake_get_pool, patch(
-        "litellm._redis.get_redis_async_client"
-    ) as fake_get_client, patch(
-        "litellm.in_memory_llm_clients_cache"
-    ) as fake_in_memory:
+    with (
+        patch("litellm._redis.get_redis_connection_pool") as fake_get_pool,
+        patch("litellm._redis.get_redis_async_client") as fake_get_client,
+        patch("litellm.in_memory_llm_clients_cache") as fake_in_memory,
+    ):
         fake_in_memory.get_cache.return_value = fake_async_client
 
         result = cache.init_async_client()
@@ -135,15 +132,17 @@ def test_init_async_client_creates_fresh_pool_on_cache_miss(redis_cache_instance
     first_client, second_client = MagicMock(name="c1"), MagicMock(name="c2")
     first_pool, second_pool = MagicMock(name="p1"), MagicMock(name="p2")
 
-    with patch(
-        "litellm._redis.get_redis_connection_pool",
-        side_effect=[first_pool, second_pool],
-    ), patch(
-        "litellm._redis.get_redis_async_client",
-        side_effect=[first_client, second_client],
-    ), patch(
-        "litellm.in_memory_llm_clients_cache"
-    ) as fake_in_memory:
+    with (
+        patch(
+            "litellm._redis.get_redis_connection_pool",
+            side_effect=[first_pool, second_pool],
+        ),
+        patch(
+            "litellm._redis.get_redis_async_client",
+            side_effect=[first_client, second_client],
+        ),
+        patch("litellm.in_memory_llm_clients_cache") as fake_in_memory,
+    ):
         fake_in_memory.get_cache.return_value = None
         c1 = cache.init_async_client()
         fake_in_memory.get_cache.return_value = None
