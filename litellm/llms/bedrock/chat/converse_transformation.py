@@ -41,6 +41,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
@@ -1891,6 +1892,67 @@ class AmazonConverseConfig(BaseConfig):
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
     @staticmethod
+    def _transform_citations_to_annotations(
+        citations_content_blocks: Optional[List[CitationsContentBlock]],
+    ) -> Tuple[Optional[str], Optional[List[ChatCompletionAnnotation]]]:
+        """
+        Convert Bedrock citationsContent blocks into OpenAI-style annotations.
+
+        Returns:
+            citations_text: concatenated text from citationsContent.content
+            annotations: OpenAI URL citation annotations
+        """
+        if not citations_content_blocks:
+            return None, None
+
+        annotations: List[ChatCompletionAnnotation] = []
+        citations_text_parts: List[str] = []
+        content_offset = 0
+
+        for citations_block in citations_content_blocks:
+            block_text = ""
+            for content_part in citations_block.get("content", []):
+                if isinstance(content_part, dict):
+                    _text = content_part.get("text")
+                    if isinstance(_text, str):
+                        block_text += _text
+
+            if block_text:
+                citations_text_parts.append(block_text)
+
+            for citation in citations_block.get("citations", []):
+                if not isinstance(citation, dict):
+                    continue
+
+                location = citation.get("location", {})
+                search_location = (
+                    location.get("searchResultLocation", {})
+                    if isinstance(location, dict)
+                    else {}
+                )
+                start = search_location.get("start")
+                end = search_location.get("end")
+                if not isinstance(start, int) or not isinstance(end, int):
+                    continue
+
+                annotations.append(
+                    ChatCompletionAnnotation(
+                        type="url_citation",
+                        url_citation={
+                            "start_index": content_offset + start,
+                            "end_index": content_offset + end,
+                            "title": str(citation.get("title", "")),
+                            "url": str(citation.get("source", "")),
+                        },
+                    )
+                )
+
+            content_offset += len(block_text)
+
+        citations_text = "".join(citations_text_parts) if citations_text_parts else None
+        return citations_text, annotations or None
+
+    @staticmethod
     def _unwrap_bedrock_properties(json_str: str) -> str:
         """
         Unwrap Bedrock's response_format JSON structure.
@@ -2071,6 +2133,19 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = (
                 provider_specific_fields
             )
+
+        citations_text, annotations = self._transform_citations_to_annotations(
+            citationsContentBlocks
+        )
+        if citations_text:
+            if not content_str:
+                content_str = citations_text
+            elif content_str.strip() == ".":
+                # Bedrock may emit the cited sentence in citationsContent and only
+                # punctuation in text blocks; stitch them for user-facing content.
+                content_str = citations_text + content_str
+        if annotations:
+            chat_completion_message["annotations"] = annotations
 
         if reasoningContentBlocks is not None:
             chat_completion_message["reasoning_content"] = (

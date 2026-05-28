@@ -49,9 +49,24 @@ class DocumentBlock(TypedDict):
     name: str
 
 
+class SearchResultBlock(TypedDict, total=False):
+    """
+    Search result block used in Bedrock toolResult content.
+
+    Reference:
+    https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultBlock.html
+    """
+
+    source: str
+    title: str
+    content: List[dict]
+    citations: dict
+
+
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    searchResult: SearchResultBlock
     json: dict
     text: str
 
