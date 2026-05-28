@@ -1049,6 +1049,62 @@ async def test_summary_call_sends_default_max_tokens():
     assert captured_kwargs.get("max_tokens") == COMPACT_SUMMARY_MAX_TOKENS
 
 
+async def test_summary_call_honors_max_tokens_override():
+    """Operators can override the default summary ``max_tokens`` via
+    ``general_settings.context_management_summary_max_tokens``."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _read_summary_max_tokens_setting,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"context_management_summary_max_tokens": 8192},
+    ):
+        assert _read_summary_max_tokens_setting() == 8192
+
+        from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+            _call_summary_model,
+        )
+
+        await _call_summary_model(
+            summary_model="claude-haiku-4-5",
+            summary_messages=[{"role": "user", "content": "hi"}],
+            metadata={},
+            llm_router=_FakeRouter(),
+            max_tokens=_read_summary_max_tokens_setting(),
+        )
+
+    assert captured_kwargs.get("max_tokens") == 8192
+
+
+def test_summary_max_tokens_setting_falls_back_for_invalid_values():
+    """Invalid override values (non-int, non-positive, missing) fall back to
+    the compiled default so a typo in ``general_settings`` doesn't break the
+    summary call."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_SUMMARY_MAX_TOKENS,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _read_summary_max_tokens_setting,
+    )
+
+    for bad in ("4096", 0, -1, None, {"value": 1024}):
+        with patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"context_management_summary_max_tokens": bad},
+        ):
+            assert (
+                _read_summary_max_tokens_setting() == COMPACT_SUMMARY_MAX_TOKENS
+            ), f"expected default for invalid override {bad!r}"
+
+
 # ---------------------------------------------------------------------------
 # Editor: summary model key/team access gate
 # ---------------------------------------------------------------------------

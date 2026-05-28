@@ -224,6 +224,32 @@ def test_ignored_knobs_do_not_alter_behavior():
     # Despite clear_tool_inputs=True, inputs are NOT cleared (knob ignored).
     assert applied is not None
     assert applied["cleared_tool_uses"] == 2
+    # Ignored knobs surface as warnings on the AppliedEdit so operators can
+    # see what was dropped (the v0 polyfill silently dropping them at debug
+    # log level made misconfiguration invisible from the response).
+    assert set(applied.get("warnings", [])) == {
+        "clear_at_least_ignored",
+        "exclude_tools_ignored",
+        "clear_tool_inputs_ignored",
+    }
+
+
+def test_no_ignored_knobs_omits_warnings_field():
+    """When the caller doesn't pass any unsupported knobs, no ``warnings`` are added."""
+    messages = _make_history(n_pairs=3)
+    _, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+        },
+    )
+    assert applied is not None
+    assert "warnings" not in applied
 
 
 def test_tool_result_list_content_shape_preserved():

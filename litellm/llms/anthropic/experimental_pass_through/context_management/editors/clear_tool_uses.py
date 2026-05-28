@@ -148,14 +148,18 @@ def apply_clear_tool_uses_20250919(
     edit_spec: Dict[str, Any],
 ) -> Tuple[List[Dict[str, Any]], Optional[AppliedEdit]]:
     """Apply clear_tool_uses; return (messages, AppliedEdit or None)."""
-    for ignored_knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs"):
-        if ignored_knob in edit_spec:
-            verbose_logger.debug(
-                "context_management polyfill: ignoring '%s' on %s "
-                "(supported only on Anthropic-family forwarding path in v0)",
-                ignored_knob,
-                CLEAR_TOOL_USES_EDIT_TYPE,
-            )
+    ignored_knobs = [
+        knob
+        for knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs")
+        if knob in edit_spec
+    ]
+    for ignored_knob in ignored_knobs:
+        verbose_logger.warning(
+            "context_management polyfill: ignoring '%s' on %s "
+            "(supported only on Anthropic-family forwarding path in v0)",
+            ignored_knob,
+            CLEAR_TOOL_USES_EDIT_TYPE,
+        )
 
     trigger = edit_spec.get("trigger") or {
         "type": "input_tokens",
@@ -201,4 +205,6 @@ def apply_clear_tool_uses_20250919(
         "cleared_tool_uses": cleared_count,
         "cleared_input_tokens": cleared_input_tokens,
     }
+    if ignored_knobs:
+        applied["warnings"] = [f"{knob}_ignored" for knob in ignored_knobs]
     return edited, applied

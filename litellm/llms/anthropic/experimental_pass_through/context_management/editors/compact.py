@@ -30,6 +30,7 @@ from ..constants import (
     COMPACT_MIN_TRIGGER_TOKENS,
     COMPACT_NO_TOOL_CALLS_SUFFIX,
     COMPACT_SUMMARY_MAX_TOKENS,
+    COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY,
     COMPACT_SUMMARY_MODEL_SETTING_KEY,
     COMPACT_SUMMARY_SYSTEM_PREFIX,
 )
@@ -63,6 +64,23 @@ def _read_summary_model_setting() -> Optional[str]:
         return None
     value = general_settings.get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
     return value if isinstance(value, str) and value else None
+
+
+def _read_summary_max_tokens_setting() -> int:
+    """Look up the configured summary ``max_tokens`` from proxy general_settings.
+
+    Falls back to :data:`COMPACT_SUMMARY_MAX_TOKENS` when the setting is
+    missing or invalid (non-positive int, wrong type). Operators tune this
+    when the default doesn't fit their chosen summary model's output budget.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except Exception:
+        return COMPACT_SUMMARY_MAX_TOKENS
+    value = general_settings.get(COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY)
+    if isinstance(value, int) and value > 0:
+        return value
+    return COMPACT_SUMMARY_MAX_TOKENS
 
 
 def _check_summary_model_access(
@@ -526,6 +544,7 @@ async def _call_summary_model(
     metadata: Dict[str, Any],
     llm_router: Any,
     allowed_model_region: Optional[str] = None,
+    max_tokens: int = COMPACT_SUMMARY_MAX_TOKENS,
 ) -> Any:
     """Invoke the configured summary model.
 
@@ -536,7 +555,10 @@ async def _call_summary_model(
     # ``max_tokens`` is required by providers like Anthropic and silently
     # accepted by providers that don't strictly require it (OpenAI etc.).
     # Setting a sensible default here means the feature works regardless of
-    # which model an admin configures as ``context_management_summary_model``.
+    # which model an admin configures as ``context_management_summary_model``;
+    # operators can override via ``context_management_summary_max_tokens`` in
+    # ``general_settings`` when the default doesn't fit the chosen model's
+    # output budget.
     # The propagated proxy auth/spend-attribution fields (``user_api_key`` etc.)
     # must travel as ``litellm_metadata`` — that is the parameter the proxy's
     # post-call spend hooks read for budget attribution. The provider-level
@@ -550,7 +572,7 @@ async def _call_summary_model(
     call_kwargs: Dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
-        "max_tokens": COMPACT_SUMMARY_MAX_TOKENS,
+        "max_tokens": max_tokens,
         "litellm_metadata": metadata,
     }
     if allowed_model_region is not None:
@@ -771,6 +793,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
             metadata=propagated_metadata,
             llm_router=llm_router,
             allowed_model_region=allowed_model_region,
+            max_tokens=_read_summary_max_tokens_setting(),
         )
     except Exception as e:
         verbose_logger.warning("compact_20260112: summary call failed: %s", e)
