@@ -27,6 +27,7 @@ enforced it.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -46,6 +47,14 @@ GRACE_PERIOD_SECONDS = 86400
 AGENT_SHIN_DEFAULT_BOT_LOGIN = "github-actions[bot]"
 
 IMMEDIATE_CLOSE_LOGINS = frozenset({"swiftwinds"})
+
+# `gh {pr,issue} list` has no "fetch everything" flag — `--limit` is the only
+# control and it defaults to 30. Pass a ceiling far above any realistic open
+# backlog (low thousands today) so gh paginates the API until the queue is
+# exhausted rather than silently truncating. The bulk sweeps MUST see the whole
+# backlog: gh lists newest-first, so a low cap drops the *oldest* PRs/issues —
+# exactly the stale ones a low-quality sweep is meant to catch.
+GH_LIST_ALL_LIMIT = 100_000
 
 
 def extract_greptile_score(comments: Iterable[dict]) -> tuple[int, dict] | None:
@@ -95,6 +104,34 @@ def gh(*args: str) -> str:
         check=True,
     )
     return result.stdout
+
+
+def list_open_items(kind: str, *, repo: str | None, fields: str) -> list[dict]:
+    """Return EVERY open PR (``kind="pr"``) or issue (``kind="issue"``) in ``repo``.
+
+    Wraps ``gh {pr,issue} list`` with ``--limit GH_LIST_ALL_LIMIT`` so the full
+    backlog is fetched instead of the default 30 (or any other arbitrary cap).
+    Both bulk sweeps — the daily Greptile closer and the one-shot rollout
+    heads-up — rely on this seeing the whole queue, including the oldest items.
+
+    ``fields`` is the comma-separated ``--json`` field list the caller needs
+    (e.g. ``"number"`` for the rollout, the full set for the closer).
+    """
+    if kind not in ("pr", "issue"):
+        raise ValueError(f"kind must be 'pr' or 'issue', got {kind!r}")
+    repo_args = ["--repo", repo] if repo else []
+    raw = gh(
+        kind,
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        str(GH_LIST_ALL_LIMIT),
+        "--json",
+        fields,
+        *repo_args,
+    )
+    return json.loads(raw)
 
 
 def seconds_since_latest_marker_comment(

@@ -45,6 +45,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _agent_shin_actions import maybe_post_comment  # noqa: E402
+from agent_shin_shared import list_open_items  # noqa: E402
 from triage_with_llm import (  # noqa: E402
     DEFAULT_MODEL,
     call_llm_judge,
@@ -206,22 +207,16 @@ def format_heads_up_comment(
 
 
 def _list_open_numbers(repo: str, kind: str) -> list[int]:
-    """Return all open PR or issue numbers in ``repo`` (paginated via gh)."""
-    # `gh issue list` includes PRs unless we filter; use the dedicated commands.
-    cmd = "pr" if kind == "pr" else "issue"
-    raw = gh(
-        cmd,
-        "list",
-        "--repo",
-        repo,
-        "--state",
-        "open",
-        "--limit",
-        "1000",
-        "--json",
-        "number",
-    )
-    return [item["number"] for item in json.loads(raw)]
+    """Return every open PR or issue number in ``repo``.
+
+    Delegates to ``list_open_items`` so the full backlog is fetched (no cap)
+    and the `gh {pr,issue} list` invocation stays in one shared place. ``gh
+    issue list`` would include PRs, but ``list_open_items`` uses the dedicated
+    command per kind, so the two never mix.
+    """
+    return [
+        item["number"] for item in list_open_items(kind, repo=repo, fields="number")
+    ]
 
 
 def _has_heads_up_marker(item: dict) -> bool:

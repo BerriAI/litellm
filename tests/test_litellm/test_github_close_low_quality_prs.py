@@ -653,3 +653,82 @@ class TestHasOptoutLabel:
 
     def test_should_handle_missing_labels(self, closer_module):
         assert closer_module.has_optout_label({}, {"wip"}) is False
+
+
+class TestListOpenItemsNoCap:
+    """The bulk sweeps must fetch the ENTIRE open backlog.
+
+    Regression guard for the old hard-coded ``--limit 1000``: gh lists
+    newest-first, so a low cap silently dropped the *oldest* PRs/issues —
+    exactly the stale ones a low-quality sweep exists to catch.
+    """
+
+    @staticmethod
+    def _shared(closer_module):
+        # `closer_module` loading puts `.github/scripts` on sys.path and
+        # imports agent_shin_shared, so it's already in sys.modules.
+        import agent_shin_shared
+
+        return agent_shin_shared
+
+    def _capture_gh_args(self, closer_module, monkeypatch, *, returns="[]"):
+        shared = self._shared(closer_module)
+        captured: dict = {}
+
+        def fake_gh(*args):
+            captured["args"] = args
+            return returns
+
+        # `list_open_items` looks up `gh` in agent_shin_shared's namespace.
+        monkeypatch.setattr(shared, "gh", fake_gh)
+        return shared, captured
+
+    def test_list_open_items_passes_no_cap_limit_not_1000(
+        self, closer_module, monkeypatch
+    ):
+        shared, captured = self._capture_gh_args(closer_module, monkeypatch)
+        shared.list_open_items("pr", repo="o/r", fields="number,title")
+        args = captured["args"]
+        assert "--limit" in args
+        limit_value = args[args.index("--limit") + 1]
+        assert limit_value == str(shared.GH_LIST_ALL_LIMIT)
+        assert limit_value != "1000"
+        # A meaningful ceiling: comfortably above any realistic open backlog.
+        assert shared.GH_LIST_ALL_LIMIT >= 100_000
+
+    def test_list_open_items_uses_dedicated_command_state_and_fields(
+        self, closer_module, monkeypatch
+    ):
+        shared, captured = self._capture_gh_args(closer_module, monkeypatch)
+        shared.list_open_items("issue", repo="o/r", fields="number")
+        args = captured["args"]
+        assert args[0] == "issue" and args[1] == "list"
+        assert args[args.index("--state") + 1] == "open"
+        assert args[args.index("--json") + 1] == "number"
+        assert tuple(args[-2:]) == ("--repo", "o/r")
+
+    def test_list_open_items_omits_repo_when_none(self, closer_module, monkeypatch):
+        shared, captured = self._capture_gh_args(closer_module, monkeypatch)
+        shared.list_open_items("pr", repo=None, fields="number")
+        assert "--repo" not in captured["args"]
+
+    def test_list_open_items_parses_json_array(self, closer_module, monkeypatch):
+        shared, _ = self._capture_gh_args(
+            closer_module, monkeypatch, returns='[{"number": 1}, {"number": 2}]'
+        )
+        items = shared.list_open_items("pr", repo=None, fields="number")
+        assert [i["number"] for i in items] == [1, 2]
+
+    def test_list_open_items_rejects_unknown_kind(self, closer_module):
+        shared = self._shared(closer_module)
+        with pytest.raises(ValueError):
+            shared.list_open_items("both", repo="o/r", fields="number")
+
+    def test_fetch_open_prs_delegates_with_no_cap(self, closer_module, monkeypatch):
+        shared, captured = self._capture_gh_args(closer_module, monkeypatch)
+        closer_module.fetch_open_prs("o/r")
+        args = captured["args"]
+        assert args[0] == "pr"
+        assert args[args.index("--limit") + 1] == str(shared.GH_LIST_ALL_LIMIT)
+        # Still requests every field downstream evaluate_pr / labels logic needs.
+        assert "createdAt" in args[args.index("--json") + 1]

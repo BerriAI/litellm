@@ -56,6 +56,7 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     SCORE_PATTERN,
     extract_greptile_score,
     gh,
+    list_open_items,
     parse_iso8601,
     seconds_since_latest_marker_comment,
 )
@@ -100,20 +101,8 @@ def fetch_open_prs(repo: str | None) -> list[dict]:
     a free pass; the internal-collaborator open-PR queue should reflect every
     PR that needs human attention regardless of draft status.
     """
-    repo_args = ["--repo", repo] if repo else []
     fields = "number,title,createdAt,isDraft,labels,author,url"
-    raw = gh(
-        "pr",
-        "list",
-        "--state",
-        "open",
-        "--limit",
-        "1000",
-        "--json",
-        fields,
-        *repo_args,
-    )
-    return json.loads(raw)
+    return list_open_items("pr", repo=repo, fields=fields)
 
 
 def fetch_pr_author_association(pr_number: int, repo: str | None) -> str:

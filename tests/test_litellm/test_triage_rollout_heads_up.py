@@ -575,3 +575,32 @@ class TestRun:
             ("issue", 101),
             ("pr", 2),
         ]
+
+
+class TestListOpenNumbersNoCap:
+    """`_list_open_numbers` must sweep the WHOLE backlog, not a capped page.
+
+    Regression guard: the rollout sweep is one-shot, so any item it misses
+    here never gets a heads-up before the bot starts auto-closing.
+    """
+
+    def test_delegates_to_list_open_items_with_no_cap(
+        self, heads_up_module, monkeypatch
+    ):
+        import agent_shin_shared
+
+        captured: dict = {}
+
+        def fake_gh(*args):
+            captured["args"] = args
+            return '[{"number": 5}, {"number": 9}]'
+
+        monkeypatch.setattr(agent_shin_shared, "gh", fake_gh)
+        numbers = heads_up_module._list_open_numbers("o/r", "issue")
+        assert numbers == [5, 9]
+        args = captured["args"]
+        assert args[0] == "issue"
+        assert args[args.index("--limit") + 1] == str(
+            agent_shin_shared.GH_LIST_ALL_LIMIT
+        )
+        assert "1000" not in args
