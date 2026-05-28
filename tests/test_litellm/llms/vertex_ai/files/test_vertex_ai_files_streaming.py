@@ -19,6 +19,7 @@ These tests assert:
 4. Peak traced memory under a sizeable synthetic payload is bounded well
    below the old ~5x amplification (we assert <= 3.5x).
 """
+
 import gc
 import io
 import json
@@ -131,9 +132,7 @@ class TestIterOpenAIJsonlEntries:
 
     def test_lazy_parsing_does_not_consume_beyond_first(self):
         """``next()`` must not parse any line beyond the first."""
-        payload = b"\n".join(
-            [json.dumps(_entry(0)).encode(), b"NOT-JSON", b"NOT-JSON"]
-        )
+        payload = b"\n".join([json.dumps(_entry(0)).encode(), b"NOT-JSON", b"NOT-JSON"])
         first = next(_iter_openai_jsonl_entries(payload))
         assert first == _entry(0)
 
@@ -146,9 +145,7 @@ class TestStreamOutputParity:
             payload, xform._map_openai_to_vertex_params
         )
         legacy_list = [
-            json.loads(line)
-            for line in payload.decode().splitlines()
-            if line.strip()
+            json.loads(line) for line in payload.decode().splitlines() if line.strip()
         ]
         legacy_vertex = (
             xform._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
@@ -217,9 +214,8 @@ class TestPublicApiParity:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
         )
-        extracted = extract_file_data(
-            ("batch.jsonl", payload, "application/jsonl")
-        )
+
+        extracted = extract_file_data(("batch.jsonl", payload, "application/jsonl"))
         name = cfg.get_object_name(extracted, "batch")
         assert "publishers/google/models" in name
 
@@ -228,6 +224,7 @@ class TestPublicApiParity:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
         )
+
         extracted = extract_file_data(("batch.jsonl", b"", "application/jsonl"))
         name = cfg.get_object_name(extracted, "batch")
         assert "/uploads/" in name
@@ -268,10 +265,8 @@ class TestPeakMemory:
         gc.collect()
         tracemalloc.start()
         xform = VertexAIJsonlFilesTransformation()
-        out, _name = (
-            xform.transform_openai_file_content_to_vertex_ai_file_content(
-                openai_file_content=payload
-            )
+        out, _name = xform.transform_openai_file_content_to_vertex_ai_file_content(
+            openai_file_content=payload
         )
         _cur, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
@@ -290,9 +285,8 @@ class TestPeakMemory:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
         )
-        extracted = extract_file_data(
-            ("batch.jsonl", payload, "application/jsonl")
-        )
+
+        extracted = extract_file_data(("batch.jsonl", payload, "application/jsonl"))
 
         gc.collect()
         tracemalloc.start()
