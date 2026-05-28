@@ -1346,6 +1346,31 @@ class TestInlineSchemaRefs:
         result = _inline_schema_refs({"$ref": "#/definitions/Foo"}, spec)
         assert result == {"type": "integer"}
 
+    def test_non_dict_target_preserves_siblings(self):
+        # JSON Schema $ref should point to a schema *object*. If the spec
+        # is malformed and points at a list/scalar, sibling fields next to
+        # the $ref must not be silently dropped: keep the original node so
+        # the caller can still see the per-use-site overrides.
+        spec = {
+            "components": {
+                "schemas": {
+                    "ListNotObject": ["this", "is", "not", "a", "valid", "schema"],
+                    "ScalarThing": "scalar",
+                }
+            }
+        }
+        # With siblings: preserve everything intact.
+        with_siblings = {
+            "$ref": "#/components/schemas/ListNotObject",
+            "description": "sibling description",
+        }
+        assert _inline_schema_refs(with_siblings, spec) == with_siblings
+        # Without siblings: legacy behaviour - return the resolved target.
+        bare_ref_list = {"$ref": "#/components/schemas/ListNotObject"}
+        assert _inline_schema_refs(bare_ref_list, spec) == ["this", "is", "not", "a", "valid", "schema"]
+        bare_ref_scalar = {"$ref": "#/components/schemas/ScalarThing"}
+        assert _inline_schema_refs(bare_ref_scalar, spec) == "scalar"
+
     def test_preserves_non_dict_non_list_inputs(self):
         assert _inline_schema_refs("string-value", {"components": {}}) == "string-value"
         assert _inline_schema_refs(42, {"components": {}}) == 42
