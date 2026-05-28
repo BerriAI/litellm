@@ -303,7 +303,7 @@ def test_mcp_span_is_current_inside_block_and_detached_after(exporter):
             mcp_active = otel_trace.get_current_span()
             assert mcp_active.is_recording(), "MCP span should be recording"
             # Create a child via a separate tracer - it must parent to MCP.
-            with parent_tracer.start_as_current_span("http.client.GET") as child:
+            with parent_tracer.start_as_current_span("http.client.GET"):
                 pass
             assert mcp_active.get_span_context().span_id != 0
             mcp_span_id_inside = mcp_active.get_span_context().span_id
