@@ -644,7 +644,24 @@ class ModelManagementAuthChecks:
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             return True
-        elif team_obj is None or not _is_user_team_admin(
+        # Enforce key-level team boundary (LIT-3211): if the API key is bound to a
+        # specific team, the target team_id MUST equal the key's team_id. Without
+        # this guard a team-A-scoped key whose owner also happens to be a member-admin
+        # of team B would slip past the _is_user_team_admin check below and act on
+        # team B - bypassing the key's team scope.
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id != team_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team ID={} does not match the API key's team ID={}. Team-scoped keys can only manage models for their own team.".format(
+                        team_id, user_api_key_dict.team_id
+                    )
+                },
+            )
+        if team_obj is None or not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=team_obj
         ):
             raise HTTPException(

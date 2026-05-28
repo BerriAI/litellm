@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
@@ -159,6 +160,87 @@ class TestModelManagementAuthChecks:
         result = ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id="test_team",
             user_api_key_dict=self.team_admin_user,
+            team_obj=team_obj,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_cross_team_key_rejected(self):
+        """LIT-3211: a team-scoped API key cannot manage models for a different team,
+        even if the underlying user happens to be admin in that other team."""
+        key_scoped_to_team_A = UserAPIKeyAuth(
+            user_id="user_x",
+            team_id="team_A",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_B_obj = LiteLLM_TeamTable(
+            team_id="team_B",
+            team_alias="team_B",
+            members_with_roles=[Member(user_id="user_x", role="admin")],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="team_B",
+                user_api_key_dict=key_scoped_to_team_A,
+                team_obj=team_B_obj,
+                premium_user=True,
+            )
+        assert exc_info.value.status_code == 403
+        err = str(exc_info.value.detail)
+        assert "team_A" in err
+        assert "team_B" in err
+        assert "Team-scoped keys can only" in err
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_same_team_key_allowed(self):
+        """LIT-3211: a team-scoped key acting on its own team_id is still allowed."""
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[
+                Member(user_id=self.team_admin_user.user_id, role="admin")
+            ],
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="test_team",
+            user_api_key_dict=self.team_admin_user,
+            team_obj=team_obj,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_proxy_admin_cross_team_allowed(self):
+        """LIT-3211: PROXY_ADMIN still bypasses the team boundary (intentional)."""
+        proxy_admin_scoped = UserAPIKeyAuth(
+            user_id="admin_user",
+            team_id="team_A",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="team_B",
+            user_api_key_dict=proxy_admin_scoped,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_unscoped_key_unchanged(self):
+        """LIT-3211: keys with no team_id still rely on the existing team-admin check."""
+        unscoped_key = UserAPIKeyAuth(
+            user_id="user_x",
+            team_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[Member(user_id="user_x", role="admin")],
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="test_team",
+            user_api_key_dict=unscoped_key,
             team_obj=team_obj,
             premium_user=True,
         )
@@ -1618,3 +1700,5 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+# LIT-3211: keys.team_id boundary check regression tests added in TestModelManagementAuthChecks above
