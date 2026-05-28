@@ -7,23 +7,16 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
-import { serverRootPath } from "@/components/networking";
+import { uiRootBase } from "@/utils/uiRoutes";
 
-/** ---- BASE URL HELPERS ---- */
+/** ---- BASE URL HELPER ---- */
 /**
- * Resolve the UI root URL: \`<serverRootPath>/ui/\`.
+ * Resolve a router target relative to the UI root \`<serverRootPath>/ui/\`.
  *
- * The LiteLLM proxy always mounts the static UI at \`/ui\` (see
- * \`app.mount(\"/ui\", StaticFiles(...))\` in \`litellm/proxy/proxy_server.py\`),
- * so router targets must always be anchored to that mount. The previous
- * implementation derived the prefix from \`NEXT_PUBLIC_BASE_URL\` — which is
- * unset in \`.env.production\` — and produced URLs like \`/?page=logs\` from
- * dashboard subpaths, leaking the previous route segment in the URL.
+ * The proxy always mounts the static UI at \`/ui\` (see \`uiRootBase\` in
+ * \`@/utils/uiRoutes\`); router pushes must therefore be anchored to that
+ * mount regardless of \`NEXT_PUBLIC_BASE_URL\`.
  */
-function uiRootBase(): string {
-  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
-  return `${root}/ui/`;
-}
 function withBase(path: string): string {
   const base = uiRootBase();
   if (path.startsWith("?")) return `${base}${path}`;
