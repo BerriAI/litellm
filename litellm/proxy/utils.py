@@ -6047,6 +6047,37 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
+    # LIT-3038: A proxy admin who was previously an internal user (or whose
+    # key/user record predates a role promotion) may still carry a
+    # `models=["no-default-models"]` restriction. Without this guard,
+    # `get_complete_model_list` would echo the literal placeholder string
+    # `"no-default-models"` back to /v1/models, which the UI interprets as
+    # "no models accessible" and uses to force the team-required key-creation
+    # modal. PROXY_ADMIN sees every model the proxy serves, so bypass the
+    # key/team filter and defer to `proxy_model_list` (wildcard / access
+    # group expansion still applies downstream).
+    from litellm.proxy._types import LitellmUserRoles
+    if (
+        user_api_key_dict is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        and not team_id
+    ):
+        return get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get(
+                "infer_model_from_keys", False
+            ),
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            only_model_access_groups=only_model_access_groups,
+            team_id=user_api_key_dict.team_id,
+        )
+
     # Get key models
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
