@@ -2343,6 +2343,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
                 if fake_stream is True:
                     return MockResponsesAPIStreamingIterator(
@@ -2374,6 +2375,7 @@ class BaseLLMHTTPHandler:
                     json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    logging_obj=logging_obj,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -2489,6 +2491,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
 
                 if fake_stream is True:
@@ -2522,6 +2525,7 @@ class BaseLLMHTTPHandler:
                     json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    logging_obj=logging_obj,
                 )
 
         except Exception as e:
