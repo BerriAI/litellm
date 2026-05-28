@@ -4977,7 +4977,16 @@ class BedrockConverseMessagesProcessor:
         """Convert a document content block to a Bedrock DocumentBlock.
 
         Handles the Anthropic-style document format:
-        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}}
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "..."},
+            # optional — propagated to Bedrock Converse DocumentBlock so citations
+            # work via the OpenAI / `/v1/chat/completions` contract, not only via
+            # the Bedrock passthrough endpoint.
+            "title": "human-readable doc title",
+            "context": "free-form context the model should see for this document",
+            "citations": {"enabled": true},
+        }
         """
         source = element["source"]
         source_type = source.get("type")
@@ -4992,23 +5001,40 @@ class BedrockConverseMessagesProcessor:
             mime_type=media_type, image_format=media_type.split("/")[1]
         )
 
-        # Deterministic name using the same hashing pattern as _create_bedrock_block
-        HASH_SAMPLE_BYTES = 64 * 1024
-        normalized = "".join(data.split()).encode("utf-8")
-        sample = normalized[:HASH_SAMPLE_BYTES]
-        hasher = hashlib.sha256()
-        hasher.update(sample)
-        hasher.update(str(len(normalized)).encode("utf-8"))
-        content_hash = hasher.hexdigest()[:16]
-        document_name = f"Document_{content_hash}_{doc_format}"
+        # Prefer the caller-supplied title when present; otherwise fall back to a
+        # deterministic hash-based name (the previous default behavior).
+        title = element.get("title")
+        if isinstance(title, str) and title.strip():
+            document_name = title.strip()
+        else:
+            # Deterministic name using the same hashing pattern as _create_bedrock_block
+            HASH_SAMPLE_BYTES = 64 * 1024
+            normalized = "".join(data.split()).encode("utf-8")
+            sample = normalized[:HASH_SAMPLE_BYTES]
+            hasher = hashlib.sha256()
+            hasher.update(sample)
+            hasher.update(str(len(normalized)).encode("utf-8"))
+            content_hash = hasher.hexdigest()[:16]
+            document_name = f"Document_{content_hash}_{doc_format}"
 
-        return BedrockContentBlock(
-            document=BedrockDocumentBlock(
-                source=BedrockSourceBlock(bytes=data),
-                format=doc_format,
-                name=document_name,
-            )
+        document_block: BedrockDocumentBlock = BedrockDocumentBlock(
+            source=BedrockSourceBlock(bytes=data),
+            format=doc_format,
+            name=document_name,
         )
+
+        # Forward Bedrock-Converse-native fields when the caller provided them.
+        # These power Claude/Nova citation grounding (`citationsContent` in the
+        # response) and per-document context for retrieval-style prompts.
+        citations = element.get("citations")
+        if isinstance(citations, dict) and "enabled" in citations:
+            document_block["citations"] = {"enabled": bool(citations["enabled"])}
+
+        context = element.get("context")
+        if isinstance(context, str) and context:
+            document_block["context"] = context
+
+        return BedrockContentBlock(document=document_block)
 
     @staticmethod
     def add_thinking_blocks_to_assistant_content(
