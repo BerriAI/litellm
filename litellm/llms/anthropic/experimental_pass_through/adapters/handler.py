@@ -70,14 +70,6 @@ def _extract_proxy_litellm_metadata(kwargs: Dict[str, Any]) -> Optional[Dict[str
     return litellm_metadata
 
 
-def _extract_user_api_key_auth(kwargs: Dict[str, Any]) -> Any:
-    """Pull the parent request's ``UserAPIKeyAuth`` out of ``litellm_metadata``."""
-    proxy_metadata = _extract_proxy_litellm_metadata(kwargs)
-    if proxy_metadata is None:
-        return None
-    return proxy_metadata.get("user_api_key_auth")
-
-
 async def _prepare_context_managed_request(
     *,
     model: str,
