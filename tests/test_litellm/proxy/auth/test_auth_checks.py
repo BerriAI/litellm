@@ -608,9 +608,7 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(
 @patch(
     "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
 )
-async def test_get_team_db_check_upsert_propagates_team_alias(
-    mock_new_team, monkeypatch
-):
+async def test_get_team_db_check_upsert_propagates_team_alias(mock_new_team):
     """LIT-3087: when ``upsert_team_alias`` is passed alongside
     ``team_id_upsert``, the auto-create call sends the alias into
     ``NewTeamRequest`` so the freshly created team has a human-readable name.
@@ -644,9 +642,7 @@ async def test_get_team_db_check_upsert_propagates_team_alias(
 @patch(
     "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
 )
-async def test_get_team_db_check_upsert_without_alias_preserved_behavior(
-    mock_new_team, monkeypatch
-):
+async def test_get_team_db_check_upsert_without_alias_preserved_behavior(mock_new_team):
     """LIT-3087: when ``upsert_team_alias`` is None (default), the upsert
     request must not stamp an alias — pre-fix behavior is preserved for
     deployments that do not configure ``team_alias_jwt_field``.
@@ -675,9 +671,7 @@ async def test_get_team_db_check_upsert_without_alias_preserved_behavior(
 @patch(
     "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
 )
-async def test_get_team_db_check_upsert_empty_alias_treated_as_unset(
-    mock_new_team, monkeypatch
-):
+async def test_get_team_db_check_upsert_empty_alias_treated_as_unset(mock_new_team):
     """LIT-3087: an empty string alias from the JWT must not be stamped as
     the team's ``team_alias`` — empty alias is indistinguishable from "no
     alias claim" and would produce a confusing blank-name team in the UI.
@@ -706,9 +700,7 @@ async def test_get_team_db_check_upsert_empty_alias_treated_as_unset(
 @patch(
     "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
 )
-async def test_get_team_db_check_alias_ignored_when_team_exists(
-    mock_new_team, monkeypatch
-):
+async def test_get_team_db_check_alias_ignored_when_team_exists(mock_new_team):
     """LIT-3087: alias backfill is intentionally NOT performed — existing
     teams keep their alias on every JWT auth. The fix only affects newly
     created (upserted) teams.
