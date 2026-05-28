@@ -655,17 +655,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Return the fetchPredictOperation URL and body needed to retrieve the source video."""
-        operation_name = extract_original_video_id(video_id)
-        model = self.extract_model_from_operation_name(operation_name)
-
-        if not model:
-            raise ValueError(
-                f"Cannot extract model from operation name: {operation_name}. "
-                "Expected format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID"
-            )
-
-        fetch_url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
-        return fetch_url, {"operationName": operation_name}
+        return self.transform_video_status_retrieve_request(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_video_edit_request(
         self,
