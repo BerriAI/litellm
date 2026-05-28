@@ -410,6 +410,66 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return total_estimated
 
+    def _apply_lit_3408_floor_cap(
+        self,
+        data: dict,
+        descriptors: List[RateLimitDescriptor],
+        estimated_tokens: int,
+    ) -> int:
+        """LIT-3408: cap the speculative output-budget FLOOR at the smallest
+        TPM bucket across ``descriptors`` when the caller did NOT pass an
+        explicit ``max_tokens`` / ``max_completion_tokens``.
+
+        Returns the (possibly capped) ``estimated_tokens`` to reserve.
+
+        The cap is held above the known input-token estimate so a request
+        whose KNOWN input already exceeds the bucket still rejects upfront;
+        capping below the input would let the call through and the
+        (actual - reserved) delta would land on the counter post-call,
+        blowing the quota.
+
+        ``is not None`` checks treat ``max_tokens=0`` /
+        ``max_completion_tokens=0`` as explicitly declared, not as absent.
+        """
+        explicit_max_tokens_set = (
+            data.get("max_tokens") is not None
+            or data.get("max_completion_tokens") is not None
+        )
+        if explicit_max_tokens_set:
+            return estimated_tokens
+
+        smallest_tpm_limit: Optional[int] = None
+        for d in descriptors:
+            tpu = (d.get("rate_limit") or {}).get("tokens_per_unit")
+            if tpu is None or tpu <= 0:
+                continue
+            smallest_tpm_limit = (
+                tpu if smallest_tpm_limit is None else min(smallest_tpm_limit, tpu)
+            )
+        if smallest_tpm_limit is None:
+            return estimated_tokens
+
+        messages = data.get("messages")
+        prompt = data.get("prompt")
+        input_text = data.get("input")
+        if messages:
+            total_chars = len(get_str_from_messages(messages))
+        elif isinstance(prompt, str):
+            total_chars = len(prompt)
+        elif isinstance(prompt, list):
+            total_chars = sum(len(str(item)) for item in prompt)
+        elif isinstance(input_text, str):
+            total_chars = len(input_text)
+        elif isinstance(input_text, list):
+            total_chars = sum(len(str(item)) for item in input_text)
+        else:
+            total_chars = 0
+        input_floor = (
+            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        )
+        capped = min(estimated_tokens, smallest_tpm_limit)
+        return max(capped, input_floor)
+
     def _is_redis_cluster(self) -> bool:
         """
         Check if the dual cache is using Redis cluster.
@@ -2028,6 +2088,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         model=requested_model,
                     ),
                     1,
+                )
+                # LIT-3408: when no explicit ``max_tokens`` is set, cap
+                # the speculative output-budget floor by the smallest TPM
+                # bucket so small-tpm keys are not rejected on the very
+                # first request. Implementation pinned in
+                # ``_apply_lit_3408_floor_cap`` so this hook keeps its
+                # ruff PLR0915 statement budget.
+                estimated_tokens = self._apply_lit_3408_floor_cap(
+                    data=data,
+                    descriptors=descriptors,
+                    estimated_tokens=estimated_tokens,
                 )
 
                 tpm_response = await self.reserve_tpm_tokens(
