@@ -1300,6 +1300,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return i
         return 0
 
+    # Absolute upper bound on how long we will buffer text without finding a
+    # whitespace/punctuation boundary. At the cap we fall back to a hard cut,
+    # but the cut leaves a generous tail behind so common PII spans (credit
+    # cards, emails, SSNs) stay inside at least one Presidio analyze call.
+    _PRESIDIO_STREAM_MAX_BUFFER = 480
+    _PRESIDIO_FORCED_FLUSH_TAIL = 96
+
     async def _mask_emit_safe_prefix(
         self,
         buf: str,
@@ -1307,15 +1314,49 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         tail_overlap: int,
         mask_fn,
     ):
-        """Compute the safe prefix to flush, mask it, and return (masked, remainder)."""
+        """Compute the safe prefix to flush, mask it, and return (masked, remainder).
+
+        If no whitespace/punctuation boundary is found inside the primary
+        ``flush_chars`` window we keep buffering (return ``None, buf``). This
+        prevents a PII span (credit card, email, SSN) from being split across
+        two Presidio analyze calls when neither call would have it in full.
+
+        Only once the buffer has grown past ``_PRESIDIO_STREAM_MAX_BUFFER``
+        do we force a flush, and even then we keep a wider tail
+        (``_PRESIDIO_FORCED_FLUSH_TAIL``) so a worst-case 96-char span still
+        appears inside the next analyze window.
+        """
         flushable = buf[:-tail_overlap] if tail_overlap else buf
         safe_len = self._find_safe_flush_boundary(flushable, flush_chars)
-        if safe_len == 0:
-            safe_len = max(0, len(buf) - tail_overlap)
-        if not safe_len:
+        if safe_len:
+            masked = await mask_fn(buf[:safe_len])
+            return masked, buf[safe_len:]
+
+        # No safe boundary inside the primary flush window. Try a wider scan
+        # before resorting to a hard cut.
+        if len(buf) < self._PRESIDIO_STREAM_MAX_BUFFER:
             return None, buf
-        masked = await mask_fn(buf[:safe_len])
-        return masked, buf[safe_len:]
+
+        wider_flushable = (
+            buf[: -self._PRESIDIO_FORCED_FLUSH_TAIL]
+            if self._PRESIDIO_FORCED_FLUSH_TAIL
+            else buf
+        )
+        wider_safe_len = self._find_safe_flush_boundary(
+            wider_flushable, self._PRESIDIO_STREAM_MAX_BUFFER
+        )
+        if wider_safe_len:
+            masked = await mask_fn(buf[:wider_safe_len])
+            return masked, buf[wider_safe_len:]
+
+        # Last-resort hard cut. Keep a generous tail so PII spans up to
+        # ``_PRESIDIO_FORCED_FLUSH_TAIL`` chars still land inside the next
+        # analyze call.
+        cut = max(0, len(buf) - self._PRESIDIO_FORCED_FLUSH_TAIL)
+        if cut <= 0:
+            return None, buf
+        masked = await mask_fn(buf[:cut])
+        return masked, buf[cut:]
 
     async def _mask_apply_to_choice_delta(
         self,
