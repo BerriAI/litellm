@@ -415,18 +415,26 @@ class AmazonAnthropicClaudeMessagesConfig(
         beta_set: set,
     ) -> None:
         """
-        Bedrock InvokeModel accepts ``context_management`` only when it carries
-        ``compact_20260112`` edits paired with the ``compact-2026-01-12``
-        anthropic-beta header. Other edit types (notably ``clear_thinking_20251015``,
-        which Claude Code sends on every request) are LiteLLM-internal and would
-        cause Bedrock to 400 with ``"context_management: Extra inputs are not
-        permitted"``.
+        Bedrock InvokeModel supports two ``context_management`` edit types, each
+        gated behind its own anthropic-beta header:
 
-        Filter the edits list to the supported subset, add the beta header when
-        compact edits remain, and drop ``context_management`` entirely when no
-        supported edits are left so the safety-net allowlist can pass it through.
+        - ``compact_20260112`` (compaction) -> ``compact-2026-01-12``
+        - ``clear_tool_uses_20250919`` (automatic tool call clearing) ->
+          ``context-management-2025-06-27``
 
-        Ref: https://github.com/BerriAI/litellm/issues/27532
+        Other edit types (notably ``clear_thinking_20251015``, which Claude Code
+        sends on every request and is consumed via thinking injection upstream)
+        are not accepted by Bedrock InvokeModel and would cause it to 400 with
+        ``"context_management: Extra inputs are not permitted"``.
+
+        Filter the edits list to the Bedrock-supported subset, add the matching
+        beta header for each kind that survives, and drop ``context_management``
+        entirely when no supported edits are left so the safety-net allowlist can
+        pass it through.
+
+        Refs:
+            https://github.com/BerriAI/litellm/issues/27532
+            https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.html
         """
         cm = anthropic_messages_request.get("context_management")
         if not isinstance(cm, dict):
@@ -436,16 +444,22 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request.pop("context_management", None)
             return
 
-        compact_edits = [
-            e
-            for e in edits
-            if isinstance(e, dict) and e.get("type") == "compact_20260112"
-        ]
-        if compact_edits:
-            beta_set.add("compact-2026-01-12")
+        supported_edits = []
+        for e in edits:
+            if not isinstance(e, dict):
+                continue
+            edit_type = e.get("type")
+            if edit_type == "compact_20260112":
+                beta_set.add("compact-2026-01-12")
+                supported_edits.append(e)
+            elif edit_type == "clear_tool_uses_20250919":
+                beta_set.add("context-management-2025-06-27")
+                supported_edits.append(e)
+
+        if supported_edits:
             anthropic_messages_request["context_management"] = {
                 **cm,
-                "edits": compact_edits,
+                "edits": supported_edits,
             }
         else:
             anthropic_messages_request.pop("context_management", None)
