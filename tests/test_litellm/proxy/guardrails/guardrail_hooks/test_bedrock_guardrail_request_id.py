@@ -92,7 +92,9 @@ class _IntegrationGuardrail:
                 return_value=(MagicMock(), "us-east-1"),
             )
         )
-        prep = self._stack.enter_context(patch.object(BedrockGuardrail, "_prepare_request"))
+        prep = self._stack.enter_context(
+            patch.object(BedrockGuardrail, "_prepare_request")
+        )
         p = MagicMock()
         p.url = "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/test/version/1/apply"
         p.body = b"{}"
