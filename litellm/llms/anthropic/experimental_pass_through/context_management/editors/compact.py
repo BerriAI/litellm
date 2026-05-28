@@ -52,7 +52,7 @@ _PROPAGATED_METADATA_KEYS = (
     "litellm_parent_otel_span",
 )
 
-_SUMMARY_TAG_RE = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
+_SUMMARY_TAG_RE = re.compile(r"<summary>(.*)</summary>", re.IGNORECASE | re.DOTALL)
 
 
 def _read_summary_model_setting() -> Optional[str]:
@@ -80,11 +80,15 @@ def _check_summary_model_access(
     Returns True (allow) when ``user_api_key_auth`` is not present — SDK
     callers and tests run outside the proxy, where no key/team policy exists.
     Returns False when either the key-level or team-level allowlist denies
-    the summary model.
+    the summary model (``ProxyException`` from ``_can_object_call_model``).
+    Unexpected errors during the check (e.g. router internals raising) fail
+    closed but are logged separately so operators can distinguish them from
+    a real access-denied response.
     """
     if user_api_key_auth is None:
         return True
     try:
+        from litellm.proxy._types import ProxyException
         from litellm.proxy.auth.auth_checks import _can_object_call_model
     except Exception:
         return True
@@ -92,31 +96,30 @@ def _check_summary_model_access(
     key_models = list(getattr(user_api_key_auth, "models", None) or [])
     team_id = getattr(user_api_key_auth, "team_id", None)
     team_model_aliases = getattr(user_api_key_auth, "team_model_aliases", None)
-    if key_models:
-        try:
-            _can_object_call_model(
-                model=summary_model,
-                llm_router=llm_router,
-                models=key_models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_id,
-                object_type="key",
-            )
-        except Exception:
-            return False
-
     team_models = list(getattr(user_api_key_auth, "team_models", None) or [])
-    if team_models:
+
+    for object_type, models in (("key", key_models), ("team", team_models)):
+        if not models:
+            continue
         try:
             _can_object_call_model(
                 model=summary_model,
                 llm_router=llm_router,
-                models=team_models,
+                models=models,
                 team_model_aliases=team_model_aliases,
                 team_id=team_id,
-                object_type="team",
+                object_type=object_type,
             )
-        except Exception:
+        except ProxyException:
+            return False
+        except Exception as e:
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during %s-level access "
+                "check for summary_model=%s; denying access: %s",
+                object_type,
+                summary_model,
+                e,
+            )
             return False
 
     return True
