@@ -456,8 +456,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             return
 
         supported = (
-            AmazonAnthropicClaudeMessagesConfig
-            ._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS
+            AmazonAnthropicClaudeMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS
         )
 
         retained_edits: List[Dict] = []
