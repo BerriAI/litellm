@@ -1333,6 +1333,31 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         fn.__dict__["arguments"] = masked_args  # type: ignore[attr-defined]
                     except Exception:
                         pass
+            # Legacy `delta.function_call.arguments` (pre-tool_calls API). Some providers
+            # still emit this on the streaming response — mask it the same way.
+            function_call = getattr(delta, "function_call", None)
+            if function_call is not None:
+                fc_args = getattr(function_call, "arguments", None)
+                if isinstance(fc_args, str) and fc_args:
+                    try:
+                        masked_fc = await self.check_pii(
+                            text=fc_args,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=request_data,
+                        )
+                        try:
+                            function_call.arguments = masked_fc
+                        except Exception:  # noqa: BLE001
+                            try:
+                                function_call.__dict__["arguments"] = masked_fc
+                            except Exception:
+                                pass
+                    except Exception as exc:  # noqa: BLE001
+                        verbose_proxy_logger.error(
+                            "Presidio multi-choice legacy function_call mask failed (%s)",
+                            type(exc).__name__,
+                        )
         return chunk
 
     @staticmethod
@@ -1365,9 +1390,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             created=getattr(template, "created", None),
             model=getattr(template, "model", None),
             system_fingerprint=getattr(template, "system_fingerprint", None),
-            # Forward usage from the template chunk (some providers carry usage
-            # on every chunk, not just the last one).
-            usage=getattr(template, "usage", None),
+            # NOTE: intentionally do NOT forward `usage` from the template here —
+            # for the combined content+finish+usage case the same payload also
+            # rides on the finish-only clone, and downstream consumers that sum
+            # token counts across all non-None usage fields would double-count.
+            # Usage forwarding is the responsibility of `_clone_chunk_finish_only`.
             choices=[new_choice],
         )
 
@@ -1682,6 +1709,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 except Exception:
                                     try:
                                         fn.__dict__["arguments"] = unmasked_args
+                                    except Exception:
+                                        pass
+                        # Legacy `delta.function_call` path.
+                        function_call = getattr(delta, "function_call", None)
+                        if function_call is not None:
+                            fc_args = getattr(function_call, "arguments", None)
+                            if isinstance(fc_args, str) and fc_args:
+                                unmasked_fc = self._unmask_pii_text(fc_args, pii_tokens)
+                                try:
+                                    function_call.arguments = unmasked_fc
+                                except Exception:
+                                    try:
+                                        function_call.__dict__["arguments"] = (
+                                            unmasked_fc
+                                        )
                                     except Exception:
                                         pass
                     yield chunk
