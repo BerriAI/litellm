@@ -3050,3 +3050,66 @@ async def test_lit3222_apply_to_output_masks_tool_call_arguments(monkeypatch):
     assert any(
         "Jane Doe" in c for c in calls
     ), f"Presidio not called with args: {calls}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_usage_forwarded_on_finish_chunk(monkeypatch):
+    """
+    LIT-3222 (Greptile P1 round 3): `_clone_chunk_finish_only` must preserve
+    `usage` from the source chunk so providers that embed token counts in the
+    combined content+finish chunk (Bedrock Converse, OpenAI
+    `stream_options: include_usage=True`) don't lose the token-count payload.
+    """
+    from litellm.types.utils import Delta, StreamingChoices, Usage
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    async def fake_check_pii(text, **_kwargs):
+        return text
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    usage = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+    combined = ModelResponseStream(
+        id="chatcmpl-usage",
+        object="chat.completion.chunk",
+        created=1700000000,
+        model="gpt-test",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="Hello world."),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    async def upstream():
+        yield combined
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # The finish-only chunk must carry the usage payload.
+    finish_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and c.choices[0].finish_reason
+    ]
+    assert len(finish_chunks) == 1
+    finish = finish_chunks[0]
+    assert getattr(finish, "usage", None) is not None, "usage lost on finish chunk"
+    assert finish.usage.prompt_tokens == 10
+    assert finish.usage.completion_tokens == 20
+    assert finish.usage.total_tokens == 30
