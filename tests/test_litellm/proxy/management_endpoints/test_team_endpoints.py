@@ -7333,7 +7333,7 @@ async def test_list_team_v1_batches_key_queries():
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
             new_callable=AsyncMock,
-            return_value=[team1, team2],
+            return_value=([team1, team2], False),
         ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships",
@@ -8010,6 +8010,8 @@ async def test_new_team_encrypts_callback_vars(
     assert cv["langfuse_secret_key"] != "sk-real"
     recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-real"
+
+
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
