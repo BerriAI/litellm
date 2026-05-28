@@ -655,6 +655,88 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 
 Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
 
+## Usage - Bedrock search citations in `/chat/completions`
+
+If your tool returns search sources and you want citation metadata in the final assistant response, pass `search_results` on the `role: "tool"` message.
+
+### Request shape
+
+```json
+{
+  "model": "bedrock-claude-3-7",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is XX?"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+          "type": "function",
+          "function": {
+            "name": "RAGRequest",
+            "arguments": "{\"query\":\"What is Apptio?\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+      "content": "XX is a company that makes calls to Bedrock using passthrough APIs via LiteLLM",
+      "search_results": [
+        {
+          "source": "https://www.xx.com/about",
+          "title": "About XX",
+          "content": [
+            {
+              "text": "XX is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+            }
+          ],
+          "citations": {
+            "enabled": true
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### What you get back
+
+LiteLLM returns regular assistant text in `message.content` and citation metadata in `message.annotations`:
+
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "XX is a technology business management company...",
+        "annotations": [
+          {
+            "type": "url_citation",
+            "url_citation": {
+              "start_index": 0,
+              "end_index": 42,
+              "title": "About XX",
+              "url": "https://www.xx.com/about"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+:::note
+If you only send plain `tool.content` text (without `search_results`), you will still get a normal answer, but no structured citation annotations.
+:::
+
 
 ## Usage - Anthropic Beta Features
 
