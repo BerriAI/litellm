@@ -3119,3 +3119,122 @@ async def test_lit_2792_key_model_max_budget_override_suppresses_team_v3():
         "Key model_max_budget override must suppress team model_per_team, "
         f"got: {descriptor_keys}"
     )
+
+
+# --------------------------------------------------------------------------
+# LIT-2792 — Greptile follow-up: partial key override must not silently drop
+# the other dimension of the team-level model descriptor.
+# --------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_lit_2792_partial_key_override_preserves_team_other_dimension_v3():
+    """
+    LIT-2792 partial override:
+
+    - Key overrides only RPM for gpt-4 (model_rpm_limit).
+    - Team configures BOTH RPM and TPM for gpt-4.
+
+    The team's RPM dimension for gpt-4 must be suppressed (key wins per
+    LIT-2792), but the team's TPM cap for gpt-4 must still apply — otherwise
+    a key with a partial override would silently bypass the team's TPM
+    budget.
+    """
+    _api_key = hash_token("sk-lit-2792-partial-rpm-only")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-partial",
+        metadata={
+            "model_rpm_limit": {"gpt-4": 50},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 10},
+            "model_tpm_limit": {"gpt-4": 1000},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert (
+        "model_per_team" in descriptor_keys
+    ), (
+        "Team's TPM dimension must still produce a model_per_team descriptor "
+        f"under a partial key override, got: {descriptor_keys}"
+    )
+
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    # The team's RPM dimension is suppressed by the key override.
+    assert model_per_team["rate_limit"]["requests_per_unit"] is None, (
+        "Team RPM must be suppressed when key overrides RPM for gpt-4, got "
+        f"{model_per_team['rate_limit']}"
+    )
+    # The team's TPM dimension is preserved.
+    assert (
+        model_per_team["rate_limit"]["tokens_per_unit"] == 1000
+    ), f"Team TPM must remain enforced, got {model_per_team['rate_limit']}"
+
+
+@pytest.mark.asyncio
+async def test_lit_2792_partial_key_override_tpm_only_preserves_team_rpm_v3():
+    """
+    Mirror of the partial-RPM case: key overrides only TPM, team configures
+    only RPM. The team's RPM cap must remain enforced.
+    """
+    _api_key = hash_token("sk-lit-2792-partial-tpm-only")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors: List[Dict[str, Any]] = []
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+
+    handler.should_rate_limit = mock_should_rate_limit
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="team-lit-2792-partial-tpm",
+        metadata={
+            "model_tpm_limit": {"gpt-4": 5000},
+        },
+        team_metadata={
+            "model_rpm_limit": {"gpt-4": 7},
+        },
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4"},
+        call_type="",
+    )
+
+    descriptor_keys = [d["key"] for d in captured_descriptors]
+    assert "model_per_team" in descriptor_keys, descriptor_keys
+    model_per_team = next(
+        d for d in captured_descriptors if d["key"] == "model_per_team"
+    )
+    assert model_per_team["rate_limit"]["requests_per_unit"] == 7
+    assert model_per_team["rate_limit"]["tokens_per_unit"] is None
