@@ -5297,7 +5297,9 @@ def _validate_sort_params(
 VALID_EXPIRES_FILTER_VALUES = {"expired", "active"}
 
 
-def _build_expires_filter_clause(expires_filter: Optional[str]) -> Optional[Dict[str, Any]]:
+def _build_expires_filter_clause(
+    expires_filter: Optional[str],
+) -> Optional[Dict[str, Any]]:
     """Build the Prisma where-clause fragment for the optional `expires` filter.
 
     Returns None when `expires_filter` is missing or not in the validated
