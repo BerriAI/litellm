@@ -88,8 +88,23 @@ class BaseLLMAIOHTTPHandler:
             )
             self._owns_transport = True
             return self.transport
-        except Exception:
-            # If transport creation fails, return None (will use direct session)
+        except Exception as e:
+            # Surface the failure: callers will fall back to a bare
+            # `aiohttp.ClientSession()` which does not carry the resolved SSL
+            # configuration, so silently swallowing this would silently
+            # re-introduce the bug fixed in LIT-3369.
+            try:
+                from litellm._logging import verbose_logger
+
+                verbose_logger.warning(
+                    "Failed to create aiohttp transport with resolved SSL "
+                    "configuration; falling back to bare aiohttp.ClientSession "
+                    "(SSL settings may not apply): %s",
+                    e,
+                )
+            except Exception:
+                # logging must never break the fallback path
+                pass
             return None
 
     def _get_connector(self) -> Optional[aiohttp.BaseConnector]:
@@ -134,8 +149,12 @@ class BaseLLMAIOHTTPHandler:
                 ):
                     return self.transport._get_valid_client_session()
             except RuntimeError:
-                # No running event loop (sync caller). Fall through to
-                # legacy default below.
+                # Most commonly raised by `asyncio.get_running_loop()` when
+                # this method is invoked outside of an async context (e.g.,
+                # sync callers / unit tests that don't drive an event loop).
+                # In that case we fall through to the legacy bare
+                # `ClientSession()` so back-compat with sync callers is
+                # preserved.
                 pass
 
         # 4) Legacy default: bare ClientSession (preserves old behavior).
