@@ -31,7 +31,14 @@ DatadogPayload = TypedDict(
 
 
 class DD_ERRORS(Enum):
-    DATADOG_413_ERROR = "Datadog API Error - Payload too large (batch is above 5MB uncompressed). If you want this logged either disable request/response logging or set `DD_BATCH_SIZE=50`"
+    DATADOG_413_ERROR = (
+        "Datadog API Error - Payload too large (batch is above 5MB "
+        "uncompressed). The batch is split in half and retried; single "
+        "events that still exceed the 5MB limit are dropped. To recover, "
+        "disable request/response body logging via "
+        "`litellm.turn_off_message_logging = True` or "
+        "`DatadogInitParams(turn_off_message_logging=True)`."
+    )
 
 
 class DatadogInitParams(StandardCustomLoggerInitParams):
