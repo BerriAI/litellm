@@ -173,6 +173,36 @@ class TestCloseCommentText:
         assert "@agent-shin reconsider" in body
         assert "Reopen the issue" not in body
 
+    def test_pr_close_comment_should_link_blog_explainer(self, triage_module):
+        # The blog post is the canonical public explanation of what the bot
+        # checks and why. Every action-required bot comment must link to it
+        # so contributors landing on a bot-closed PR can self-serve context
+        # without pinging a maintainer.
+        body = triage_module.format_pr_close_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "https://docs.litellm.ai/blog/agent-shin-triage" in body
+
+    def test_issue_close_comment_should_link_blog_explainer(self, triage_module):
+        body = triage_module.format_issue_close_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "https://docs.litellm.ai/blog/agent-shin-triage" in body
+
+    def test_pr_close_comment_should_flag_mocked_tests_as_insufficient_proof(
+        self, triage_module
+    ):
+        # The PR rubric was tightened to require end-to-end QA proof and
+        # explicitly exclude mocked-dependency unit tests. The user-facing
+        # close comment must say so — otherwise contributors will keep
+        # re-submitting "pytest passed (mocks)" runs and getting closed
+        # again with no explanation of why.
+        body = triage_module.format_pr_close_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "end-to-end qa proof" in body.lower()
+        assert "mock" in body.lower()
+
 
 class TestWasClosedByAgentShin:
     """Bot-closed guard: only the bot's own closures are reopen candidates."""
