@@ -5509,27 +5509,107 @@ class Router:
 
     async def acancel_batch(
         self,
-        model: str,
+        model: Optional[str] = None,
         **kwargs,
     ) -> LiteLLMBatch:
         """
         Cancel a batch through the router with proper model-to-provider mapping.
+
+        When ``model`` is provided, the existing single-deployment fast path runs
+        (with fallbacks / retries). When ``model`` is ``None`` -- e.g. a
+        ``/v1/batches/{batch_id}/cancel`` call with no model in the URL/body
+        under ``enable_loadbalancing_on_batch_endpoints`` -- the router iterates
+        every deployment in parallel and returns the first one that successfully
+        cancels the batch. Mirrors the behaviour of ``aretrieve_batch`` so
+        retrieve / cancel are symmetric (LIT-2454).
         """
         try:
-            kwargs["model"] = model
-            kwargs["original_function"] = self._acancel_batch
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            metadata_variable_name = _get_router_metadata_variable_name(
-                function_name="_acancel_batch"
-            )
-            self._update_kwargs_before_fallbacks(
-                model=model,
-                kwargs=kwargs,
-                metadata_variable_name=metadata_variable_name,
-            )
-            response = await self.async_function_with_fallbacks(**kwargs)
+            if model is not None:
+                kwargs["model"] = model
+                kwargs["original_function"] = self._acancel_batch
+                kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+                metadata_variable_name = _get_router_metadata_variable_name(
+                    function_name="_acancel_batch"
+                )
+                self._update_kwargs_before_fallbacks(
+                    model=model,
+                    kwargs=kwargs,
+                    metadata_variable_name=metadata_variable_name,
+                )
+                response = await self.async_function_with_fallbacks(**kwargs)
+                return response
 
-            return response
+            # Model unknown -- iterate every deployment to locate the batch.
+            # Same pattern as aretrieve_batch.
+            from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+            filtered_model_list = self.get_model_list()
+            if filtered_model_list is None:
+                raise Exception("Router not yet initialized.")
+
+            received_exceptions: list = []
+
+            async def try_cancel_batch(model_deployment):
+                try:
+                    deployment_model = model_deployment["litellm_params"].get("model")
+                    data = model_deployment["litellm_params"].copy()
+                    custom_llm_provider = data.get("custom_llm_provider")
+                    if deployment_model is None:
+                        raise Exception(
+                            f"Model not found in litellm_params for deployment: {model_deployment}"
+                        )
+                    if not custom_llm_provider:
+                        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+                            model=deployment_model
+                        )
+                    new_kwargs = safe_deep_copy(kwargs)
+                    self._update_kwargs_with_deployment(
+                        deployment=cast(dict, model_deployment),
+                        kwargs=new_kwargs,
+                        function_name="acancel_batch",
+                    )
+                    new_kwargs.pop("custom_llm_provider", None)
+                    data.pop("custom_llm_provider", None)
+                    return await litellm.acancel_batch(
+                        **{
+                            **data,
+                            "custom_llm_provider": custom_llm_provider,
+                            **new_kwargs,
+                        },
+                    )
+                except Exception as e:
+                    # router.py already imports `traceback` at module level
+                    # (Greptile P2).
+                    traceback.print_exc()
+                    received_exceptions.append(e)
+                    return None
+
+            if isinstance(filtered_model_list, list) and len(filtered_model_list) > 0:
+                # try_cancel_batch() already swallows every Exception internally
+                # and returns None on failure; no need for return_exceptions=True.
+                # Letting BaseException (e.g. CancelledError) propagate is the
+                # correct behaviour. (Greptile P2)
+                results = await asyncio.gather(
+                    *[
+                        try_cancel_batch(cast(DeploymentTypedDict, m))
+                        for m in filtered_model_list
+                    ],
+                )
+            else:
+                raise Exception("No deployments configured on router.")
+
+            for result in results:
+                if isinstance(result, LiteLLMBatch):
+                    return result
+
+            if received_exceptions:
+                raise received_exceptions[0]
+
+            raise Exception(
+                "Unable to cancel batch in any model. Received errors - {}".format(
+                    received_exceptions
+                )
+            )
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
