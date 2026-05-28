@@ -2782,6 +2782,15 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     surface it as a queryable span attribute without parsing the raw
     guardrail_response blob."""
 
+    provider_request_id: Optional[str]
+    """Provider-side request ID for the guardrail execution. AWS Bedrock
+    returns this as the ``x-amzn-RequestId`` response header on every
+    ApplyGuardrail call; populated by the provider hook so operators can
+    correlate a LiteLLM request to the corresponding provider-side
+    guardrail execution in compliance logs, vendor dashboards, and support
+    tickets. ``None`` when the provider does not expose a request ID or the
+    header was missing on the response."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -2825,6 +2834,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     risk_score: Optional[float]
     violation_categories: Optional[List[str]]
     guardrail_action: Optional[str]
+    provider_request_id: Optional[str]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
