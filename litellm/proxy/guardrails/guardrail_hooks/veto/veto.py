@@ -22,9 +22,14 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import (
+    CallTypesLiteral,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
     )
@@ -175,14 +180,7 @@ class VetoGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Any:
         """Parallel guardrail (block-only): runs alongside the LLM call. Cannot
         rewrite content, so redact is not applied — only block raises."""
@@ -205,6 +203,8 @@ class VetoGuardrail(CustomGuardrail):
             return response
         for choice in getattr(response, "choices", []) or []:
             message = getattr(choice, "message", None)
+            if message is None:
+                continue
             content = getattr(message, "content", None)
             if isinstance(content, str) and content.strip():
                 message.content = await self._scan_text(content)
@@ -212,11 +212,17 @@ class VetoGuardrail(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[Any]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> "GenericGuardrailAPIInputs":
         """Text-in / text-out surface used by the unified guardrail API.
-        Block raises; redact returns the masked text; allow returns input."""
-        return await self._scan_text(text)
+        Scans each entry in ``inputs['texts']``: block raises; redact rewrites
+        the text in place; allow returns it untouched."""
+        texts = inputs.get("texts") or []
+        for i, text in enumerate(texts):
+            scanned = await self._scan_text(text)
+            if isinstance(scanned, str):
+                texts[i] = scanned
+        return inputs

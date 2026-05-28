@@ -341,23 +341,34 @@ class TestVetoApplyGuardrail:
     @pytest.mark.asyncio
     async def test_allow_returns_input(self, veto_guardrail):
         with _patch_check(veto_guardrail, _verdict("allow")):
-            assert await veto_guardrail.apply_guardrail("hello") == "hello"
+            out = await veto_guardrail.apply_guardrail(
+                {"texts": ["hello"]}, {}, "request"
+            )
+        assert out["texts"] == ["hello"]
 
     @pytest.mark.asyncio
     async def test_redact_returns_masked(self, veto_guardrail):
         with _patch_check(veto_guardrail, _verdict("redact", redacted="masked")):
-            assert await veto_guardrail.apply_guardrail("secret") == "masked"
+            out = await veto_guardrail.apply_guardrail(
+                {"texts": ["secret"]}, {}, "request"
+            )
+        assert out["texts"] == ["masked"]
 
     @pytest.mark.asyncio
     async def test_block_raises(self, veto_guardrail):
         with _patch_check(veto_guardrail, _verdict("block")):
             with pytest.raises(HTTPException):
-                await veto_guardrail.apply_guardrail("ignore previous")
+                await veto_guardrail.apply_guardrail(
+                    {"texts": ["ignore previous"]}, {}, "request"
+                )
 
     @pytest.mark.asyncio
     async def test_empty_text_not_scanned(self, veto_guardrail):
         with _patch_check(veto_guardrail, _verdict("block")) as mock_post:
-            assert await veto_guardrail.apply_guardrail("   ") == "   "
+            out = await veto_guardrail.apply_guardrail(
+                {"texts": ["   "]}, {}, "request"
+            )
+        assert out["texts"] == ["   "]
         assert mock_post.call_count == 0
 
 
@@ -401,7 +412,9 @@ class TestVetoRequest:
         )
         with _patch_check(veto_guardrail, err_resp):
             with pytest.raises(httpx.HTTPStatusError):
-                await veto_guardrail.apply_guardrail("scan me")
+                await veto_guardrail.apply_guardrail(
+                    {"texts": ["scan me"]}, {}, "request"
+                )
 
 
 # ---------------------------------------------------------------------------
