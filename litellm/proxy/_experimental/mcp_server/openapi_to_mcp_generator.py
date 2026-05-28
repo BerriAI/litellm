@@ -319,6 +319,14 @@ def _inline_schema_refs(
                 # Sibling wins, matching OpenAPI 3.1 ``$ref`` overlay semantics.
                 merged[k] = v
             return merged
+        # The resolved target is not a JSON Schema object (e.g. the spec
+        # points ``$ref`` at a list or scalar - technically malformed under
+        # JSON Schema). If the original ``$ref`` node carried sibling
+        # fields (``description``, ``nullable``, ...), they would be lost
+        # if we returned the bare resolved value. Preserve the source node
+        # in that case so no per-use-site context is dropped silently.
+        if any(k != "$ref" for k in schema):
+            return schema
         return resolved
 
     return {k: _inline_schema_refs(v, spec, _visiting) for k, v in schema.items()}
