@@ -647,26 +647,14 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def transform_video_get_character_response(self, raw_response, logging_obj):
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
-    def transform_video_edit_request(
+    def get_video_edit_prefetch_params(
         self,
-        prompt: str,
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        """
-        Transform the video edit request for Veo API.
-
-        Veo does not have a dedicated edit endpoint. Instead, this implementation:
-        1. Fetches the source video from the completed operation via fetchPredictOperation
-        2. Constructs a new predictLongRunning request using the source video as input
-
-        The source video is passed as bytesBase64Encoded (or gcsUri if available).
-        """
-        import httpx as _httpx
-
+        """Return the fetchPredictOperation URL and body needed to retrieve the source video."""
         operation_name = extract_original_video_id(video_id)
         model = self.extract_model_from_operation_name(operation_name)
 
@@ -676,27 +664,38 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 "Expected format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID"
             )
 
-        # Step 1: Fetch the source video data from the completed operation
         fetch_url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
-        with _httpx.Client() as client:
-            fetch_response = client.post(
-                url=fetch_url,
-                headers=headers,
-                json={"operationName": operation_name},
-                timeout=30,
+        return fetch_url, {"operationName": operation_name}
+
+    def transform_video_edit_request(
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+        prefetched_source_data: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Build a predictLongRunning edit request from the pre-fetched source video.
+
+        The actual fetchPredictOperation HTTP call is hoisted into the handler so
+        it can use the shared async/sync httpx client instead of blocking the loop.
+        """
+        if prefetched_source_data is None:
+            raise ValueError(
+                "prefetched_source_data is required for Vertex AI video edit. "
+                "Ensure get_video_edit_prefetch_params is called by the handler."
             )
-            fetch_response.raise_for_status()
 
-        fetch_data = fetch_response.json()
-
-        if not fetch_data.get("done", False):
+        if not prefetched_source_data.get("done", False):
             raise ValueError(
                 "Source video generation is not complete yet. "
                 "Check the video status before editing."
             )
 
-        response_data = fetch_data.get("response", {})
-        videos = response_data.get("videos", [])
+        videos = prefetched_source_data.get("response", {}).get("videos", [])
         if not videos:
             raise ValueError("No videos found in the completed operation. Cannot edit.")
 
@@ -712,18 +711,19 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 "Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit."
             )
 
-        # Step 2: Build the edit request using the same predictLongRunning endpoint
-        instance_dict: Dict[str, Any] = {"prompt": prompt, "video": video_input}
+        operation_name = extract_original_video_id(video_id)
+        model = self.extract_model_from_operation_name(operation_name) or ""
 
+        instance_dict: Dict[str, Any] = {"prompt": prompt, "video": video_input}
         request_data: Dict[str, Any] = {"instances": [instance_dict]}
 
-        # Allow caller to pass extra parameters (e.g. durationSeconds, aspectRatio)
         if extra_body:
-            nested_params = extra_body.pop("parameters", None)
+            extra_body_copy = dict(extra_body)
+            nested_params = extra_body_copy.pop("parameters", None)
             vertex_params: Dict[str, Any] = {}
             if isinstance(nested_params, dict):
                 vertex_params.update(nested_params)
-            vertex_params.update(extra_body)
+            vertex_params.update(extra_body_copy)
             if vertex_params:
                 request_data["parameters"] = vertex_params
 
