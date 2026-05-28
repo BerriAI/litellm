@@ -1220,13 +1220,9 @@ class JWTAuthManager:
             and jwt_user_id is not None
             and user_object.user_id != jwt_user_id
         ):
-            verbose_proxy_logger.info(
-                "JWT Auth: rebinding user_id from JWT claim %r to existing DB "
-                "user_id %r (matched via email/sso_user_id). Spend will be "
-                "attributed to the existing user record.",
-                jwt_user_id,
-                user_object.user_id,
-            )
+            # The single INFO log lives at the auth_builder call site (LIT-2684);
+            # keeping this helper log-free lets us call it from get_objects
+            # without producing a duplicate log line per request.
             return user_object.user_id
         return jwt_user_id
 
@@ -1805,9 +1801,18 @@ class JWTAuthManager:
         # Rebind user_id when JWT claim didn’t match DB user_id directly but a
         # legacy pre-JWT row was resolved via email/sso_user_id fuzzy lookup.
         # See JWTAuthManager._effective_user_id docstring (LIT-2684).
-        user_id = JWTAuthManager._effective_user_id(
+        rebound_user_id = JWTAuthManager._effective_user_id(
             jwt_user_id=user_id, user_object=user_object
         )
+        if rebound_user_id != user_id:
+            verbose_proxy_logger.info(
+                "JWT Auth: rebinding user_id from JWT claim %r to existing DB "
+                "user_id %r (matched via email/sso_user_id). Spend will be "
+                "attributed to the existing user record.",
+                user_id,
+                rebound_user_id,
+            )
+        user_id = rebound_user_id
 
         await JWTAuthManager.sync_user_role_and_teams(
             jwt_handler=jwt_handler,
