@@ -1,4 +1,5 @@
 """Tests for caller-scoped /spend/report endpoints (LIT-2401)."""
+
 import datetime
 import os
 import sys
@@ -47,7 +48,9 @@ def _org_admin():
 
 def test_resolve_api_key_defaults_to_caller():
     auth = _internal_user()
-    assert sme._resolve_api_key_scope(user_api_key_dict=auth, api_key=None) == auth.api_key
+    assert (
+        sme._resolve_api_key_scope(user_api_key_dict=auth, api_key=None) == auth.api_key
+    )
 
 
 def test_resolve_api_key_non_admin_override_forbidden():
@@ -234,11 +237,11 @@ async def test_key_spend_report_calls_query_with_resolved_hash(monkeypatch):
         user_api_key_dict=auth,
     )
     assert out == [{"api_key": "h", "total_cost": 1.0}]
-    args, _ = pc.db.query_raw.await_args
-    sql, sd, ed, k = args[0], args[1], args[2], args[3]
+    args, _kw = pc.db.query_raw.await_args
+    sql, _sd, _ed, k = args[0], args[1], args[2], args[3]
     assert "sl.api_key = $3" in sql
     assert k == auth.api_key
-    assert isinstance(sd, datetime.datetime) and sd.tzinfo == timezone.utc
+    assert isinstance(_sd, datetime.datetime) and _sd.tzinfo == timezone.utc
 
 
 @pytest.mark.asyncio
@@ -267,8 +270,8 @@ async def test_team_spend_report_uses_team_id_filter(monkeypatch):
         team_id=None,
         user_api_key_dict=_internal_user(),
     )
-    args, _ = pc.db.query_raw.await_args
-    sql, sd, ed, t = args[0], args[1], args[2], args[3]
+    args, _kw = pc.db.query_raw.await_args
+    sql, _sd, _ed, t = args[0], args[1], args[2], args[3]
     assert "sl.team_id = $3" in sql
     assert t == "team-blue"
 
@@ -287,8 +290,8 @@ async def test_org_spend_report_org_admin_runs_against_own_org_teams(monkeypatch
         organization_id=None,
         user_api_key_dict=_org_admin(),
     )
-    args, _ = pc.db.query_raw.await_args
-    sql, sd, ed, teams_param = args[0], args[1], args[2], args[3]
+    args, _kw = pc.db.query_raw.await_args
+    sql, _sd, _ed, teams_param = args[0], args[1], args[2], args[3]
     assert "team_id = ANY($3::text[])" in sql
     assert teams_param == ["team-red", "team-blue"]
 
