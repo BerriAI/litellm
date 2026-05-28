@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 460" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <!-- harness pod (brain) -->
+  <rect x="40" y="40" width="640" height="150" rx="10" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="60" y="65" font-size="11" font-weight="700" letter-spacing="0.08em" fill="#92400e">HARNESS POD — SHARED, PERSISTENT</text>
+  <rect x="200" y="85" width="320" height="80" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+  <text x="360" y="115" text-anchor="middle" font-size="16" font-weight="600" fill="#111827">brain</text>
+  <text x="360" y="135" text-anchor="middle" font-size="12" fill="#6b7280">reasoning · planning · model calls</text>
+  <text x="360" y="152" text-anchor="middle" font-size="11" fill="#9ca3af" font-style="italic">no BASH, no filesystem, no shell</text>
+
+  <!-- tool surface -->
+  <line x1="120" y1="220" x2="600" y2="220" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="360" y="245" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="0.08em" fill="#6b7280">TOOL SURFACE — 2 CALLS</text>
+  <g font-family="ui-monospace, monospace" font-size="11" fill="#374151">
+    <rect x="200" y="258" width="150" height="28" rx="4" fill="#f3f4f6" stroke="#d1d5db"/>
+    <text x="275" y="276" text-anchor="middle">sandbox_provision</text>
+    <rect x="370" y="258" width="150" height="28" rx="4" fill="#f3f4f6" stroke="#d1d5db"/>
+    <text x="445" y="276" text-anchor="middle">sandbox_execute</text>
+  </g>
+
+  <!-- sandbox pods (per-session) -->
+  <rect x="40" y="310" width="640" height="120" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="60" y="335" font-size="11" font-weight="700" letter-spacing="0.08em" fill="#075985">E2B SANDBOX POOL — EPHEMERAL, ONE PER SESSION</text>
+  <g font-size="12" fill="#0c4a6e">
+    <rect x="70" y="355" width="180" height="55" rx="6" fill="#fff" stroke="#0284c7"/>
+    <text x="160" y="378" text-anchor="middle" font-weight="600">session A</text>
+    <text x="160" y="395" text-anchor="middle" font-size="10" fill="#64748b">git · gh · pytest · shell</text>
+    <rect x="270" y="355" width="180" height="55" rx="6" fill="#fff" stroke="#0284c7"/>
+    <text x="360" y="378" text-anchor="middle" font-weight="600">session B</text>
+    <text x="360" y="395" text-anchor="middle" font-size="10" fill="#64748b">git · gh · pytest · shell</text>
+    <rect x="470" y="355" width="180" height="55" rx="6" fill="#fff" stroke="#0284c7"/>
+    <text x="560" y="378" text-anchor="middle" font-weight="600">session C</text>
+    <text x="560" y="395" text-anchor="middle" font-size="10" fill="#64748b">git · gh · pytest · shell</text>
+  </g>
+
+  <!-- arrows -->
+  <line x1="360" y1="165" x2="360" y2="218" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="275" y1="290" x2="275" y2="350" stroke="#6b7280" stroke-width="1" marker-end="url(#arr)"/>
+  <line x1="445" y1="290" x2="445" y2="350" stroke="#6b7280" stroke-width="1" marker-end="url(#arr)"/>
+</svg>
