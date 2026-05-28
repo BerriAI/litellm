@@ -443,6 +443,145 @@ async def cursor_chat_completions(
         )
 
 
+@router.post(
+    "/v1/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/openai/v1/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def count_input_tokens(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Count input tokens for an OpenAI Responses-API-shaped request.
+
+    Mirrors Anthropic POST ``/v1/messages/count_tokens``: accepts the same
+    body shape as POST ``/v1/responses`` (``model`` + ``input`` + optional
+    ``instructions`` / ``tools``) but returns the token count for the
+    would-be input instead of generating a response.
+
+    The Responses-API ``input`` (string or input-items list) and
+    ``instructions`` are translated into Chat Completion messages via
+    ``LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages``
+    and then fed through the existing ``/utils/token_counter`` pipeline, so
+    model-aware provider routing (Anthropic / Google AI Studio / OpenAI
+    token-count endpoints) is reused automatically.
+
+    Example:
+    ```bash
+    curl -X POST http://localhost:4000/v1/responses/input_tokens \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-..." \
+      -d '{"model": "openai/gpt-4o", "input": "Hello there"}'
+    ```
+
+    Returns: ``{"input_tokens": <number>}``
+    """
+    from litellm.proxy.proxy_server import _read_request_body
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+    from litellm.types.utils import TokenCountResponse
+
+    try:
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+
+        model_name = data.get("model")
+        input_val = data.get("input")
+        instructions = data.get("instructions")
+
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model parameter is required"},
+            )
+        if input_val is None and not instructions:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "input parameter is required"},
+            )
+
+        # Translate Responses-API input -> Chat Completion messages so the
+        # existing token-counter pipeline can score it. Treat missing
+        # ``input`` as empty string when only ``instructions`` is supplied.
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_val if input_val is not None else "",
+                responses_api_request=data,
+            )
+        )
+
+        # Coerce messages into the plain-dict shape TokenCountRequest expects.
+        normalized_messages: list = []
+        for m in messages or []:
+            if isinstance(m, dict):
+                normalized_messages.append(m)
+            elif hasattr(m, "model_dump"):
+                normalized_messages.append(m.model_dump(exclude_none=True))
+            elif hasattr(m, "dict"):
+                normalized_messages.append(m.dict(exclude_none=True))
+            else:
+                normalized_messages.append(dict(m))
+
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=normalized_messages,
+            tools=data.get("tools"),
+        )
+
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+
+        if isinstance(token_response, TokenCountResponse):
+            payload = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            payload = token_response
+        else:
+            payload = {"total_tokens": 0}
+
+        total_tokens = payload.get("total_tokens") or 0
+        try:
+            input_tokens = int(total_tokens)
+        except (TypeError, ValueError):
+            input_tokens = 0
+
+        return {"input_tokens": input_tokens}
+
+    except HTTPException:
+        raise
+    except ProxyException as e:
+        status_code = (
+            int(e.code) if e.code and str(e.code).isdigit() else 500
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": e.message},
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.response_api_endpoints.count_input_tokens(): "
+            "Exception occurred - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Internal server error: {str(e)}"},
+        )
+
+
 @router.get(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
