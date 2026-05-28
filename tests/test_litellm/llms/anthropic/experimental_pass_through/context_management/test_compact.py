@@ -358,7 +358,13 @@ async def test_opt_in_gating_no_summary_model_configured():
 
 
 def test_client_compaction_block_history_without_context_management():
-    """Compaction in messages alone triggers slice-only forwarding."""
+    """Compaction in messages alone triggers slice-only forwarding.
+
+    The prior summary is prepended to ``system``; the post-compaction tail is
+    forwarded unchanged so the model sees the recent turns the summary does
+    not cover. Compaction blocks themselves are stripped from messages so
+    non-Anthropic backends don't reject them.
+    """
     messages = _messages_with_compaction("prior summary text")
 
     result = apply_client_compaction_block_history(messages=messages, system=None)
@@ -368,9 +374,15 @@ def test_client_compaction_block_history_without_context_management():
     assert "prior summary text" in str(result.system)
     assert result.compaction_block is None
     assert result.applied_edits == []
-    assert len(result.messages) == 1
-    assert result.messages[0]["role"] == "user"
-    assert result.messages[0]["content"] == "latest question"
+    # Post-compaction tail: newer question, newer reply, latest question.
+    assert [m["role"] for m in result.messages] == ["user", "assistant", "user"]
+    assert result.messages[0]["content"] == "newer question"
+    assert result.messages[-1]["content"] == "latest question"
+    for msg in result.messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert block.get("type") != "compaction"
 
 
 def test_client_compaction_block_history_no_compaction_returns_none():
@@ -386,7 +398,13 @@ def test_client_compaction_block_history_no_compaction_returns_none():
 
 
 async def test_slice_only_path_with_existing_compaction_block():
-    """Phase A slices; Phase B token count is below threshold; no summary call."""
+    """Phase A slices; Phase B token count is below threshold; no summary call.
+
+    The prior compaction summary lives on the system prefix; the
+    post-compaction tail is forwarded unchanged so the model retains the
+    recent turns the summary does not cover. Compaction blocks themselves
+    are stripped from messages.
+    """
     messages = _messages_with_compaction("prior summary text")
 
     with (
@@ -412,10 +430,10 @@ async def test_slice_only_path_with_existing_compaction_block():
     assert result.compaction_block is None
     assert result.iterations_usage is None
 
-    # Main call: summary on system, latest user question only (no stale assistant).
-    assert len(result.messages) == 1
-    assert result.messages[0]["role"] == "user"
-    assert result.messages[0]["content"] == "latest question"
+    # Main call: summary on system + full post-compaction tail (no compaction blocks).
+    assert [m["role"] for m in result.messages] == ["user", "assistant", "user"]
+    assert result.messages[0]["content"] == "newer question"
+    assert result.messages[-1]["content"] == "latest question"
     for msg in result.messages:
         content = msg.get("content")
         if isinstance(content, list):

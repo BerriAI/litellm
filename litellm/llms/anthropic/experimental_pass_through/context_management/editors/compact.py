@@ -626,9 +626,11 @@ def apply_client_compaction_block_history(
     """Honor client-sent compaction blocks without a ``compact_20260112`` edit.
 
     When the request omits ``context_management`` but the message history already
-    contains a ``compaction`` content block (e.g. Claude Code client-side compaction),
-    apply the same slice-only forwarding as the under-threshold path: summary on
-    ``system``, latest user question only on the main call.
+    contains a ``compaction`` content block (e.g. Claude Code client-side
+    compaction), apply the same slice-only forwarding as the under-threshold
+    path: the prior summary is prepended to ``system`` and the post-compaction
+    tail is forwarded unchanged (with compaction blocks stripped) so recent
+    turns the summary does not cover are preserved.
     """
     effective_messages, prior_compaction_block = _slice_around_compaction_block(
         messages
@@ -650,7 +652,12 @@ def apply_client_compaction_block_history(
             len(prior_summary_text),
         )
 
-    downstream_messages = _select_last_user_question(effective_messages)
+    # Post-compaction turns are recent context the prior summary does not cover,
+    # so forward them unchanged. Only fall back to the last user question if the
+    # strip leaves the downstream call with nothing to answer.
+    downstream_messages = _strip_compaction_blocks(effective_messages)
+    if not downstream_messages:
+        downstream_messages = _select_last_user_question(effective_messages)
 
     return PolyfillResult(
         messages=downstream_messages,
@@ -750,14 +757,13 @@ async def apply_compact_20260112(  # noqa: PLR0915
     )
 
     if current_tokens <= trigger_tokens:
-        # Slice-only path: prior context lives in ``augmented_system`` (the
-        # compaction summary prefix). The main model call must not re-send stale
-        # assistant turns from the post-compaction tail — only the latest user
-        # question, matching the full-summary path below.
-        if prior_compaction_block is not None:
-            downstream_messages = _select_last_user_question(effective_messages)
-        elif not downstream_messages:
-            # No compaction checkpoint: only substitute when strip left nothing.
+        # Slice-only path: the prior compaction summary already lives in
+        # ``augmented_system``. Post-compaction turns are recent context the
+        # summary does not cover, so forward ``downstream_messages`` (the
+        # post-compaction tail with compaction blocks stripped) unchanged.
+        # Only fall back to the last user question when the strip leaves
+        # nothing for the downstream call to answer.
+        if not downstream_messages:
             downstream_messages = _select_last_user_question(effective_messages)
         return PolyfillResult(
             messages=downstream_messages,
