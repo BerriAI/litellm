@@ -1285,44 +1285,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: Optional[str],
-    ) -> bool:
+    ) -> Tuple[bool, bool]:
         """
-        Return True if the API key has its own model-specific rate-limit override
-        for requested_model.
+        Return ``(rpm_override, tpm_override)`` — whether the API key has its
+        own model-specific RPM / TPM override for ``requested_model``.
 
-        A key override is recognised when requested_model is present as a key
-        in any of:
+        A dimension override is recognised when ``requested_model`` is present in:
 
-        * user_api_key_dict.metadata[model_rpm_limit]
-        * user_api_key_dict.metadata[model_tpm_limit]
-        * user_api_key_dict.model_max_budget (with rpm_limit or
-          tpm_limit set in the per-model budget dict)
+        * ``user_api_key_dict.metadata["model_rpm_limit"]`` (RPM)
+        * ``user_api_key_dict.metadata["model_tpm_limit"]`` (TPM)
+        * ``user_api_key_dict.model_max_budget[requested_model]`` — ``rpm_limit``
+          contributes to RPM, ``tpm_limit`` to TPM.
 
-        When this is True, the key-level override is treated as authoritative
-        for the requested model and the team-level model_rpm_limit /
-        model_tpm_limit value for the same model is intentionally skipped so
-        the team value cannot clamp below the key override (LIT-2792).
+        The two dimensions are tracked independently so the team-level
+        model-specific value for the OTHER dimension is not silently dropped
+        when the key overrides only one of RPM / TPM (LIT-2792).
         """
         if not requested_model:
-            return False
+            return False, False
+
+        rpm_override = False
+        tpm_override = False
 
         key_metadata = user_api_key_dict.metadata or {}
         key_model_rpm = key_metadata.get("model_rpm_limit") or {}
         key_model_tpm = key_metadata.get("model_tpm_limit") or {}
-        if (isinstance(key_model_rpm, dict) and requested_model in key_model_rpm) or (
-            isinstance(key_model_tpm, dict) and requested_model in key_model_tpm
-        ):
-            return True
+        if isinstance(key_model_rpm, dict) and requested_model in key_model_rpm:
+            rpm_override = True
+        if isinstance(key_model_tpm, dict) and requested_model in key_model_tpm:
+            tpm_override = True
 
         key_model_max_budget = user_api_key_dict.model_max_budget or {}
         if isinstance(key_model_max_budget, dict):
             entry = key_model_max_budget.get(requested_model)
-            if isinstance(entry, dict) and (
-                entry.get("rpm_limit") is not None or entry.get("tpm_limit") is not None
-            ):
-                return True
+            if isinstance(entry, dict):
+                if entry.get("rpm_limit") is not None:
+                    rpm_override = True
+                if entry.get("tpm_limit") is not None:
+                    tpm_override = True
 
-        return False
+        return rpm_override, tpm_override
 
     def _add_model_per_key_rate_limit_descriptor(
         self,
@@ -1757,15 +1759,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Add team model rate limit descriptor from team_metadata if applicable.
 
         LIT-2792: when the API key has its own model-specific override for the
-        requested model (see _key_has_model_specific_override), the team-level
-        model_rpm_limit / model_tpm_limit value for the same model is
-        intentionally skipped so the team value cannot clamp below the key
-        override.
+        requested model on a given dimension (RPM / TPM), only THAT dimension
+        of the team-level descriptor is suppressed so the team value cannot
+        clamp below the key override. The other dimension of the team-level
+        descriptor is preserved so partial key overrides (e.g. key sets only
+        RPM, team sets only TPM) do not silently drop the team's TPM cap.
+
+        If both dimensions are overridden by the key, no team descriptor is
+        appended.
         """
-        if self._key_has_model_specific_override(
+        key_rpm_override, key_tpm_override = self._key_has_model_specific_override(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
-        ):
+        )
+        if key_rpm_override and key_tpm_override:
             return
 
         if (
@@ -1802,6 +1809,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 model_specific_rpm_limit = _rpm_limit_for_team_model.get(
                     requested_model
                 )
+
+                # Per-dimension key precedence: blank out only the team
+                # dimensions that the key already owns. The remaining
+                # dimension(s) still apply to the team budget.
+                if key_rpm_override:
+                    model_specific_rpm_limit = None
+                if key_tpm_override:
+                    model_specific_tpm_limit = None
+
+                # After per-dimension suppression there may be nothing left
+                # for the team to enforce on this descriptor.
+                if (
+                    model_specific_rpm_limit is None
+                    and model_specific_tpm_limit is None
+                ):
+                    return
+
                 descriptors.append(
                     RateLimitDescriptor(
                         key="model_per_team",
