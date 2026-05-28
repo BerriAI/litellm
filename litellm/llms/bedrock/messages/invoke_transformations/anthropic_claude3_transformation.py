@@ -463,17 +463,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         for edit in edits:
             if not isinstance(edit, dict):
                 continue
-            if edit.get("type") in supported:
+            edit_type = edit.get("type")
+            if isinstance(edit_type, str) and edit_type in supported:
                 retained_edits.append(edit)
+                beta_set.add(supported[edit_type])
 
         if not retained_edits:
             anthropic_messages_request.pop("context_management", None)
             return
-
-        for edit in retained_edits:
-            mapped = supported.get(edit.get("type"))
-            if mapped:
-                beta_set.add(mapped)
 
         anthropic_messages_request["context_management"] = {
             **cm,
