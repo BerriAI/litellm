@@ -510,7 +510,7 @@ async def count_input_tokens(
         if input_val is None and not instructions:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "input parameter is required"},
+                detail={"error": "input parameter is required (or instructions)"},
             )
 
         # Translate Responses-API input -> Chat Completion messages so the
