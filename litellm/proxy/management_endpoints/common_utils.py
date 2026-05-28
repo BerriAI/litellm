@@ -465,12 +465,23 @@ async def _upsert_budget_and_membership(
     shared_with_other_memberships = False
     if existing_budget_id is not None and not is_shared_default:
         try:
-            _probe_where = {"budget_id": existing_budget_id, "NOT": {"user_id": user_id, "team_id": team_id}}
-            other_membership = await tx.litellm_teammembership.find_first(where=_probe_where)
+            _probe_where = {
+                "budget_id": existing_budget_id,
+                "NOT": {"user_id": user_id, "team_id": team_id},
+            }
+            other_membership = await tx.litellm_teammembership.find_first(
+                where=_probe_where
+            )
             shared_with_other_memberships = other_membership is not None
         except Exception as e:
             # Refuse to mutate on probe failures; fall through to clone-on-write.
-            verbose_proxy_logger.debug("_upsert_budget_and_membership: shared-row probe failed for budget_id=%s (team_id=%s, user_id=%s): %s. Defaulting to clone-on-write.", existing_budget_id, team_id, user_id, e)
+            verbose_proxy_logger.debug(
+                "_upsert_budget_and_membership: shared-row probe failed for budget_id=%s (team_id=%s, user_id=%s): %s. Defaulting to clone-on-write.",
+                existing_budget_id,
+                team_id,
+                user_id,
+                e,
+            )
             shared_with_other_memberships = True
 
     if (
