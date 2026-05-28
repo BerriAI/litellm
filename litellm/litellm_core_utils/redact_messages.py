@@ -41,6 +41,35 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
+# Keys inside Message.provider_specific_fields that mirror reasoning / thinking
+# content (Anthropic thinking_blocks, DeepSeek reasoning_content, Bedrock
+# Converse reasoningContentBlocks). Must be wiped alongside the dedicated
+# attributes when message redaction is enabled (LIT-3131).
+_PROVIDER_REASONING_KEYS = (
+    "reasoning_content",
+    "thinking_blocks",
+    "reasoningContentBlocks",
+)
+
+
+def _redact_provider_specific_fields(obj):
+    """Clear reasoning/thinking content inside provider_specific_fields if present.
+
+    provider_specific_fields is an Optional[Dict[str, Any]] attribute on
+    Message / Delta. Providers (Anthropic, DeepSeek, Bedrock Converse) copy raw
+    reasoning content into this dict alongside the dedicated
+    `reasoning_content` / `thinking_blocks` attributes. Without this helper the
+    raw reasoning leaks to custom loggers via response_obj.choices[i].message
+    .provider_specific_fields even when message redaction is on (LIT-3131).
+    """
+    psf = getattr(obj, "provider_specific_fields", None)
+    if not isinstance(psf, dict):
+        return
+    for key in _PROVIDER_REASONING_KEYS:
+        if key in psf:
+            psf[key] = None
+
+
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
@@ -49,12 +78,14 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        _redact_provider_specific_fields(choice.message)
     elif isinstance(choice, litellm.utils.StreamingChoices):
         choice.delta.content = "redacted-by-litellm"
         if hasattr(choice.delta, "reasoning_content"):
             choice.delta.reasoning_content = "redacted-by-litellm"
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        _redact_provider_specific_fields(choice.delta)
 
 
 def _redact_responses_api_output(output_items):
@@ -130,6 +161,17 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
+def _redact_provider_specific_fields_dict(part: dict) -> None:
+    """Mirror of `_redact_provider_specific_fields` for the dict representation
+    of Message / Delta (LIT-3131)."""
+    psf = part.get("provider_specific_fields")
+    if not isinstance(psf, dict):
+        return
+    for key in _PROVIDER_REASONING_KEYS:
+        if key in psf:
+            psf[key] = None
+
+
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
@@ -141,6 +183,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                _redact_provider_specific_fields_dict(choice["message"])
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
                 if "reasoning_content" in choice["delta"]:
@@ -149,8 +192,37 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                _redact_provider_specific_fields_dict(choice["delta"])
         else:
             _redact_choice_content(choice)
+
+
+def _redact_proxy_server_request_body(model_call_details: dict) -> None:
+    """Redact message / prompt / input content inside the
+    `litellm_params.proxy_server_request.body` snapshot.
+
+    The proxy snapshots the raw request body for audit so downstream consumers
+    (spend logs, audit hooks, custom loggers) can see how the request arrived
+    on the wire. When message redaction is enabled, that nested copy must be
+    redacted too — otherwise the raw `messages` / `input` / `prompt` content
+    is delivered to every `async_log_success_event` consumer via
+    `kwargs["litellm_params"]["proxy_server_request"]["body"]` (LIT-3131).
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+    psr = litellm_params.get("proxy_server_request")
+    if not isinstance(psr, dict):
+        return
+    body = psr.get("body")
+    if not isinstance(body, dict):
+        return
+    if "messages" in body:
+        body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    if "input" in body:
+        body["input"] = ""
+    if "prompt" in body:
+        body["prompt"] = ""
 
 
 def perform_redaction(model_call_details: dict, result):
@@ -164,6 +236,7 @@ def perform_redaction(model_call_details: dict, result):
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
+    _redact_proxy_server_request_body(model_call_details)
 
     # Redact streaming response
     if (
