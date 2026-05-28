@@ -1141,6 +1141,10 @@ class MCPRequestHandler:
             )
             return []
 
+    # Sentinel stored in cache when an org has no object_permission, so we
+    # don't re-query the DB on every MCP request for that org.
+    _ORG_NO_PERMISSION_SENTINEL = "__org_no_mcp_permission__"
+
     @staticmethod
     async def _get_org_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
