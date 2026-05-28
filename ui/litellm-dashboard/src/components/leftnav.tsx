@@ -44,7 +44,7 @@ import {
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
-import { serverRootPath } from "./networking";
+import { legacyHref, migratedHref, uiRootBase } from "@/utils/uiRoutes";
 const { Sider } = Layout;
 
 /**
@@ -56,34 +56,6 @@ const { Sider } = Layout;
 const MIGRATED_PAGES: Record<string, string> = {
   "api-reference": "api-reference",
 };
-
-/**
- * Resolve the UI root URL: \`<serverRootPath>/ui/\`.
- *
- * The LiteLLM proxy always mounts the static UI at \`/ui\` (see
- * \`app.mount(\"/ui\", StaticFiles(...))\` in \`litellm/proxy/proxy_server.py\`),
- * so sidebar links must always be anchored to that mount. The previous
- * implementation derived the prefix from \`NEXT_PUBLIC_BASE_URL\` — which is
- * unset in \`.env.production\` — and ended up producing hrefs like
- * \`/api-reference\` that hit the proxy 404 handler instead of the UI.
- */
-function uiRootBase(): string {
-  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
-  return `${root}/ui/`;
-}
-
-/** Build an absolute href for a migrated (path-based) page. */
-function migratedHref(routeSegment: string): string {
-  return `${uiRootBase()}${routeSegment.replace(/^\/+/, "")}`;
-}
-
-/** Build an absolute href for a legacy (query-param) page. */
-function legacyHref(page: string): string {
-  const search = typeof window !== "undefined" ? window.location.search : "";
-  const params = new URLSearchParams(search);
-  params.set("page", page);
-  return `${uiRootBase()}?${params.toString()}`;
-}
 
 // Define the props type
 interface SidebarProps {
