@@ -261,32 +261,32 @@ class CatoNetworksGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
     ) -> Any:
-        if (
-            isinstance(response, ModelResponse)
-            and response.choices
-            and isinstance(response.choices[0], Choices)
-        ):
-            content = response.choices[0].message.content or ""
-            cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
-                data,
-                content,
-                hook="output",
-                key_alias=user_api_key_dict.key_alias,
-                user_email=self._resolve_cato_user_email(user_api_key_dict),
-            )
-            if cato_output_guardrail_result and cato_output_guardrail_result.get(
-                "detection_message"
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail=cato_output_guardrail_result.get("detection_message"),
+        if isinstance(response, ModelResponse) and response.choices:
+            user_email = self._resolve_cato_user_email(user_api_key_dict)
+            for choice in response.choices:
+                if not isinstance(choice, Choices):
+                    continue
+                content = choice.message.content or ""
+                cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
+                    data,
+                    content,
+                    hook="output",
+                    key_alias=user_api_key_dict.key_alias,
+                    user_email=user_email,
                 )
-            if cato_output_guardrail_result and cato_output_guardrail_result.get(
-                "redacted_output"
-            ):
-                response.choices[0].message.content = cato_output_guardrail_result.get(
+                if cato_output_guardrail_result and cato_output_guardrail_result.get(
+                    "detection_message"
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=cato_output_guardrail_result.get("detection_message"),
+                    )
+                if cato_output_guardrail_result and cato_output_guardrail_result.get(
                     "redacted_output"
-                )
+                ):
+                    choice.message.content = cato_output_guardrail_result.get(
+                        "redacted_output"
+                    )
         return response
 
     async def async_post_call_streaming_iterator_hook(

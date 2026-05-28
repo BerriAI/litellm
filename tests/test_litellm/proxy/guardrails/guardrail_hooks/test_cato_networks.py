@@ -691,6 +691,112 @@ async def test_post_call_success_hook_no_action_keeps_content():
 
 
 @pytest.mark.asyncio
+async def test_post_call_success_hook_block_action_raises_on_later_choice():
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+    block_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {
+                "action_type": "block_action",
+                "detection_message": "blocked output",
+                "policy_name": "PII",
+            },
+        }
+    )
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "safe", "role": "assistant"},
+            },
+            {
+                "finish_reason": "stop",
+                "index": 1,
+                "message": {"content": "secret", "role": "assistant"},
+            },
+        ]
+    )
+
+    async def mock_post_side_effect(url, *args, **kwargs):
+        request_body = kwargs.get("json", {})
+        assistant_content = request_body["messages"][-1]["content"]
+        if assistant_content == "safe":
+            return response_without_detections
+        return block_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=mock_post_side_effect,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard.async_post_call_success_hook(
+                data=request_data,
+                response=llm_response,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "blocked output"
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_anonymize_action_redacts_all_choices():
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+
+    def anonymize_response_for(content: str) -> Response:
+        return _make_response(
+            {
+                "analysis_result": {"policy_drill_down": {"PII": {}}},
+                "required_action": {
+                    "action_type": "anonymize_action",
+                    "policy_name": "PII",
+                },
+                "redacted_chat": {
+                    "all_redacted_messages": [
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": f"redacted {content}"},
+                    ]
+                },
+            }
+        )
+
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "Hello Brian", "role": "assistant"},
+            },
+            {
+                "finish_reason": "stop",
+                "index": 1,
+                "message": {"content": "Hi Alice", "role": "assistant"},
+            },
+        ]
+    )
+
+    async def mock_post_side_effect(url, *args, **kwargs):
+        request_body = kwargs.get("json", {})
+        assistant_content = request_body["messages"][-1]["content"]
+        return anonymize_response_for(assistant_content)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=mock_post_side_effect,
+    ):
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=llm_response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "redacted Hello Brian"
+    assert result.choices[1].message.content == "redacted Hi Alice"
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_skips_non_model_response():
     guard = _make_guardrail()
     request_data = {"messages": [{"role": "user", "content": "hi"}]}
