@@ -381,7 +381,7 @@ async def create_agent(
         upstream_card = request.get("agent_card_params")
         agent_to_create: AgentConfig = request
         new_agent_id: Optional[str] = None
-        if upstream_card:
+        if upstream_card is not None:
             # Pre-generate the agent_id so the merged card can reference it
             # in ``supportedInterfaces`` before the DB row exists.
             new_agent_id = str(uuid.uuid4())
@@ -593,7 +593,7 @@ async def update_agent(
         # card for them.
         upstream_card = request.get("agent_card_params")
         agent_to_update: AgentConfig = request
-        if upstream_card:
+        if upstream_card is not None:
             merged_card = _build_merged_agent_card(
                 upstream_card,
                 agent_id=agent_id,
@@ -697,14 +697,15 @@ async def patch_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
-        # Re-merge only when the patch actually touches agent_card_params with
-        # a non-empty card; a patch updating just litellm_params/rate limits
-        # shouldn't rewrite the stored card, and a patch clearing
-        # ``agent_card_params`` shouldn't synthesise a default A2A card for
-        # what is effectively a non-A2A agent.
+        # Re-merge only when the patch actually touches agent_card_params; a
+        # patch updating just litellm_params/rate limits (``agent_card_params``
+        # omitted) shouldn't rewrite the stored card. An explicitly provided
+        # ``agent_card_params`` — even an empty dict — still goes through the
+        # merge so LiteLLM applies its security schemes and supported
+        # interfaces instead of storing a bare card.
         patch_payload: PatchAgentRequest = request
         upstream_card = request.get("agent_card_params")
-        if upstream_card:
+        if upstream_card is not None:
             merged_card = _build_merged_agent_card(
                 upstream_card,
                 agent_id=agent_id,
