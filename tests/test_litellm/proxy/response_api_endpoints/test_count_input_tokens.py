@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy.proxy_server import app
 
-
 _AUTH = {"Authorization": "Bearer sk-1234"}
 
 
@@ -58,9 +57,7 @@ def test_responses_input_tokens_input_items_list_with_instructions(client):
         {
             "model": "openai/gpt-4o",
             "instructions": "You are a helpful assistant.",
-            "input": [
-                {"role": "user", "content": "What is the capital of France?"}
-            ],
+            "input": [{"role": "user", "content": "What is the capital of France?"}],
         },
     )
     assert r.status_code == 200, r.text
@@ -105,7 +102,6 @@ def test_responses_input_tokens_missing_input_returns_400(client):
     r = _post(client, "/v1/responses/input_tokens", {"model": "openai/gpt-4o"})
     assert r.status_code == 400, r.text
     assert "input" in r.text
-
 
 
 def test_responses_input_tokens_route_registered_in_openai_routes_list():
