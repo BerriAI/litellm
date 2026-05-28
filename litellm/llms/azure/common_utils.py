@@ -472,10 +472,29 @@ class BaseAzureLLM(BaseOpenAILLM):
             # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
             # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
             if self._is_azure_v1_api_version(api_version):
-                # Extract only params that OpenAI client accepts
-                # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
+                # Extract only params that OpenAI client accepts.
+                # Always use /openai/v1/ regardless of whether user passed
+                # "v1", "latest", or "preview".
+                #
+                # Resolve the bearer credential the OpenAI SDK will send as
+                # Authorization: Bearer <api_key>. When the caller (or
+                # litellm.enable_azure_ad_token_refresh) provides an Azure
+                # AD token provider or a static azure_ad_token, fall back
+                # to that so v1-API clients work without a static api_key
+                # — the behavior the v1-API path inadvertently dropped
+                # after #19313 (1.84.0). The token rotates inside the
+                # in-memory client cache TTL
+                # (_DEFAULT_TTL_FOR_HTTPX_CLIENTS == 1h), matching
+                # pre-1.84.0 behavior of the AzureOpenAI client.
+                v1_api_key = self._resolve_v1_bearer_credential(
+                    api_key=azure_client_params.get("api_key"),
+                    azure_ad_token=azure_client_params.get("azure_ad_token"),
+                    azure_ad_token_provider=azure_client_params.get(
+                        "azure_ad_token_provider"
+                    ),
+                )
                 v1_params = {
-                    "api_key": azure_client_params.get("api_key"),
+                    "api_key": v1_api_key,
                     "base_url": f"{api_base}/openai/v1/",
                 }
                 if "timeout" in azure_client_params:
@@ -516,6 +535,45 @@ class BaseAzureLLM(BaseOpenAILLM):
             client_type="azure",
         )
         return openai_client
+
+    @staticmethod
+    def _resolve_v1_bearer_credential(
+        api_key: Optional[str],
+        azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable[[], str]],
+    ) -> Optional[str]:
+        """Pick the bearer credential to hand the OpenAI SDK for Azure v1 API.
+
+        The standard OpenAI client sends Authorization: Bearer <api_key>
+        and does not accept azure_ad_token / azure_ad_token_provider
+        kwargs the way AzureOpenAI does. For Azure v1 API requests, an
+        Entra ID token works as the bearer, so when no static api_key is
+        provided we fall back, in order, to:
+
+          1. azure_ad_token — a static AD token string.
+          2. azure_ad_token_provider() — a callable, e.g. produced
+             by litellm.enable_azure_ad_token_refresh=True /
+             DefaultAzureCredential.
+
+        Returns None if no credential is available, so the OpenAI SDK can
+        raise its own clearer error.
+        """
+        if api_key:
+            return api_key
+        if azure_ad_token:
+            return azure_ad_token
+        if azure_ad_token_provider is not None:
+            try:
+                token = azure_ad_token_provider()
+            except Exception as e:  # pragma: no cover - defensive
+                verbose_logger.debug(
+                    f"Azure AD token provider raised while resolving v1 API "
+                    f"bearer credential: {type(e).__name__}: {e}"
+                )
+                return None
+            if token:
+                return token
+        return None
 
     def initialize_azure_sdk_client(
         self,
