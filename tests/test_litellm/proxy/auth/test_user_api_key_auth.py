@@ -3589,7 +3589,7 @@ async def test_centralized_common_checks_blocks_over_budget_tag_from_header():
         await _tag_max_budget_check(
             request_body=kwargs["request_body"],
             prisma_client=MagicMock(),
-            user_api_key_cache=kwargs["valid_token"].__class__.__name__ and DualCache(),
+            user_api_key_cache=DualCache(),
             proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
             valid_token=kwargs["valid_token"],
         )
@@ -3646,17 +3646,12 @@ async def test_centralized_common_checks_no_header_tags_does_not_enforce_tag_bud
     from litellm.proxy.utils import ProxyLogging
 
     token = UserAPIKeyAuth(api_key="sk-test")
-    # No x-litellm-tags header
-    request_mock = MagicMock()
+    # No x-litellm-tags header — reuse the same helper but blank out the
+    # headers dict so apply_client_tag_policy_pre_auth sees nothing. Keeps
+    # this mock in sync with _request_mock_with_header_tags if the helper
+    # ever needs to grow new request_mock attributes.
+    request_mock = _request_mock_with_header_tags("")
     request_mock.headers = {}
-    request_mock.state = MagicMock()
-    request_mock.state._cached_headers = None
-    request_mock.url = MagicMock()
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
     request_data = {"model": "gpt-3.5-turbo"}
 
     over_budget_tag = LiteLLM_TagTable(
