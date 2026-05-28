@@ -443,6 +443,39 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert result.usage.web_search_requests == 2
 
+    @pytest.mark.parametrize(
+        "finish_reason", ["IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "SAFETY"]
+    )
+    def test_transform_image_generation_response_raises_on_safety_block(
+        self, finish_reason
+    ):
+        """A safety/prohibited block returns a candidate with finishReason and no
+        inlineData; it must raise ContentPolicyViolationError, not return empty data."""
+        from litellm.exceptions import ContentPolicyViolationError
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"finishReason": finish_reason, "content": {"parts": []}}]
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        with pytest.raises(ContentPolicyViolationError) as exc:
+            self.config.transform_image_generation_response(
+                model="gemini-2.5-flash-image",
+                raw_response=mock_response,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+        assert finish_reason in str(exc.value)
+        assert exc.value.llm_provider == "vertex_ai"
+
 
 class TestVertexAIImagenImageGenerationConfig:
     def setup_method(self):

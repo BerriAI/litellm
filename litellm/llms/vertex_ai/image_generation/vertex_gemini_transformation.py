@@ -321,6 +321,17 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             )
                         )
 
+        # A safety/prohibited block returns a candidate with finishReason and
+        # no inlineData — surface it instead of returning empty data.
+        if not model_response.data:
+            from litellm.llms.gemini.image_generation.transformation import (
+                raise_if_image_gen_flagged,
+            )
+
+            raise_if_image_gen_flagged(
+                response_data, model, raw_response, llm_provider="vertex_ai"
+            )
+
         if usage_metadata := response_data.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(usage_metadata)
 
