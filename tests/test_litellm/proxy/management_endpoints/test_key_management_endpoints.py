@@ -11382,10 +11382,15 @@ def test_expires_clause_uses_server_side_now():
     c1 = _build_expires_filter_clause("expired")
     time.sleep(0.001)
     c2 = _build_expires_filter_clause("expired")
+
     # Extract the `lt` value from {"AND": [..., {"expires": {"lt": <dt>}}]}
     def _lt(c):
         for p in c["AND"]:
-            if "expires" in p and isinstance(p["expires"], dict) and "lt" in p["expires"]:
+            if (
+                "expires" in p
+                and isinstance(p["expires"], dict)
+                and "lt" in p["expires"]
+            ):
                 return p["expires"]["lt"]
         raise AssertionError("no lt")
 
@@ -11453,9 +11458,7 @@ async def test_list_keys_endpoint_passes_expires_through(monkeypatch):
 
     monkeypatch.setattr(kme, "validate_key_list_check", fake_validate_key_list_check)
     monkeypatch.setattr(kme, "_list_key_helper", fake_list_key_helper)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
 
     mock_user = MagicMock()
     mock_user.user_role = LitellmUserRoles.PROXY_ADMIN.value
