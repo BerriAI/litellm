@@ -459,6 +459,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     self.holding_chunk = None
+                    # If a final ``message_delta`` is also held, the
+                    # dangling ``content_block_delta`` must be followed
+                    # by ``content_block_stop`` before the
+                    # ``message_delta`` so the emitted SSE stays in
+                    # valid Anthropic order (content_block_delta ->
+                    # content_block_stop -> message_delta) rather than
+                    # the invalid content_block_delta -> message_delta.
+                    if self.holding_stop_reason_chunk is not None:
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
                 if self.holding_stop_reason_chunk is not None:
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
@@ -677,6 +691,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     self.holding_chunk = None
+                    # If a final ``message_delta`` is also held, the
+                    # dangling ``content_block_delta`` must be followed
+                    # by ``content_block_stop`` before the
+                    # ``message_delta`` so the emitted SSE stays in
+                    # valid Anthropic order (content_block_delta ->
+                    # content_block_stop -> message_delta) rather than
+                    # the invalid content_block_delta -> message_delta.
+                    if self.holding_stop_reason_chunk is not None:
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
                 if self.holding_stop_reason_chunk is not None:
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
