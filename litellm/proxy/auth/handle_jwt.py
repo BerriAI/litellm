@@ -1316,7 +1316,7 @@ class JWTAuthManager:
             user_id=user_id, user_object=user_object
         )
         if effective_user_id != user_id:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "JWT Auth: rebinding user_id %r -> DB user_id %r (email/sso match)",
                 user_id,
                 effective_user_id,
