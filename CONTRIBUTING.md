@@ -50,6 +50,10 @@ make help
 
 That's it! Your local development environment is ready.
 
+### Optional: Conventional Commits / Branches git hooks
+
+These hooks are developer-tooling guidance (kept in this repo intentionally, since they only apply to contributors with a local checkout — not the LiteLLM user-facing docs in `litellm-docs`).
+
 To install the optional Conventional Commits + Conventional Branches git hooks, run:
 
 ```bash
