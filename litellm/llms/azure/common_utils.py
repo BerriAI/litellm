@@ -627,12 +627,29 @@ class BaseAzureLLM(BaseOpenAILLM):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
 
-        # save client in-memory cache
-        self.set_cached_openai_client(
-            openai_client=openai_client,
-            client_initialization_params=client_initialization_params,
-            client_type="azure",
-        )
+        # Save client in the in-memory cache.
+        #
+        # Skip caching for the dynamic-bearer subclasses
+        # (_OpenAIAzureADBearerClient / _AsyncOpenAIAzureADBearerClient): the
+        # cache key is derived from get_azure_openai_client locals() which
+        # exposes api_key / api_base / api_version but NOT the AD
+        # azure_ad_token / azure_ad_token_provider that live inside
+        # litellm_params. With api_key=None, two callers using the same Azure
+        # endpoint with different AD providers would otherwise alias to the
+        # same cached client and one caller's requests would silently be
+        # signed with the other caller's AD credentials (credential-confusion
+        # risk flagged by Veria on PR #29113). Building a fresh subclass
+        # instance per call is cheap: the httpx connection pool is shared
+        # through the existing http_client kwarg.
+        if not isinstance(
+            openai_client,
+            (_OpenAIAzureADBearerClient, _AsyncOpenAIAzureADBearerClient),
+        ):
+            self.set_cached_openai_client(
+                openai_client=openai_client,
+                client_initialization_params=client_initialization_params,
+                client_type="azure",
+            )
         return openai_client
 
     @staticmethod
