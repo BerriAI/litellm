@@ -5321,6 +5321,21 @@ def _build_expires_filter_clause(
     return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
 
 
+def _apply_expires_filter(
+    where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]],
+    expires_filter: Optional[str],
+) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
+    """AND the expires-filter clause (if any) onto an existing where-dict.
+
+    Pulled out of `_build_key_filter_conditions` so the host function stays
+    under the ruff PLR0915 statement budget.
+    """
+    clause = _build_expires_filter_clause(expires_filter)
+    if clause is None:
+        return where
+    return {"AND": [where, clause]}
+
+
 def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
@@ -5445,9 +5460,7 @@ def _build_key_filter_conditions(
     if access_group_id:
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
 
-    expires_clause = _build_expires_filter_clause(expires_filter)
-    if expires_clause is not None:
-        where = {"AND": [where, expires_clause]}
+    where = _apply_expires_filter(where, expires_filter)
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
