@@ -564,9 +564,7 @@ async def count_input_tokens(
     except HTTPException:
         raise
     except ProxyException as e:
-        status_code = (
-            int(e.code) if e.code and str(e.code).isdigit() else 500
-        )
+        status_code = int(e.code) if e.code and str(e.code).isdigit() else 500
         raise HTTPException(
             status_code=status_code,
             detail={"error": e.message},
