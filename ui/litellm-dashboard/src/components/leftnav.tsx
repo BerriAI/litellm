@@ -32,6 +32,7 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -56,19 +57,32 @@ const MIGRATED_PAGES: Record<string, string> = {
   "api-reference": "api-reference",
 };
 
-/** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
+/**
+ * Resolve the UI root URL: \`<serverRootPath>/ui/\`.
+ *
+ * The LiteLLM proxy always mounts the static UI at \`/ui\` (see
+ * \`app.mount(\"/ui\", StaticFiles(...))\` in \`litellm/proxy/proxy_server.py\`),
+ * so sidebar links must always be anchored to that mount. The previous
+ * implementation derived the prefix from \`NEXT_PUBLIC_BASE_URL\` — which is
+ * unset in \`.env.production\` — and ended up producing hrefs like
+ * \`/api-reference\` that hit the proxy 404 handler instead of the UI.
+ */
+function uiRootBase(): string {
+  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
+  return `${root}/ui/`;
+}
+
+/** Build an absolute href for a migrated (path-based) page. */
 function migratedHref(routeSegment: string): string {
-  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = raw.replace(/^\/+|\/+$/g, "");
-  let base = trimmed ? `/${trimmed}/` : "/";
+  return `${uiRootBase()}${routeSegment.replace(/^\/+/, "")}`;
+}
 
-  if (serverRootPath && serverRootPath !== "/") {
-    const cleanRoot = serverRootPath.replace(/\/+$/, "");
-    const cleanBase = base.replace(/^\/+/, "");
-    base = `${cleanRoot}/${cleanBase}`;
-  }
-
-  return `${base}${routeSegment}`;
+/** Build an absolute href for a legacy (query-param) page. */
+function legacyHref(page: string): string {
+  const search = typeof window !== "undefined" ? window.location.search : "";
+  const params = new URLSearchParams(search);
+  params.set("page", page);
+  return `${uiRootBase()}?${params.toString()}`;
 }
 
 // Define the props type
@@ -422,6 +436,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
+  const router = useRouter();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
@@ -436,14 +451,26 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   // Navigate to page helper
   const navigateToPage = (page: string) => {
-    // For migrated pages, just call setPage — the parent layout handles routing
+    // Migrated (path-based) pages are routed by the parent layout (full
+    // router.push to the matching segment under (dashboard)/).
     if (MIGRATED_PAGES[page]) {
       setPage(page);
       return;
     }
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+    // Legacy (query-param) pages live at the UI root \`<serverRootPath>/ui/\`.
+    // When the user is currently on a migrated path such as \`/ui/api-reference\`,
+    // a relative \`pushState(\"?page=...\")\` would produce \`/ui/api-reference?page=...\`
+    // and leave the previous route segment in the URL. Build the absolute
+    // target and hand off to the Next.js router so the root SPA re-mounts.
+    const target = legacyHref(page);
+    const currentPath = window.location.pathname.replace(/\/+$/, "");
+    const rootPath = uiRootBase().replace(/\/+$/, "");
+    if (currentPath === rootPath) {
+      // Already at the UI root — pushState avoids a full re-render.
+      window.history.pushState(null, "", target);
+    } else {
+      router.push(target);
+    }
     setPage(page);
   };
 
@@ -467,11 +494,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         </a>
       );
     }
-    // For migrated pages, generate a path-based href for right-click "Open in new tab"
+    // Resolve to an absolute href so that right-click "Open in new tab" and
+    // Ctrl/Cmd+click work consistently regardless of the current path.
     const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute
-      ? migratedHref(migratedRoute)
-      : (() => { const params = new URLSearchParams(window.location.search); params.set("page", page); return `?${params.toString()}`; })();
+    const href = migratedRoute ? migratedHref(migratedRoute) : legacyHref(page);
     return (
       <a
         href={href}
