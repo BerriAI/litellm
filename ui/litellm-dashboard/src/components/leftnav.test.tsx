@@ -3,6 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar from "./leftnav";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => "/ui/",
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock("../utils/roles", () => {
   return {
     all_admin_roles: ["admin", "admin_viewer"],
@@ -220,5 +233,57 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByText("Organizations")).toBeInTheDocument();
+  });
+});
+
+// -------------------------------------------------------------------------
+// LIT-3063 — Sidebar nav broken in v1.83.14
+//
+// Two regressions covered by the helpers introduced in leftnav.tsx:
+//   1. The API Reference sidebar entry was rendering with href
+//      "/api-reference" instead of "/ui/api-reference", so Ctrl/Cmd+click
+//      (or double-click) navigated outside the UI mount and 404ed.
+//   2. The legacy (query-param) entries rendered with relative
+//      hrefs like "?page=logs" — so on /ui/api-reference the browser
+//      resolved them to "/ui/api-reference?page=logs" instead of
+//      "/ui/?page=logs", leaving the previous route segment in the URL.
+//
+// The hrefs are now anchored to the UI root ("<serverRootPath>/ui/")
+// regardless of NEXT_PUBLIC_BASE_URL, matching the proxys static
+// mount in litellm/proxy/proxy_server.py.
+// -------------------------------------------------------------------------
+describe("Sidebar (leftnav) — LIT-3063 absolute /ui/ href anchoring", () => {
+  const defaultProps = {
+    setPage: vi.fn(),
+    defaultSelectedKey: "api-keys",
+    collapsed: false,
+  };
+
+  it("renders the API Reference link with an absolute /ui/api-reference href", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
+    const apiRef = Array.from(container.querySelectorAll("a")).find(
+      (a) => a.textContent?.trim() === "API Reference",
+    );
+    expect(apiRef).toBeTruthy();
+    // The raw attribute (what Ctrl/Cmd+click follows) must already be /ui/...
+    expect(apiRef!.getAttribute("href")).toBe("/ui/api-reference");
+  });
+
+  it("renders every legacy (query-param) link anchored to /ui/", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
+    const anchors = Array.from(container.querySelectorAll("a"));
+    const cases: Record<string, string> = {
+      Logs: "page=logs",
+      Teams: "page=teams",
+      "Virtual Keys": "page=api-keys",
+    };
+    for (const [label, expected] of Object.entries(cases)) {
+      const a = anchors.find((x) => x.textContent?.trim() === label);
+      expect(a, `missing link for ${label}`).toBeTruthy();
+      const href = a!.getAttribute("href") ?? "";
+      // Anchored to /ui/, not relative ?page=...
+      expect(href.startsWith("/ui/?"), `${label} href \`${href}\` must start with /ui/?`).toBe(true);
+      expect(href).toContain(expected);
+    }
   });
 });
