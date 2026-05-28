@@ -887,8 +887,7 @@ async def cancel_batch(
         # encoding) instead of falling through to the env-var fallback below
         # (LIT-2454).
         elif (
-            litellm.enable_loadbalancing_on_batch_endpoints is True
-            or unified_batch_id
+            litellm.enable_loadbalancing_on_batch_endpoints is True or unified_batch_id
         ):
             if llm_router is None:
                 raise HTTPException(
