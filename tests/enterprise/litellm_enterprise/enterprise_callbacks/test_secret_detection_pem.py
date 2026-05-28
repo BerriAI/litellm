@@ -219,3 +219,41 @@ def test_helper_skips_private_key_str_value_match():
     # Helper should not crash and should not substitute when no BEGIN..END
     # spans match (and we deliberately don't substitute the literal header).
     assert out == "no key here"
+
+
+_TRUNCATED_ENCRYPTED_PEM = """-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: DES-EDE3-CBC,FEEDFACECAFEBEEF
+
+abc123XYZ+++/ab1234567890ABCDEFabcdef0123456789"""
+
+
+def test_truncated_encrypted_pem_blank_line_separator_does_not_leak_body():
+    """LIT-3292 / Veria PR review #29149: encrypted PEM blocks have a blank
+    line between the ``Proc-Type``/``DEK-Info`` headers and the base64 body.
+    If the END footer is missing (truncated paste), an earlier two-regex
+    formulation stopped consuming at the blank line and let the body through.
+    The consolidated single-span fallback must consume from BEGIN through
+    end-of-string so the body cannot leak."""
+    data = {
+        "model": "echo-model",
+        "messages": [
+            {"role": "user", "content": "partial:\n" + _TRUNCATED_ENCRYPTED_PEM},
+        ],
+    }
+    asyncio.run(
+        _hook().async_pre_call_hook(
+            user_api_key_dict=_user_auth(),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+    )
+    content = data["messages"][0]["content"]
+    # Body marker (after the blank line) MUST be gone.
+    assert "abc123XYZ+++" not in content, content
+    # And nothing of the encrypted-headers section either.
+    assert "Proc-Type:" not in content
+    assert "DEK-Info:" not in content
+    assert "[REDACTED]" in content
+

@@ -434,13 +434,18 @@ _default_detect_secrets_config = {
 # the full ``BEGIN ... END`` span before substituting. A fallback regex covers
 # malformed/truncated PEMs where the END footer is missing so residual key
 # material still does not leak downstream.
-_PEM_PRIVATE_KEY_BLOCK_RE = re.compile(
-    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
-    re.DOTALL,
-)
-_PEM_PRIVATE_KEY_FALLBACK_RE = re.compile(
+# A single non-greedy span that matches:
+#   - BEGIN ... END  (closed armored block, normal case), or
+#   - BEGIN ... \Z   (truncated PEM with no END footer in the message — the
+#                     fallback consumes everything from BEGIN to end-of-string,
+#                     so partial encrypted keys with header lines and blank
+#                     separator lines can not leak past the BEGIN marker).
+# Using a single ``re.DOTALL`` span avoids the encrypted-PEM blank-line gap
+# that an earlier two-regex pass-and-fallback formulation missed.
+_PEM_PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
-    r"(?:\r?\n[A-Za-z0-9+/=:.\- _,]+)*",
+    r"[\s\S]*?"
+    r"(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)",
 )
 
 
@@ -455,8 +460,7 @@ def _redact_text_with_detected_secrets(text: str, detected_secrets) -> str:
         return text
     has_pem = any(s.get("type") == "Private Key" for s in detected_secrets)
     if has_pem:
-        text = _PEM_PRIVATE_KEY_BLOCK_RE.sub("[REDACTED]", text)
-        text = _PEM_PRIVATE_KEY_FALLBACK_RE.sub("[REDACTED]", text)
+        text = _PEM_PRIVATE_KEY_RE.sub("[REDACTED]", text)
     for secret in detected_secrets:
         if secret.get("type") == "Private Key":
             continue
