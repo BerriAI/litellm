@@ -38,6 +38,31 @@ interface UserSearchModalProps {
   teamId?: string;
 }
 
+// Build a synthetic "use what I typed" option so the literal value the
+// caller entered is always selectable. This is what lets team admins (who
+// can't call /user/filter/ui because they lack the proxy-wide list scope)
+// still add a member by typing their email or user_id directly — without
+// this, Antd's Select silently drops the typed text on submit because the
+// value is not part of `options` when `filterOption={false}`.
+//
+// Lifted to module scope: it has no dependency on component state or props
+// (everything it needs comes from parameters), so allocating a new closure
+// per render would just be churn.
+const buildFreeTextOption = (
+  text: string,
+  fieldName: "user_email" | "user_id",
+): UserOption => {
+  const labelPrefix = fieldName === "user_email" ? "Use email" : "Use user ID";
+  return {
+    label: `${labelPrefix} "${text}"`,
+    value: text,
+    user:
+      fieldName === "user_email"
+        ? { user_id: "", user_email: text }
+        : { user_id: text, user_email: "" },
+  };
+};
+
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
   isVisible,
   onCancel,
@@ -62,32 +87,50 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
-    if (!searchText) {
+    const trimmed = searchText.trim();
+    if (!trimmed) {
       setUserOptions([]);
       return;
     }
 
     setLoading(true);
+    const freeTextOption = buildFreeTextOption(trimmed, fieldName);
+
     try {
+      if (accessToken == null) {
+        setUserOptions([freeTextOption]);
+        return;
+      }
       const params = new URLSearchParams();
-      params.append(fieldName, searchText);
+      params.append(fieldName, trimmed);
       if (teamId) {
         params.append("team_id", teamId);
       }
-      if (accessToken == null) {
-        return;
-      }
       const response = await userFilterUICall(accessToken, params);
 
-      const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
+      const data: User[] = Array.isArray(response) ? response : [];
+      const apiOptions: UserOption[] = data.map((user) => ({
         label: fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
         value: fieldName === "user_email" ? user.user_email : user.user_id,
         user,
       }));
-      setUserOptions(options);
+
+      // If a real result already matches the typed value, omit the synthetic
+      // option so the dropdown isn't visually duplicated. Emails are
+      // case-insensitive on the wire, so compare lower-cased — that way a
+      // user typing `Alice@Example.com` against an API row of
+      // `alice@example.com` collapses to a single dropdown entry instead of
+      // letting the user select a differently-cased duplicate.
+      const trimmedLower = trimmed.toLowerCase();
+      const apiHasExactMatch = apiOptions.some(
+        (opt) => (opt.value ?? "").toLowerCase() === trimmedLower,
+      );
+      setUserOptions(apiHasExactMatch ? apiOptions : [...apiOptions, freeTextOption]);
     } catch (error) {
       console.error("Error fetching users:", error);
+      // Even when /user/filter/ui is unauthorized (typical for team admins),
+      // surface the typed value as a selectable option so submit still works.
+      setUserOptions([freeTextOption]);
     } finally {
       setLoading(false);
     }
@@ -167,6 +210,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             options={selectedField === "user_id" ? userOptions : []}
             loading={loading}
             allowClear
+            data-testid="member-userid-search"
           />
         </Form.Item>
 
