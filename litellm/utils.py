@@ -2997,6 +2997,17 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "novita":
             if key not in litellm.novita_models:
                 litellm.novita_models.add(key)
+
+    # Propagate to the merged per-provider lookup so wildcard expansion
+    # (UI hub/playground dropdowns via ``get_provider_models`` →
+    # ``get_valid_models`` → ``litellm.models_by_provider``) reflects the
+    # newly registered models. See LIT-1695.
+    try:
+        litellm._refresh_models_by_provider()
+    except AttributeError:
+        # Defensive: in partial-import scenarios the helper may be missing.
+        pass
+
     return model_cost
 
 
