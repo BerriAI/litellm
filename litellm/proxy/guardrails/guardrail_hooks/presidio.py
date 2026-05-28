@@ -1229,8 +1229,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not chunk.choices:
             return chunk
         delta = getattr(chunk.choices[0], "delta", None)
+        if delta is None:
+            return chunk
         tool_calls = getattr(delta, "tool_calls", None) or []
-        if not tool_calls:
+        function_call = getattr(delta, "function_call", None)
+        if not tool_calls and function_call is None:
             return chunk
         for tc in tool_calls:
             fn = getattr(tc, "function", None)
@@ -1262,6 +1265,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     fn.__dict__["arguments"] = masked_args  # type: ignore[attr-defined]
                 except Exception:
                     pass
+        # Legacy `delta.function_call.arguments` path.
+        if function_call is not None:
+            fc_args = getattr(function_call, "arguments", None)
+            if isinstance(fc_args, str) and fc_args:
+                try:
+                    masked_fc = await self.check_pii(
+                        text=fc_args,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+                    try:
+                        function_call.arguments = masked_fc
+                    except Exception:  # noqa: BLE001
+                        try:
+                            function_call.__dict__["arguments"] = masked_fc
+                        except Exception:
+                            pass
+                except Exception as exc:  # noqa: BLE001
+                    verbose_proxy_logger.error(
+                        "Presidio apply_to_output: legacy function_call mask failed (%s)",
+                        type(exc).__name__,
+                    )
         return chunk
 
     async def _mask_all_choices_text_and_tool_calls(
@@ -1642,6 +1668,51 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             template, self._unmask_pii_text(text, pii_tokens)
         )
 
+    def _unmask_chunk_tool_calls(
+        self,
+        chunk: "ModelResponseStream",
+        pii_tokens: Dict[str, str],
+    ) -> "ModelResponseStream":
+        """In-place unmask tool_call args and legacy function_call args on chunk.
+
+        Mirrors `_mask_tool_call_arguments_in_chunk` for the unmasking path,
+        so a server response that streams PII tokens inside tool_call or
+        function_call arguments gets rewritten back to the original values.
+        """
+        if not chunk.choices:
+            return chunk
+        delta = getattr(chunk.choices[0], "delta", None)
+        if delta is None:
+            return chunk
+        for tc in getattr(delta, "tool_calls", None) or []:
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            args = getattr(fn, "arguments", None)
+            if not isinstance(args, str) or not args:
+                continue
+            unmasked = self._unmask_pii_text(args, pii_tokens)
+            try:
+                fn.arguments = unmasked
+            except Exception:  # noqa: BLE001
+                try:
+                    fn.__dict__["arguments"] = unmasked
+                except Exception:
+                    pass
+        function_call = getattr(delta, "function_call", None)
+        if function_call is not None:
+            fc_args = getattr(function_call, "arguments", None)
+            if isinstance(fc_args, str) and fc_args:
+                unmasked_fc = self._unmask_pii_text(fc_args, pii_tokens)
+                try:
+                    function_call.arguments = unmasked_fc
+                except Exception:
+                    try:
+                        function_call.__dict__["arguments"] = unmasked_fc
+                    except Exception:
+                        pass
+        return chunk
+
     async def _stream_pii_unmasking(
         self,
         response: Any,
@@ -1759,12 +1830,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             yield flushed
                     continue
 
-                # Non-text MRS chunk — flush pending text first, then pass through.
+                # Non-text MRS chunk — flush pending text first, then unmask any
+                # tool_call / legacy function_call args before yielding (Veria HIGH).
                 flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
                 buffer = ""
                 if flushed is not None:
                     yield flushed
-                yield chunk
+                yield self._unmask_chunk_tool_calls(chunk, pii_tokens)
 
             # End of stream — drain the trailing buffer.
             flushed = self._unmask_buffer_to_chunk(buffer, template, pii_tokens)
