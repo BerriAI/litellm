@@ -774,7 +774,11 @@ describe("ModelInfoView", () => {
       ...defaultModelData,
       litellm_params: {
         ...defaultModelData.litellm_params,
+        // Seed BOTH credential fields so the "blank preserves existing" test
+        // can prove that leaving the form field empty does not wipe the
+        // already-stored upstream value.
         api_key: "sk-EXISTING-KEY",
+        organization: "org-EXISTING",
         litellm_credential_name: undefined,
       },
     };
@@ -858,8 +862,11 @@ describe("ModelInfoView", () => {
 
       const apiKeyInput = screen
         .getAllByPlaceholderText(/leave blank to keep current/i)
-        .find((el) => (el as HTMLInputElement).type === "password")!;
-      await user.type(apiKeyInput, "sk-ROTATED-KEY");
+        .find((el) => (el as HTMLInputElement).type === "password");
+      // Defensive: surface a meaningful failure if the password rotate input
+      // isn't rendered, rather than a cryptic TypeError on the next line.
+      expect(apiKeyInput).toBeDefined();
+      await user.type(apiKeyInput as HTMLInputElement, "sk-ROTATED-KEY");
 
       const saveButton = screen.getByRole("button", { name: /save changes/i });
       await user.click(saveButton);
@@ -869,8 +876,13 @@ describe("ModelInfoView", () => {
       });
       const lastCall = mockModelPatchUpdateCall.mock.calls.at(-1)!;
       const updateData = lastCall[1] as any;
+      // The filled rotate field wins over the existing api_key merged from
+      // parsedExtraParams above.
       expect(updateData.litellm_params.api_key).toBe("sk-ROTATED-KEY");
-      expect(updateData.litellm_params.organization).toBeUndefined();
+      // The blank rotate field must NOT clobber the existing organization
+      // value that came through parsedExtraParams — the seeded
+      // "org-EXISTING" should flow through unchanged.
+      expect(updateData.litellm_params.organization).toBe("org-EXISTING");
     });
 
     it("falls back to a no-fields message when the provider has no credential metadata", async () => {
