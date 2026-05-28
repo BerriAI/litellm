@@ -44,29 +44,63 @@ class TickerrLogger(CustomLogger):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.disabled: bool = os.environ.get("TICKERR_DISABLED", "").lower() in {
-            "1", "true", "yes",
+            "1",
+            "true",
+            "yes",
         }
         self.region: Optional[str] = os.environ.get("TICKERR_REGION")
         try:
-            self.sample_rate: float = min(1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0"))))
+            self.sample_rate: float = min(
+                1.0, max(0.0, float(os.environ.get("TICKERR_SAMPLE_RATE", "0")))
+            )
         except (ValueError, TypeError):
             self.sample_rate = 0.0
 
-    def log_failure_event(self, kwargs: Dict[str, Any], response_obj: Any, start_time: Union[datetime, float], end_time: Union[datetime, float]) -> None:
+    def log_failure_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
+    ) -> None:
         self._report(kwargs, start_time, end_time)
 
-    async def async_log_failure_event(self, kwargs: Dict[str, Any], response_obj: Any, start_time: Union[datetime, float], end_time: Union[datetime, float]) -> None:
+    async def async_log_failure_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
+    ) -> None:
         self._report(kwargs, start_time, end_time)
 
-    def log_success_event(self, kwargs: Dict[str, Any], response_obj: Any, start_time: Union[datetime, float], end_time: Union[datetime, float]) -> None:
+    def log_success_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
+    ) -> None:
         if self.sample_rate > 0 and random.random() < self.sample_rate:
             self._report(kwargs, start_time, end_time, is_success=True)
 
-    async def async_log_success_event(self, kwargs: Dict[str, Any], response_obj: Any, start_time: Union[datetime, float], end_time: Union[datetime, float]) -> None:
+    async def async_log_success_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
+    ) -> None:
         if self.sample_rate > 0 and random.random() < self.sample_rate:
             self._report(kwargs, start_time, end_time, is_success=True)
 
-    def _report(self, kwargs: Dict[str, Any], start_time: Union[datetime, float], end_time: Union[datetime, float], is_success: bool = False) -> None:
+    def _report(
+        self,
+        kwargs: Dict[str, Any],
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
+        is_success: bool = False,
+    ) -> None:
         if self.disabled:
             return
 
@@ -77,14 +111,19 @@ class TickerrLogger(CustomLogger):
         else:
             latency = round((float(end_time) - float(start_time)) * 1000)
 
-        payload = {k: v for k, v in {
-            "provider": kwargs.get("litellm_params", {}).get("custom_llm_provider") or kwargs.get("custom_llm_provider"),
-            "model": model or None,
-            "latency_ms": latency,
-            "event_type": "success" if is_success else "failure",
-            "status_code": getattr(kwargs.get("exception"), "status_code", None),
-            "region": self.region,
-        }.items() if v is not None}
+        payload = {
+            k: v
+            for k, v in {
+                "provider": kwargs.get("litellm_params", {}).get("custom_llm_provider")
+                or kwargs.get("custom_llm_provider"),
+                "model": model or None,
+                "latency_ms": latency,
+                "event_type": "success" if is_success else "failure",
+                "status_code": getattr(kwargs.get("exception"), "status_code", None),
+                "region": self.region,
+            }.items()
+            if v is not None
+        }
 
         def _send() -> None:
             try:
