@@ -2507,6 +2507,7 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
 def _mrs_text_chunk(text, finish=None, role=None):
     """Build a minimal ModelResponseStream carrying delta.content=text."""
     from litellm.types.utils import Delta, StreamingChoices
+
     return ModelResponseStream(
         id="chatcmpl-lit3222",
         object="chat.completion.chunk",
@@ -2524,6 +2525,7 @@ def _mrs_text_chunk(text, finish=None, role=None):
 
 def _mrs_finish_chunk(finish="stop"):
     from litellm.types.utils import Delta, StreamingChoices
+
     return ModelResponseStream(
         id="chatcmpl-lit3222",
         object="chat.completion.chunk",
@@ -2558,9 +2560,9 @@ async def test_lit3222_apply_to_output_streams_incrementally(monkeypatch):
     monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
 
     pieces = [
-        "Hello there. ",                                # ends with "." → flush
-        "My name is Jane and I live in NYC. ",          # ends with "." → flush
-        "Have a good day. ",                            # ends with "." → flush
+        "Hello there. ",  # ends with "." → flush
+        "My name is Jane and I live in NYC. ",  # ends with "." → flush
+        "Have a good day. ",  # ends with "." → flush
     ]
 
     async def upstream():
@@ -2579,18 +2581,24 @@ async def test_lit3222_apply_to_output_streams_incrementally(monkeypatch):
     assert len(received) > 1, f"expected multiple chunks, got {len(received)}"
     # Recovered text must be masked.
     text_pieces = [
-        c.choices[0].delta.content for c in received
+        c.choices[0].delta.content
+        for c in received
         if isinstance(c, ModelResponseStream)
-        and c.choices and getattr(c.choices[0].delta, "content", None)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
     ]
     full = "".join(text_pieces)
     assert "Jane" not in full, f"PII leaked: {full!r}"
     assert "<PERSON>" in full, f"masked token missing: {full!r}"
     # Finish-reason chunk must still arrive at the tail with finish_reason set.
     last_finish = next(
-        (c for c in reversed(received)
-         if isinstance(c, ModelResponseStream)
-         and c.choices and c.choices[0].finish_reason),
+        (
+            c
+            for c in reversed(received)
+            if isinstance(c, ModelResponseStream)
+            and c.choices
+            and c.choices[0].finish_reason
+        ),
         None,
     )
     assert last_finish is not None, "no finish_reason chunk was emitted"
@@ -2616,6 +2624,7 @@ async def test_lit3222_apply_to_output_flushes_on_char_limit(monkeypatch):
 
     # 200 chars of word-only content, no period anywhere — must still chunk on char limit
     chunks_in = [("abcdefghij " * 5).strip() + " "] * 4  # ~55 chars each
+
     async def upstream():
         for c in chunks_in:
             yield _mrs_text_chunk(c)
@@ -2631,9 +2640,11 @@ async def test_lit3222_apply_to_output_flushes_on_char_limit(monkeypatch):
 
     # Must produce >1 text chunk before EOS even without sentence enders.
     text_chunks = [
-        c for c in received
+        c
+        for c in received
         if isinstance(c, ModelResponseStream)
-        and c.choices and getattr(c.choices[0].delta, "content", None)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
     ]
     assert len(text_chunks) > 1, f"char-limit flush failed: {len(text_chunks)}"
 
@@ -2670,9 +2681,11 @@ async def test_lit3222_unmask_path_streams_incrementally():
         received.append(chunk)
 
     text_pieces = [
-        c.choices[0].delta.content for c in received
+        c.choices[0].delta.content
+        for c in received
         if isinstance(c, ModelResponseStream)
-        and c.choices and getattr(c.choices[0].delta, "content", None)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
     ]
     full = "".join(text_pieces)
     # Cross-boundary token still resolved.
@@ -2681,7 +2694,9 @@ async def test_lit3222_unmask_path_streams_incrementally():
     assert "<PERSON_1>" not in full
     assert "<EMAIL_2>" not in full
     # Progressive emission: at least 2 text-bearing chunks were yielded.
-    assert len(text_pieces) >= 2, f"unmask path collapsed: {len(text_pieces)} text chunks"
+    assert (
+        len(text_pieces) >= 2
+    ), f"unmask path collapsed: {len(text_pieces)} text chunks"
 
 
 @pytest.mark.asyncio
@@ -2713,7 +2728,10 @@ async def test_lit3222_unmask_path_tool_call_chunk_passes_through():
                             id="call_1",
                             index=0,
                             type="function",
-                            function={"name": "lookup_user", "arguments": '{"name":"<PERSON_1>"}'},
+                            function={
+                                "name": "lookup_user",
+                                "arguments": '{"name":"<PERSON_1>"}',
+                            },
                         )
                     ],
                 ),
@@ -2771,9 +2789,11 @@ async def test_lit3222_apply_to_output_no_pii_no_extra_calls(monkeypatch):
         received.append(chunk)
 
     text_chunks = [
-        c for c in received
+        c
+        for c in received
         if isinstance(c, ModelResponseStream)
-        and c.choices and getattr(c.choices[0].delta, "content", None)
+        and c.choices
+        and getattr(c.choices[0].delta, "content", None)
     ]
     full = "".join(c.choices[0].delta.content for c in text_chunks)
     assert full == "First sentence. Second sentence. Third sentence."
