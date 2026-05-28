@@ -4286,9 +4286,7 @@ async def _authorize_and_filter_teams(
             )
 
     # LIT-2553: narrow only when the caller is a non-admin / non-org-admin.
-    should_narrow_for_internal_user = (
-        not is_proxy_admin and allowed_org_ids is None
-    )
+    should_narrow_for_internal_user = not is_proxy_admin and allowed_org_ids is None
 
     if allowed_org_ids is not None:
         org_teams = await prisma_client.db.litellm_teamtable.find_many(
@@ -4314,11 +4312,14 @@ async def _authorize_and_filter_teams(
             and any(m.get("user_id") == user_id for m in team.members_with_roles)
         ], should_narrow_for_internal_user
     else:
-        return list(
-            await prisma_client.db.litellm_teamtable.find_many(
-                include={"litellm_model_table": True}
-            )
-        ), should_narrow_for_internal_user
+        return (
+            list(
+                await prisma_client.db.litellm_teamtable.find_many(
+                    include={"litellm_model_table": True}
+                )
+            ),
+            should_narrow_for_internal_user,
+        )
 
 
 def _narrow_team_list_response_for_internal_user(
@@ -4346,9 +4347,7 @@ def _narrow_team_list_response_for_internal_user(
     response.team_memberships = [
         tm for tm in (response.team_memberships or []) if _entry_uid(tm) == target_uid
     ]
-    response.keys = [
-        k for k in (response.keys or []) if _entry_uid(k) == target_uid
-    ]
+    response.keys = [k for k in (response.keys or []) if _entry_uid(k) == target_uid]
 
     response.team_member_permissions = None
     response.metadata = None
@@ -4395,12 +4394,14 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    filtered_response, should_narrow_for_internal_user = await _authorize_and_filter_teams(
-        user_api_key_dict=user_api_key_dict,
-        user_id=user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+    filtered_response, should_narrow_for_internal_user = (
+        await _authorize_and_filter_teams(
+            user_api_key_dict=user_api_key_dict,
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
     _team_ids = [team.team_id for team in filtered_response]
