@@ -3464,3 +3464,65 @@ async def test_assert_user_can_view_request_id_team_key_other_team_denied():
             request_id="r1",
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_team_key_orphan_row_falls_through():
+    """A team-scoped key viewing an orphan row (team_id=None) falls through to
+    the user-based check. The row's user matches the key's owning user_id so
+    access is allowed (LIT-3301 — backward compatibility for pre-team rows)."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+
+    row = MagicMock()
+    row.team_id = None  # orphan row
+    row.user = "admin_user_1"  # owned by key's user
+
+    class _DB:
+        litellm_spendlogs = MagicMock()
+
+    _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
+
+    class _Client:
+        db = _DB
+
+    # Should not raise — row.user matches user_api_key_dict.user_id
+    await spend_management_endpoints._assert_user_can_view_request_id(
+        prisma_client=_Client(),
+        user_api_key_dict=auth,
+        request_id="r-orphan",
+    )
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_team_key_orphan_row_other_user_denied():
+    """A team-scoped key viewing an orphan row owned by a different user is
+    denied (no team match, no user match)."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+
+    row = MagicMock()
+    row.team_id = None
+    row.user = "someone_else"
+
+    class _DB:
+        litellm_spendlogs = MagicMock()
+
+    _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
+
+    class _Client:
+        db = _DB
+
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            prisma_client=_Client(),
+            user_api_key_dict=auth,
+            request_id="r-orphan",
+        )
+    assert exc_info.value.status_code == 403
