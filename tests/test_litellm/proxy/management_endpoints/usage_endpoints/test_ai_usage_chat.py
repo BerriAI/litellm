@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
     stream_usage_ai_chat,
 )
 
-
 SAMPLE_AGGREGATED_RESPONSE = {
     "results": [
         {
@@ -207,11 +206,10 @@ class TestStreamUsageAiChat:
             ],
         }
 
-        async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Total spend is $50.25"
-            yield chunk
+        mock_second_response = MagicMock()
+        mock_second_response.choices = [MagicMock()]
+        mock_second_response.choices[0].message.tool_calls = None
+        mock_second_response.choices[0].message.content = "Total spend is $50.25"
 
         with (
             patch(
@@ -225,7 +223,7 @@ class TestStreamUsageAiChat:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
-                    mock_stream(),
+                    mock_second_response,
                 ]
             )
             mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
@@ -282,11 +280,10 @@ class TestStreamUsageAiChat:
             ],
         }
 
-        async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Engineering is the top team."
-            yield chunk
+        mock_second_response = MagicMock()
+        mock_second_response.choices = [MagicMock()]
+        mock_second_response.choices[0].message.tool_calls = None
+        mock_second_response.choices[0].message.content = "Engineering is the top team."
 
         with (
             patch(
@@ -300,7 +297,7 @@ class TestStreamUsageAiChat:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
-                    mock_stream(),
+                    mock_second_response,
                 ]
             )
             mock_fetch.return_value = SAMPLE_TEAM_RESPONSE
@@ -365,11 +362,10 @@ class TestStreamUsageAiChat:
             ],
         }
 
-        async def mock_stream():
-            chunk = MagicMock()
-            chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Data."
-            yield chunk
+        mock_second_response = MagicMock()
+        mock_second_response.choices = [MagicMock()]
+        mock_second_response.choices[0].message.tool_calls = None
+        mock_second_response.choices[0].message.content = "Data."
 
         mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
 
@@ -391,7 +387,7 @@ class TestStreamUsageAiChat:
             mock_litellm.acompletion = AsyncMock(
                 side_effect=[
                     mock_first_response,
-                    mock_stream(),
+                    mock_second_response,
                 ]
             )
 
@@ -466,3 +462,232 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# LIT-3145 regression tests: system-prompt date-default + multi-turn tool loop
+# ---------------------------------------------------------------------------
+
+
+class TestLit3145SystemPromptDateDefault:
+    """Pin the date-default guidance added to the system prompt."""
+
+    def test_admin_prompt_tells_model_to_default_to_last_30_days(self):
+        prompt = _build_system_prompt(is_admin=True)
+        assert "last 30 days" in prompt
+
+    def test_non_admin_prompt_tells_model_to_default_to_last_30_days(self):
+        prompt = _build_system_prompt(is_admin=False)
+        assert "last 30 days" in prompt
+
+    def test_prompt_forbids_asking_for_date_range_clarification(self):
+        prompt = _build_system_prompt(is_admin=True)
+        # Must explicitly tell the model NOT to ask for clarification, otherwise
+        # we regress the LIT-3145 UX where the assistant replied with
+        # "what date range?" on a fresh turn.
+        assert "Do NOT ask" in prompt
+        assert "date range" in prompt
+
+    def test_prompt_instructs_model_to_state_chosen_range(self):
+        prompt = _build_system_prompt(is_admin=True)
+        # The model should report which range it chose so the user can sanity-check.
+        assert "which range you used" in prompt
+
+
+class TestLit3145MultiTurnToolLoop:
+    """Multi-round tool loop: model can chain follow-up tool calls in one turn."""
+
+    def _make_tool_call_choice(self, tool_name, args, call_id="call_x"):
+        tc = MagicMock()
+        tc.id = call_id
+        tc.function.name = tool_name
+        tc.function.arguments = json.dumps(args)
+
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.tool_calls = [tc]
+        resp.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(args),
+                    },
+                }
+            ],
+        }
+        return resp
+
+    def _make_final_choice(self, content):
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.tool_calls = None
+        resp.choices[0].message.content = content
+        return resp
+
+    @pytest.mark.asyncio
+    async def test_two_tool_rounds_in_a_single_user_turn(self):
+        """First round: get_usage_data. Second round (post-results): get_team_usage_data.
+        Third round: final natural-language answer. All in ONE user message.
+        """
+        round1 = self._make_tool_call_choice(
+            "get_usage_data",
+            {"start_date": "2026-04-29", "end_date": "2026-05-28"},
+            call_id="c1",
+        )
+        round2 = self._make_tool_call_choice(
+            "get_team_usage_data",
+            {"start_date": "2026-04-29", "end_date": "2026-05-28"},
+            call_id="c2",
+        )
+        round3 = self._make_final_choice(
+            "Showing usage for 2026-04-29 -> 2026-05-28. Top team is Engineering."
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch_usage,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch_team,
+        ):
+            mock_litellm.acompletion = AsyncMock(side_effect=[round1, round2, round3])
+            mock_fetch_usage.return_value = SAMPLE_AGGREGATED_RESPONSE
+            mock_fetch_team.return_value = SAMPLE_TEAM_RESPONSE
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Which team spent the most last month?",
+                    }
+                ],
+                model="gpt-4o-mini",
+                user_id="admin-1",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            tool_call_events = [e for e in events if e["type"] == "tool_call"]
+            tool_names_run = {
+                e["tool_name"] for e in tool_call_events if e.get("status") == "running"
+            }
+            # Critical assertion: both tool calls happened in a single user turn.
+            assert "get_usage_data" in tool_names_run
+            assert "get_team_usage_data" in tool_names_run
+
+            chunks = [e for e in events if e["type"] == "chunk"]
+            joined = "".join(c["content"] for c in chunks)
+            assert "Engineering" in joined
+
+            done_events = [e for e in events if e["type"] == "done"]
+            assert len(done_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_round_cap_enforced_no_runaway_tool_calls(self):
+        """A model that keeps requesting tool calls forever must be stopped by
+        MAX_TOOL_ROUNDS. After the cap we force a final natural-language reply
+        via _stream_final_response (no more tools)."""
+        # Three identical tool-call responses in a row.
+        rounds = [
+            self._make_tool_call_choice(
+                "get_usage_data",
+                {"start_date": "2026-04-29", "end_date": "2026-05-28"},
+                call_id=f"c{i}",
+            )
+            for i in range(5)  # more than MAX_TOOL_ROUNDS
+        ]
+
+        async def mock_final_stream():
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = "Final fallback answer."
+            yield chunk
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
+            # Sequence: MAX_TOOL_ROUNDS tool-call responses, then a streamed final.
+            from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+                MAX_TOOL_ROUNDS,
+            )
+
+            mock_litellm.acompletion = AsyncMock(
+                side_effect=rounds[:MAX_TOOL_ROUNDS] + [mock_final_stream()]
+            )
+            mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "summarise usage"}],
+                model="gpt-4o-mini",
+                user_id="admin-1",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            running_tool_calls = [
+                e
+                for e in events
+                if e["type"] == "tool_call" and e.get("status") == "running"
+            ]
+            # Exactly MAX_TOOL_ROUNDS tool calls — not 4, not 5.
+            assert (
+                len(running_tool_calls) == MAX_TOOL_ROUNDS
+            ), f"expected {MAX_TOOL_ROUNDS} tool calls, got {len(running_tool_calls)}"
+
+            # And the final synth chunk does land.
+            chunks = [e for e in events if e["type"] == "chunk"]
+            assert any("Final fallback answer." in c["content"] for c in chunks)
+
+            # Total acompletion calls = MAX_TOOL_ROUNDS + 1 (the final synth).
+            assert mock_litellm.acompletion.await_count == MAX_TOOL_ROUNDS + 1
+
+    @pytest.mark.asyncio
+    async def test_model_can_answer_without_any_tool_call_on_first_round(self):
+        """If the model responds with content (no tool_calls) on round 1 we
+        emit that content and stop — no fallback _stream_final_response call.
+        This is a regression guard for the single-round happy path so we don't
+        accidentally call acompletion a second time when the first response
+        already had the answer.
+        """
+        round1 = self._make_final_choice("Hello! How can I help with your usage?")
+
+        with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+        ) as mock_litellm:
+            mock_litellm.acompletion = AsyncMock(side_effect=[round1])
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-4o-mini",
+                user_id="u-1",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            chunks = [e for e in events if e["type"] == "chunk"]
+            done = [e for e in events if e["type"] == "done"]
+            assert len(chunks) == 1
+            assert chunks[0]["content"] == "Hello! How can I help with your usage?"
+            assert len(done) == 1
+            # Exactly one model call -- no second-round fallback streaming.
+            assert mock_litellm.acompletion.await_count == 1
