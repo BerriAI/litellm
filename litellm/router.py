@@ -5578,19 +5578,22 @@ class Router:
                         },
                     )
                 except Exception as e:
-                    import traceback as _tb
-
-                    _tb.print_exc()
+                    # router.py already imports `traceback` at module level
+                    # (Greptile P2).
+                    traceback.print_exc()
                     received_exceptions.append(e)
                     return None
 
             if isinstance(filtered_model_list, list) and len(filtered_model_list) > 0:
+                # try_cancel_batch() already swallows every Exception internally
+                # and returns None on failure; no need for return_exceptions=True.
+                # Letting BaseException (e.g. CancelledError) propagate is the
+                # correct behaviour. (Greptile P2)
                 results = await asyncio.gather(
                     *[
                         try_cancel_batch(cast(DeploymentTypedDict, m))
                         for m in filtered_model_list
                     ],
-                    return_exceptions=True,
                 )
             else:
                 raise Exception("No deployments configured on router.")
