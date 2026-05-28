@@ -919,7 +919,7 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     # dropdowns see the new models. On the very first call (at module init
     # below) ``models_by_provider`` has not been built yet — guard accordingly.
     # See LIT-1695.
-    if "models_by_provider" in globals():
+    if "models_by_provider" in globals() and "_refresh_models_by_provider" in globals():
         _refresh_models_by_provider()
 
 
