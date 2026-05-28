@@ -1,5 +1,4 @@
-"""
-Regression tests for LIT-3386: CheckBatchCost background poller must route
+"""Regression tests for LIT-3386: CheckBatchCost background poller must route
 managed-file-id normalization through ensure_batch_response_managed_file_ids
 (the same helper update_batch_in_database uses on the retrieve/cancel HTTP
 path) so that:
@@ -43,7 +42,6 @@ EXISTING_MANAGED_INPUT = (
 
 
 def _make_response():
-    """Fresh LiteLLMBatch with raw provider file IDs (what providers return)."""
     from litellm.types.utils import LiteLLMBatch
 
     return LiteLLMBatch(
@@ -61,8 +59,6 @@ def _make_response():
 
 
 def _build_environment(input_has_existing_managed_row: bool = True):
-    """Build the full CheckBatchCost mock environment (prisma, router, hook)."""
-    # -- prisma --
     prisma = MagicMock()
     prisma.db = MagicMock()
     prisma.db.litellm_managedobjecttable = MagicMock()
@@ -93,7 +89,6 @@ def _build_environment(input_has_existing_managed_row: bool = True):
     job.team_id = "team-lit-3386"
     prisma.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[job])
 
-    # -- router --
     router = MagicMock()
     response = _make_response()
     router.aretrieve_batch = AsyncMock(return_value=response)
@@ -107,7 +102,6 @@ def _build_environment(input_has_existing_managed_row: bool = True):
     deployment.model_info.model_dump.return_value = {}
     router.get_deployment = MagicMock(return_value=deployment)
 
-    # -- managed_files hook --
     hook = MagicMock()
 
     def _gen_unified_id(output_file_id, model_id, model_name):
@@ -244,8 +238,9 @@ async def test_lit_3386_output_and_error_use_creator_auth():
     await _run_check_batch_cost(env)
 
     store_calls = env["store_calls"]
-    assert len(store_calls) >= 2, (
-        f"expected ≥2 store_unified_file_id calls (output + error), got {len(store_calls)}"
+    assert len(store_calls) == 2, (
+        f"expected exactly 2 store_unified_file_id calls (output + error), "
+        f"got {len(store_calls)}"
     )
     for c in store_calls:
         assert c["user_id"] == "shin-real-user-id", (
