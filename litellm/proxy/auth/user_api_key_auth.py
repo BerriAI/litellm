@@ -2267,6 +2267,14 @@ async def _return_user_api_key_auth_obj(
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
 
+    auth_service_event_metadata = {
+        k: v
+        for k, v in (
+            ("user_api_key_team_id", valid_token_dict.get("team_id")),
+            ("user_api_key_team_alias", valid_token_dict.get("team_alias")),
+        )
+        if v
+    }
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
             service=ServiceTypes.AUTH,
@@ -2275,10 +2283,7 @@ async def _return_user_api_key_auth_obj(
             end_time=end_time,
             duration=end_time.timestamp() - start_time.timestamp(),
             parent_otel_span=parent_otel_span,
-            event_metadata={
-                "user_api_key_team_id": valid_token_dict.get("team_id"),
-                "user_api_key_team_alias": valid_token_dict.get("team_alias"),
-            },
+            event_metadata=auth_service_event_metadata or None,
         )
     )
 
