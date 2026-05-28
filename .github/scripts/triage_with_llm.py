@@ -912,7 +912,11 @@ def _has_marker(
     return False
 
 
-def format_ready_for_review_comment(verdict: dict, greptile_score: int | None) -> str:
+def format_ready_for_review_comment(
+    verdict: dict,
+    greptile_score: int | None,
+    min_greptile_score: int = DEFAULT_MIN_GREPTILE_SCORE,
+) -> str:
     """Posted the first time a PR clears the bar (label added)."""
     score_line = (
         f" Greptile scored it **{greptile_score}/5**."
@@ -931,7 +935,7 @@ def format_ready_for_review_comment(verdict: dict, greptile_score: int | None) -
         f"> {explanation}\n"
         "\n"
         "A maintainer will take it from here. If a later re-check finds the PR "
-        f"has regressed (Greptile drops below {DEFAULT_MIN_GREPTILE_SCORE}/5, "
+        f"has regressed (Greptile drops below {min_greptile_score}/5, "
         "the QA proof is removed, etc.) I'll pull the tag and comment with "
         "what's missing — fix it and the tag comes back automatically.\n"
         f"{READY_MARKER}"
@@ -1138,7 +1142,9 @@ def review_gate(
         comment = (
             format_all_clear_comment(verdict, greptile_score)
             if recovered
-            else format_ready_for_review_comment(verdict, greptile_score)
+            else format_ready_for_review_comment(
+                verdict, greptile_score, min_greptile_score
+            )
         )
         if not close:
             return {**base_result, "action": "would-label-ready", "comment": comment}
