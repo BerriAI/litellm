@@ -691,3 +691,80 @@ class TestLit3145MultiTurnToolLoop:
             assert len(done) == 1
             # Exactly one model call -- no second-round fallback streaming.
             assert mock_litellm.acompletion.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_analyzing_results_status_emitted_after_tools_before_answer(self):
+        """After at least one tool round the post-tool answer must be preceded
+        by an 'Analyzing results...' status event so the UI shows visible
+        feedback during the model's synthesis pause. Round 0 (direct answer
+        without tools) must NOT emit it - the initial 'Thinking...' covers it.
+        """
+        round1 = self._make_tool_call_choice(
+            "get_usage_data",
+            {"start_date": "2026-04-29", "end_date": "2026-05-28"},
+            call_id="c1",
+        )
+        round2 = self._make_final_choice("Showing usage; total spend $50.25.")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm,
+            patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
+        ):
+            mock_litellm.acompletion = AsyncMock(side_effect=[round1, round2])
+            mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "summarise usage"}],
+                model="gpt-4o-mini",
+                user_id="admin-1",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            statuses = [e["message"] for e in events if e["type"] == "status"]
+            # Both the initial "Thinking..." and the post-tool "Analyzing
+            # results..." should appear, in that order.
+            assert "Thinking..." in statuses
+            assert "Analyzing results..." in statuses
+            assert statuses.index("Thinking...") < statuses.index(
+                "Analyzing results..."
+            )
+
+            # The "Analyzing results..." status should appear right BEFORE the
+            # chunk that carries the final answer (so the UI can render the
+            # spinner-to-answer transition cleanly).
+            types = [e["type"] for e in events]
+            chunk_idx = types.index("chunk")
+            # find last status before the chunk
+            prior_statuses = [e for e in events[:chunk_idx] if e["type"] == "status"]
+            assert prior_statuses[-1]["message"] == "Analyzing results..."
+
+    @pytest.mark.asyncio
+    async def test_no_analyzing_status_when_model_answers_on_round_0(self):
+        """Direct-answer-without-tools case: only the initial 'Thinking...'
+        status should be emitted - no spurious 'Analyzing results...' since
+        no tools ran."""
+        round1 = self._make_final_choice("Hi! How can I help with your usage?")
+
+        with patch(
+            "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+        ) as mock_litellm:
+            mock_litellm.acompletion = AsyncMock(side_effect=[round1])
+
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-4o-mini",
+                user_id="u-1",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            statuses = [e["message"] for e in events if e["type"] == "status"]
+            assert statuses == ["Thinking..."]
