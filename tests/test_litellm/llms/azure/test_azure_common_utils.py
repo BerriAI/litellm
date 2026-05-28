@@ -1646,6 +1646,150 @@ def test_azure_v1_api_uses_openai_client(api_version):
         ), f"base_url should contain /openai/v1/, got {async_client.base_url}"
 
 
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_uses_token_provider_when_api_key_missing(api_version):
+    """LIT-3074 regression: Azure v1 API path must fall back to
+    azure_ad_token_provider when api_key is None, not raise
+    OpenAIError("api_key client option must be set").
+
+    Prior to the fix, the v1 API builder copied only ``api_key`` from
+    ``azure_client_params``, dropping ``azure_ad_token`` and
+    ``azure_ad_token_provider``. With ``enable_azure_ad_token_refresh=True``
+    (a documented config flag) ``api_key`` is None, so OpenAI/AsyncOpenAI
+    construction raised at client init time. The fix resolves the bearer
+    credential and passes it as ``api_key`` (the OpenAI SDK then sends
+    ``Authorization: Bearer <token>``).
+    """
+    from openai import AsyncOpenAI, OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    fake_token = "EYJ.FAKE.AAD.TOKEN.FROM.PROVIDER"
+
+    # Clear the in-memory client cache so parameterised cases do not
+    # mutually contaminate via the per-config client cache.
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: fake_token,
+        }
+
+        # Async path
+        async_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+        assert isinstance(async_client, AsyncOpenAI)
+        assert async_client.api_key == fake_token
+        assert "/openai/v1/" in str(async_client.base_url)
+
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": lambda: fake_token,
+        }
+
+        # Sync path
+        sync_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+        assert isinstance(sync_client, OpenAI)
+        assert sync_client.api_key == fake_token
+
+
+def test_azure_v1_api_uses_static_ad_token_when_api_key_missing():
+    """LIT-3074 regression: a static ``azure_ad_token`` string is used as the
+    bearer credential when no ``api_key`` is set on the Azure v1 API path."""
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    static_token = "STATIC.AAD.TOKEN"
+
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token": static_token,
+            "azure_ad_token_provider": None,
+        }
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version="preview",
+            _is_async=False,
+        )
+        assert isinstance(client, OpenAI)
+        assert client.api_key == static_token
+
+
+def test_azure_v1_api_explicit_api_key_beats_token_provider():
+    """LIT-3074 regression: when an explicit ``api_key`` is set it must
+    continue to win over an AD token / provider (precedence preserved)."""
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    litellm.in_memory_llm_clients_cache.cache_dict.clear()
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "primary-static-key",
+            "azure_endpoint": api_base,
+            "api_version": "v1",
+            "azure_ad_token": "should-not-be-used-ad-token",
+            "azure_ad_token_provider": lambda: "should-not-be-used-provider",
+        }
+        client = base_llm.get_azure_openai_client(
+            api_key="primary-static-key",
+            api_base=api_base,
+            api_version="v1",
+            _is_async=False,
+        )
+        assert isinstance(client, OpenAI)
+        assert client.api_key == "primary-static-key"
+
+
+def test_resolve_v1_bearer_credential_precedence_and_fallback():
+    """Direct unit coverage for the precedence/fallback helper:
+    api_key > azure_ad_token > azure_ad_token_provider() > None.
+    """
+    fn = BaseAzureLLM._resolve_v1_bearer_credential
+    # 1) explicit api_key wins
+    assert fn(api_key="K", azure_ad_token="T", azure_ad_token_provider=lambda: "P") == "K"
+    # 2) static azure_ad_token next
+    assert fn(api_key=None, azure_ad_token="T", azure_ad_token_provider=lambda: "P") == "T"
+    # 3) callable provider as last resort
+    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=lambda: "P") == "P"
+    # 4) nothing -> None (SDK will raise its own clearer error)
+    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=None) is None
+    # 5) provider that raises -> None (defensive, no crash on AD glitches)
+    def boom():
+        raise RuntimeError("transient AD failure")
+    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=boom) is None
+    # 6) provider returning empty string -> None (not a usable bearer)
+    assert fn(api_key=None, azure_ad_token=None, azure_ad_token_provider=lambda: "") is None
+
+
 def test_azure_traditional_api_uses_azure_openai_client():
     """
     Test that traditional Azure API versions still use AzureOpenAI client.
