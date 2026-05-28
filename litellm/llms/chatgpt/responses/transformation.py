@@ -24,6 +24,7 @@ from ..common_utils import (
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    normalize_chatgpt_access_token,
 )
 
 
@@ -42,16 +43,21 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
-        try:
-            access_token = self.authenticator.get_access_token()
-        except GetAccessTokenError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider="chatgpt",
-                message=str(e),
-            )
+        access_token = litellm_params.api_key if litellm_params else None
+        if not access_token:
+            try:
+                access_token = self.authenticator.get_access_token()
+            except GetAccessTokenError as e:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=str(e),
+                )
+        access_token = normalize_chatgpt_access_token(access_token)
 
-        account_id = self.authenticator.get_account_id()
+        account_id = self.authenticator.get_account_id_from_token(access_token)
+        if not account_id:
+            account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(
             access_token, account_id, session_id

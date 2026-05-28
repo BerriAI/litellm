@@ -236,6 +236,7 @@ def get_chatgpt_default_headers(
     account_id: Optional[str],
     session_id: Optional[str] = None,
 ) -> dict:
+    access_token = normalize_chatgpt_access_token(access_token)
     originator = get_chatgpt_originator()
     user_agent = get_chatgpt_user_agent(originator)
     headers = {
@@ -250,6 +251,13 @@ def get_chatgpt_default_headers(
     if account_id:
         headers["ChatGPT-Account-Id"] = account_id
     return headers
+
+
+def normalize_chatgpt_access_token(access_token: str) -> str:
+    access_token = access_token.strip()
+    if access_token.lower().startswith("bearer "):
+        return access_token[7:].strip()
+    return access_token
 
 
 def get_chatgpt_default_instructions() -> str:

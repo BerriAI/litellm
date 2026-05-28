@@ -422,6 +422,60 @@ def test_chat_completion_forward_llm_provider_auth_headers(
 
 
 @mock_patch_acompletion()
+def test_chat_completion_forward_authorization_as_provider_api_key(
+    mock_acompletion, client_no_auth
+):
+    """
+    When the proxy is authenticated with x-litellm-api-key, Authorization can be
+    used as the upstream provider token.
+    """
+    original_forward_client_headers = None
+    original_forward_auth_headers = None
+    try:
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        original_forward_client_headers = gs.get("forward_client_headers_to_llm_api")
+        original_forward_auth_headers = gs.get("forward_llm_provider_auth_headers")
+        gs["forward_client_headers_to_llm_api"] = True
+        gs["forward_llm_provider_auth_headers"] = True
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
+
+        test_data = {
+            "model": "chatgpt/gpt-5.3-codex",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+        }
+        request_headers = {
+            "x-litellm-api-key": "Bearer sk-proxy-auth-123",
+            "Authorization": "Bearer chatgpt-access-token",
+            "X-Custom-Header": "custom-value",
+        }
+
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=request_headers
+        )
+
+        assert response.status_code == 200
+        assert mock_acompletion.call_args.kwargs["api_key"] == "chatgpt-access-token"
+        forwarded_headers = mock_acompletion.call_args.kwargs.get("headers", {})
+        assert "authorization" not in forwarded_headers
+        assert "Authorization" not in forwarded_headers
+        assert forwarded_headers["x-custom-header"] == "custom-value"
+    except Exception as e:
+        pytest.fail(f"Test failed forwarding Authorization provider key: {str(e)}")
+    finally:
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        if original_forward_client_headers is None:
+            gs.pop("forward_client_headers_to_llm_api", None)
+        else:
+            gs["forward_client_headers_to_llm_api"] = original_forward_client_headers
+        if original_forward_auth_headers is None:
+            gs.pop("forward_llm_provider_auth_headers", None)
+        else:
+            gs["forward_llm_provider_auth_headers"] = original_forward_auth_headers
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
+
+
+@mock_patch_acompletion()
 @pytest.mark.asyncio
 async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
     """

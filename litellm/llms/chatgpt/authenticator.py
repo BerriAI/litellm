@@ -20,6 +20,7 @@ from .common_utils import (
     GetAccessTokenError,
     GetDeviceCodeError,
     RefreshAccessTokenError,
+    normalize_chatgpt_access_token,
 )
 
 TOKEN_EXPIRY_SKEW_SECONDS = 60
@@ -37,7 +38,6 @@ class Authenticator:
         self.auth_file = os.path.join(
             self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json")
         )
-        self._ensure_token_dir()
 
     def get_api_base(self) -> str:
         return (
@@ -46,7 +46,13 @@ class Authenticator:
             or CHATGPT_API_BASE
         )
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, allow_device_auth: bool = True) -> str:
+        env_access_token = os.getenv("CHATGPT_ACCESS_TOKEN")
+        if env_access_token:
+            env_access_token = normalize_chatgpt_access_token(env_access_token)
+        if env_access_token and not self._is_token_value_expired(env_access_token):
+            return env_access_token
+
         auth_data = self._read_auth_file()
         if auth_data:
             access_token = auth_data.get("access_token")
@@ -62,6 +68,36 @@ class Authenticator:
                         "ChatGPT refresh token failed, re-login required: %s", exc
                     )
 
+        env_refresh_token = os.getenv("CHATGPT_REFRESH_TOKEN")
+        if env_refresh_token:
+            try:
+                refreshed = self._refresh_tokens(env_refresh_token)
+                return refreshed["access_token"]
+            except RefreshAccessTokenError as exc:
+                verbose_logger.warning(
+                    "ChatGPT refresh token from env failed, re-login required: %s", exc
+                )
+
+        if not allow_device_auth:
+            raise GetAccessTokenError(
+                message="No valid ChatGPT access/refresh token is available.",
+                status_code=401,
+            )
+
+        if os.getenv("CHATGPT_DISABLE_DEVICE_AUTH", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            raise GetAccessTokenError(
+                message=(
+                    "ChatGPT device auth is disabled and no valid access/refresh token "
+                    "was provided. Set CHATGPT_ACCESS_TOKEN, CHATGPT_REFRESH_TOKEN, "
+                    "or pass a client token through the proxy."
+                ),
+                status_code=401,
+            )
+
         cooldown_remaining = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:
             token = self._wait_for_access_token(cooldown_remaining)
@@ -72,6 +108,10 @@ class Authenticator:
         return tokens["access_token"]
 
     def get_account_id(self) -> Optional[str]:
+        account_id = os.getenv("CHATGPT_ACCOUNT_ID")
+        if account_id:
+            return account_id
+
         auth_data = self._read_auth_file()
         if not auth_data:
             return None
@@ -85,6 +125,9 @@ class Authenticator:
             auth_data["account_id"] = derived
             self._write_auth_file(auth_data)
         return derived
+
+    def get_account_id_from_token(self, token: Optional[str]) -> Optional[str]:
+        return self._extract_account_id(token)
 
     def _ensure_token_dir(self) -> None:
         if not os.path.exists(self.token_dir):
@@ -102,6 +145,7 @@ class Authenticator:
 
     def _write_auth_file(self, data: Dict[str, Any]) -> None:
         try:
+            self._ensure_token_dir()
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
         except IOError as exc:
@@ -114,6 +158,12 @@ class Authenticator:
             if expires_at:
                 auth_data["expires_at"] = expires_at
                 self._write_auth_file(auth_data)
+        if expires_at is None:
+            return True
+        return time.time() >= float(expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
+
+    def _is_token_value_expired(self, access_token: str) -> bool:
+        expires_at = self._get_expires_at(access_token)
         if expires_at is None:
             return True
         return time.time() >= float(expires_at) - TOKEN_EXPIRY_SKEW_SECONDS

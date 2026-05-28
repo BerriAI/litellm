@@ -619,6 +619,43 @@ def clean_headers(
     return clean_headers
 
 
+def _get_header_case_insensitive(headers: Headers, key: str) -> Optional[str]:
+    for header, value in headers.items():
+        if header.lower() == key.lower():
+            return value
+    return None
+
+
+def _strip_bearer_prefix(value: str) -> str:
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def _get_client_authorization_provider_key(
+    *,
+    request: Request,
+    general_settings: Optional[Dict[str, Any]],
+    forward_llm_provider_auth_headers: bool,
+    authenticated_with_header: Optional[str],
+) -> Optional[str]:
+    if not (
+        general_settings
+        and general_settings.get("forward_client_headers_to_llm_api") is True
+        and forward_llm_provider_auth_headers
+    ):
+        return None
+    if (
+        authenticated_with_header is not None
+        and authenticated_with_header.lower() == "authorization"
+    ):
+        return None
+    authorization_header = _get_header_case_insensitive(request.headers, "authorization")
+    if not authorization_header:
+        return None
+    return _strip_bearer_prefix(authorization_header)
+
+
 class LiteLLMProxyRequestSetup:
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> Optional[float]:
@@ -1313,11 +1350,23 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if not forward_llm_auth:
         forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
     # Determine which header was used for authentication
-    # This enables forwarding provider keys (e.g., x-api-key) when they weren't used for LiteLLM auth
+    # This enables forwarding provider keys (e.g., x-api-key) when they weren't
+    # used for LiteLLM auth.
     authenticated_with_header = None
+    custom_litellm_key_header_name = (
+        general_settings.get("litellm_key_header_name")
+        if general_settings is not None
+        else None
+    )
     if "x-litellm-api-key" in request.headers:
         # If x-litellm-api-key is present, it was used for auth
         authenticated_with_header = "x-litellm-api-key"
+    elif (
+        custom_litellm_key_header_name is not None
+        and _get_header_case_insensitive(request.headers, custom_litellm_key_header_name)
+        is not None
+    ):
+        authenticated_with_header = custom_litellm_key_header_name
     elif "authorization" in request.headers:
         # Authorization header was used for auth
         authenticated_with_header = "authorization"
@@ -1327,11 +1376,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _headers: Dict[str, str] = clean_headers(
         request.headers,
-        litellm_key_header_name=(
-            general_settings.get("litellm_key_header_name")
-            if general_settings is not None
-            else None
-        ),
+        litellm_key_header_name=custom_litellm_key_header_name,
         forward_llm_provider_auth_headers=forward_llm_auth,
         authenticated_with_header=authenticated_with_header,
     )
@@ -1353,6 +1398,18 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data["api_key"] = _headers["x-api-key"]
         verbose_proxy_logger.debug(
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
+        )
+    client_authorization_provider_key = _get_client_authorization_provider_key(
+        request=request,
+        general_settings=general_settings,
+        forward_llm_provider_auth_headers=forward_llm_auth,
+        authenticated_with_header=authenticated_with_header,
+    )
+    if client_authorization_provider_key:
+        data["api_key"] = client_authorization_provider_key
+        verbose_proxy_logger.debug(
+            "Setting client-provided Authorization bearer token as api_key "
+            "parameter (will override deployment key)"
         )
 
     ##########################################################
