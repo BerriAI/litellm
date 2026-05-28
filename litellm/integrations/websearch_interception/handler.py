@@ -1022,6 +1022,16 @@ class WebSearchInterceptionLogger(CustomLogger):
             if k != "max_tokens"
         }
         kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
+        # Avoid passing the same key in both ``**optional_params`` and
+        # ``**request_patch.kwargs`` at the follow-up ``acreate`` call (e.g.
+        # ``output_config`` shows up in both surfaces for /v1/messages
+        # callers). Strip keys already present in ``optional_params`` from the
+        # follow-up kwargs so the patch is a clean disjoint pair.
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs_for_followup.items()
+            if k not in optional_params_without_max_tokens
+        }
 
         if logging_obj is not None:
             agentic_params = logging_obj.model_call_details.get(
@@ -1297,6 +1307,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         if tools_param is not None:
             optional_params_clean["tools"] = tools_param
+
+        # Avoid passing the same key in both ``**optional_params`` and
+        # ``**request_patch.kwargs`` at the follow-up ``acompletion`` call
+        # (e.g. ``output_config`` shows up in both surfaces). Strip keys
+        # already present in ``optional_params_clean`` from the follow-up
+        # kwargs so the patch is a clean disjoint pair.
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs_for_followup.items()
+            if k not in optional_params_clean
+        }
 
         return AgenticLoopRequestPatch(
             model=full_model_name,
