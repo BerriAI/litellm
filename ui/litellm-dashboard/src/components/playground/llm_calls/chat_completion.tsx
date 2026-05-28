@@ -31,6 +31,7 @@ export async function makeOpenAIChatCompletionRequest(
   onMCPEvent?: (event: MCPEvent) => void,
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
+  stream?: boolean,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -112,28 +113,120 @@ export async function makeOpenAIChatCompletionRequest(
       }
     }
 
-    // @ts-ignore
-    const response = await client.chat.completions.create(
-      {
-        model: selectedModel,
-        stream: true,
-        stream_options: {
-          include_usage: true,
-        },
-        litellm_trace_id: traceId,
-        messages: chatHistory as ChatCompletionMessageParam[],
-        ...(vector_store_ids ? { vector_store_ids } : {}),
-        ...(guardrails ? { guardrails } : {}),
-        ...(policies ? { policies } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(max_tokens !== undefined ? { max_tokens } : {}),
-        ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
-      },
-      { signal },
-    );
+    // Default to streaming so existing callers/UX are unchanged.
+    const useStream = stream !== false;
+    const baseRequest = {
+      model: selectedModel,
+      litellm_trace_id: traceId,
+      messages: chatHistory as ChatCompletionMessageParam[],
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
+      ...(policies ? { policies } : {}),
+      ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(max_tokens !== undefined ? { max_tokens } : {}),
+      ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
+    } as any;
 
-    for await (const chunk of response) {
+    if (!useStream) {
+      // Non-streaming branch — single response object, no async iteration.
+      // @ts-ignore
+      const response = await client.chat.completions.create(
+        { ...baseRequest, stream: false },
+        { signal },
+      );
+      const choice = (response as any)?.choices?.[0];
+      const message = choice?.message ?? {};
+      const responseModel = (response as any)?.model ?? selectedModel;
+
+      // Surface time-to-first-token for parity with streaming UX (non-stream returns everything at once).
+      timeToFirstToken = Date.now() - startTime;
+      if (onTimingData) {
+        onTimingData(timeToFirstToken);
+      }
+      firstTokenReceived = true;
+
+      const content = typeof message.content === "string" ? message.content : "";
+      if (content) {
+        updateUI(content, responseModel);
+        fullResponseContent = content;
+      }
+
+      if (message.reasoning_content && onReasoningContent) {
+        onReasoningContent(message.reasoning_content);
+        fullReasoningContent = String(message.reasoning_content);
+      }
+
+      // Provider-specific fields can also appear on non-streaming responses.
+      const providerFields = message.provider_specific_fields;
+      if (providerFields) {
+        if (providerFields.search_results && onSearchResults) {
+          onSearchResults(providerFields.search_results);
+        }
+        if (providerFields.mcp_list_tools) {
+          mcpMetadata.mcp_list_tools = providerFields.mcp_list_tools;
+          if (onMCPEvent && !mcpListToolsProcessed) {
+            mcpListToolsProcessed = true;
+            const toolsEvent: MCPEvent = {
+              type: "response.output_item.done",
+              item_id: "mcp_list_tools",
+              item: {
+                type: "mcp_list_tools",
+                tools: providerFields.mcp_list_tools.map((tool: any) => ({
+                  name: tool.function?.name || tool.name || "",
+                  description: tool.function?.description || tool.description || "",
+                  input_schema: tool.function?.parameters || tool.input_schema || {},
+                })),
+              },
+              timestamp: Date.now(),
+            };
+            onMCPEvent(toolsEvent);
+          }
+        }
+        if (providerFields.mcp_tool_calls) {
+          mcpMetadata.mcp_tool_calls = providerFields.mcp_tool_calls;
+        }
+        if (providerFields.mcp_call_results) {
+          mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
+        }
+      }
+
+      // Image generation on non-streaming responses (delta.image equivalent).
+      const messageImage = (message as any).image;
+      if (messageImage?.url && onImageGenerated) {
+        onImageGenerated(messageImage.url, responseModel);
+      }
+
+      const responseUsage = (response as any)?.usage;
+      if (responseUsage && onUsageData) {
+        const usageData: TokenUsage = {
+          completionTokens: responseUsage.completion_tokens,
+          promptTokens: responseUsage.prompt_tokens,
+          totalTokens: responseUsage.total_tokens,
+        };
+        if (responseUsage.completion_tokens_details?.reasoning_tokens) {
+          usageData.reasoningTokens = responseUsage.completion_tokens_details.reasoning_tokens;
+        }
+        if (responseUsage.cost !== undefined && responseUsage.cost !== null) {
+          usageData.cost = parseFloat(responseUsage.cost);
+        }
+        onUsageData(usageData);
+      }
+    } else {
+      // Streaming branch — existing behavior, unchanged.
+      // @ts-ignore
+      const response = await client.chat.completions.create(
+        {
+          ...baseRequest,
+          stream: true,
+          stream_options: {
+            include_usage: true,
+          },
+        },
+        { signal },
+      );
+
+      for await (const chunk of response as any) {
       console.log("Stream chunk:", chunk);
 
       // Process content and measure time to first token
@@ -252,6 +345,7 @@ export async function makeOpenAIChatCompletionRequest(
         onUsageData(usageData);
       }
     }
+    } // end stream branch
 
     // Process remaining MCP metadata (mcp_tool_calls and mcp_call_results) after stream completes
     // Note: mcp_list_tools is already processed when found in the first chunk

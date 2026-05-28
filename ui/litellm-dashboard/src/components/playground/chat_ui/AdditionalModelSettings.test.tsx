@@ -98,4 +98,27 @@ describe("AdditionalModelSettings", () => {
       expect(onMockTestFallbacksChange).toHaveBeenCalledWith(false);
     });
   });
+
+  it("should not show 'Stream response' toggle when onStreamChange is not provided", () => {
+    render(<AdditionalModelSettings />);
+    expect(screen.queryByText(/Stream response/i)).not.toBeInTheDocument();
+  });
+
+  it("should render 'Stream response' toggle and reflect stream prop", () => {
+    render(<AdditionalModelSettings stream={true} onStreamChange={vi.fn()} />);
+    const checkbox = screen.getByRole("checkbox", { name: /Stream response/i });
+    expect(checkbox).toBeInTheDocument();
+    expect(checkbox).toBeChecked();
+  });
+
+  it("should treat stream=false prop as unchecked and call onStreamChange when toggled", async () => {
+    const user = userEvent.setup();
+    const onStreamChange = vi.fn();
+    render(<AdditionalModelSettings stream={false} onStreamChange={onStreamChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: /Stream response/i });
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+    expect(onStreamChange).toHaveBeenCalledWith(true);
+  });
 });

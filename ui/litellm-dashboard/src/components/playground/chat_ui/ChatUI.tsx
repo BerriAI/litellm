@@ -255,6 +255,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
   const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
+  const [streamEnabled, setStreamEnabled] = useState<boolean>(true);
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -783,6 +784,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             handleMCPEvent,
             mockTestFallbacks,
             mcpToolsets,
+            streamEnabled,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -1211,6 +1213,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             onUseAdvancedParamsChange={setUseAdvancedParams}
                             mockTestFallbacks={mockTestFallbacks}
                             onMockTestFallbacksChange={setMockTestFallbacks}
+                            stream={streamEnabled}
+                            onStreamChange={setStreamEnabled}
                           />
                         }
                         title="Model Settings"
