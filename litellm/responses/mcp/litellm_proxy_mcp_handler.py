@@ -52,6 +52,106 @@ LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 _PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
 
 
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions or
+    /responses kwargs.
+
+    Auto-executed MCP sub-calls inherit the parent request tags so they
+    roll up into the same Tag Usage view as the request that triggered
+    them. Tags can live on either ``metadata`` or ``litellm_metadata``
+    depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
+
+
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions or
+    /responses kwargs.
+
+    Auto-executed MCP sub-calls inherit the parent request tags so they
+    roll up into the same Tag Usage view as the request that triggered
+    them. Tags can live on either ``metadata`` or ``litellm_metadata``
+    depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
+
+
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions or
+    /responses kwargs.
+
+    Auto-executed MCP sub-calls inherit the parent request tags so they
+    roll up into the same Tag Usage view as the request that triggered
+    them. Tags can live on either ``metadata`` or ``litellm_metadata``
+    depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
+
+
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions or
+    /responses kwargs.
+
+    Auto-executed MCP sub-calls inherit the parent request tags so they
+    roll up into the same Tag Usage view as the request that triggered
+    them. Tags can live on either ``metadata`` or ``litellm_metadata``
+    depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
+
+
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions or
+    /responses kwargs.
+
+    Auto-executed MCP sub-calls inherit the parent request tags so they
+    roll up into the same Tag Usage view as the request that triggered
+    them. Tags can live on either ``metadata`` or ``litellm_metadata``
+    depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
+
+
 class LiteLLM_Proxy_MCP_Handler:
     """
     Helper class with static methods for MCP integration with Responses API.
