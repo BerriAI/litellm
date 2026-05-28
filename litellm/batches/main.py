@@ -37,7 +37,9 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.batches.batch_utils import sanitize_openai_batch_metadata
+from litellm.llms.openai.batches.transformation import (
+    sanitize_openai_batch_metadata,
+)
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
