@@ -1618,6 +1618,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 team_id=valid_token.team_id,
                                 team_model_max_budget=team_mmb,
                                 model=model_name,
+                                key_model_max_budget=valid_token.model_max_budget,
                             )
 
             # Check 6: Additional Common Checks across jwt + key auth
@@ -2655,6 +2656,7 @@ async def _run_post_custom_auth_checks(
                 team_id=valid_token.team_id,
                 team_model_max_budget=team_mmb,
                 model=model_name,
+                key_model_max_budget=valid_token.model_max_budget,
             )
 
     # team / user / end_user / project context objects are fetched by
