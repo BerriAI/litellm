@@ -378,12 +378,16 @@ async def responses_input_tokens(
             )
 
         raw_input = body.get("input")
-        if raw_input is None or (
-            isinstance(raw_input, (str, list, dict)) and len(raw_input) == 0
+        # Per the Responses API spec, ``input`` is either a string or a list of
+        # input items. Reject anything else (dict, non-empty or otherwise) so a
+        # malformed payload combined with ``instructions`` cannot silently
+        # bypass validation and return a token count for the system message
+        # alone while dropping the actual user input.
+        if (
+            raw_input is None
+            or not isinstance(raw_input, (str, list))
+            or len(raw_input) == 0
         ):
-            # Validate "input" against the raw body, not against the normalized
-            # message list. Otherwise a request with only "instructions" would
-            # produce a non-empty message list and silently bypass this check.
             raise HTTPException(
                 status_code=400,
                 detail={"error": "input parameter is required"},
