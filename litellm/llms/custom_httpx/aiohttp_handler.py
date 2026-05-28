@@ -55,17 +55,56 @@ class BaseLLMAIOHTTPHandler:
         )  # Track if we own the connector for cleanup
 
     def _get_or_create_transport(self) -> Optional[LiteLLMAiohttpTransport]:
-        """Get existing transport or create a new one if needed."""
+        """Get existing transport or create a new one if needed.
+
+        Resolves the global SSL configuration (``litellm.ssl_verify`` /
+        ``SSL_VERIFY`` env / ``SSL_CERT_FILE``) and threads it through to the
+        underlying transport so that ``ssl_verify: False`` set in
+        ``litellm_settings`` is honored on this aiohttp transport path
+        (matches what ``AsyncHTTPHandler.create_client`` already does).
+        """
         if self.transport:
             return self.transport
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            import ssl as _ssl
+
+            from litellm.llms.custom_httpx.http_handler import (
+                get_ssl_configuration,
+            )
+
+            # Resolve global ssl config the same way
+            # AsyncHTTPHandler.create_client does for the main transport path.
+            ssl_config = get_ssl_configuration(None)
+            ssl_context_arg = (
+                ssl_config if isinstance(ssl_config, _ssl.SSLContext) else None
+            )
+            ssl_verify_arg = ssl_config if isinstance(ssl_config, bool) else None
+
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=ssl_verify_arg,
+                ssl_context=ssl_context_arg,
+            )
             self._owns_transport = True
             return self.transport
-        except Exception:
-            # If transport creation fails, return None (will use direct session)
+        except Exception as e:
+            # Surface the failure: callers will fall back to a bare
+            # `aiohttp.ClientSession()` which does not carry the resolved SSL
+            # configuration, so silently swallowing this would silently
+            # re-introduce the bug fixed in LIT-3369.
+            try:
+                from litellm._logging import verbose_logger
+
+                verbose_logger.warning(
+                    "Failed to create aiohttp transport with resolved SSL "
+                    "configuration; falling back to bare aiohttp.ClientSession "
+                    "(SSL settings may not apply): %s",
+                    e,
+                )
+            except Exception:
+                # logging must never break the fallback path
+                pass
             return None
 
     def _get_connector(self) -> Optional[aiohttp.BaseConnector]:
@@ -83,21 +122,43 @@ class BaseLLMAIOHTTPHandler:
         return None
 
     def _create_client_session_with_transport(self) -> ClientSession:
-        """Create a new client session using transport or connector configuration."""
-        connector = self._get_connector()
+        """Create a new client session using transport or connector configuration.
 
+        When no explicit transport, connector, or session was injected, lazily
+        create a transport so that the global SSL configuration
+        (``litellm.ssl_verify``, ``SSL_VERIFY`` env, ``SSL_CERT_FILE``) is
+        honored on the aiohttp_openai provider path (LIT-3369). Falls back to
+        the legacy bare ``aiohttp.ClientSession()`` when no event loop is
+        available so sync callers/tests still work.
+        """
+        # 1) Prefer an explicitly-injected transport (carries SSL config).
         if self.transport and hasattr(self.transport, "_get_valid_client_session"):
-            # Use transport's session creation if available
-            session = self.transport._get_valid_client_session()
-            return session
-        elif connector:
-            # Use provided connector
-            session = aiohttp.ClientSession(connector=connector)
-            return session
-        else:
-            # Default session creation
-            session = aiohttp.ClientSession()
-            return session
+            return self.transport._get_valid_client_session()
+
+        # 2) Prefer an explicitly-injected connector.
+        connector = self._get_connector()
+        if connector is not None:
+            return aiohttp.ClientSession(connector=connector)
+
+        # 3) Lazy-create a transport so global SSL config is honored.
+        if self._owns_transport:
+            try:
+                self._get_or_create_transport()
+                if self.transport and hasattr(
+                    self.transport, "_get_valid_client_session"
+                ):
+                    return self.transport._get_valid_client_session()
+            except RuntimeError:
+                # Most commonly raised by `asyncio.get_running_loop()` when
+                # this method is invoked outside of an async context (e.g.,
+                # sync callers / unit tests that don't drive an event loop).
+                # In that case we fall through to the legacy bare
+                # `ClientSession()` so back-compat with sync callers is
+                # preserved.
+                pass
+
+        # 4) Legacy default: bare ClientSession (preserves old behavior).
+        return aiohttp.ClientSession()
 
     def _get_async_client_session(
         self, dynamic_client_session: Optional[ClientSession] = None
