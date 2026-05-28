@@ -7,19 +7,28 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { serverRootPath } from "@/components/networking";
 
 /** ---- BASE URL HELPERS ---- */
-function normalizeBasePrefix(raw: string | undefined | null): string {
-  const trimmed = (raw ?? "").trim();
-  if (!trimmed) return "";
-  const core = trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
-  return core ? `/${core}/` : "/";
+/**
+ * Resolve the UI root URL: \`<serverRootPath>/ui/\`.
+ *
+ * The LiteLLM proxy always mounts the static UI at \`/ui\` (see
+ * \`app.mount(\"/ui\", StaticFiles(...))\` in \`litellm/proxy/proxy_server.py\`),
+ * so router targets must always be anchored to that mount. The previous
+ * implementation derived the prefix from \`NEXT_PUBLIC_BASE_URL\` — which is
+ * unset in \`.env.production\` — and produced URLs like \`/?page=logs\` from
+ * dashboard subpaths, leaking the previous route segment in the URL.
+ */
+function uiRootBase(): string {
+  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath.replace(/\/+$/, "") : "";
+  return `${root}/ui/`;
 }
-const BASE_PREFIX = normalizeBasePrefix(process.env.NEXT_PUBLIC_BASE_URL);
 function withBase(path: string): string {
-  const body = path.startsWith("/") ? path.slice(1) : path;
-  const combined = `${BASE_PREFIX}${body}`;
-  return combined.startsWith("/") ? combined : `/${combined}`;
+  const base = uiRootBase();
+  if (path.startsWith("?")) return `${base}${path}`;
+  if (path.startsWith("/")) return `${base}${path.slice(1)}`;
+  return `${base}${path}`;
 }
 /** -------------------------------- */
 
