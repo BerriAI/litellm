@@ -463,8 +463,22 @@ def _get_public_model_name(
     patch_data: updateDeployment,
     db_model: Deployment,
 ) -> str:
-    """Determine the public model name from patch or existing model."""
-    if patch_data.model_name:
+    """Determine the public model name from patch or existing model.
+
+    Precedence (highest first):
+    1. ``patch_data.model_info.team_public_model_name`` -- explicit signal.
+    2. ``patch_data.model_name`` -- only when it differs from
+       ``db_model.model_name`` (genuine top-level rename).
+    3. ``db_model.model_info.team_public_model_name`` -- existing alias.
+    4. ``db_model.model_name`` -- legacy-row fallback.
+    """
+    if (
+        patch_data.model_info is not None
+        and patch_data.model_info.team_public_model_name
+    ):
+        return patch_data.model_info.team_public_model_name
+
+    if patch_data.model_name and patch_data.model_name != db_model.model_name:
         return patch_data.model_name
 
     if db_model.model_info and db_model.model_info.team_public_model_name:
