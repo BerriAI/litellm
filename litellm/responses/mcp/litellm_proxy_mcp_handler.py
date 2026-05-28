@@ -654,6 +654,7 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -739,6 +740,34 @@ class LiteLLM_Proxy_MCP_Handler:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
                 user_identifier = None
                 if user_api_key_auth is not None:
+                    # LIT-3304: inherit the full proxy-auth metadata block
+                    # (team_id / team_alias / user_api_key_alias /
+                    # user_api_key_user_id / user_api_key_end_user_id /
+                    # org_id / ...). Without this, MCP sub-calls auto-executed
+                    # from /chat/completions or /responses (e.g. Playground)
+                    # land in SpendLogs with no team or alias and break
+                    # team-budget tracking and alias-based filtering in the
+                    # Logs UI.
+                    try:
+                        from litellm.proxy.litellm_pre_call_utils import (
+                            LiteLLMProxyRequestSetup,
+                        )
+
+                        sanitized_user_api_key_metadata = (
+                            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                                user_api_key_dict=user_api_key_auth,
+                            )
+                        )
+                        if sanitized_user_api_key_metadata:
+                            for _k, _v in sanitized_user_api_key_metadata.items():
+                                if _v is not None:
+                                    logging_request_data["metadata"][_k] = _v
+                    except Exception as _meta_exc:
+                        verbose_logger.debug(
+                            "MCP _execute_tool_calls: failed to attach sanitized user_api_key metadata: %s",
+                            _meta_exc,
+                        )
+
                     user_api_key = getattr(user_api_key_auth, "api_key", None)
                     if user_api_key:
                         logging_request_data["metadata"]["user_api_key"] = user_api_key
@@ -748,6 +777,12 @@ class LiteLLM_Proxy_MCP_Handler:
                     ) or getattr(user_api_key_auth, "user_id", None)
                 if user_identifier:
                     logging_request_data["user"] = user_identifier
+
+                # LIT-3304: inherit request_tags from the parent request so
+                # MCP sub-calls roll up into the same Tag Usage view as the
+                # /chat/completions or /responses call that triggered them.
+                if request_tags:
+                    logging_request_data["metadata"]["tags"] = list(request_tags)
 
                 litellm_logging_obj: Optional[LiteLLMLoggingObj] = None
                 try:
