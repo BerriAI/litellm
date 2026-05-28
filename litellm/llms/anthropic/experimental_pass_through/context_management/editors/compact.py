@@ -525,6 +525,7 @@ async def _call_summary_model(
     summary_messages: List[Dict[str, Any]],
     metadata: Dict[str, Any],
     llm_router: Any,
+    allowed_model_region: Optional[str] = None,
 ) -> Any:
     """Invoke the configured summary model.
 
@@ -541,12 +542,19 @@ async def _call_summary_model(
     # post-call spend hooks read for budget attribution. The provider-level
     # ``metadata`` kwarg corresponds to the upstream API request body and would
     # not flow into spend tracking.
+    # ``allowed_model_region`` must travel as a top-level kwarg because the
+    # router enforces region restrictions by reading ``request_kwargs`` directly
+    # (see ``Router._common_checks_available_deployment``); without this the
+    # summary subrequest could be routed to a deployment outside the caller's
+    # permitted region.
     call_kwargs: Dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
         "max_tokens": COMPACT_SUMMARY_MAX_TOKENS,
         "litellm_metadata": metadata,
     }
+    if allowed_model_region is not None:
+        call_kwargs["allowed_model_region"] = allowed_model_region
     if llm_router is not None and hasattr(llm_router, "acompletion"):
         return await llm_router.acompletion(**call_kwargs)
     return await litellm.acompletion(**call_kwargs)
@@ -754,6 +762,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
         effective_messages, prompt, system=augmented_system
     )
     propagated_metadata = _propagate_metadata(litellm_metadata)
+    allowed_model_region = getattr(user_api_key_auth, "allowed_model_region", None)
 
     try:
         response = await _call_summary_model(
@@ -761,6 +770,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
             summary_messages=summary_messages,
             metadata=propagated_metadata,
             llm_router=llm_router,
+            allowed_model_region=allowed_model_region,
         )
     except Exception as e:
         verbose_logger.warning("compact_20260112: summary call failed: %s", e)

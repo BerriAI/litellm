@@ -1194,6 +1194,90 @@ async def test_summary_model_allowed_when_no_user_api_key_auth():
     assert result.compaction_block is not None
 
 
+async def test_summary_call_propagates_allowed_model_region():
+    """``allowed_model_region`` from ``user_api_key_auth`` is propagated to the
+    summary subrequest as a top-level kwarg so the router applies the same
+    region restriction the parent request would.
+    """
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
+    auth.allowed_model_region = "eu"
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_awaited_once()
+    assert mock_call.await_args.kwargs.get("allowed_model_region") == "eu"
+
+
+async def test_summary_call_omits_allowed_model_region_when_unset():
+    """Callers without a region restriction must not get an ``allowed_model_region=None``
+    kwarg, which would otherwise force the router to evaluate region filtering.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={},
+        llm_router=_FakeRouter(),
+    )
+
+    assert "allowed_model_region" not in captured_kwargs
+
+
+async def test_summary_call_forwards_allowed_model_region_when_set():
+    """When the caller is region-restricted, the kwarg reaches the router."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={},
+        llm_router=_FakeRouter(),
+        allowed_model_region="eu",
+    )
+
+    assert captured_kwargs.get("allowed_model_region") == "eu"
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher integration: compact_20260112 via apply_context_management
 # ---------------------------------------------------------------------------
