@@ -40,6 +40,18 @@ if TYPE_CHECKING:
 ANTHROPIC_ONLY_REQUEST_KEYS: frozenset[str] = frozenset({"output_config"})
 
 
+def _messages_have_compaction_block(messages: List[Dict]) -> bool:
+    """Return True when any message carries a ``compaction`` content block."""
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "compaction":
+                return True
+    return False
+
+
 async def _prepare_context_managed_request(
     *,
     model: str,
@@ -677,17 +689,26 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # unaffected because it ``await``s within the original event loop.
         litellm_router = kwargs.pop("litellm_router", None)
 
-        polyfill_result = run_async_function(
-            _prepare_context_managed_request,
-            model=model,
-            messages=messages,
-            tools=tools,
-            system=system,
-            context_management_spec=context_management,
-            metadata=metadata,
-            drop_params=drop_params,
-            llm_router=litellm_router,
-        )
+        # Skip the async bridge entirely when there is nothing for either the
+        # polyfill or the client-history slice-only fallback to do. The vast
+        # majority of sync ``litellm.messages.create()`` requests carry no
+        # ``context_management`` spec and no client-sent ``compaction`` block,
+        # and bridging through a worker-thread event loop just to discover
+        # there is no work is pure overhead.
+        if context_management is None and not _messages_have_compaction_block(messages):
+            polyfill_result: Optional[PolyfillResult] = None
+        else:
+            polyfill_result = run_async_function(
+                _prepare_context_managed_request,
+                model=model,
+                messages=messages,
+                tools=tools,
+                system=system,
+                context_management_spec=context_management,
+                metadata=metadata,
+                drop_params=drop_params,
+                llm_router=litellm_router,
+            )
 
         effective_messages = (
             polyfill_result.messages if polyfill_result is not None else messages

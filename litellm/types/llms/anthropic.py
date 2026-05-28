@@ -537,14 +537,14 @@ class ContextManagementResponse(TypedDict, total=False):
 class CompactionBlock(TypedDict, total=False):
     """Synthesized ``compaction`` content block (compact_20260112)."""
 
-    type: Literal["compaction"]
+    type: Required[Literal["compaction"]]
     content: Optional[str]
 
 
 class UsageIteration(TypedDict, total=False):
     """One sampling iteration's token usage (compact_20260112)."""
 
-    type: Literal["compaction", "message"]
+    type: Required[Literal["compaction", "message"]]
     input_tokens: int
     output_tokens: int
 
