@@ -1171,6 +1171,7 @@ def _refresh_models_by_provider() -> None:
     models_by_provider.clear()
     models_by_provider.update(fresh)
 
+
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
     # openai chat completion models

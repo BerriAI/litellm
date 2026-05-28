@@ -17,6 +17,7 @@ Fix: refresh ``models_by_provider`` from the underlying sets at the end of
 ``add_known_models`` and ``register_model`` so wildcard expansion via
 ``get_provider_models`` / ``get_valid_models`` reflects the new state.
 """
+
 import pytest
 
 import litellm
@@ -25,7 +26,6 @@ from litellm.proxy.auth.model_checks import (
     get_known_models_from_wildcard,
     get_provider_models,
 )
-
 
 # Use clearly-fictional keys so they cannot collide with the bundled
 # model_prices_and_context_window.json or any other test fixture.
@@ -102,9 +102,9 @@ def test_register_model_propagates_openai_union_to_models_by_provider(
     )
 
     assert _NEW_OPENAI in litellm.open_ai_chat_completion_models
-    assert _NEW_OPENAI in litellm.models_by_provider["openai"], (
-        "register_model must refresh models_by_provider for union-backed providers"
-    )
+    assert (
+        _NEW_OPENAI in litellm.models_by_provider["openai"]
+    ), "register_model must refresh models_by_provider for union-backed providers"
 
 
 def test_add_known_models_propagates_to_union_provider(_restore_provider_state):
@@ -127,9 +127,9 @@ def test_add_known_models_propagates_to_union_provider(_restore_provider_state):
     )
 
     assert _NEW_VERTEX in litellm.vertex_chat_models
-    assert _NEW_VERTEX in litellm.models_by_provider["vertex_ai"], (
-        "add_known_models must refresh union-backed entries in models_by_provider"
-    )
+    assert (
+        _NEW_VERTEX in litellm.models_by_provider["vertex_ai"]
+    ), "add_known_models must refresh union-backed entries in models_by_provider"
 
 
 def test_wildcard_expansion_sees_newly_registered_model(_restore_provider_state):
