@@ -199,7 +199,10 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     discoveryParamsKey,
   ]);
 
-  // Auto-discover when the URL (or parent plan) becomes available.
+  // Auto-discover when the URL (or parent plan) becomes available. Debounce
+  // is applied uniformly so rapid changes from a watched parent form (e.g.
+  // typing into a LangGraph api_base / assistant_id field) don't fire one
+  // HTTP request per keystroke.
   useEffect(() => {
     if (!accessToken) return;
     const trimmed = effectiveUrl.trim();
@@ -211,12 +214,11 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       return;
     }
 
-    const debounceMs = isParentDriven ? 0 : 400;
     const timer = window.setTimeout(() => {
       void handleDiscover();
-    }, debounceMs);
+    }, 400);
     return () => window.clearTimeout(timer);
-  }, [accessToken, effectiveUrl, isParentDriven, handleDiscover]);
+  }, [accessToken, effectiveUrl, handleDiscover]);
 
   const toggleSkill = (id: string, checked: boolean) => {
     setSelectedSkillIds((prev) => {

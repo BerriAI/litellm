@@ -13,7 +13,10 @@ import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, {
   DiscoveredAgentCardSelection,
 } from "./agent_card_discovery";
-import { buildDiscoveryRequest } from "./agent_discovery_utils";
+import {
+  buildDiscoveryRequest,
+  overlayDiscoveredCardParams,
+} from "./agent_discovery_utils";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -111,41 +114,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     [watchedFormValues, selectedAgentTypeInfo, detectedAgentType],
   );
 
-  const overlayDiscoveredCardParams = (
-    agentData: Record<string, any>,
-  ): Record<string, any> => {
-    if (!appliedDiscoveredSelection) return agentData;
-    const discovered = appliedDiscoveredSelection.selected_card;
-    return {
-      ...agentData,
-      agent_card_params: {
-        ...agentData.agent_card_params,
-        name: discovered.name ?? agentData.agent_card_params?.name,
-        description:
-          discovered.description ?? agentData.agent_card_params?.description,
-        ...(Array.isArray(discovered.skills) && {
-          skills: discovered.skills,
-        }),
-        ...(discovered.capabilities && {
-          capabilities: discovered.capabilities,
-        }),
-        ...(Array.isArray(discovered.defaultInputModes) &&
-          discovered.defaultInputModes.length > 0 && {
-            defaultInputModes: discovered.defaultInputModes,
-          }),
-        ...(Array.isArray(discovered.defaultOutputModes) &&
-          discovered.defaultOutputModes.length > 0 && {
-            defaultOutputModes: discovered.defaultOutputModes,
-          }),
-        ...(discovered.provider && { provider: discovered.provider }),
-        ...(discovered.iconUrl && { iconUrl: discovered.iconUrl }),
-        ...(discovered.documentationUrl && {
-          documentationUrl: discovered.documentationUrl,
-        }),
-      },
-    };
-  };
-
   const handleApplyDiscoveredCard = (
     selection: DiscoveredAgentCardSelection | null,
   ) => {
@@ -196,7 +164,10 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
       }
 
       if (appliedDiscoveredSelection) {
-        updateData = overlayDiscoveredCardParams(updateData);
+        updateData = overlayDiscoveredCardParams(
+          updateData,
+          appliedDiscoveredSelection.selected_card,
+        );
       }
 
       await patchAgentCall(accessToken, agentId, updateData);

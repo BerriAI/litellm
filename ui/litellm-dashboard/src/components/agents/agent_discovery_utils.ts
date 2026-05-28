@@ -94,6 +94,48 @@ export const selectionsFromUpstreamCard = (
   };
 };
 
+/**
+ * Overlay the admin's discovery selections onto the ``agent_card_params``
+ * built from the form. Dynamic agent forms (e.g. LangGraph) don't register
+ * Form.Items for name / description / skills / capabilities, so AntD's
+ * setFieldsValue silently drops those keys and the values never make it back
+ * through buildAgentData — we re-apply them here from the selection.
+ */
+export const overlayDiscoveredCardParams = (
+  agentData: Record<string, any>,
+  discovered: DiscoveredAgentCard | null | undefined,
+): Record<string, any> => {
+  if (!discovered) return agentData;
+  return {
+    ...agentData,
+    agent_card_params: {
+      ...agentData.agent_card_params,
+      name: discovered.name ?? agentData.agent_card_params?.name,
+      description:
+        discovered.description ?? agentData.agent_card_params?.description,
+      ...(Array.isArray(discovered.skills) && {
+        skills: discovered.skills,
+      }),
+      ...(discovered.capabilities && {
+        capabilities: discovered.capabilities,
+      }),
+      ...(Array.isArray(discovered.defaultInputModes) &&
+        discovered.defaultInputModes.length > 0 && {
+          defaultInputModes: discovered.defaultInputModes,
+        }),
+      ...(Array.isArray(discovered.defaultOutputModes) &&
+        discovered.defaultOutputModes.length > 0 && {
+          defaultOutputModes: discovered.defaultOutputModes,
+        }),
+      ...(discovered.provider && { provider: discovered.provider }),
+      ...(discovered.iconUrl && { iconUrl: discovered.iconUrl }),
+      ...(discovered.documentationUrl && {
+        documentationUrl: discovered.documentationUrl,
+      }),
+    },
+  };
+};
+
 export const buildDiscoveryRequest = (
   agentType: string,
   values: Record<string, any>,
