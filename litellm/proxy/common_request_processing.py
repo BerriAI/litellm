@@ -839,6 +839,7 @@ class ProxyBaseLLMRequestProcessing:
             "aget_run",
             "acancel_run",
             "adelete_run",
+            "apply_guardrail",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
