@@ -51,6 +51,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
@@ -129,6 +130,32 @@ def update_db_model(
         merged_deployment_dict["model_info"].update(
             updated_patch.model_info.model_dump(exclude_none=True)
         )
+
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
+    # passes through (which today re-sends the OLD pricing on every save) cannot
+    # silently undo a litellm_params clear via .update().
+    #
+    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
+    # and cache read/write costs) so this path cannot be used to null out privileged
+    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
+    # mirrored between litellm_params and model_info by Deployment.__init__, so the
+    # clear propagates to both blobs.
+    if updated_patch.litellm_params:
+        for field in updated_patch.litellm_params.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("model_info", {}).pop(field, None)
+    if updated_patch.model_info:
+        for field in updated_patch.model_info.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.model_info, field) is None
+            ):
+                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
     # convert to prisma compatible format
 
@@ -644,7 +671,24 @@ class ModelManagementAuthChecks:
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             return True
-        elif team_obj is None or not _is_user_team_admin(
+        # Enforce key-level team boundary (LIT-3211): if the API key is bound to a
+        # specific team, the target team_id MUST equal the key's team_id. Without
+        # this guard a team-A-scoped key whose owner also happens to be a member-admin
+        # of team B would slip past the _is_user_team_admin check below and act on
+        # team B - bypassing the key's team scope.
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id != team_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team ID={} does not match the API key's team ID={}. Team-scoped keys can only manage models for their own team.".format(
+                        team_id, user_api_key_dict.team_id
+                    )
+                },
+            )
+        if team_obj is None or not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=team_obj
         ):
             raise HTTPException(
