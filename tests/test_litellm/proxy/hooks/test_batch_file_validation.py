@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # Token counter — covers all three batch payload shapes
 # ---------------------------------------------------------------------------
@@ -268,7 +267,7 @@ async def test_pre_call_skips_file_fetch_when_disabled_in_general_settings():
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=MagicMock(),
     )
-    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["gpt-4o"])
+    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
 
     with patch(
         "litellm.proxy.proxy_server.general_settings",
@@ -293,7 +292,7 @@ async def test_pre_call_skips_file_fetch_for_configured_provider():
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=MagicMock(),
     )
-    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["gpt-4o"])
+    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
 
     with patch(
         "litellm.proxy.proxy_server.general_settings",
