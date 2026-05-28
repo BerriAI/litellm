@@ -815,6 +815,7 @@ async def delete_model(
             removed_model_aliases = await delete_team_model_alias(
                 public_model_name=public_model_name_for_team,
                 prisma_client=prisma_client,
+                team_id=model_params.model_info.team_id,
             )
 
             valid_team_model_aliases = [
@@ -913,11 +914,19 @@ async def delete_model(
 async def delete_team_model_alias(
     public_model_name: str,
     prisma_client: PrismaClient,
+    team_id: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """
-    Delete a team model alias
+    Delete a team model alias.
 
-    Iterate through all team model aliases and delete the one that matches the model_id
+    Iterate through team model aliases and delete entries whose value equals
+    `public_model_name`.
+
+    If `team_id` is provided, the deletion is scoped to that team's
+    `LiteLLM_ModelTable` row only — required when this helper is called from a
+    flow where the caller is only authorized for a specific team (e.g.
+    `/model/delete` for a team-scoped BYOK model), so that a public name
+    shared by another team's alias map is never removed by side effect.
 
     Returns:
     - List of team id + model alias pairs that were removed
@@ -928,6 +937,15 @@ async def delete_team_model_alias(
     tasks = []
     removed_model_aliases = []
     for team_model_alias in team_model_aliases:
+        # Authorization scope: only touch the caller-supplied team's row.
+        # Rows missing a `team` relation are skipped under scoping because we
+        # have no way to attribute them.
+        if team_id is not None and (
+            team_model_alias.team is None
+            or team_model_alias.team.team_id != team_id
+        ):
+            continue
+
         model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
         id = team_model_alias.id
 

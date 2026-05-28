@@ -1613,11 +1613,17 @@ class TestDeleteTeamBYOKGhostFix_LIT2120:
         assert "keepme" in updated_models
 
     @pytest.mark.asyncio
-    async def test_only_matching_team_alias_keys_are_removed(self):
-        """Aliases that live on OTHER teams pointing at the same public name
-        must not contaminate this team's cleanup. The exclusion list filters
-        `removed_model_aliases` by `team_id` before applying it to this
-        team's `models`."""
+    async def test_alias_deletion_is_scoped_to_caller_team(self):
+        """`/model/delete` is authorized for the caller's team only, so the
+        alias scan must NOT touch other teams' `LiteLLM_ModelTable` rows
+        even when they happen to share the same public model name.
+
+        This is the Veria-flagged cross-team integrity guard: a team admin
+        deleting their team's BYOK model "shared-public-name" must not
+        cascade into removing another team's `"other-alias" -> "shared-public-name"`
+        mapping. Pre-fix, `delete_team_model_alias` iterated every row and
+        wiped any match; the scoping pass-through of `team_id` from the
+        `/model/delete` call site fixes that."""
         team_id = "team-byok-multi"
         other_team_id = "other-team"
         public_name = "shared-public-name"
@@ -1631,8 +1637,8 @@ class TestDeleteTeamBYOKGhostFix_LIT2120:
             internal_name=internal_name,
         )
 
-        # Two alias rows: one on this team, one on another team, both
-        # pointing at the same public name.
+        # Two alias rows on different teams, both pointing at the same
+        # public name.
         row_this = MagicMock()
         row_this.id = 11
         row_this.model_aliases = {"this-alias": public_name}
@@ -1652,7 +1658,6 @@ class TestDeleteTeamBYOKGhostFix_LIT2120:
             team_id=team_id,
             team_models_before=[
                 "this-alias",
-                "other-alias",
                 public_name,
                 "untouched",
             ],
@@ -1661,18 +1666,58 @@ class TestDeleteTeamBYOKGhostFix_LIT2120:
 
         await self._invoke_delete(mock_prisma, model_id)
 
-        # Both LiteLLM_ModelTable rows are wiped (the helper removes from
-        # every team that points at the public name).
-        assert mock_prisma.db.litellm_modeltable.update.await_count == 2
+        # Only THIS team's `LiteLLM_ModelTable` row was updated. The other
+        # team's row is untouched -- a team admin must not be able to wipe
+        # alias mappings outside their authorized team.
+        assert mock_prisma.db.litellm_modeltable.update.await_count == 1
+        only_update_call = mock_prisma.db.litellm_modeltable.update.await_args
+        assert only_update_call.kwargs["where"] == {"id": 11}
 
-        # This team's `models` cleanup excludes ONLY this team's alias key
-        # plus the public name -- the OTHER team's alias key stays in this
-        # team's list (it shouldn't have been there to begin with, but the
-        # delete handler must not corrupt the row by removing it).
+        # This team's `models` cleanup excludes this team's alias key plus
+        # the public name.
         updated_models = team_update_calls[0]["data"]["models"]
         assert "this-alias" not in updated_models
         assert public_name not in updated_models
-        assert "other-alias" in updated_models
+        assert "untouched" in updated_models
+
+    @pytest.mark.asyncio
+    async def test_alias_rows_without_team_relation_are_skipped_under_scoping(self):
+        """Defense-in-depth: a legacy `LiteLLM_ModelTable` row that lost its
+        `team` relation (or never had one) must be skipped when the helper
+        is invoked from the team-scoped `/model/delete` path. Otherwise a
+        team admin could still indirectly drop unattributed alias maps."""
+        team_id = "team-byok-orphan-rows"
+        public_name = "scoped-public-name"
+        internal_name = f"model_name_{team_id}_gggg-hhhh"
+        model_id = "byok-orphan-mid"
+
+        db_row = self._build_team_byok_db_row(
+            model_id=model_id,
+            team_id=team_id,
+            public_name=public_name,
+            internal_name=internal_name,
+        )
+
+        # Orphan row: `.team` is None
+        orphan_row = MagicMock()
+        orphan_row.id = 99
+        orphan_row.model_aliases = {"orphan-alias": public_name}
+        orphan_row.team = None
+
+        mock_prisma, team_update_calls, _ = self._wire_prisma_for_delete(
+            db_row=db_row,
+            team_id=team_id,
+            team_models_before=[public_name, "untouched"],
+            team_modeltable_rows=[orphan_row],
+        )
+
+        await self._invoke_delete(mock_prisma, model_id)
+
+        # Orphan row never written to.
+        assert mock_prisma.db.litellm_modeltable.update.await_count == 0
+        # team.models cleanup still drops the public name.
+        updated_models = team_update_calls[0]["data"]["models"]
+        assert public_name not in updated_models
         assert "untouched" in updated_models
 
 class TestGetTeamDeployments:
