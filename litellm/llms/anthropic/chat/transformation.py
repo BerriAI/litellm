@@ -1793,7 +1793,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_context_management_beta_header(
                 headers, optional_params["context_management"]
             )
-        if optional_params.get("output_format") is not None:
+        output_config = optional_params.get("output_config")
+        if optional_params.get("output_format") is not None or (
+            isinstance(output_config, dict) and output_config.get("format") is not None
+        ):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
             )
