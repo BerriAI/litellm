@@ -1202,11 +1202,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     @staticmethod
     def _split_unmask_safe_prefix(
-        buffer: str, pii_tokens: Dict[str, str], max_token_len: int
+        buffer: str, pii_tokens: Dict[str, str]
     ) -> Tuple[str, str]:
         """Split `buffer` into (safe_prefix, held_tail) for incremental PII unmasking.
 
-        Guarantees: no PII token in `pii_tokens` can span the (safe / tail)
+        Guarantee: no PII token in `pii_tokens` can span the (safe / tail)
         boundary. The held_tail is kept in the buffer for the next iteration
         so a token whose `<` arrived in one upstream chunk and `>` arrived in
         the next still gets rewritten atomically.
@@ -1214,26 +1214,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Strategy: PII tokens emitted by `_finalize_presidio_anonymize_numbered_tokens`
         always have the shape `<ENTITY_N>` — they start with `<` and end with `>`.
         We therefore find the rightmost `<` whose matching `>` has NOT yet
-        arrived in `buffer`; everything up to that `<` is safe to emit. As a
-        defensive backstop (e.g. if a token does not match this shape) we also
-        never emit the very last `max_token_len - 1` characters unless the buffer
-        is entirely empty of `<`.
+        arrived in `buffer`; everything up to that `<` is safe to emit. The
+        `pii_tokens` mapping is kept on the signature as a shape-validation
+        extension point but is not consulted by the current `<ENTITY_N>`-shape
+        implementation.
         """
         if not buffer:
             return "", buffer
-
         last_lt = buffer.rfind("<")
         if last_lt < 0:
             # No `<` anywhere — entire buffer is safely emittable.
             return buffer, ""
-
-        # Is the rightmost `<` already closed by a `>` later in the buffer?
+        # If the rightmost `<` is already closed by a `>` later in the buffer,
+        # everything is safe.
         if ">" in buffer[last_lt:]:
-            # The last `<...>` is closed. Everything is safe.
             return buffer, ""
-
-        # The last `<` is unclosed — push it (and everything after) into the tail
-        # so it can be completed by future chunks before unmasking runs on it.
+        # The last `<` is unclosed — push it (and everything after) into the tail.
         return buffer[:last_lt], buffer[last_lt:]
 
     # Incremental flush thresholds for apply_to_output streaming.
@@ -1276,11 +1272,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return self._build_streaming_text_chunk(template, masked)
 
     def _mask_flush_due(self, buffer: str) -> bool:
-        """Return True when `buffer` has reached a Presidio-mask flush boundary."""
-        if len(buffer) >= self._STREAM_MASK_FLUSH_CHARS:
-            return True
+        """Return True when `buffer` has reached a Presidio-mask flush boundary.
+
+        Boundaries (in priority order):
+        1. Sentence enders (`.`, `!`, `?`, newline) — natural semantic units;
+           multi-token entities are highly unlikely to straddle them.
+        2. `_STREAM_MASK_FLUSH_CHARS` chars **AND** buffer ends on whitespace
+           — a word boundary, so we never cut mid-token. This keeps TTFT
+           bounded on long sentences without splitting multi-word entities
+           like "John Smith" across two Presidio calls.
+
+        Returns False otherwise so the buffer continues to accumulate until a
+        safe boundary appears.
+        """
         stripped = buffer.rstrip()
-        return bool(stripped) and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
+        if stripped and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS:
+            return True
+        if len(buffer) >= self._STREAM_MASK_FLUSH_CHARS and buffer[-1:].isspace():
+            return True
+        return False
 
     async def _stream_apply_output_masking(
         self,
@@ -1418,7 +1428,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
-        max_token_len = max(len(t) for t in pii_tokens.keys())
         buffer = ""
         template: Optional[ModelResponseStream] = None
 
@@ -1437,9 +1446,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 template = chunk
                 if self._is_streaming_chunk_with_content(chunk):
                     buffer += chunk.choices[0].delta.content
-                    safe, tail = self._split_unmask_safe_prefix(
-                        buffer, pii_tokens, max_token_len
-                    )
+                    safe, tail = self._split_unmask_safe_prefix(buffer, pii_tokens)
                     if safe:
                         flushed = self._unmask_buffer_to_chunk(
                             safe, template, pii_tokens
