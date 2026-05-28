@@ -177,8 +177,8 @@ def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
 
 
 def _iter_openai_file_lines(
-    openai_file_content,
-):
+    openai_file_content: FileTypes,
+) -> Iterator[str]:
     """
     Stream lines from an OpenAI ``FileTypes`` payload without materialising the
     full ``splitlines()`` list.
@@ -242,8 +242,8 @@ def _iter_openai_file_lines(
 
 
 def _iter_openai_jsonl_entries(
-    openai_file_content,
-):
+    openai_file_content: FileTypes,
+) -> Iterator[Dict[str, Any]]:
     """Stream parsed OpenAI batch JSONL entries one-at-a-time."""
     for line in _iter_openai_file_lines(openai_file_content):
         if line.strip():
@@ -251,9 +251,9 @@ def _iter_openai_jsonl_entries(
 
 
 def _stream_openai_jsonl_to_vertex_jsonl_string(
-    openai_file_content,
-    map_openai_to_vertex_params,
-):
+    openai_file_content: FileTypes,
+    map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
     """
     Stream the OpenAI batch JSONL -> Vertex JSONL transformation one entry at a
     time. Returns ``(vertex_jsonl_string, first_openai_entry_or_None)`` -- the
