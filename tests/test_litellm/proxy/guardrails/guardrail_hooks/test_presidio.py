@@ -3033,3 +3033,107 @@ async def test_lit3222_unmask_handles_tool_call_arguments(mock_user_api_key):
                     final_args += fn.arguments
     assert "Jane Doe" in final_args, f"placeholder not unmasked: {final_args!r}"
     assert "<PERSON_1>" not in final_args, f"placeholder leaked: {final_args!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_no_boundary_keeps_buffering(mock_user_api_key):
+    """
+    Veria AI feedback (PR #29134, round 2): if no whitespace/punctuation
+    boundary is found inside the flush window, we must NOT hard-cut and risk
+    splitting a credit card / email / SSN across two Presidio calls. We
+    should keep buffering until a boundary appears or end-of-stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    mask_inputs = []
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        mask_inputs.append(text)
+        return text.replace("4111111111111111", "[CARD]")
+
+    guardrail.check_pii = mock_check_pii
+
+    # Send 160 chars in 10-char chunks with NO whitespace/punctuation and a
+    # 16-digit "credit card" spanning what would be the old hard-cut boundary.
+    # After 152 chars accumulated (flush_chars+tail_overlap), the old code
+    # would have hard-cut at 120, splitting the card. The new code must
+    # continue buffering until end-of-stream and emit the card whole.
+    body = (
+        "abc" * 40  # 120 chars, no whitespace
+        + "4111111111111111"  # 16-digit card across position 120
+        + "xyz" * 8  # 24 more chars, still no whitespace
+    )
+    pieces = [body[i : i + 10] for i in range(0, len(body), 10)]
+
+    async def mock_stream():
+        for p in pieces[:-1]:
+            yield _lit3222_make_text_chunk(0, p)
+        yield _lit3222_make_text_chunk(0, pieces[-1], finish_reason="stop")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # The full card must appear in at least one Presidio call (not split).
+    assert any(
+        "4111111111111111" in s for s in mask_inputs
+    ), f"Card was not seen by Presidio as a single token: {mask_inputs!r}"
+
+    full_text = "".join(
+        (c.choices[0].delta.content or "") for c in received if c.choices
+    )
+    assert "[CARD]" in full_text, f"Card not masked in output: {full_text!r}"
+    assert (
+        "4111111111111111" not in full_text
+    ), f"Unmasked card leaked through stream: {full_text!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_no_boundary_force_flush_at_max_buffer(mock_user_api_key):
+    """
+    Defensive cap: if the buffer truly grows without bound (pathological
+    no-whitespace input), we eventually force a flush but keep a generous
+    tail so a worst-case 96-char PII span still lands inside the next
+    Presidio call.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+    # Make the cap clearly observable in this test.
+    guardrail._PRESIDIO_STREAM_MAX_BUFFER = 200
+    guardrail._PRESIDIO_FORCED_FLUSH_TAIL = 50
+
+    mask_calls = []
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        mask_calls.append(text)
+        return text
+
+    guardrail.check_pii = mock_check_pii
+
+    # 300 chars of no-whitespace text — must force at least one mid-stream flush.
+    body = "x" * 300
+
+    async def mock_stream():
+        yield _lit3222_make_text_chunk(0, body, finish_reason="stop")
+
+    async for _ in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        pass
+
+    # At minimum a final flush call should have happened on the full body.
+    joined = "".join(mask_calls)
+    assert (
+        "x" * 300 in joined
+    ), f"Body never made it through Presidio: {[len(c) for c in mask_calls]}"
