@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -1072,6 +1072,24 @@ async def test_raw_pass_through_request_forwards_exact_body_bytes_and_sanitized_
     assert "connection" not in sent_headers
     assert "transfer-encoding" not in sent_headers
     assert response.body == b'{"ok": true}'
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_request_rejects_passthrough_guardrails():
+    mock_request = MagicMock(spec=Request)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pass_through_request(
+            request=mock_request,
+            target="https://upstream.example.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            guardrails_config={"test-guardrail": None},
+            mode="raw",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "cannot be used with passthrough guardrails" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

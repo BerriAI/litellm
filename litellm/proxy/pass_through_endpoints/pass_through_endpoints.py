@@ -6,7 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Mapping, NoReturn, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -477,7 +477,7 @@ async def _handle_raw_pass_through_failure(
     kwargs: Optional[dict],
     logging_obj: Optional[LiteLLMLoggingObj],
     custom_llm_provider: Optional[str],
-) -> None:
+) -> NoReturn:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     custom_response_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1246,6 +1246,11 @@ async def pass_through_request(  # noqa: PLR0915
         mode: Pass-through mode. "standard" preserves existing parsing and hooks; "raw" forwards request body bytes without body mutation.
     """
     if mode == RAW_PASSTHROUGH_MODE:
+        if guardrails_config:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Raw pass-through mode cannot be used with passthrough guardrails. Use standard mode to run guardrails, or remove guardrails for exact byte forwarding.",
+            )
         return await _raw_pass_through_request(
             request=request,
             target=target,
