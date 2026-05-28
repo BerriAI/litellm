@@ -74,15 +74,25 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             **kwargs,
         )
 
-        # OpenAI Moderation can only block, never redact — so mid-stream
-        # sampling adds no safety benefit; it just multiplies /moderations
-        # RTT. Default end-of-stream-only so a single moderation call runs
-        # at the end of the stream (matching the non-streaming
-        # async_post_call_success_hook path). Users can still set
-        # streaming_end_of_stream_only=False in the guardrail config to
-        # restore mid-stream sampling.
+        # Streaming sampling configuration for post-call moderation.
+        #
+        # Default `streaming_end_of_stream_only=False` so OpenAI Moderation
+        # behaves like every other post-call guardrail on upgrade: the
+        # unified dispatcher samples the accumulated stream every
+        # `streaming_sampling_rate` chunks (default 5) and at end-of-stream,
+        # interrupting the response if a sample is flagged. This preserves
+        # mid-stream blocking — a moderation-flagged stream stops yielding
+        # chunks at the next sample tick instead of after the full reply
+        # has reached the client.
+        #
+        # Operators that prioritise latency over mid-stream blocking can
+        # opt in via `streaming_end_of_stream_only: true` (or pair with a
+        # large `streaming_sampling_rate`), which collapses post-call
+        # moderation to a single `/moderations` round-trip per request at
+        # the cost of mid-stream interruption. See the LiteLLM guardrail
+        # docs for the trade-off matrix.
         self.streaming_end_of_stream_only: bool = bool(
-            kwargs.get("streaming_end_of_stream_only", True)
+            kwargs.get("streaming_end_of_stream_only", False)
         )
 
         self.async_handler = get_async_httpx_client(
