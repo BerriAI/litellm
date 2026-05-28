@@ -376,8 +376,23 @@ class LicenseChecker:
         all_compliant = True
 
         for req in requirements:
+            # Prefer a lower-bound/exact version (a real released version) for the
+            # PyPI license lookup. ``next(iter(req.specifier))`` returns an
+            # arbitrary clause; for a range like ``>=1.0,<2.0`` that can be the
+            # upper bound (``2.0``) — a version that may not exist on PyPI and
+            # would 404 to an "unknown" license.
             try:
-                version = next(iter(req.specifier)).version if req.specifier else None
+                floor_versions = [
+                    spec.version
+                    for spec in req.specifier
+                    if spec.operator in (">=", "==", "===", "~=", ">")
+                ]
+                if floor_versions:
+                    version = floor_versions[0]
+                else:
+                    version = (
+                        next(iter(req.specifier)).version if req.specifier else None
+                    )
             except StopIteration:
                 version = None
 
