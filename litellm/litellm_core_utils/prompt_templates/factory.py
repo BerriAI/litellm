@@ -5001,12 +5001,28 @@ class BedrockConverseMessagesProcessor:
             mime_type=media_type, image_format=media_type.split("/")[1]
         )
 
-        # Prefer the caller-supplied title when present; otherwise fall back to a
-        # deterministic hash-based name (the previous default behavior).
+        # Bedrock DocumentBlock.name has a strict allowlist:
+        #   [a-zA-Z0-9 ()\[\]-]  (no more than one consecutive whitespace), max 200 chars.
+        # Per https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+        # If the caller passes a title, sanitize it down to the allowlist so common
+        # punctuation (`.`, `,`, `:`, `_`, `'`, etc.) does not trigger a 400 from
+        # Bedrock. If the sanitized result is empty, fall back to the deterministic
+        # hash-based name (the previous default behavior).
+        def _sanitize_bedrock_document_name(raw: str) -> str:
+            # 1) keep only Bedrock-allowed characters; replace the rest with a single space
+            cleaned = re.sub(r"[^A-Za-z0-9 \-()\[\]]", " ", raw)
+            # 2) collapse consecutive whitespace down to one space
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            # 3) clamp to Bedrock's 200-char hard limit
+            return cleaned[:200]
+
         title = element.get("title")
+        document_name: Optional[str] = None
         if isinstance(title, str) and title.strip():
-            document_name = title.strip()
-        else:
+            sanitized = _sanitize_bedrock_document_name(title)
+            if sanitized:
+                document_name = sanitized
+        if document_name is None:
             # Deterministic name using the same hashing pattern as _create_bedrock_block
             HASH_SAMPLE_BYTES = 64 * 1024
             normalized = "".join(data.split()).encode("utf-8")
