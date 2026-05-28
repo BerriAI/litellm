@@ -192,14 +192,27 @@ def test_mcp_span_failure_records_exception_and_reraises(exporter):
 # -- parent span inheritance --
 
 
-def test_mcp_span_inherits_parent_when_one_is_active(exporter):
+def test_mcp_span_inherits_parent_when_one_is_active(exporter, monkeypatch):
+    # Use a dedicated provider for both the parent and MCP tracers so they
+    # share context, but do NOT mutate the process-global tracer provider -
+    # other tests in this process rely on a clean provider.
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    otel_trace.set_tracer_provider(provider)
-    parent_tracer = provider.get_tracer("test.parent")
-    proxy_server.open_telemetry_logger = _FakeOtelLogger(
-        provider.get_tracer(MCP_OTEL_TRACER_NAME)
+    _prev_provider = otel_trace.get_tracer_provider()
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(
+        otel_trace, "get_tracer_provider", lambda: provider, raising=False
     )
+    monkeypatch.setattr(
+        proxy_server,
+        "open_telemetry_logger",
+        _FakeOtelLogger(provider.get_tracer(MCP_OTEL_TRACER_NAME)),
+        raising=False,
+    )
+    parent_tracer = provider.get_tracer("test.parent")
+    # Test logic continues - the provider goes out of scope at test end and
+    # the previous global provider is restored by monkeypatch teardown.
+    _ = _prev_provider
 
     async def run():
         with parent_tracer.start_as_current_span("parent.op") as parent:
@@ -281,7 +294,7 @@ def test_mcp_span_records_arguments_count_not_values(exporter):
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_span_is_current_inside_block_and_detached_after(exporter):
+def test_mcp_span_is_current_inside_block_and_detached_after(exporter, monkeypatch):
     """Child spans created inside the helper's block must parent to the MCP
     span, and after the block the active span must revert to the prior
     context (no leaked detach)."""
@@ -290,11 +303,20 @@ def test_mcp_span_is_current_inside_block_and_detached_after(exporter):
     # child tracer so they share context.
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    otel_trace.set_tracer_provider(provider)
-    parent_tracer = provider.get_tracer("test.parent")
-    proxy_server.open_telemetry_logger = _FakeOtelLogger(
-        provider.get_tracer(MCP_OTEL_TRACER_NAME)
+    # Don't mutate the process-global provider - monkeypatch get_tracer_provider
+    # so any look-up inside this test returns provider but other tests in
+    # the same process keep the default.
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(
+        otel_trace, "get_tracer_provider", lambda: provider, raising=False
     )
+    monkeypatch.setattr(
+        proxy_server,
+        "open_telemetry_logger",
+        _FakeOtelLogger(provider.get_tracer(MCP_OTEL_TRACER_NAME)),
+        raising=False,
+    )
+    parent_tracer = provider.get_tracer("test.parent")
 
     async def run():
         outer_span_id_before = otel_trace.get_current_span().get_span_context().span_id
