@@ -2,10 +2,12 @@ ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af640103
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
-FROM $UV_IMAGE AS uvbin
+# Pin by digest so supply-chain scanners (OpenSSF Scorecard PinnedDependencies)
+# recognise the image as pinned. Update the ARG defaults above in sync.
+FROM ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a AS uvbin
 
 # ---------- Builder ----------
-FROM $LITELLM_BUILD_IMAGE AS builder
+FROM cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9 AS builder
 
 WORKDIR /app
 USER root
@@ -64,7 +66,7 @@ RUN mkdir -p /home/nonroot && \
     chown -R nonroot:nonroot /home/nonroot/.cache
 
 # ---------- Runtime ----------
-FROM $LITELLM_RUNTIME_IMAGE AS runtime
+FROM cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9 AS runtime
 
 USER root
 
