@@ -1413,16 +1413,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_buffer_to_chunk(
         self,
         buffer: str,
-        template: "ModelResponseStream",
+        template: Optional["ModelResponseStream"],
         presidio_config: Optional[PresidioPerRequestConfig],
         request_data: dict,
     ) -> Optional["ModelResponseStream"]:
         """Run Presidio masking on `buffer` and return one synthetic streaming chunk.
 
-        Returns None when there is nothing to emit. On Presidio failure, logs and
+        Returns None when there is nothing to emit (empty buffer or no template
+        ModelResponseStream has been observed yet). On Presidio failure, logs and
         emits the buffer unmasked so the client still receives partial output.
         """
-        if not buffer:
+        if not buffer or template is None:
             return None
         try:
             masked = await self.check_pii(
