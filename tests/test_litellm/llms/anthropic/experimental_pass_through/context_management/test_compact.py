@@ -896,6 +896,49 @@ async def test_system_prompt_forwarded_to_summary_call_as_content_blocks():
     assert "Initial task: review PR #123." in content
 
 
+async def test_summary_call_carries_prior_compaction_summary_into_system():
+    """Multi-round: when a prior compaction block is present, the summary
+    model receives the augmented system (with ``Previous conversation
+    summary: <prior>``) so it can produce a comprehensive summary that
+    incorporates both the prior round's context and the current slice.
+    Without this, multi-round compaction would silently drop accumulated
+    history each time the polyfill fires.
+    """
+    messages = _messages_with_compaction(summary="ROUND_ONE_SUMMARY_TEXT")
+    mock_response = _make_mock_response("<summary>Round two</summary>")
+
+    captured_calls: list = []
+
+    async def _fake_call_summary_model(**kwargs):
+        captured_calls.append(kwargs)
+        return mock_response
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            side_effect=_fake_call_summary_model,
+        ),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system="Original agent role.",
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    summary_messages = captured_calls[0]["summary_messages"]
+    assert summary_messages[0]["role"] == "system"
+    system_content = summary_messages[0]["content"]
+    assert "ROUND_ONE_SUMMARY_TEXT" in system_content
+    assert "Original agent role." in system_content
+
+
 async def test_summary_call_omits_system_message_when_system_is_none():
     """No system message is prepended when the caller did not provide one."""
     messages = _simple_messages()

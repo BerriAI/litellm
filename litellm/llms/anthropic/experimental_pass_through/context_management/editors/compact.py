@@ -620,10 +620,12 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    # Phase C: summarize.
+    # Phase C: summarize. ``augmented_system`` carries any prior compaction
+    # summary so multi-round compaction does not lose accumulated history —
+    # ``effective_messages`` only contains turns since the last compaction.
     prompt = _build_summary_prompt(edit_spec, tools)
     summary_messages = _build_summary_messages(
-        effective_messages, prompt, system=system
+        effective_messages, prompt, system=augmented_system
     )
     propagated_metadata = _propagate_metadata(metadata)
 
