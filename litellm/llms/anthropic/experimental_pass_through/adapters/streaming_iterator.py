@@ -287,10 +287,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             ):
                 self.sent_compaction_block = True
                 self._queue_compaction_block_events()
+                # The compaction block emitted a complete start/delta/stop
+                # lifecycle. Reflect that in the state machine so any
+                # downstream check sees a consistent view; the flag is
+                # reset to ``False`` when the next (text) block's
+                # ``content_block_start`` is emitted below.
+                self.sent_content_block_finish = True
                 return self.chunk_queue.popleft()
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
+                self.sent_content_block_finish = False
                 self.chunk_queue.append(
                     {
                         "type": "content_block_start",
@@ -502,10 +509,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             ):
                 self.sent_compaction_block = True
                 self._queue_compaction_block_events()
+                # The compaction block emitted a complete start/delta/stop
+                # lifecycle. Reflect that in the state machine so any
+                # downstream check sees a consistent view; the flag is
+                # reset to ``False`` when the next (text) block's
+                # ``content_block_start`` is emitted below.
+                self.sent_content_block_finish = True
                 return self.chunk_queue.popleft()
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
+                self.sent_content_block_finish = False
                 self.chunk_queue.append(
                     {
                         "type": "content_block_start",

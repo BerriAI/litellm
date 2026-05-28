@@ -979,9 +979,17 @@ class AmazonConverseConfig(BaseConfig):
     def _map_context_management_param(
         self, value: Union[dict, list], optional_params: dict
     ) -> None:
-        mapped = AnthropicConfig.map_openai_context_management_to_anthropic(
-            cast(Union[dict, list], value)
-        )
+        # Match the dispatcher's ``_normalize_spec`` behavior: only run the
+        # OpenAI→Anthropic mapper for list inputs. Dict inputs are already in
+        # Anthropic-native shape (``{"edits": [...]}``) and should pass
+        # through unchanged so an Anthropic-format ``context_management``
+        # value isn't silently dropped when the mapper can't classify it.
+        if isinstance(value, list):
+            mapped = AnthropicConfig.map_openai_context_management_to_anthropic(
+                cast(Union[dict, list], value)
+            )
+        else:
+            mapped = value
         # Skip when the mapper returned None for malformed input — leaving the
         # key out is safer than passing `context_management: null` downstream,
         # which Bedrock would reject and which can confuse intermediate checks
