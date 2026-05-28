@@ -475,6 +475,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         status_code,
                         detail_message,
                     ) = self._parse_bedrock_guardrail_error_response(response)
+                    # Surface the AWS request ID on the failure record too so
+                    # operators can correlate a failed/blocked call to the
+                    # provider-side ApplyGuardrail execution without re-running
+                    # the request. Bedrock returns x-amzn-RequestId on error
+                    # responses just like on 2xx.
+                    err_request_id = self._extract_bedrock_request_id(
+                        getattr(response, "headers", None)
+                    )
+                    err_tracing_detail: GuardrailTracingDetail = (
+                        {"provider_request_id": err_request_id}
+                        if err_request_id is not None
+                        else {}
+                    )
                     self.add_standard_logging_guardrail_information_to_request_data(
                         guardrail_provider=self.guardrail_provider,
                         guardrail_json_response={"error": detail_message},
@@ -484,6 +497,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         end_time=datetime.now().timestamp(),
                         duration=(datetime.now() - start_time).total_seconds(),
                         event_type=event_type,
+                        tracing_detail=err_tracing_detail or None,
                     )
                     raise HTTPException(
                         status_code=status_code, detail=detail_message
@@ -510,7 +524,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Add guardrail information to request trace
         #########################################################
         _json_response = httpx_response.json()
-        tracing_detail = self._build_tracing_detail(_json_response)
+        tracing_detail = self._build_tracing_detail(
+            _json_response, response_headers=httpx_response.headers
+        )
 
         # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
         # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
@@ -644,17 +660,58 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return (status_code, err)
         return (status_code, message)
 
+    # AWS Bedrock returns the per-call request ID via these response headers.
+    # ``x-amzn-RequestId`` is the canonical header surfaced by the AWS SDK /
+    # CloudTrail / Bedrock console; ``x-amz-request-id`` is the legacy S3-style
+    # fallback that some Bedrock proxies still emit. Listed in priority order.
+    # ``x-amzn-RequestId`` is the canonical header surfaced by the AWS SDK,
+    # CloudTrail, and the Bedrock console. ``x-amz-request-id`` is the legacy
+    # S3-style fallback some Bedrock proxies still emit. httpx.Headers gives
+    # case-insensitive lookups so listing the canonical capitalisation once
+    # is enough; plain dicts are matched as-is (callers control case).
+    _BEDROCK_REQUEST_ID_HEADERS: ClassVar[Tuple[str, ...]] = (
+        "x-amzn-RequestId",
+        "x-amz-request-id",
+    )
+
+    @classmethod
+    def _extract_bedrock_request_id(cls, headers: Optional[Any]) -> Optional[str]:
+        """
+        Return AWS Bedrock\'s per-call request ID from response headers if
+        present, else ``None``. Case-insensitive lookup via ``httpx.Headers``;
+        also accepts a plain dict. The first non-empty value wins. Never
+        raises - header extraction must not break the guardrail call.
+        """
+        if headers is None:
+            return None
+        try:
+            for name in cls._BEDROCK_REQUEST_ID_HEADERS:
+                value = headers.get(name)
+                if isinstance(value, str) and value:
+                    return value
+        except Exception:
+            return None
+        return None
+
     def _build_tracing_detail(
-        self, response: BedrockGuardrailResponse
+        self,
+        response: BedrockGuardrailResponse,
+        response_headers: Optional[Any] = None,
     ) -> GuardrailTracingDetail:
         """
         Build the tracing detail from the raw Bedrock response, before
         redaction, so downstream loggers (OTEL, Langfuse, ...) get the
         actual category names rather than the "[REDACTED]" sentinel that
-        replaces customWords.match later. Bedrock's top-level ``action``
+        replaces customWords.match later. Bedrock\'s top-level ``action``
         field ("GUARDRAIL_INTERVENED" or "NONE") is also surfaced so the
         OTEL integration can expose it as a queryable span attribute
         without re-parsing the redacted guardrail_response blob.
+
+        When ``response_headers`` is provided, the AWS request ID
+        (``x-amzn-RequestId``) is also stamped onto the tracing detail so
+        that LiteLLM logs, the Logs UI, and downstream observability
+        backends can correlate to the provider-side ApplyGuardrail
+        execution.
         """
         tracing_detail: GuardrailTracingDetail = {}
         violation_categories = self._extract_violation_category_names(response)
@@ -663,6 +720,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_action = response.get("action")
         if isinstance(bedrock_action, str):
             tracing_detail["guardrail_action"] = bedrock_action
+        bedrock_request_id = self._extract_bedrock_request_id(response_headers)
+        if bedrock_request_id is not None:
+            tracing_detail["provider_request_id"] = bedrock_request_id
         return tracing_detail
 
     def _extract_violation_category_names(
