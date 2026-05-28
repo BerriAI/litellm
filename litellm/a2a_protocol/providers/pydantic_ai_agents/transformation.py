@@ -289,16 +289,16 @@ class PydanticAITransformation:
         Transform Pydantic AI task response to standard A2A non-streaming format.
 
         Pydantic AI returns a task with history/artifacts, but the standard A2A
-        non-streaming format expects:
+        non-streaming format expects ``result`` to be the Message directly
+        (``kind="message"``), per the A2A spec / ``SendMessageResponse``:
         {
             "jsonrpc": "2.0",
             "id": "...",
             "result": {
-                "message": {
-                    "role": "agent",
-                    "parts": [{"kind": "text", "text": "..."}],
-                    "messageId": "..."
-                }
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "..."}],
+                "messageId": "..."
             }
         }
 
