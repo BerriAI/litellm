@@ -573,7 +573,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                     azure_ad_token=azure_client_params.get("azure_ad_token"),
                 )
                 ad_token_provider = azure_client_params.get("azure_ad_token_provider")
-                v1_params = {
+                v1_params: Dict[str, Any] = {
                     "base_url": f"{api_base}/openai/v1/",
                 }
                 if "timeout" in azure_client_params:
