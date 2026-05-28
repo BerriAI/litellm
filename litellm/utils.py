@@ -5317,7 +5317,7 @@ def get_max_tokens(model: str) -> Optional[int]:
         int: The maximum number of tokens allowed for the given model.
 
     Raises:
-        Exception: If the model is not mapped yet.
+        ModelNotMappedError: If the model is not mapped yet.
 
     Example:
         >>> get_max_tokens("gpt-4")
@@ -5362,6 +5362,8 @@ def get_max_tokens(model: str) -> Optional[int]:
         else:
             raise Exception()
         return None
+    except ModelNotMappedError:
+        raise
     except Exception:
         raise ModelNotMappedError(
             f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
