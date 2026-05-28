@@ -13,7 +13,7 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -98,7 +98,11 @@ def _check_summary_model_access(
     team_model_aliases = getattr(user_api_key_auth, "team_model_aliases", None)
     team_models = list(getattr(user_api_key_auth, "team_models", None) or [])
 
-    for object_type, models in (("key", key_models), ("team", team_models)):
+    checks: Tuple[Tuple[Literal["key", "team"], List[str]], ...] = (
+        ("key", key_models),
+        ("team", team_models),
+    )
+    for object_type, models in checks:
         if not models:
             continue
         try:
