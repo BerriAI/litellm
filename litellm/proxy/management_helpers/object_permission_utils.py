@@ -299,9 +299,38 @@ def _extract_requested_mcp_toolsets(
     return set()
 
 
+async def _get_stale_mcp_server_ids(
+    requested_servers: Set[str],
+    prisma_client: Optional[PrismaClient],
+) -> Set[str]:
+    """
+    Return the subset of *requested_servers* that no longer exist.
+
+    Queries the DB when *prisma_client* is available (authoritative); falls back
+    to the in-memory registry for config-only deployments without a DB.
+    """
+    if prisma_client is not None:
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers
+
+        existing = await get_mcp_servers(prisma_client, list(requested_servers))
+        existing_ids = {s.server_id for s in existing}
+        return requested_servers - existing_ids
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return {
+        sid
+        for sid in requested_servers
+        if global_mcp_server_manager.get_mcp_server_by_id(sid) is None
+    }
+
+
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional[PrismaClient] = None,
 ):
     """
     Validate that MCP servers requested on a key are within the allowed scope.
@@ -332,19 +361,9 @@ async def validate_key_mcp_servers_against_team(
 
     # Validate requested server IDs
     if requested_servers:
-        # Strip IDs for servers that no longer exist in the registry (stale/deleted).
-        # These should not block the operation — a deleted server can't be used for
-        # anything, so carrying its old ID in object_permission is harmless and
-        # should not be treated as an authorization violation.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-
-        stale_ids = {
-            sid
-            for sid in requested_servers
-            if global_mcp_server_manager.get_mcp_server_by_id(sid) is None
-        }
+        # Strip IDs for deleted servers — carrying a stale ID from a form that
+        # hasn't refreshed is not an authorization violation.
+        stale_ids = await _get_stale_mcp_server_ids(requested_servers, prisma_client)
         if stale_ids:
             verbose_proxy_logger.warning(
                 "validate_key_mcp_servers_against_team: ignoring stale MCP server "

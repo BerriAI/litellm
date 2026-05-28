@@ -399,6 +399,34 @@ async def test_validate_stale_mcp_server_ids_are_silently_dropped(
 
 @pytest.mark.asyncio
 @patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
+    mock_access_groups, mock_allow_all
+):
+    """
+    Stale server IDs referenced only as keys in mcp_tool_permissions (not in
+    mcp_servers) must also be silently stripped rather than raising a 403.
+    """
+    team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_tool_permissions": {"s1-stale": ["tool1"]}},
+        team_obj=team_obj,
+    )  # Must not raise
+
+
+@pytest.mark.asyncio
+@patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )

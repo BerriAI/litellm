@@ -836,6 +836,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
+        prisma_client=prisma_client,
     )
     await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
@@ -2133,6 +2134,7 @@ async def _validate_mcp_servers_for_key_update(
     await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
+        prisma_client=prisma_client,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
