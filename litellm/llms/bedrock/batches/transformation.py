@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from httpx import Headers, Response
 
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -273,22 +272,16 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     def _get_openai_compatible_batch_metadata(metadata: Any) -> Dict[str, str]:
         """
         OpenAI Batch metadata only accepts string values.
+
+        Delegates to the canonical OpenAI Batches helper so the sanitization
+        rules stay in one place. Returns ``{}`` (not ``None``) for non-dict /
+        ``None`` input to preserve this method's historical contract.
         """
-        if not isinstance(metadata, dict):
-            return {}
+        from litellm.llms.openai.batches.transformation import (
+            sanitize_openai_batch_metadata,
+        )
 
-        sanitized_metadata: Dict[str, str] = {}
-        for key, value in metadata.items():
-            if key == "standard_logging_guardrail_information" or value is None:
-                continue
-
-            str_key = str(key)
-            if isinstance(value, str):
-                sanitized_metadata[str_key] = value
-            else:
-                sanitized_metadata[str_key] = safe_dumps(value)
-
-        return sanitized_metadata
+        return sanitize_openai_batch_metadata(metadata) or {}
 
     def transform_retrieve_batch_request(
         self,

@@ -37,6 +37,9 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.llms.openai.batches.transformation import (
+    sanitize_openai_batch_metadata,
+)
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
@@ -215,11 +218,23 @@ def create_batch(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
         )
 
+        # OpenAI's Batches API (and OpenAI-compatible providers like Azure) requires
+        # metadata values to be strings. Proxy-level pre-call hooks can inject non-
+        # string values (e.g. `applied_policies` as a list); sanitize before forwarding
+        # so we don't hit a 400 `invalid_type` upstream. Other providers (Vertex AI,
+        # Bedrock, Anthropic) own their own request transforms and are not affected.
+        if (
+            custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+            or custom_llm_provider == "azure"
+        ):
+            sanitized_metadata = sanitize_openai_batch_metadata(metadata)
+        else:
+            sanitized_metadata = metadata
         _create_batch_request = CreateBatchRequest(
             completion_window=completion_window,
             endpoint=endpoint,
             input_file_id=input_file_id,
-            metadata=metadata,
+            metadata=sanitized_metadata,
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
