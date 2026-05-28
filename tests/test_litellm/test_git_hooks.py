@@ -85,6 +85,7 @@ def _run_pre_push(stdin: str) -> subprocess.CompletedProcess:
         "Revert \"feat: bad change\"",
         "fixup! feat: add cooldown",
         "squash! fix: bedrock",
+        "amend! feat: add cooldown",
     ],
 )
 def test_commit_msg_accepts_valid(tmp_path, subject):
