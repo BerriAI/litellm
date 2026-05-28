@@ -8785,6 +8785,21 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                # LIT-3412: wildcard deployments deleted via DELETE /model/{id}
+                # were previously left registered in pattern_router /
+                # team_pattern_routers — same root cause as the upsert path.
+                # Build a previous_deployment shape for the team_id scope hint.
+                _prev: Optional[Deployment] = None
+                try:
+                    if isinstance(item, dict):
+                        _prev = Deployment(**item)
+                    elif isinstance(item, Deployment):
+                        _prev = item
+                except Exception:
+                    _prev = None
+                self._evict_stale_pattern_entries(
+                    deployment_id=id, previous_deployment=_prev
+                )
                 return item
             else:
                 return None
