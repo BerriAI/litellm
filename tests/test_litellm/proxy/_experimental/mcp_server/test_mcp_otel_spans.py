@@ -1,0 +1,469 @@
+"""Regression coverage for LIT-3201: OpenTelemetry spans for MCP operations.
+
+Exercises ``litellm.proxy._experimental.mcp_server.mcp_tracing.mcp_otel_span``
+against an in-process OTEL ``InMemorySpanExporter`` so each test asserts on
+the real exporter output rather than on a mock. Spans are wired in via a
+``SimpleSpanProcessor`` attached to a stand-alone ``TracerProvider``, and
+the proxy's ``open_telemetry_logger`` global is monkey-patched to expose
+that provider's tracer.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+
+import pytest
+
+sys.path.insert(
+    0,
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")),
+)
+
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.trace import StatusCode
+
+from litellm.proxy import proxy_server
+from litellm.proxy._experimental.mcp_server.mcp_tracing import (
+    MCP_OTEL_TRACER_NAME,
+    mcp_otel_span,
+)
+
+
+class _FakeOtelLogger:
+    """Just enough surface area for ``mcp_otel_span`` (only ``tracer``)."""
+
+    def __init__(self, tracer):
+        self.tracer = tracer
+
+
+@pytest.fixture
+def exporter(monkeypatch):
+    """Wire InMemorySpanExporter into a fresh TracerProvider and expose its
+    tracer via the proxy ``open_telemetry_logger`` global."""
+    exp = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exp))
+    tracer = provider.get_tracer(MCP_OTEL_TRACER_NAME)
+    monkeypatch.setattr(
+        proxy_server, "open_telemetry_logger", _FakeOtelLogger(tracer), raising=False
+    )
+    yield exp
+
+
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _finished(exporter):
+    return list(exporter.get_finished_spans())
+
+
+# -- success matrix --
+
+
+@pytest.mark.parametrize(
+    "operation, kwargs, expected_name, expected_attrs",
+    [
+        (
+            "tool.call",
+            {
+                "server_name": "github",
+                "tool_name": "create_issue",
+                "arguments": {"title": "x", "body": "y"},
+            },
+            "mcp.tool.call",
+            {
+                "mcp.operation": "tool.call",
+                "mcp.server.name": "github",
+                "mcp.tool.name": "create_issue",
+                "mcp.arguments_count": 2,
+            },
+        ),
+        (
+            "get_prompt",
+            {
+                "server_name": "tools",
+                "prompt_name": "summarize",
+                "arguments": {"x": 1},
+            },
+            "mcp.get_prompt",
+            {
+                "mcp.operation": "get_prompt",
+                "mcp.server.name": "tools",
+                "mcp.prompt.name": "summarize",
+                "mcp.arguments_count": 1,
+            },
+        ),
+        (
+            "read_resource",
+            {"resource_uri": "file:///etc/hostname"},
+            "mcp.read_resource",
+            {
+                "mcp.operation": "read_resource",
+                "mcp.resource.uri": "file:///etc/hostname",
+            },
+        ),
+        (
+            "list_tools",
+            {"extra_attributes": {"mcp.servers_filter": ""}},
+            "mcp.list_tools",
+            {"mcp.operation": "list_tools", "mcp.servers_filter": ""},
+        ),
+        (
+            "list_prompts",
+            {"extra_attributes": {"mcp.servers_filter": "github,slack"}},
+            "mcp.list_prompts",
+            {"mcp.operation": "list_prompts", "mcp.servers_filter": "github,slack"},
+        ),
+        (
+            "list_resources",
+            {"extra_attributes": {"mcp.servers_filter": ""}},
+            "mcp.list_resources",
+            {"mcp.operation": "list_resources"},
+        ),
+        (
+            "list_resource_templates",
+            {"extra_attributes": {"mcp.servers_filter": ""}},
+            "mcp.list_resource_templates",
+            {"mcp.operation": "list_resource_templates"},
+        ),
+    ],
+    ids=[
+        "tool.call",
+        "get_prompt",
+        "read_resource",
+        "list_tools",
+        "list_prompts_with_filter",
+        "list_resources",
+        "list_resource_templates",
+    ],
+)
+def test_mcp_span_success_path_records_attributes(
+    exporter, operation, kwargs, expected_name, expected_attrs
+):
+    async def run():
+        async with mcp_otel_span(operation, **kwargs) as span:
+            assert span is not None, "span must be live when OTEL is configured"
+
+    _run(run())
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == expected_name
+    for k, v in expected_attrs.items():
+        assert span.attributes[k] == v, f"{k}: {span.attributes.get(k)!r} != {v!r}"
+    assert span.status.status_code == StatusCode.OK
+    assert not span.events
+
+
+# -- failure path --
+
+
+def test_mcp_span_failure_records_exception_and_reraises(exporter):
+    class _Boom(RuntimeError):
+        pass
+
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            raise _Boom("kaboom")
+
+    with pytest.raises(_Boom):
+        _run(run())
+
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["mcp.error.type"] == "_Boom"
+    assert "exception" in [e.name for e in span.events]
+
+
+# -- parent span inheritance --
+
+
+def test_mcp_span_inherits_parent_when_one_is_active(exporter, monkeypatch):
+    # Use a dedicated provider for both the parent and MCP tracers so they
+    # share context, but do NOT mutate the process-global tracer provider -
+    # other tests in this process rely on a clean provider.
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    _prev_provider = otel_trace.get_tracer_provider()
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(
+        otel_trace, "get_tracer_provider", lambda: provider, raising=False
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "open_telemetry_logger",
+        _FakeOtelLogger(provider.get_tracer(MCP_OTEL_TRACER_NAME)),
+        raising=False,
+    )
+    parent_tracer = provider.get_tracer("test.parent")
+    # Test logic continues - the provider goes out of scope at test end and
+    # the previous global provider is restored by monkeypatch teardown.
+    _ = _prev_provider
+
+    async def run():
+        with parent_tracer.start_as_current_span("parent.op") as parent:
+            parent_ctx = parent.get_span_context()
+            async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+                pass
+        return parent_ctx
+
+    parent_ctx = _run(run())
+
+    finished = _finished(exporter)
+    mcp_span = next(s for s in finished if s.name == "mcp.tool.call")
+    parent_span = next(s for s in finished if s.name == "parent.op")
+    assert mcp_span.context.trace_id == parent_ctx.trace_id
+    assert mcp_span.parent is not None
+    assert mcp_span.parent.span_id == parent_span.context.span_id
+
+
+# -- no-op paths --
+
+
+def test_mcp_span_no_op_when_otel_logger_missing(monkeypatch):
+    exp = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exp))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None, raising=False)
+
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="x") as s:
+            assert s is None
+
+    _run(run())
+    assert _finished(exp) == []
+
+
+def test_mcp_span_no_op_when_logger_has_no_tracer(monkeypatch):
+    exp = InMemorySpanExporter()
+
+    class _NoTracer:
+        pass
+
+    monkeypatch.setattr(
+        proxy_server, "open_telemetry_logger", _NoTracer(), raising=False
+    )
+
+    async def run():
+        async with mcp_otel_span("list_tools") as s:
+            assert s is None
+
+    _run(run())
+    assert _finished(exp) == []
+
+
+# -- secrets safety --
+
+
+def test_mcp_span_records_arguments_count_not_values(exporter):
+    async def run():
+        async with mcp_otel_span(
+            "tool.call",
+            tool_name="t",
+            server_name="s",
+            arguments={"secret": "s3kret-token", "x": 1},
+        ):
+            pass
+
+    _run(run())
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes["mcp.arguments_count"] == 2
+    for k, v in span.attributes.items():
+        assert "s3kret-token" not in str(v), (k, v)
+
+
+# ---------------------------------------------------------------------------
+# Greptile P1: span must be the active context inside the block so any
+# child spans (e.g. HTTP auto-instrumentation) are parented to it.
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_span_is_current_inside_block_and_detached_after(exporter, monkeypatch):
+    """Child spans created inside the helper's block must parent to the MCP
+    span, and after the block the active span must revert to the prior
+    context (no leaked detach)."""
+
+    # Use the proxy's tracer for the helper, and the same provider for the
+    # child tracer so they share context.
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    # Don't mutate the process-global provider - monkeypatch get_tracer_provider
+    # so any look-up inside this test returns provider but other tests in
+    # the same process keep the default.
+    monkeypatch.setattr(otel_trace, "_TRACER_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(
+        otel_trace, "get_tracer_provider", lambda: provider, raising=False
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "open_telemetry_logger",
+        _FakeOtelLogger(provider.get_tracer(MCP_OTEL_TRACER_NAME)),
+        raising=False,
+    )
+    parent_tracer = provider.get_tracer("test.parent")
+
+    async def run():
+        outer_span_id_before = otel_trace.get_current_span().get_span_context().span_id
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            # Now the MCP span must be the active span on the OTEL context.
+            mcp_active = otel_trace.get_current_span()
+            assert mcp_active.is_recording(), "MCP span should be recording"
+            # Create a child via a separate tracer - it must parent to MCP.
+            with parent_tracer.start_as_current_span("http.client.GET"):
+                pass
+            assert mcp_active.get_span_context().span_id != 0
+            mcp_span_id_inside = mcp_active.get_span_context().span_id
+        # After the block, the context must revert to what it was before
+        # (no INVALID span_id == 0 leftover unless it was 0 to begin with).
+        outer_span_id_after = otel_trace.get_current_span().get_span_context().span_id
+        assert outer_span_id_after == outer_span_id_before
+        return mcp_span_id_inside
+
+    mcp_span_id = _run(run())
+
+    finished = _finished(exporter)
+    mcp_spans = [s for s in finished if s.name == "mcp.tool.call"]
+    child_spans = [s for s in finished if s.name == "http.client.GET"]
+    assert len(mcp_spans) == 1
+    assert len(child_spans) == 1
+    # Critical: child must parent to MCP span, not to the prior context.
+    assert child_spans[0].parent is not None
+    assert child_spans[0].parent.span_id == mcp_span_id
+
+
+# ---------------------------------------------------------------------------
+# Greptile P2: 4xx HTTPException should NOT mark the span as ERROR.
+# It should still record the exception event and the HTTP status code.
+# ---------------------------------------------------------------------------
+
+
+class _HttpExc(Exception):
+    """Minimal HTTPException-shape - mirrors Starlette/FastAPI surface."""
+
+    def __init__(self, status_code, detail=""):
+        super().__init__(detail)
+        self.status_code = status_code
+
+
+def test_mcp_span_4xx_http_exception_does_not_mark_error(exporter):
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            raise _HttpExc(403, "User not allowed")
+
+    with pytest.raises(_HttpExc):
+        _run(run())
+
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    # 4xx must not inflate the ERROR rate.
+    assert span.status.status_code in (StatusCode.OK, StatusCode.UNSET)
+    # But the exception event AND http.status_code attr must be there.
+    assert "exception" in [e.name for e in span.events]
+    assert span.attributes["mcp.http.status_code"] == 403
+    assert span.attributes["mcp.error.type"] == "_HttpExc"
+
+
+def test_mcp_span_5xx_http_exception_still_marks_error(exporter):
+    async def run():
+        async with mcp_otel_span("tool.call", tool_name="t", server_name="s"):
+            raise _HttpExc(502, "Bad gateway")
+
+    with pytest.raises(_HttpExc):
+        _run(run())
+
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    span = spans[0]
+    # Server-side error -> ERROR status (operator-visible).
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["mcp.http.status_code"] == 502
+    assert span.attributes["mcp.error.type"] == "_HttpExc"
+
+
+# ---------------------------------------------------------------------------
+# Veria - sensitive components in resource URI must be stripped before export
+# (credentials, query string, fragment). Scheme + host[:port] + path stay.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected_substring, forbidden_substrings",
+    [
+        (
+            "https://user:pwd@example.com/path?token=secret#frag",
+            "https://example.com/path",
+            ["user", "pwd", "token", "secret", "frag"],
+        ),
+        (
+            "https://example.com/path?Signature=ABCDEF",
+            "https://example.com/path",
+            ["Signature", "ABCDEF"],
+        ),
+        (
+            "file:///etc/hostname",
+            "file:///etc/hostname",
+            ["?", "#"],
+        ),
+        (
+            "s3://bucket-x/key/with/slashes",
+            "s3://bucket-x/key/with/slashes",
+            [],
+        ),
+        # IPv6 netloc with an explicit port must keep brackets intact - otherwise
+        # the recorded "host:port" string is ambiguous (e.g. ::1:8080).
+        (
+            "http://[::1]:8080/path",
+            "http://[::1]:8080/path",
+            [],
+        ),
+        # IPv6 with userinfo: strip credentials but keep brackets.
+        (
+            "https://user:pwd@[2001:db8::1]:443/x?token=t",
+            "https://[2001:db8::1]:443/x",
+            ["user", "pwd", "token"],
+        ),
+    ],
+    ids=[
+        "userinfo_query_frag",
+        "presigned_query",
+        "file_uri",
+        "s3_uri",
+        "ipv6_port",
+        "ipv6_userinfo",
+    ],
+)
+def test_mcp_span_resource_uri_is_sanitised(
+    exporter, raw, expected_substring, forbidden_substrings
+):
+    async def run():
+        async with mcp_otel_span("read_resource", resource_uri=raw):
+            pass
+
+    _run(run())
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    recorded = spans[0].attributes["mcp.resource.uri"]
+    assert (
+        expected_substring in recorded
+    ), f"sanitised URI {recorded!r} should keep {expected_substring!r}"
+    for forbidden in forbidden_substrings:
+        assert (
+            forbidden not in recorded
+        ), f"sanitised URI {recorded!r} must not contain {forbidden!r}"
