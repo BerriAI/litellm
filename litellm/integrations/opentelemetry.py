@@ -1753,7 +1753,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # by the provider hook onto StandardLoggingGuardrailInformation,
             # surfaced here so dashboards can pivot from a LiteLLM trace to
             # the corresponding provider-side guardrail execution without
-            # re-running the request.
+            # re-running the request. Skip emitting when the value is missing
+            # so dashboards don't get cluttered with empty attributes.
             guardrail_provider_request_id = guardrail_information.get(
                 "provider_request_id"
             )
