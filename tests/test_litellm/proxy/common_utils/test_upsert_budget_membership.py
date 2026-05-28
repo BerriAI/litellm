@@ -23,6 +23,10 @@ def mock_tx():
     membership = MagicMock()
     membership.update = AsyncMock()
     membership.upsert = AsyncMock()
+    # LIT-3359: default the shared-row probe to "no other reference" so
+    # tests that exercise the in-place update path are not nudged into
+    # clone-on-write by an unset mock.
+    membership.find_first = AsyncMock(return_value=None)
 
     # budget “table”
     budget = MagicMock()
@@ -369,3 +373,81 @@ async def test_upsert_updates_in_place_when_member_has_private_budget(
     )
     mock_tx.litellm_budgettable.create.assert_not_called()
     mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LIT-3359 coverage: shared-row probe paths (these mirror the dedicated
+# tests under tests/litellm/proxy/management_endpoints/test_common_utils.py
+# but live in the proxy-infra shard so codecov sees the new branches in
+# common_utils.py exercised here too).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_clones_when_budget_id_is_shared_with_other_membership(
+    mock_tx, fake_user
+):
+    """LIT-3359: if find_first returns a sibling membership, we clone-on-write."""
+    sibling = types.SimpleNamespace(user_id="bob", team_id="team-shared",
+                                    budget_id="shared-bdg")
+    mock_tx.litellm_teammembership.find_first = AsyncMock(return_value=sibling)
+    # Seed the shared row find_unique returns (used to carry-over fields)
+    shared_row = MagicMock()
+    shared_row.model_dump = MagicMock(return_value={
+        "budget_id": "shared-bdg",
+        "max_budget": 100.0,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "model_max_budget": None,
+        "budget_duration": None,
+        "allowed_models": None,
+    })
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=shared_row)
+
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-shared",
+        user_id="alice",
+        max_budget=42.0,
+        existing_budget_id="shared-bdg",
+        user_api_key_dict=fake_user,
+        team_default_budget_id=None,
+    )
+
+    # MUST NOT have mutated the shared row in place
+    mock_tx.litellm_budgettable.update.assert_not_called()
+    # MUST have created a new private budget
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
+    create_kwargs = mock_tx.litellm_budgettable.create.await_args.kwargs
+    assert create_kwargs["data"]["max_budget"] == 42.0
+    # MUST have re-linked the caller's membership to the new budget
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_probe_failure_falls_through_to_clone(mock_tx, fake_user):
+    """LIT-3359: if find_first itself raises, we DEFAULT to clone-on-write
+    rather than risk mutating a possibly-shared row."""
+    mock_tx.litellm_teammembership.find_first = AsyncMock(
+        side_effect=RuntimeError("boom")
+    )
+    shared_row = MagicMock()
+    shared_row.model_dump = MagicMock(return_value={"budget_id": "x",
+                                                    "max_budget": 50.0})
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=shared_row)
+
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="t",
+        user_id="u",
+        max_budget=7.0,
+        existing_budget_id="x",
+        user_api_key_dict=fake_user,
+        team_default_budget_id=None,
+    )
+
+    # safety: clone-on-write, NOT in-place
+    mock_tx.litellm_budgettable.update.assert_not_called()
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
