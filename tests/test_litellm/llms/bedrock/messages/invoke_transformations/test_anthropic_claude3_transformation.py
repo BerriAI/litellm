@@ -1639,27 +1639,42 @@ def test_bedrock_messages_filters_clear_thinking_keeps_clear_tool_uses(monkeypat
     assert "compact-2026-01-12" not in betas
 
 
-def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock():
+def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock(
+    monkeypatch,
+):
     """
     LIT-3393: ``anthropic_beta_headers_config.json`` previously mapped
     ``bedrock.context-management-2025-06-27`` to ``null``, so
     ``filter_and_transform_beta_headers`` dropped the header even when the
-    transformation tried to set it. This regression guard locks the mapping in
-    place.
+    transformation tried to set it. This regression guard locks the bundled
+    mapping in place.
+
+    Pinned to the bundled local config via ``LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS``
+    so the assertion is not subject to whatever the upstream remote currently
+    serves or what previous tests left in the module cache.
     """
-    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
-
-    out = filter_and_transform_beta_headers(
-        ["context-management-2025-06-27"],
-        provider="bedrock",
+    from litellm.anthropic_beta_headers_manager import (
+        filter_and_transform_beta_headers,
+        reload_beta_headers_config,
     )
-    assert out == ["context-management-2025-06-27"]
 
-    # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents an
-    # accidental flip there.
-    out_converse = filter_and_transform_beta_headers(
-        ["context-management-2025-06-27"],
-        provider="bedrock_converse",
-    )
-    assert out_converse == []
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    try:
+        out = filter_and_transform_beta_headers(
+            ["context-management-2025-06-27"],
+            provider="bedrock",
+        )
+        assert out == ["context-management-2025-06-27"]
+
+        # Bedrock_converse genuinely lacks it per AWS docs; this guard prevents
+        # an accidental flip there.
+        out_converse = filter_and_transform_beta_headers(
+            ["context-management-2025-06-27"],
+            provider="bedrock_converse",
+        )
+        assert out_converse == []
+    finally:
+        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+        reload_beta_headers_config()
 
