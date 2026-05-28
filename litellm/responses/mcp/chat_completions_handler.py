@@ -2,7 +2,6 @@
 
 from typing import (
     Any,
-    Dict,
     List,
     Optional,
     Union,
@@ -11,6 +10,7 @@ from typing import (
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
+    _extract_request_tags_from_kwargs,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import ModelResponse
@@ -76,25 +76,6 @@ def _add_mcp_metadata_to_response(
 
             # Set the provider_specific_fields
             setattr(message, "provider_specific_fields", provider_fields)
-
-
-def _extract_request_tags_from_kwargs(
-    kwargs: Dict[str, Any],
-) -> Optional[List[str]]:
-    """LIT-3304: extract request_tags from parent /chat/completions kwargs.
-
-    Auto-executed MCP sub-calls must inherit the parent request tags so
-    they roll up into the same Tag Usage view as the /chat/completions call
-    that triggered them. Tags can live on either ``metadata`` or
-    ``litellm_metadata`` depending on which entrypoint built the kwargs.
-    """
-    for _meta_key in ("metadata", "litellm_metadata"):
-        _meta = kwargs.get(_meta_key)
-        if isinstance(_meta, dict):
-            tags = _meta.get("tags")
-            if isinstance(tags, list) and tags:
-                return list(tags)
-    return None
 
 
 async def acompletion_with_mcp(  # noqa: PLR0915
