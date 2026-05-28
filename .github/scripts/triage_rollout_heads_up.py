@@ -176,7 +176,7 @@ def format_heads_up_comment(
     )
 
     return (
-        "👋 **Heads-up: new OSS triage bot landing on "
+        "🚄 **Heads-up: new OSS triage bot landing on "
         f"{cutoff.strftime('%A, %B')} {cutoff.day}, {cutoff.year}.**\n"
         "\n"
         "We're rolling out **Agent Shin**, an LLM-as-judge triage bot for "

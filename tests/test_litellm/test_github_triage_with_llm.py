@@ -203,6 +203,107 @@ class TestCloseCommentText:
         assert "end-to-end qa proof" in body.lower()
         assert "mock" in body.lower()
 
+    def test_all_agent_shin_comments_should_use_bullet_train_emoji(self, triage_module):
+        # The bullet train (🚄) is Agent Shin's symbol; the previous wave (👋)
+        # was generic and didn't match the bot's identity. Every action-
+        # required comment the bot can post must use the bullet train so the
+        # contributor recognizes who's writing without reading the signoff.
+        verdict = {"verdict": "fail", "missing": [], "explanation": ""}
+        comments = {
+            "pr_close": triage_module.format_pr_close_comment(verdict),
+            "issue_close": triage_module.format_issue_close_comment(verdict),
+            "pr_grace": triage_module.format_grace_warning_pr_comment(verdict),
+            "issue_grace": triage_module.format_grace_warning_issue_comment(verdict),
+            "within_grace": triage_module.format_within_grace_comment(
+                [], "", grace_days=1
+            ),
+        }
+        for name, body in comments.items():
+            assert "🚄" in body, f"{name} comment is missing the bullet train emoji"
+            assert "👋" not in body, f"{name} comment still uses the old wave emoji"
+
+    def test_pr_close_comment_should_show_what_pr_got_right(self, triage_module):
+        # The user explicitly asked for a "things you got right" section so
+        # the comment doesn't read as pure rejection. When the judge confirms
+        # a field is present (e.g. linked_issue), the bullet for it MUST
+        # appear in the close comment.
+        body = triage_module.format_pr_close_comment(
+            {
+                "verdict": "fail",
+                "linked_issue": True,
+                "has_problem_description": True,
+                "has_expected_vs_actual": False,
+                "has_qa_proof": False,
+                "missing": ["QA proof"],
+                "explanation": "no proof",
+            }
+        )
+        assert "What you got right" in body
+        # The two present fields surface as ✅ bullets; the two absent
+        # fields do not get a ✅ bullet (the QA-proof rubric block still
+        # mentions the concept, but only the affirmed fields get checkmarks).
+        assert "- ✅ Linked a related GitHub issue" in body
+        assert "- ✅ Clear problem description" in body
+        assert "- ✅ Expected vs. actual behavior" not in body
+        assert "- ✅ End-to-end QA proof" not in body
+
+    def test_pr_close_comment_should_omit_present_section_when_nothing_present(
+        self, triage_module
+    ):
+        # If the judge says nothing is present (every flag False), the
+        # "what you got right" block is skipped entirely — better to omit
+        # than to render "What you got right: (nothing)".
+        body = triage_module.format_pr_close_comment(
+            {
+                "verdict": "fail",
+                "linked_issue": False,
+                "has_problem_description": False,
+                "has_expected_vs_actual": False,
+                "has_qa_proof": False,
+                "missing": [],
+                "explanation": "",
+            }
+        )
+        assert "What you got right" not in body
+
+    def test_issue_close_comment_should_show_what_issue_got_right(self, triage_module):
+        body = triage_module.format_issue_close_comment(
+            {
+                "verdict": "fail",
+                "kind": "bug",
+                "has_repro": True,
+                "has_proof": False,
+                "has_expected_vs_actual": True,
+                "missing": ["screenshot / log"],
+                "explanation": "missing proof",
+            }
+        )
+        assert "What you got right" in body
+        assert "Runnable reproduction" in body
+        assert "Expected vs. actual behavior" in body
+        assert "- ✅ Screenshot, traceback, or log" not in body
+
+    def test_close_comments_should_use_softer_park_for_later_framing(
+        self, triage_module
+    ):
+        # User feedback: the messaging shouldn't feel like punishment. The
+        # comment must explicitly frame close as a "park this for later," not
+        # a rejection, and ground that in the queue-hygiene reason.
+        for body in (
+            triage_module.format_pr_close_comment(
+                {"verdict": "fail", "missing": [], "explanation": ""}
+            ),
+            triage_module.format_issue_close_comment(
+                {"verdict": "fail", "missing": [], "explanation": ""}
+            ),
+        ):
+            assert "park this for later" in body
+            assert (
+                "not a rejection" in body
+                or "isn't a rejection" in body
+                or ("isn't us saying" in body)
+            )
+
 
 class TestWasClosedByAgentShin:
     """Bot-closed guard: only the bot's own closures are reopen candidates."""
@@ -1661,6 +1762,76 @@ class TestGraceWarningCommentText:
         )
         assert "@greptileai" in body
         assert "even after the PR is closed" in body
+
+    def test_pr_grace_warning_should_not_prompt_reconsider_during_grace_window(
+        self, triage_module
+    ):
+        # Per user feedback: during the 24h grace window, the contributor
+        # should just update the PR description. Asking them to also comment
+        # "@agent-shin reconsider" right away adds a step they don't need —
+        # the bot re-checks automatically on the next sweep. The reconsider
+        # trigger is reserved for the post-close recovery path.
+        #
+        # We pin this by checking that the grace section explicitly tells
+        # the contributor they don't need to ping the bot during the grace
+        # window. The presence of "@agent-shin reconsider" elsewhere in the
+        # comment (as the post-close path) is fine and required by other
+        # tests.
+        body = triage_module.format_grace_warning_pr_comment(
+            {"verdict": "fail", "missing": [], "explanation": ""}
+        )
+        assert "No need to ping" in body or "no need to ping" in body
+
+    def test_grace_warnings_should_show_what_got_right(self, triage_module):
+        # The "What you got right" section must appear in the grace warning
+        # too, not only the close comment — the contributor sees the warning
+        # first and that's their best chance to know what to keep.
+        pr_body = triage_module.format_grace_warning_pr_comment(
+            {
+                "verdict": "fail",
+                "linked_issue": True,
+                "has_problem_description": True,
+                "has_expected_vs_actual": True,
+                "has_qa_proof": False,
+                "missing": ["QA proof"],
+                "explanation": "thin",
+            }
+        )
+        assert "What you got right" in pr_body
+        assert "Linked a related GitHub issue" in pr_body
+
+        issue_body = triage_module.format_grace_warning_issue_comment(
+            {
+                "verdict": "fail",
+                "kind": "feature",
+                "has_motivation_example": True,
+                "missing": ["concrete description"],
+                "explanation": "vague",
+            }
+        )
+        assert "What you got right" in issue_body
+        assert "Motivation and concrete example" in issue_body
+
+    def test_grace_warnings_should_use_softer_park_for_later_framing(
+        self, triage_module
+    ):
+        # Same softer-framing pin as the close comment, but for the warning
+        # — the contributor's first contact with the bot must not read as a
+        # hard deadline / ultimatum.
+        for body in (
+            triage_module.format_grace_warning_pr_comment(
+                {"verdict": "fail", "missing": [], "explanation": ""}
+            ),
+            triage_module.format_grace_warning_issue_comment(
+                {"verdict": "fail", "missing": [], "explanation": ""}
+            ),
+        ):
+            assert "park this for later" in body
+            assert (
+                "not a rejection" in body
+                or "isn't a rejection" in body
+                or ("isn't us saying" in body)
+            )
 
 
 class TestSecondsSinceLastGraceWarning:

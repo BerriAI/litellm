@@ -621,46 +621,115 @@ def _format_missing(missing: list[str]) -> str:
     return "\n".join(f"- {m}" for m in missing)
 
 
+# Rubric items the judge can mark present. The first element of each tuple is
+# the verdict-JSON boolean field, the second is the human-readable label we
+# render in the "what you got right" section of close / grace-warning comments.
+_PR_PRESENT_LABELS: tuple[tuple[str, str], ...] = (
+    ("linked_issue", "Linked a related GitHub issue"),
+    ("has_problem_description", "Clear problem description"),
+    ("has_expected_vs_actual", "Expected vs. actual behavior"),
+    ("has_qa_proof", "End-to-end QA proof"),
+)
+
+# Issue rubric labels grouped by `kind`. The judge sets `kind` to one of
+# {"bug", "feature", "other"}; when "other" we render both groups so we don't
+# silently drop a present-flag the judge actually set to True.
+_ISSUE_BUG_LABELS: tuple[tuple[str, str], ...] = (
+    ("has_repro", "Runnable reproduction (steps, code, curl, or config)"),
+    ("has_proof", "Screenshot, traceback, or log showing the bug"),
+    ("has_expected_vs_actual", "Expected vs. actual behavior"),
+)
+_ISSUE_FEATURE_LABELS: tuple[tuple[str, str], ...] = (
+    ("has_motivation_example", "Motivation and concrete example"),
+)
+
+
+def _format_present_for_pr(verdict: dict) -> list[str]:
+    """Human-readable rubric items the judge confirmed are present on a PR.
+
+    Drives the "what you got right" section in close / grace-warning comments.
+    The user gave explicit feedback: contributors should see what they nailed
+    *before* the list of gaps, so the comment doesn't read as pure rejection.
+    """
+    return [label for field, label in _PR_PRESENT_LABELS if verdict.get(field)]
+
+
+def _format_present_for_issue(verdict: dict) -> list[str]:
+    """Human-readable rubric items the judge confirmed are present on an issue.
+
+    Branches on the judge's `kind` field. For `"other"` (or missing kind) we
+    render the union so a present-flag isn't dropped just because the judge
+    couldn't classify the issue cleanly.
+    """
+    kind = (verdict.get("kind") or "").lower()
+    groups: list[tuple[tuple[str, str], ...]] = []
+    if kind in ("bug", "other", ""):
+        groups.append(_ISSUE_BUG_LABELS)
+    if kind in ("feature", "other", ""):
+        groups.append(_ISSUE_FEATURE_LABELS)
+    out: list[str] = []
+    for group in groups:
+        for field, label in group:
+            if verdict.get(field) and label not in out:
+                out.append(label)
+    return out
+
+
+def _format_present_block(items: list[str]) -> str:
+    """Render the optional "what you got right" block. Empty string when the
+    judge didn't confirm anything as present — better to omit the section
+    entirely than to show "What you got right: (nothing)".
+    """
+    if not items:
+        return ""
+    bullets = "\n".join(f"- ✅ {item}" for item in items)
+    return f"**What you got right:**\n\n{bullets}\n\n"
+
+
 def format_pr_close_comment(verdict: dict) -> str:
     missing_lines = _format_missing(verdict.get("missing") or [])
+    present_block = _format_present_block(_format_present_for_pr(verdict))
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this repository. "
+        "🚄 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this "
+        "repository. "
         "[What's this and why am I getting it?](https://docs.litellm.ai/blog/agent-shin-triage)\n"
         "\n"
-        "This PR is being **auto-closed** because it does not yet meet the bar described in our "
-        "[pull-request template](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
-        "Specifically, I couldn't find:\n"
+        "I read the description against our "
+        "[contribution rubric](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
+        "Here's how it lined up:\n"
+        "\n"
+        f"{present_block}"
+        "**What's still missing:**\n"
         "\n"
         f"{missing_lines}\n"
         "\n"
         f"> {explanation}\n"
         "\n"
-        "**This isn't a rejection of the idea.** To bring this PR back, the description needs "
-        "**both** of the following:\n"
+        "**Closing this PR isn't a rejection of the change.** We want the open-PR list to "
+        "mirror what a maintainer can act on *right now*, so contributors don't get lost in a "
+        'backlog. A closed PR is a soft "park this for later" — your work is still here, '
+        "the diff is still here, and getting it reopened is one comment away. Take your time.\n"
         "\n"
-        "1. **Context** — either a linked issue (e.g. `Fixes #1234`) **or** a clear problem "
-        "description with expected vs. actual behavior.\n"
-        "2. **End-to-end QA proof** — at least one of: a screenshot of the fix working, a short "
-        "screen recording, or the exact commands you ran paired with their **real output** "
-        "against the real system. Unit tests whose external dependencies (LLM provider, DB, "
-        "network) are mocked or stubbed do **not** count — output from a real integration run "
-        "is required.\n"
+        "**To bring this PR back:**\n"
         "\n"
-        "A linked issue alone is not enough: it covers context, not proof. See "
-        "[what counts as QA proof](https://docs.litellm.ai/blog/agent-shin-triage#the-rubric-for-pull-requests) "
-        "for the full rubric.\n"
+        "- Update the description with the missing pieces, then comment `@agent-shin reconsider` "
+        "on this PR. I'll re-evaluate and reopen if it now passes.\n"
+        "- Or **Open a new PR** with the same fix and the updated description. GitHub doesn't "
+        "always let external contributors reopen a bot-closed PR, so a fresh PR is the most "
+        "reliable path back into the review queue.\n"
+        "- If Greptile's most recent score on this PR was below 4/5, comment `@greptileai` to "
+        "request a fresh review — that **still works even after the PR is closed**, and a "
+        "stronger score is one of the signals that lifts the PR back into the queue. A low "
+        "Greptile score isn't a blocker.\n"
         "\n"
-        "Once the description has both, you can:\n"
-        "\n"
-        "- **Open a new PR** with the same fixes — recommended path. GitHub does not let external "
-        "contributors reopen a PR that was closed by a bot/maintainer, so a fresh PR is the most reliable way "
-        "to get back into the review queue.\n"
-        "- **Or** comment `@agent-shin reconsider` on this closed PR after updating the description. "
-        "I'll re-run the triage; if it now passes, I'll reopen this PR automatically.\n"
-        "- You can also comment `@greptileai` on this PR to request a fresh Greptile review — that "
-        "still works **even after the PR is closed**, and a higher score is one of the signals that "
-        "lifts the PR back into the queue.\n"
+        '**What "end-to-end QA proof" means**, since it\'s the most common gap: a screenshot '
+        "of the fix working, a short screen recording, or the exact commands you ran paired "
+        "with their **real output** against the real system. Unit tests whose external "
+        "dependencies (LLM provider, DB, network) are mocked or stubbed don't count — output "
+        "from a real integration run is what we look for. A linked issue alone isn't enough "
+        "either: it covers context, not proof. See "
+        "[the full rubric](https://docs.litellm.ai/blog/agent-shin-triage#the-rubric-for-pull-requests).\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
@@ -671,29 +740,38 @@ def format_pr_close_comment(verdict: dict) -> str:
 
 def format_issue_close_comment(verdict: dict) -> str:
     missing_lines = _format_missing(verdict.get("missing") or [])
+    present_block = _format_present_block(_format_present_for_issue(verdict))
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this repository. "
+        "🚄 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this "
+        "repository. "
         "[What's this and why am I getting it?](https://docs.litellm.ai/blog/agent-shin-triage)\n"
         "\n"
-        "This issue is being **auto-closed** because it doesn't yet have enough detail for a maintainer to act on. "
-        "Specifically, I couldn't find:\n"
+        "I read the issue against our reporting checklist. Here's how it lined up:\n"
+        "\n"
+        f"{present_block}"
+        "**What's still missing:**\n"
         "\n"
         f"{missing_lines}\n"
         "\n"
         f"> {explanation}\n"
         "\n"
-        "**This isn't a \"won't fix\".** To bring this issue back:\n"
+        "**Closing this isn't us saying the bug isn't real or the request isn't useful.** We "
+        "want the open-issue list to mirror what a maintainer can act on *right now*, so "
+        "reports like yours don't get buried in a backlog. A closed issue is a soft \"park "
+        'this for later" — your report is still here, and getting it reopened is one comment '
+        "away. Take your time.\n"
         "\n"
-        "1. Edit the issue to add the missing pieces:\n"
-        "   - For **bug reports**: a runnable reproduction (code / curl / config), expected vs. actual behavior, "
-        "and a screenshot / traceback / log showing the bug.\n"
-        "   - For **feature requests**: a concrete description of what should change, plus a use case and example "
-        "(config / API call / UI flow).\n"
-        "2. Comment `@agent-shin reconsider` on this issue once you've updated it. "
-        "I'll re-run triage and reopen the issue if it now meets the bar. "
-        "(GitHub doesn't always let the original reporter reopen a bot-closed issue, "
-        "so the comment-based reconsider is the reliable path.)\n"
+        "**To bring this issue back:**\n"
+        "\n"
+        "1. Edit the issue description to add the missing pieces:\n"
+        "   - For **bug reports**: a runnable reproduction (code / curl / config), expected "
+        "vs. actual behavior, and a screenshot / traceback / log showing the bug.\n"
+        "   - For **feature requests**: a concrete description of what should change, plus a "
+        "use case and example (config / API call / UI flow).\n"
+        "2. Comment `@agent-shin reconsider`. I'll re-run triage and reopen the issue if it now "
+        "meets the bar. (GitHub doesn't always let the original reporter reopen a bot-closed "
+        "issue, so the comment-based reconsider is the reliable path.)\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
@@ -713,46 +791,48 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
     `format_pr_close_comment` and closes the PR).
     """
     missing_lines = _format_missing(verdict.get("missing") or [])
+    present_block = _format_present_block(_format_present_for_pr(verdict))
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this repository. "
+        "🚄 Hi, thanks for the PR! I'm **Agent Shin**, the automated triage bot for this "
+        "repository. "
         "[What's this and why am I getting it?](https://docs.litellm.ai/blog/agent-shin-triage)\n"
         "\n"
-        "Heads up — this PR does not yet meet the bar described in our "
-        "[pull-request template](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
-        "Specifically, I couldn't find:\n"
+        "I read the description against our "
+        "[contribution rubric](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md). "
+        "Here's how it lined up:\n"
+        "\n"
+        f"{present_block}"
+        "**What's still missing:**\n"
         "\n"
         f"{missing_lines}\n"
         "\n"
         f"> {explanation}\n"
         "\n"
-        "⏳ **You have 1 day to address this before this PR is auto-closed.** "
-        "During the grace period, update the PR description so it has **both** of:\n"
+        "If the description isn't updated in the next **1 day**, I'll auto-close this PR. "
+        "That's **not** us saying we don't care about the change — we want the open-PR list to "
+        "mirror what a maintainer can act on *right now*, so contributors don't get lost in a "
+        'backlog. A closed PR is a soft "park this for later," not a rejection. Take your '
+        "time; everything below still works after the close.\n"
         "\n"
-        "1. **Context** — either a linked issue (e.g. `Fixes #1234`) **or** a clear problem "
-        "description with expected vs. actual behavior.\n"
-        "2. **End-to-end QA proof** — at least one of: a screenshot of the fix working, a short "
-        "screen recording, or the exact commands you ran paired with their **real output** "
-        "against the real system. Unit tests whose external dependencies (LLM provider, DB, "
-        "network) are mocked or stubbed do **not** count — output from a real integration run "
-        "is required.\n"
-        "\n"
-        "A linked issue alone is not enough: it covers context, not proof. See "
+        "**During the grace period:** just update the PR description with the missing pieces. "
+        "No need to ping me — I'll re-check on the next sweep and skip the auto-close if it "
+        "now passes. See "
         "[what counts as QA proof](https://docs.litellm.ai/blog/agent-shin-triage#the-rubric-for-pull-requests) "
-        "for the full rubric.\n"
+        "for the full rubric (a linked issue alone isn't enough — it covers context, not proof).\n"
         "\n"
-        "Then comment `@agent-shin reconsider` on this PR. If your update meets the bar, I'll "
-        "skip the auto-close and a maintainer will take another look.\n"
+        "**If the PR does get auto-closed in 24 hours, you still have easy recovery paths:**\n"
         "\n"
-        "If this PR is auto-closed in 24 hours, you'll still have options:\n"
-        "\n"
-        "- Comment `@agent-shin reconsider` to have me re-evaluate (and reopen the PR if it now meets the bar).\n"
-        "- Comment `@greptileai` to request a fresh Greptile review — that works **even after the PR is closed**.\n"
+        "- Comment `@agent-shin reconsider` after updating the description. I'll re-evaluate "
+        "and reopen the PR if it now passes.\n"
+        "- Comment `@greptileai` to request a fresh Greptile review — that **still works even "
+        "after the PR is closed**, and a stronger score is one of the signals that lifts the "
+        "PR back into the queue. So a low Greptile score isn't a blocker either.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
-        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
-        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_\n"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, ping a "
+        "maintainer — they'll override me.)_\n"
         "\n"
         f"{GRACE_COMMENT_MARKER}"
     )
@@ -761,36 +841,46 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
 def format_grace_warning_issue_comment(verdict: dict) -> str:
     """Issue analogue of `format_grace_warning_pr_comment`."""
     missing_lines = _format_missing(verdict.get("missing") or [])
+    present_block = _format_present_block(_format_present_for_issue(verdict))
     explanation = verdict.get("explanation") or ""
     return (
-        "👋 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this repository. "
+        "🚄 Hi, thanks for filing this! I'm **Agent Shin**, the automated triage bot for this "
+        "repository. "
         "[What's this and why am I getting it?](https://docs.litellm.ai/blog/agent-shin-triage)\n"
         "\n"
-        "Heads up — this issue doesn't yet have enough detail for a maintainer to act on. "
-        "Specifically, I couldn't find:\n"
+        "I read the issue against our reporting checklist. Here's how it lined up:\n"
+        "\n"
+        f"{present_block}"
+        "**What's still missing:**\n"
         "\n"
         f"{missing_lines}\n"
         "\n"
         f"> {explanation}\n"
         "\n"
-        "⏳ **You have 1 day to address this before this issue is auto-closed.** "
-        "During the grace period:\n"
+        "If the issue isn't updated in the next **1 day**, I'll auto-close it. That's **not** us "
+        "saying the bug isn't real or the request isn't useful — we want the open-issue list "
+        "to mirror what a maintainer can act on *right now*, so reports like yours don't get "
+        'buried in a backlog. A closed issue is a soft "park this for later," not a '
+        "rejection. Take your time; reopening is one comment away.\n"
         "\n"
-        "1. Edit the issue to add the missing pieces:\n"
-        "   - For **bug reports**: a runnable reproduction (code / curl / config), expected vs. actual behavior, "
-        "and a screenshot / traceback / log showing the bug.\n"
-        "   - For **feature requests**: a concrete description of what should change, plus a use case and example "
-        "(config / API call / UI flow).\n"
-        "2. Comment `@agent-shin reconsider` on this issue after updating it. If your update meets the bar, "
-        "I'll skip the auto-close and a maintainer will take another look.\n"
+        "**During the grace period:** just edit the issue description with the missing "
+        "pieces. No need to ping me — I'll re-check on the next sweep and skip the auto-close "
+        "if it now passes.\n"
         "\n"
-        "If this issue is auto-closed in 24 hours, you can still comment `@agent-shin reconsider` to have "
-        "me re-evaluate (and reopen the issue if it now meets the bar).\n"
+        "Missing pieces, depending on what this is:\n"
+        "\n"
+        "- For **bug reports**: a runnable reproduction (code / curl / config), expected vs. "
+        "actual behavior, and a screenshot / traceback / log showing the bug.\n"
+        "- For **feature requests**: a concrete description of what should change, plus a use "
+        "case and example (config / API call / UI flow).\n"
+        "\n"
+        "**If the issue does get auto-closed in 24 hours**, comment `@agent-shin reconsider` "
+        "and I'll re-evaluate. If it now meets the bar, I'll reopen the issue.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you — ping a maintainer.\n"
         "\n"
-        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, comment "
-        "`@agent-shin reconsider` or ping a maintainer — they'll override me.)_\n"
+        "_(I'm an LLM, so I'm not infallible. If you think I got this wrong, ping a "
+        "maintainer — they'll override me.)_\n"
         "\n"
         f"{GRACE_COMMENT_MARKER}"
     )
@@ -987,17 +1077,18 @@ def format_within_grace_comment(
     """Posted once while a failing PR is still inside its grace window."""
     window = "24 hours" if grace_days == 1 else f"{grace_days} days"
     return (
-        "👋 Hi, thanks for the PR! This is **Agent Shin**, the automated triage "
-        "bot. This PR doesn't meet the contribution bar yet:\n"
+        "🚄 Hi, thanks for the PR! This is **Agent Shin**, the automated triage "
+        "bot. This PR doesn't quite meet the contribution bar yet:\n"
         "\n"
         f"{_format_missing(missing)}\n"
         "\n"
         f"> {explanation}\n"
         "\n"
         f"You have ~{window} from when this PR was opened to add the missing "
-        "pieces. Once it passes I'll tag it `ready for review`; otherwise I'll "
-        "auto-close it (you can always re-open the conversation with "
-        "`@agent-shin reconsider`).\n"
+        "pieces — just update the description and I'll re-check on the next "
+        "sweep. Once it passes I'll tag it `ready for review`. If it does get "
+        "auto-closed, that's not a rejection — comment `@agent-shin reconsider` "
+        "and I'll re-evaluate and reopen if it now passes.\n"
         f"{WITHIN_GRACE_MARKER}"
     )
 
