@@ -1820,8 +1820,19 @@ async def _delete_cache_key_object(
 
 @log_db_metrics
 async def _get_team_db_check(
-    team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
+    team_id: str,
+    prisma_client: PrismaClient,
+    team_id_upsert: Optional[bool] = None,
+    upsert_team_alias: Optional[str] = None,
 ):
+    """Look up a team by id, optionally upserting if missing.
+
+    ``upsert_team_alias`` is only consulted when ``team_id_upsert`` triggers
+    the auto-create branch. Callers driven by an IdP (e.g. a JWT carrying
+    ``team_alias_jwt_field`` alongside ``team_id_jwt_field``) pass the
+    resolved alias here so the freshly created team has a human-readable
+    name in the UI / spend tooling instead of an empty alias.
+    """
     response = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
@@ -1829,7 +1840,10 @@ async def _get_team_db_check(
     if response is None and team_id_upsert:
         from litellm.proxy.management_endpoints.team_endpoints import new_team
 
-        new_team_data = NewTeamRequest(team_id=team_id)
+        new_team_kwargs: Dict[str, Any] = {"team_id": team_id}
+        if upsert_team_alias:
+            new_team_kwargs["team_alias"] = upsert_team_alias
+        new_team_data = NewTeamRequest(**new_team_kwargs)
 
         mock_request = Request(scope={"type": "http"})
         system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -1858,6 +1872,7 @@ async def _get_team_object_from_user_api_key_cache(
     proxy_logging_obj: Optional[ProxyLogging],
     key: str,
     team_id_upsert: Optional[bool] = None,
+    upsert_team_alias: Optional[str] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key = key
     should_check_db = _should_check_db(
@@ -1867,7 +1882,10 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(
-            team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert
+            team_id=team_id,
+            prisma_client=prisma_client,
+            team_id_upsert=team_id_upsert,
+            upsert_team_alias=upsert_team_alias,
         )
     else:
         response = None
@@ -1950,6 +1968,7 @@ async def get_team_object(
     check_cache_only: Optional[bool] = None,
     check_db_only: Optional[bool] = None,
     team_id_upsert: Optional[bool] = None,
+    upsert_team_alias: Optional[str] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -1997,6 +2016,7 @@ async def get_team_object(
             db_cache_expiry=db_cache_expiry,
             key=key,
             team_id_upsert=team_id_upsert,
+            upsert_team_alias=upsert_team_alias,
         )
     except Exception:
         raise HTTPException(
