@@ -365,3 +365,47 @@ async def test_list_team_does_not_narrow_for_org_admin(mock_request):
     assert sorted(m.user_id for m in team.members_with_roles) == ["alice", "bob"]
     assert team.metadata == {"secret": "value"}
     assert team.team_member_permissions == ["/key/generate"]
+
+
+@pytest.mark.asyncio
+async def test_list_team_does_not_narrow_for_proxy_admin_view_only(mock_request):
+    """LIT-2553: PROXY_ADMIN_VIEW_ONLY callers also keep full visibility
+    (they pass `_user_has_admin_view`, same as PROXY_ADMIN). Regression
+    guard from Greptile review on PR #29117."""
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        user_id="viewer-admin",
+    )
+
+    team_row = _build_team_row(caller="alice")
+    memberships = [_build_membership("alice"), _build_membership("bob")]
+    keys = [_build_key("alice"), _build_key("bob")]
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = MagicMock()
+        mock_prisma_client.db = mock_db
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[team_row])
+        mock_db.litellm_teammembership.find_many = AsyncMock(return_value=memberships)
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=keys)
+
+        result = await list_team(
+            http_request=mock_request,
+            user_id=None,
+            organization_id=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert len(result) == 1
+    team = result[0]
+    assert sorted(m.user_id for m in team.members_with_roles) == ["alice", "bob"]
+    assert sorted(team.admins) == ["alice", "bob"]
+    assert sorted(tm.user_id for tm in team.team_memberships) == ["alice", "bob"]
+    key_uids = [
+        (k.get("user_id") if isinstance(k, dict) else getattr(k, "user_id", None))
+        for k in team.keys
+    ]
+    assert sorted(key_uids) == ["alice", "bob"]
+    assert team.metadata == {"secret": "value"}
+    assert team.team_member_permissions == ["/key/generate"]
