@@ -539,6 +539,28 @@ class AmazonAnthropicClaudeMessagesConfig(
             )
         return {k: v for k, v in anthropic_messages_request.items() if k in allowed}
 
+    @staticmethod
+    def _clamp_adaptive_reasoning_effort_for_bedrock(
+        model: str, optional_params: Dict
+    ) -> None:
+        """Lower ``reasoning_effort`` to the Bedrock effort ceiling before validation.
+
+        The shared ``/v1/messages`` effort gate rejects tiers a model does not
+        natively support (e.g. ``xhigh`` on Opus 4.6). Bedrock's chat paths instead
+        clamp the tier to the model's ``bedrock_output_config_effort_ceiling`` so
+        Claude Code "goal mode" keeps working; mirror that here so the messages
+        path degrades ``xhigh`` -> ``max`` rather than 400-ing. Non-adaptive models
+        and models without a ceiling are left untouched.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+            return
+        effort = optional_params.get("reasoning_effort")
+        if not isinstance(effort, str):
+            return
+        clamped = {"effort": effort}
+        normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
+        optional_params["reasoning_effort"] = clamped["effort"]
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -547,6 +569,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        self._clamp_adaptive_reasoning_effort_for_bedrock(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+        )
         anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
