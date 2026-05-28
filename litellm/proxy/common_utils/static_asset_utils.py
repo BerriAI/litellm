@@ -8,6 +8,35 @@ from litellm._logging import verbose_proxy_logger
 LOCAL_IMAGE_HEADER_BYTES = 512
 
 
+def _is_svg_header(header: bytes) -> bool:
+    """Detect SVG by checking for an ``<svg`` start tag in the leading bytes.
+
+    SVGs may begin with an optional UTF-8 BOM, leading whitespace, an XML
+    declaration (``<?xml … ?>``), an SVG ``<!DOCTYPE svg …>``, or XML
+    comments before the root ``<svg>`` element. We accept those prologues but
+    only return True when an ``<svg`` token actually appears in the leading
+    window, so HTML (``<!DOCTYPE html`` / ``<html``) and unrelated XML payloads
+    are never misclassified as SVG.
+    """
+    if not header:
+        return False
+    # Tolerate the optional UTF-8 BOM.
+    if header.startswith(b"\xef\xbb\xbf"):
+        header = header[3:]
+    stripped = header.lstrip()
+    if not stripped:
+        return False
+    if stripped.startswith(b"<svg"):
+        return True
+    if (
+        stripped[:5].lower() == b"<?xml"
+        or stripped[:13].lower() == b"<!doctype svg"
+        or stripped[:4] == b"<!--"
+    ):
+        return b"<svg" in header.lower()
+    return False
+
+
 def detect_local_image_media_type(header: bytes) -> Optional[str]:
     """Return a browser image media type for supported local image signatures."""
     if header[0:8] == b"\x89PNG\r\n\x1a\n":
@@ -20,6 +49,8 @@ def detect_local_image_media_type(header: bytes) -> Optional[str]:
         return "image/webp"
     if header[0:4] in (b"\x00\x00\x01\x00", b"\x00\x00\x02\x00"):
         return "image/x-icon"
+    if _is_svg_header(header):
+        return "image/svg+xml"
     return None
 
 
