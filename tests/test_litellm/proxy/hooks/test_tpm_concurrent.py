@@ -1088,5 +1088,109 @@ async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
     )
 
 
+@pytest.mark.asyncio
+async def test_small_tpm_cap_injects_matching_max_tokens(rate_limiter):
+    """
+    When a small TPM cap forces the no-max_tokens floor below the baseline,
+    the hook must also write data['max_tokens'] = capped_floor so the actual
+    model output is bounded by the reservation. Without this cap, concurrent
+    no-max_tokens generations can spend past the TPM limit before post-call
+    reconciliation runs.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-small-tpm-cap"),
+        project_id="proj-small-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data.get("max_tokens") == 1000 // 4, (
+        f"Capped floor must be written to max_tokens to bound the actual "
+        f"model output; got {data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_large_tpm_cap_does_not_inject_max_tokens(rate_limiter):
+    """
+    A TPM cap that doesn't constrain the floor must not silently inject
+    max_tokens — that would change behaviour for tenants who already have
+    plenty of budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-large-tpm-cap"),
+        project_id="proj-large-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 100_000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert "max_tokens" not in data, (
+        f"Large TPM caps should leave max_tokens alone; got "
+        f"{data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_preserves_explicit_max_tokens(rate_limiter):
+    """
+    Explicit max_tokens from the caller must never be overwritten by the
+    bypass mitigation — the user already declared their budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-explicit-max-tokens"),
+        project_id="proj-explicit-max-tokens",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 500,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data["max_tokens"] == 500
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

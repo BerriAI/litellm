@@ -207,6 +207,11 @@ REDIS_NODE_HASHTAG_NAME = "all_keys"
 # *some* output budget; these define that fallback estimate.
 DEFAULT_MAX_TOKENS_ESTIMATE = 4096
 DEFAULT_CHARS_PER_TOKEN = 4
+# Fraction of the available output budget reserved as the upfront floor when
+# the request omits max_tokens. Applied to both DEFAULT_MAX_TOKENS_ESTIMATE
+# (baseline floor) and to the smallest configured TPM limit (capped floor for
+# small per-tenant TPM caps).
+_TPM_FLOOR_FRACTION = 4
 # Stash for the reserved-token count on the request data dict so success/
 # failure callbacks can reconcile against the upfront reservation.
 TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
@@ -340,6 +345,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Return the current time for rate limiting calculations."""
         return self._time_provider()
 
+    @staticmethod
+    def _no_max_tokens_output_floor(
+        min_configured_tpm_limit: Optional[int],
+    ) -> int:
+        """Output-budget floor used when the request omits max_tokens.
+
+        Capped at a fraction of the smallest configured TPM limit so a small
+        per-tenant cap can't be tripped by the floor alone. Returns the
+        baseline floor when no limit is provided.
+        """
+        baseline = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        if min_configured_tpm_limit is None:
+            return baseline
+        return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
+
     def _estimate_tokens_for_request(
         self,
         data: dict,
@@ -405,12 +425,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # the smallest TPM limit this request will be charged against,
                 # so a small per-tenant TPM cap can't be tripped by the floor
                 # alone.
-                output_floor = DEFAULT_MAX_TOKENS_ESTIMATE // 4
-                if min_configured_tpm_limit is not None:
-                    output_floor = min(
-                        output_floor,
-                        max(1, min_configured_tpm_limit // 4),
-                    )
+                output_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
+                )
                 max_tokens_estimate = max(estimated_input_tokens, output_floor)
 
         total_estimated = estimated_input_tokens + max_tokens_estimate
@@ -2023,13 +2040,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # even without Redis.
             # ----------------------------------------------------------------
             configured_tpm_limits = [
-                (d.get("rate_limit") or {}).get("tokens_per_unit")
+                int(v)
                 for d in descriptors
-                if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+                for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
+                if v is not None
             ]
             has_tpm_limits = bool(configured_tpm_limits)
 
             if has_tpm_limits:
+                min_configured_tpm_limit = min(configured_tpm_limits)
+
+                # When the configured TPM cap is small enough to constrain the
+                # no-max_tokens floor, also hard-cap the model output via
+                # data["max_tokens"] so concurrent unbounded generations can't
+                # spend past the limit before post-call reconciliation runs.
+                # Skip when the request already sets max_tokens or has no
+                # generation budget at all (embeddings).
+                capped_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
+                )
+                baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+                has_explicit_max_tokens = (
+                    data.get("max_tokens") is not None
+                    or data.get("max_completion_tokens") is not None
+                )
+                is_embedding = data.get("input") is not None
+                if (
+                    capped_floor < baseline_floor
+                    and not has_explicit_max_tokens
+                    and not is_embedding
+                ):
+                    data["max_tokens"] = capped_floor
+
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
                 # through the atomic counter and get backpressure when at
@@ -2041,7 +2083,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._estimate_tokens_for_request(
                         data=data,
                         model=requested_model,
-                        min_configured_tpm_limit=min(configured_tpm_limits),
+                        min_configured_tpm_limit=min_configured_tpm_limit,
                     ),
                     1,
                 )
