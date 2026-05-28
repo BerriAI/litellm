@@ -4237,14 +4237,15 @@ async def _authorize_and_filter_teams(
     prisma_client: Any,
     user_api_key_cache: Any,
     proxy_logging_obj: Any,
-) -> list:
+) -> Tuple[list, bool]:
     """
-    Authorize the /team/list request and return filtered teams.
+    Authorize the /team/list request and return filtered teams plus a flag
+    indicating whether the response must be narrowed for an internal user.
 
-    - Proxy admins: all teams (or filtered by user_id if provided).
-    - Org admins: teams from their orgs (scoped to user_id if provided).
-    - Own query (user_id matches caller): teams the user is a member of.
-    - Others: 401.
+    Returns a tuple ``(teams, should_narrow_for_internal_user)`` where
+    ``should_narrow_for_internal_user`` is ``True`` only when the caller is a
+    non-admin (not ``proxy_admin``/``proxy_admin_viewer``, not ``org_admin``
+    in any org) and is allowed to see their own teams. See LIT-2553.
     """
     is_proxy_admin = _user_has_admin_view(user_api_key_dict)
     allowed_org_ids: Optional[List[str]] = None
@@ -4256,7 +4257,6 @@ async def _authorize_and_filter_teams(
             and user_api_key_dict.user_id == user_id
         )
 
-        # Check if user is an org admin (even for own queries, so they see org teams)
         if user_api_key_dict.user_id is not None:
             caller_user = await get_user_object(
                 user_id=user_api_key_dict.user_id,
@@ -4285,23 +4285,25 @@ async def _authorize_and_filter_teams(
                 },
             )
 
+    # LIT-2553: narrow only when the caller is a non-admin / non-org-admin.
+    should_narrow_for_internal_user = (
+        not is_proxy_admin and allowed_org_ids is None
+    )
+
     if allowed_org_ids is not None:
-        # Org admin: query DB for teams in their orgs
         org_teams = await prisma_client.db.litellm_teamtable.find_many(
             where={"organization_id": {"in": allowed_org_ids}},
             include={"litellm_model_table": True},
         )
         if not user_id:
-            return list(org_teams)
-        # Filter org teams to only those where the target user is a member
+            return list(org_teams), should_narrow_for_internal_user
         return [
             team
             for team in org_teams
             if team.members_with_roles
             and any(m.get("user_id") == user_id for m in team.members_with_roles)
-        ]
+        ], should_narrow_for_internal_user
     elif user_id:
-        # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
         response = await prisma_client.db.litellm_teamtable.find_many(
             include={"litellm_model_table": True}
         )
@@ -4310,14 +4312,53 @@ async def _authorize_and_filter_teams(
             for team in response
             if team.members_with_roles
             and any(m.get("user_id") == user_id for m in team.members_with_roles)
-        ]
+        ], should_narrow_for_internal_user
     else:
-        # Proxy admin: all teams
         return list(
             await prisma_client.db.litellm_teamtable.find_many(
                 include={"litellm_model_table": True}
             )
-        )
+        ), should_narrow_for_internal_user
+
+
+def _narrow_team_list_response_for_internal_user(
+    response: "TeamListResponseObject",
+    caller_user_id: Optional[str],
+) -> "TeamListResponseObject":
+    """
+    Narrow a /team/list response item so a non-admin caller only sees data
+    scoped to their own membership. Tracking ticket: LIT-2553.
+    """
+    target_uid: str = (
+        caller_user_id if caller_user_id is not None else "\x00__never_matches__"
+    )
+
+    def _entry_uid(entry: Any) -> Optional[str]:
+        if isinstance(entry, dict):
+            return entry.get("user_id")
+        return getattr(entry, "user_id", None)
+
+    response.members_with_roles = [
+        m for m in (response.members_with_roles or []) if _entry_uid(m) == target_uid
+    ]
+    response.admins = [u for u in (response.admins or []) if u == target_uid]
+    response.members = [u for u in (response.members or []) if u == target_uid]
+    response.team_memberships = [
+        tm for tm in (response.team_memberships or []) if _entry_uid(tm) == target_uid
+    ]
+    response.keys = [
+        k for k in (response.keys or []) if _entry_uid(k) == target_uid
+    ]
+
+    response.team_member_permissions = None
+    response.metadata = None
+    response.router_settings = None
+    response.object_permission = None
+    response.object_permission_id = None
+    response.litellm_model_table = None
+    response.budget_limits = None
+
+    return response
 
 
 @router.get(
@@ -4354,7 +4395,7 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    filtered_response = await _authorize_and_filter_teams(
+    filtered_response, should_narrow_for_internal_user = await _authorize_and_filter_teams(
         user_api_key_dict=user_api_key_dict,
         user_id=user_id,
         prisma_client=prisma_client,
@@ -4407,6 +4448,14 @@ async def list_team(
                 for team in returned_responses
                 if team.organization_id == organization_id
             ]
+
+    # LIT-2553: narrow each response object for non-admin callers so they only
+    # see their own membership, their own keys, and no other-member info or
+    # admin-only team fields. Admin / org-admin callers are untouched.
+    if should_narrow_for_internal_user:
+        caller_user_id = user_api_key_dict.user_id
+        for resp in returned_responses:
+            _narrow_team_list_response_for_internal_user(resp, caller_user_id)
 
     return returned_responses
 
