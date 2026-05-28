@@ -43,11 +43,11 @@ def client_and_table(monkeypatch):
 
     captured = {"create": [], "update": []}
 
-    async def capture_create(*, data):
+    def capture_create(*, data):
         captured["create"].append(data)
         return data
 
-    async def capture_update(*, where, data):
+    def capture_update(*, where, data):
         captured["update"].append({"where": where, "data": data})
         return {**where, **data}
 
@@ -76,8 +76,7 @@ def _last_update_payload(captured):
     return captured["update"][-1]["data"]
 
 
-@pytest.mark.asyncio
-async def test_update_with_duration_only_recomputes_reset_at(client_and_table):
+def test_update_with_duration_only_recomputes_reset_at(client_and_table):
     """budget_duration changes \u2192 reset_at is recomputed forward."""
     client, captured = client_and_table
 
@@ -86,7 +85,6 @@ async def test_update_with_duration_only_recomputes_reset_at(client_and_table):
         "/budget/update",
         json={"budget_id": "b1", "budget_duration": "1d"},
     )
-    after = datetime.now(timezone.utc)
     assert resp.status_code == 200, resp.text
 
     data = _last_update_payload(captured)
@@ -105,8 +103,7 @@ async def test_update_with_duration_only_recomputes_reset_at(client_and_table):
     )
 
 
-@pytest.mark.asyncio
-async def test_update_with_explicit_reset_at_preserves_caller_value(client_and_table):
+def test_update_with_explicit_reset_at_preserves_caller_value(client_and_table):
     """Explicit budget_reset_at wins \u2014 we never silently overwrite it."""
     client, captured = client_and_table
 
@@ -132,8 +129,7 @@ async def test_update_with_explicit_reset_at_preserves_caller_value(client_and_t
     )
 
 
-@pytest.mark.asyncio
-async def test_update_without_budget_duration_does_not_touch_reset_at(client_and_table):
+def test_update_without_budget_duration_does_not_touch_reset_at(client_and_table):
     """Updates that omit budget_duration must not introduce budget_reset_at."""
     client, captured = client_and_table
 
@@ -151,8 +147,7 @@ async def test_update_without_budget_duration_does_not_touch_reset_at(client_and
     assert data["max_budget"] == 50.0
 
 
-@pytest.mark.asyncio
-async def test_update_with_budget_duration_explicit_none_does_not_recompute(client_and_table):
+def test_update_with_budget_duration_explicit_none_does_not_recompute(client_and_table):
     """Setting budget_duration=None (clearing it) must not recompute reset_at."""
     client, captured = client_and_table
 
