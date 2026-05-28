@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -521,44 +521,3 @@ def _batch_response_was_successful(batch_job_output_file: dict) -> bool:
     """
     _response: dict = batch_job_output_file.get("response", None) or {}
     return _response.get("status_code", None) == 200
-
-
-def sanitize_openai_batch_metadata(
-    metadata: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, str]]:
-    """
-    OpenAI's Batches API (and OpenAI-compatible providers like Azure) require
-    metadata values to be strings - ``Dict[str, str]``. The proxy pre-call
-    pipeline can inject non-string values (e.g. ``applied_policies`` as a
-    ``List[str]``), which causes upstream 400 errors:
-
-        Invalid type for 'metadata.<field>': expected a string, but got an
-        array instead. (code=invalid_type)
-
-    This helper normalizes a metadata dict so every value is a string. Non-
-    string scalars are JSON-stringified via ``safe_dumps``. Internal-only keys
-    such as ``standard_logging_guardrail_information`` and ``None`` values are
-    dropped (they are not part of the OpenAI contract). Returns ``None``
-    unchanged so callers can omit the field entirely.
-
-    Mirrors the existing Bedrock-side helper
-    ``BedrockBatchesConfig._get_openai_compatible_batch_metadata`` used when
-    materializing OpenAI-shaped batch responses.
-    """
-    if metadata is None:
-        return None
-    if not isinstance(metadata, dict):
-        return None
-
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-    sanitized: Dict[str, str] = {}
-    for key, value in metadata.items():
-        if key == "standard_logging_guardrail_information" or value is None:
-            continue
-        str_key = str(key)
-        if isinstance(value, str):
-            sanitized[str_key] = value
-        else:
-            sanitized[str_key] = safe_dumps(value)
-    return sanitized
