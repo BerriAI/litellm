@@ -284,3 +284,119 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
             guardrail_resp, dict
         ), f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
         assert "results" in guardrail_resp
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_defaults_to_end_of_stream_only():
+    """
+    Regression for LIT-3320 / "Post guardrail with OpenAI moderation is too slow".
+
+     should default to 
+    so it issues exactly one  call per streamed completion. Mid-stream
+    sampling produces no safety benefit for moderation (it cannot redact, only block)
+    and previously inflated post-guardrail latency by ~4x at sampling_rate=5.
+
+    Users can still set  in the guardrail
+    config to restore mid-stream sampling — verified below as well.
+    """
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+    from litellm.types.llms.openai import (
+        OpenAIModerationResponse,
+        OpenAIModerationResult,
+    )
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        # 1. Default — no kwargs about streaming
+        default_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        assert default_guardrail.streaming_end_of_stream_only is True, (
+            "Default streaming_end_of_stream_only must be True so OpenAI moderation "
+            "only runs once at end-of-stream (LIT-3320)."
+        )
+
+        # 2. Explicit opt-out still honored
+        opted_out = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+            streaming_end_of_stream_only=False,
+        )
+        assert opted_out.streaming_end_of_stream_only is False, (
+            "User opt-out via streaming_end_of_stream_only=False must be preserved."
+        )
+
+        # 3. End-to-end behavior: drive the real UnifiedLLMGuardrails streaming
+        #    hook over a 20-chunk stream, mock the /moderations call, and assert
+        #    it is invoked exactly once.
+        unified = UnifiedLLMGuardrails()
+
+        chunks_data = [
+            "The", " capital", " of", " France", " is", " Paris", ".",
+            " It", " is", " also", " the", " largest", " city", " in",
+            " the", " country", " and", " a", " global", " hub",
+        ]
+
+        async def real_stream():
+            for i, content in enumerate(chunks_data):
+                yield ModelResponseStream(
+                    id=f"chunk-{i}",
+                    model="gpt-4",
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content=content, role="assistant"),
+                            finish_reason="stop"
+                            if i == len(chunks_data) - 1
+                            else None,
+                        )
+                    ],
+                )
+
+        call_counter = {"n": 0}
+
+        async def fake_moderation(self, input_text):
+            call_counter["n"] += 1
+            return OpenAIModerationResponse(
+                id="mod",
+                model="omni-moderation-latest",
+                results=[
+                    OpenAIModerationResult(
+                        categories={},
+                        category_applied_input_types={},
+                        category_scores={},
+                        flagged=False,
+                    )
+                ],
+            )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": default_guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+            "model": "gpt-4",
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test", request_route="/chat/completions"
+        )
+
+        with patch.object(
+            OpenAIModerationGuardrail, "async_make_request", fake_moderation
+        ):
+            chunks_received = 0
+            async for _ in unified.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=real_stream(),
+                request_data=request_data,
+            ):
+                chunks_received += 1
+
+        assert chunks_received == len(chunks_data), (
+            f"Expected all {len(chunks_data)} chunks to be yielded, got {chunks_received}"
+        )
+        moderation_calls = call_counter["n"]
+        assert moderation_calls == 1, (
+            f"Expected exactly 1 /moderations call at end-of-stream with the new "
+            f"default; got {moderation_calls}. "
+            f"This is the LIT-3320 regression."
+        )
