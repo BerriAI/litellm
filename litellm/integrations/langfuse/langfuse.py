@@ -154,8 +154,15 @@ class LangFuseLogger:
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
         else:
-            http_client = _get_httpx_client()
-            self.langfuse_client = http_client.client
+            # Hold a strong reference to the cached HTTPHandler so it (and its
+            # underlying httpx.Client) survives even after the LLM-clients cache
+            # TTL evicts the wrapper. Without this, the HTTPHandler is eligible
+            # for GC after the 1h cache TTL; its __del__ closes the httpx.Client
+            # that the Langfuse SDK background flush thread is still using,
+            # surfacing as RuntimeError("Cannot send a request, as the client
+            # has been closed.") on subsequent traces. See LIT-3221.
+            self._http_handler = _get_httpx_client()
+            self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
         parameters = {
