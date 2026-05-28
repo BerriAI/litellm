@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 import asyncio
+import contextlib
 import json
 import os
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
 from fastapi import HTTPException
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
+from websockets.exceptions import ConnectionClosed
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -64,9 +66,23 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace(
             "https://", "wss://"
         )
-        self.dlp_entities: list[dict] = []
-        self._max_dlp_entities = 100
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _resolve_cato_user_email(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+        """Use proxy-authenticated identity only; request headers are spoofable."""
+        if user_api_key_dict.user_email:
+            return user_api_key_dict.user_email
+        if user_api_key_dict.end_user_id:
+            return str(user_api_key_dict.end_user_id)
+        return None
+
+    @staticmethod
+    async def _cancel_background_task(task: asyncio.Task) -> None:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def async_pre_call_hook(
         self,
@@ -77,7 +93,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
         return await self.call_cato_guardrail(
-            data, hook="pre_call", key_alias=user_api_key_dict.key_alias
+            data,
+            hook="pre_call",
+            key_alias=user_api_key_dict.key_alias,
+            user_email=self._resolve_cato_user_email(user_api_key_dict),
         )
 
     async def async_moderation_hook(
@@ -87,18 +106,20 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
-
-        await self.call_cato_guardrail(
-            data, hook="moderation", key_alias=user_api_key_dict.key_alias
+        return await self.call_cato_guardrail(
+            data,
+            hook="moderation",
+            key_alias=user_api_key_dict.key_alias,
+            user_email=self._resolve_cato_user_email(user_api_key_dict),
         )
-        return data
 
     async def call_cato_guardrail(
-        self, data: dict, hook: str, key_alias: Optional[str]
+        self,
+        data: dict,
+        hook: str,
+        key_alias: Optional[str],
+        user_email: Optional[str] = None,
     ) -> dict:
-        user_email = (
-            data.get("metadata", {}).get("headers", {}).get("x-cato-user-email")
-        )
         call_id = data.get("litellm_call_id")
         headers = self._build_cato_headers(
             hook=hook,
@@ -152,11 +173,13 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return data
 
     async def call_cato_guardrail_on_output(
-        self, request_data: dict, output: str, hook: str, key_alias: Optional[str]
+        self,
+        request_data: dict,
+        output: str,
+        hook: str,
+        key_alias: Optional[str],
+        user_email: Optional[str] = None,
     ) -> Optional[dict]:
-        user_email = (
-            request_data.get("metadata", {}).get("headers", {}).get("x-cato-user-email")
-        )
         call_id = request_data.get("litellm_call_id")
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
@@ -245,7 +268,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
         ):
             content = response.choices[0].message.content or ""
             cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
-                data, content, hook="output", key_alias=user_api_key_dict.key_alias
+                data,
+                content,
+                hook="output",
+                key_alias=user_api_key_dict.key_alias,
+                user_email=self._resolve_cato_user_email(user_api_key_dict),
             )
             if cato_output_guardrail_result and cato_output_guardrail_result.get(
                 "detection_message"
@@ -268,9 +295,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         response,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        user_email = (
-            request_data.get("metadata", {}).get("headers", {}).get("x-cato-user-email")
-        )
+        from litellm.proxy.proxy_server import StreamingCallbackError
+
+        user_email = self._resolve_cato_user_email(user_api_key_dict)
         call_id = request_data.get("litellm_call_id")
         async with connect(
             f"{self.ws_api_base}/fw/v1/analyze/stream",
@@ -284,22 +311,28 @@ class CatoNetworksGuardrail(CustomGuardrail):
             sender = asyncio.create_task(
                 self.forward_the_stream_to_cato(websocket, response)
             )
-            while True:
-                result = json.loads(await websocket.recv())
-                if verified_chunk := result.get("verified_chunk"):
-                    yield ModelResponseStream.model_validate(verified_chunk)
-                else:
-                    sender.cancel()
-                    if result.get("done"):
+            try:
+                while True:
+                    try:
+                        raw_message = await websocket.recv()
+                    except ConnectionClosed as exc:
+                        raise StreamingCallbackError(
+                            "Cato guardrail connection closed unexpectedly"
+                        ) from exc
+                    result = json.loads(raw_message)
+                    if verified_chunk := result.get("verified_chunk"):
+                        yield ModelResponseStream.model_validate(verified_chunk)
+                    else:
+                        if result.get("done"):
+                            return
+                        if blocking_message := result.get("blocking_message"):
+                            raise StreamingCallbackError(blocking_message)
+                        verbose_proxy_logger.error(
+                            f"Unknown message received from Cato: {result}"
+                        )
                         return
-                    if blocking_message := result.get("blocking_message"):
-                        from litellm.proxy.proxy_server import StreamingCallbackError
-
-                        raise StreamingCallbackError(blocking_message)
-                    verbose_proxy_logger.error(
-                        f"Unknown message received from Cato: {result}"
-                    )
-                    return
+            finally:
+                await self._cancel_background_task(sender)
 
     async def forward_the_stream_to_cato(
         self,

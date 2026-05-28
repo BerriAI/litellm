@@ -1,10 +1,12 @@
+import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
+from websockets.exceptions import ConnectionClosed
 
 from litellm import DualCache
 from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import (
@@ -511,11 +513,10 @@ async def test_anonymize_action_without_redacted_chat_returns_data_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_call_cato_guardrail_forwards_user_email_from_metadata():
+async def test_call_cato_guardrail_forwards_user_email_from_auth():
     guard = _make_guardrail()
     data = {
         "messages": [{"role": "user", "content": "hi"}],
-        "metadata": {"headers": {"x-cato-user-email": "alice@example.com"}},
         "litellm_call_id": "call-xyz",
     }
     response = _make_response(
@@ -525,12 +526,60 @@ async def test_call_cato_guardrail_forwards_user_email_from_metadata():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=response,
     ) as mock_post:
-        await guard.call_cato_guardrail(data, hook="pre_call", key_alias="alias-1")
+        await guard.async_pre_call_hook(
+            data=data,
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(
+                key_alias="alias-1", user_email="alice@example.com"
+            ),
+            call_type="completion",
+        )
     sent_headers = mock_post.call_args.kwargs["headers"]
     assert sent_headers["x-cato-user-email"] == "alice@example.com"
     assert sent_headers["x-cato-call-id"] == "call-xyz"
     assert sent_headers["x-cato-gateway-key-alias"] == "alias-1"
     assert sent_headers["x-cato-litellm-hook"] == "pre_call"
+
+
+@pytest.mark.asyncio
+async def test_call_cato_guardrail_ignores_spoofable_metadata_user_email():
+    guard = _make_guardrail()
+    data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"headers": {"x-cato-user-email": "victim@example.com"}},
+    }
+    response = _make_response(
+        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ) as mock_post:
+        await guard.async_pre_call_hook(
+            data=data,
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(user_email="trusted@example.com"),
+            call_type="completion",
+        )
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert sent_headers["x-cato-user-email"] == "trusted@example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_cato_user_email_prefers_user_email_over_end_user_id():
+    assert (
+        CatoNetworksGuardrail._resolve_cato_user_email(
+            UserAPIKeyAuth(user_email="user@example.com", end_user_id="end-1")
+        )
+        == "user@example.com"
+    )
+    assert (
+        CatoNetworksGuardrail._resolve_cato_user_email(
+            UserAPIKeyAuth(end_user_id="end-1")
+        )
+        == "end-1"
+    )
+    assert CatoNetworksGuardrail._resolve_cato_user_email(UserAPIKeyAuth()) is None
 
 
 # -----------------------------------------------------------------------------
@@ -670,3 +719,144 @@ def test_get_config_model_returns_pydantic_class():
     )
 
     assert CatoNetworksGuardrail.get_config_model() is CatoNetworksGuardrailConfigModel
+
+
+# -----------------------------------------------------------------------------
+# Streaming hook coverage
+# -----------------------------------------------------------------------------
+
+
+async def _mock_llm_stream():
+    yield {"choices": [{"delta": {"content": "hello"}}]}
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_yields_verified_chunks_and_cancels_sender():
+    guard = _make_guardrail()
+    verified_chunk = {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "gpt-4",
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    class MockWebSocket:
+        recv_calls = 0
+
+        async def recv(self):
+            MockWebSocket.recv_calls += 1
+            if MockWebSocket.recv_calls == 1:
+                return json.dumps({"verified_chunk": verified_chunk})
+            return json.dumps({"done": True})
+
+        async def send(self, _chunk):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=MockWebSocket(),
+    ):
+        chunks = [
+            chunk
+            async for chunk in guard.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(user_email="stream@example.com"),
+                response=_mock_llm_stream(),
+                request_data={"litellm_call_id": "stream-call"},
+            )
+        ]
+    assert len(chunks) == 1
+    assert chunks[0].choices[0].delta.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_raises_on_connection_closed():
+    guard = _make_guardrail()
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    class ClosedWebSocket:
+        async def recv(self):
+            raise ConnectionClosed(None, None)
+
+        async def send(self, _chunk):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=ClosedWebSocket(),
+    ):
+        with pytest.raises(
+            StreamingCallbackError, match="connection closed unexpectedly"
+        ):
+            async for _ in guard.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_mock_llm_stream(),
+                request_data={},
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_raises_on_blocking_message():
+    guard = _make_guardrail()
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    class BlockingWebSocket:
+        async def recv(self):
+            return json.dumps({"blocking_message": "blocked by policy"})
+
+        async def send(self, _chunk):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=BlockingWebSocket(),
+    ):
+        with pytest.raises(StreamingCallbackError, match="blocked by policy"):
+            async for _ in guard.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_mock_llm_stream(),
+                request_data={},
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_forward_the_stream_to_cato_serializes_chunks():
+    guard = _make_guardrail()
+    websocket = MagicMock()
+    websocket.send = AsyncMock()
+
+    async def response_iter():
+        yield {"role": "assistant"}
+        yield ModelResponse(
+            choices=[
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "done", "role": "assistant"},
+                }
+            ]
+        )
+
+    await guard.forward_the_stream_to_cato(websocket, response_iter())
+    assert websocket.send.await_count == 3
+    assert json.loads(websocket.send.await_args_list[-1].args[0]) == {"done": True}
