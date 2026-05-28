@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
@@ -159,6 +160,88 @@ class TestModelManagementAuthChecks:
         result = ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id="test_team",
             user_api_key_dict=self.team_admin_user,
+            team_obj=team_obj,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_cross_team_key_rejected(self):
+        """LIT-3211: a team-scoped API key cannot manage models for a different team,
+        even if the underlying user happens to be admin in that other team."""
+        # Key is scoped to team_A, but caller targets team_B.
+        key_scoped_to_team_A = UserAPIKeyAuth(
+            user_id="user_x",
+            team_id="team_A",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_B_obj = LiteLLM_TeamTable(
+            team_id="team_B",
+            team_alias="team_B",
+            members_with_roles=[Member(user_id="user_x", role="admin")],
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="team_B",
+                user_api_key_dict=key_scoped_to_team_A,
+                team_obj=team_B_obj,
+                premium_user=True,
+            )
+        assert exc_info.value.status_code == 403
+        err = str(exc_info.value.detail)
+        assert "team_A" in err
+        assert "team_B" in err
+        assert "Team-scoped keys can only" in err
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_same_team_key_allowed(self):
+        """LIT-3211: a team-scoped key acting on its own team_id is still allowed."""
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[
+                Member(user_id=self.team_admin_user.user_id, role="admin")
+            ],
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="test_team",
+            user_api_key_dict=self.team_admin_user,
+            team_obj=team_obj,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_proxy_admin_cross_team_allowed(self):
+        """LIT-3211: PROXY_ADMIN still bypasses the team boundary (intentional)."""
+        proxy_admin_scoped = UserAPIKeyAuth(
+            user_id="admin_user",
+            team_id="team_A",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="team_B",
+            user_api_key_dict=proxy_admin_scoped,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_unscoped_key_unchanged(self):
+        """LIT-3211: keys with no team_id still rely on the existing team-admin check."""
+        unscoped_key = UserAPIKeyAuth(
+            user_id="user_x",
+            team_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[Member(user_id="user_x", role="admin")],
+        )
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="test_team",
+            user_api_key_dict=unscoped_key,
             team_obj=team_obj,
             premium_user=True,
         )
@@ -1495,6 +1578,305 @@ class TestUpdateDBModelBlocked:
             updated_patch=updateDeployment(),
         )
         assert "blocked" not in result
+
+
+def _build_db_model_with_pricing():
+    """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
+    mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            input_cost_per_token=0.000001,
+            output_cost_per_token=0.000002,
+        ),
+        model_info=ModelInfo(id="dep-pricing-0"),
+    )
+
+
+class TestUpdateDBModelClearPricing:
+    """Sending an explicit `null` for a pricing field must remove it from both
+    `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
+    between the two by Deployment.__init__).
+
+    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
+    cannot be cleared via this path.
+    """
+
+    def test_clear_input_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+        # Other pricing untouched
+        assert params.get("output_cost_per_token") == 0.000002
+        assert info.get("output_cost_per_token") == 0.000002
+
+    def test_clear_output_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "output_cost_per_token" not in params
+        assert "output_cost_per_token" not in info
+
+    def test_non_null_pricing_update_still_works(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.000005)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000005
+
+    def test_omitted_pricing_field_is_preserved(self):
+        """PATCH semantics: fields not in the patch keep their existing value."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=0.000007)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000007
+
+    def test_null_on_non_pricing_field_does_not_clear(self):
+        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
+        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
+        by the null-clearing path so a team admin can't ungate a team-scoped model.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+            ),
+            model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
+        )
+
+        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
+        # or any other non-pricing field from the merged dict.
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(api_base=None)
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        # Pricing still present (not part of this patch)
+        assert "input_cost_per_token" in info
+        # team_id must survive
+        assert info.get("team_id") == "team-keep-me"
+
+    def test_clear_survives_model_info_passthrough_with_old_pricing(self):
+        """Realistic UI submit shape: the patch carries BOTH blobs. The
+        model_info portion still has the old pricing because the form
+        re-serializes the source blob. The litellm_params null must beat the
+        model_info merge — i.e. the clear runs after both merges, not between.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None),
+                # The UI passes the OLD model_info blob through unchanged.
+                model_info=ModelInfo(
+                    id="dep-pricing-0",
+                    input_cost_per_token=0.000001,  # stale value from the page state
+                ),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert (
+            "input_cost_per_token" not in info
+        ), "model_info passthrough must not resurrect the cleared override"
+
+    def test_clear_via_model_info_clears_both_blobs(self):
+        """The mirror works in the reverse direction too: nulling a pricing field
+        via the model_info patch should clear it from litellm_params as well."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-pricing-0", input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+
+    def test_clear_cache_read_cost_removes_from_both_blobs(self):
+        """cache_read_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-read overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_read_input_token_cost=0.0000005,
+            ),
+            model_info=ModelInfo(id="dep-cache-read-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+
+    def test_clear_cache_write_cost_removes_from_both_blobs(self):
+        """cache_creation_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-write overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-write-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_creation_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_creation_input_token_cost" not in params
+        assert "cache_creation_input_token_cost" not in info
+
+    def test_clear_cache_read_preserves_other_pricing(self):
+        """Clearing cache_read must not touch input/output cost overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+                output_cost_per_token=0.000002,
+                cache_read_input_token_cost=0.0000005,
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-mixed-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+        # Other pricing untouched in both blobs
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000002
+        assert params["cache_creation_input_token_cost"] == 0.000003
+        assert info["input_cost_per_token"] == 0.000001
+        assert info["output_cost_per_token"] == 0.000002
+        assert info["cache_creation_input_token_cost"] == 0.000003
 
 
 class TestGetModelInfoWithIdBlocked:
