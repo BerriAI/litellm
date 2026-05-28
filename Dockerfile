@@ -47,8 +47,12 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
-RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Build Admin UI before final sync (skip if pre-built UI exists from CI)
+RUN if [ ! -f litellm/proxy/_experimental/out/index.html ]; then \
+        sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh; \
+    else \
+        echo "Using pre-built Admin UI from CI"; \
+    fi
 
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
