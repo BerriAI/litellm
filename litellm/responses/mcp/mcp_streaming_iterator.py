@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+    _extract_request_tags_from_kwargs,
+)
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     MCPCallArgumentsDeltaEvent,
@@ -659,14 +662,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Execute the tools
             # LIT-3304: forward parent /responses request_tags so MCP
-            # sub-calls inherit them on SpendLogs / Tag Usage.
+            # sub-calls inherit them on SpendLogs / Tag Usage. Reuse the
+            # central helper so /responses streaming honors both `metadata`
+            # and `litellm_metadata` tag locations, matching the
+            # non-streaming and /chat/completions paths.
             _iter_request_tags = None
             try:
-                _params_meta = (self.original_request_params or {}).get("metadata")
-                if isinstance(_params_meta, dict):
-                    _tags = _params_meta.get("tags")
-                    if isinstance(_tags, list) and _tags:
-                        _iter_request_tags = list(_tags)
+                _iter_request_tags = _extract_request_tags_from_kwargs(
+                    self.original_request_params or {}
+                )
             except Exception:
                 _iter_request_tags = None
 
