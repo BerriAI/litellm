@@ -97,7 +97,6 @@ class TestResolveValidatedLocalImagePath:
         assert resolve_validated_local_image_path("") is None
 
 
-
 class TestSvgDetection:
     """Regression tests for LIT-2150: company logos are commonly SVG, and
     ``UI_LOGO_PATH`` pointing at an SVG used to silently fall back to the
@@ -160,7 +159,6 @@ class TestSvgDetection:
         assert result is None
 
 
-
 class TestSvgDetectionTightened:
     """Greptile P2 follow-ups for LIT-2150: an XML element whose name starts
     with ``svg`` (``<svgIcon>``) and HTML wrapped in an XML comment that
@@ -173,9 +171,9 @@ class TestSvgDetectionTightened:
             b'<svgIcon xmlns="http://example.com"></svgIcon>',
             b'<?xml version="1.0"?><svgIcon></svgIcon>',
             # XML comment prologue wrapping HTML that embeds an inline SVG.
-            b'<!-- attribution --><!DOCTYPE html><html><body><svg></svg></body></html>',
+            b"<!-- attribution --><!DOCTYPE html><html><body><svg></svg></body></html>",
             # XML comment prologue followed by HTML (no inline SVG).
-            b'<!-- attribution --><html><body></body></html>',
+            b"<!-- attribution --><html><body></body></html>",
             # ``<?xml ?>`` prologue introducing HTML must still be rejected.
             b'<?xml version="1.0"?><html><body><svg></svg></body></html>',
         ],
@@ -191,7 +189,7 @@ class TestSvgDetectionTightened:
             # Whitespace between <svg and attributes / >.
             b'<svg\n  xmlns="http://www.w3.org/2000/svg"\n></svg>',
             # Self-closing svg.
-            b'<svg/>',
+            b"<svg/>",
         ],
     )
     def test_still_accepts_valid_svg_after_tightening(self, body):
