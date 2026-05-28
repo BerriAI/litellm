@@ -3310,3 +3310,68 @@ async def test_lit3222_unmask_multi_choice_all_unmasked():
     assert "<PERSON_1>" not in c0, f"choice[0] not unmasked: {c0}"
     assert "<PERSON_1>" not in c1, f"choice[1] not unmasked: {c1}"
     assert "Alice" in c0 and "Alice" in c1
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_legacy_function_call_args_single_choice(monkeypatch):
+    """
+    LIT-3222 + Veria HIGH round 3: single-choice streaming chunks that
+    carry only `delta.function_call.arguments` (legacy non-tool_calls API)
+    must be masked too — previously they fell through the non-text branch
+    untouched.
+    """
+    from litellm.types.utils import Delta, StreamingChoices, FunctionCall
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    async def fake_check_pii(text, **_kwargs):
+        return text.replace("Jane Doe", "<PERSON>")
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    fc_chunk = ModelResponseStream(
+        id="chatcmpl-fc",
+        object="chat.completion.chunk",
+        created=1700000000,
+        model="gpt-test",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    function_call=FunctionCall(
+                        name="lookup",
+                        arguments='{"who":"Jane Doe"}',
+                    ),
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    async def upstream():
+        yield fc_chunk
+        yield _mrs_finish_chunk("function_call")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    fc_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and getattr(c.choices[0].delta, "function_call", None) is not None
+    ]
+    assert len(fc_chunks) >= 1
+    args_str = fc_chunks[0].choices[0].delta.function_call.arguments
+    assert "Jane Doe" not in args_str, f"PII leaked through function_call: {args_str}"
+    assert "<PERSON>" in args_str, f"masked token missing: {args_str}"
