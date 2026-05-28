@@ -1281,6 +1281,52 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return descriptors
 
+    def _key_has_model_specific_override(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+    ) -> bool:
+        """
+        Return True if the API key has its own model-specific rate-limit override
+        for requested_model.
+
+        A key override is recognised when requested_model is present as a key
+        in any of:
+
+        * user_api_key_dict.metadata[model_rpm_limit]
+        * user_api_key_dict.metadata[model_tpm_limit]
+        * user_api_key_dict.model_max_budget (with rpm_limit or
+          tpm_limit set in the per-model budget dict)
+
+        When this is True, the key-level override is treated as authoritative
+        for the requested model and the team-level model_rpm_limit /
+        model_tpm_limit value for the same model is intentionally skipped so
+        the team value cannot clamp below the key override (LIT-2792).
+        """
+        if not requested_model:
+            return False
+
+        key_metadata = user_api_key_dict.metadata or {}
+        key_model_rpm = key_metadata.get("model_rpm_limit") or {}
+        key_model_tpm = key_metadata.get("model_tpm_limit") or {}
+        if (
+            isinstance(key_model_rpm, dict) and requested_model in key_model_rpm
+        ) or (
+            isinstance(key_model_tpm, dict) and requested_model in key_model_tpm
+        ):
+            return True
+
+        key_model_max_budget = user_api_key_dict.model_max_budget or {}
+        if isinstance(key_model_max_budget, dict):
+            entry = key_model_max_budget.get(requested_model)
+            if isinstance(entry, dict) and (
+                entry.get("rpm_limit") is not None
+                or entry.get("tpm_limit") is not None
+            ):
+                return True
+
+        return False
+
     def _add_model_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1623,44 +1669,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        if (
-            get_team_model_rpm_limit(user_api_key_dict) is not None
-            or get_team_model_tpm_limit(user_api_key_dict) is not None
-        ):
-            _tpm_limit_for_team_model = (
-                get_team_model_tpm_limit(user_api_key_dict) or {}
-            )
-            _rpm_limit_for_team_model = (
-                get_team_model_rpm_limit(user_api_key_dict) or {}
-            )
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_team_model:
-                should_check_rate_limit = True
-            elif requested_model in _rpm_limit_for_team_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit = None
-                model_specific_rpm_limit = None
-                if requested_model in _tpm_limit_for_team_model:
-                    model_specific_tpm_limit = _tpm_limit_for_team_model[
-                        requested_model
-                    ]
-                if requested_model in _rpm_limit_for_team_model:
-                    model_specific_rpm_limit = _rpm_limit_for_team_model[
-                        requested_model
-                    ]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        # NB: the team-level model_per_team descriptor is appended later by
+        # _add_team_model_rate_limit_descriptor_from_metadata, which is called
+        # from async_pre_call_hook after this function returns. It also honours
+        # the LIT-2792 key-override precedence rule via
+        # _key_has_model_specific_override.
 
         # Agent-level and session-level rate limits
         resolved_agent_id = self._get_resolved_agent_id(user_api_key_dict, data)
@@ -1744,7 +1757,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         requested_model: Optional[str],
         descriptors: List[RateLimitDescriptor],
     ) -> None:
-        """Add team model rate limit descriptor from team_metadata if applicable."""
+        """Add team model rate limit descriptor from team_metadata if applicable.
+
+        LIT-2792: when the API key has its own model-specific override for the
+        requested model (see _key_has_model_specific_override), the team-level
+        model_rpm_limit / model_tpm_limit value for the same model is
+        intentionally skipped so the team value cannot clamp below the key
+        override.
+        """
+        if self._key_has_model_specific_override(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+        ):
+            return
+
         if (
             get_model_rate_limit_from_metadata(
                 user_api_key_dict, "team_metadata", "model_rpm_limit"
