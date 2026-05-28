@@ -1200,7 +1200,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             choices=[new_choice],
         )
 
-
     @staticmethod
     def _split_unmask_safe_prefix(
         buffer: str, pii_tokens: Dict[str, str], max_token_len: int
@@ -1307,7 +1306,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     # Flush any pending masked text first, then pass the event through.
                     async for flushed in _flush():
                         yield flushed
-                    if not saw_unknown_event_warning_emitted and had_any_modelresponsestream:
+                    if (
+                        not saw_unknown_event_warning_emitted
+                        and had_any_modelresponsestream
+                    ):
                         verbose_proxy_logger.warning(
                             "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
                             "Switching to transparent passthrough for non-ModelResponseStream events; "
@@ -1326,9 +1328,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     content = delta.content
                     buffer += content
                     stripped = buffer.rstrip()
-                    should_flush = (
-                        len(buffer) >= self._STREAM_MASK_FLUSH_CHARS
-                        or (stripped and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS)
+                    should_flush = len(buffer) >= self._STREAM_MASK_FLUSH_CHARS or (
+                        stripped and stripped[-1] in self._STREAM_MASK_SENTENCE_ENDERS
                     )
                     if should_flush:
                         async for flushed in _flush():
@@ -1353,9 +1354,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error masking streaming PII output: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
             # Best-effort: emit whatever text we accumulated (unmasked) so the client
             # at least gets the partial response instead of nothing.
             if buffer and template is not None:
@@ -1445,9 +1444,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield flushed
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in PII streaming processing: {str(e)}"
-            )
+            verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             # Best-effort: emit pending buffer unmasked so the client still gets data.
             if buffer and template is not None:
                 try:
