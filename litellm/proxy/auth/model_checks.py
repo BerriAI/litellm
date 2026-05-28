@@ -403,7 +403,7 @@ def get_all_fallbacks(
     try:
         # Use existing function to get fallback model group
         fallback_model_group, _ = get_fallback_model_group(
-            fallbacks=fallbacks_config, model_group=model
+            fallbacks=list(fallbacks_config), model_group=model
         )
 
         if fallback_model_group is None:
