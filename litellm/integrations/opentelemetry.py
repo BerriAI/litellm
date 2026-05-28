@@ -592,6 +592,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=key,
                         value=value,
                     )
+                self._set_team_attributes_on_span(
+                    span=service_logging_span,
+                    team_id=event_metadata.get("user_api_key_team_id"),
+                    team_alias=event_metadata.get("user_api_key_team_alias"),
+                )
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -655,6 +660,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=key,
                         value=value,
                     )
+                self._set_team_attributes_on_span(
+                    span=service_logging_span,
+                    team_id=event_metadata.get("user_api_key_team_id"),
+                    team_alias=event_metadata.get("user_api_key_team_alias"),
+                )
 
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
@@ -916,54 +926,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
-    @staticmethod
-    def _make_hashable(value):
-        """Recursively convert a scope element into a hashable form.
-
-        Used by :meth:`_emit_once` because callers pass scope elements that
-        come from user-supplied config (e.g. ``guardrail_mode`` which users
-        can configure as a list like ``["pre_call", "post_call"]``). Without
-        this normalization the resulting ``dedupe_key`` tuple contains an
-        unhashable element and ``spans_logged.get(...)`` raises ``TypeError:
-        unhashable type: 'list'`` (returning HTTP 500).
-
-        Conversions:
-          - ``list``                -> ``tuple``     (preserves order, recursive)
-          - ``tuple``               -> ``tuple``     (recursive, in case any
-                                                      element is itself
-                                                      unhashable e.g. a list)
-          - ``set`` / ``frozenset`` -> ``frozenset`` (order-independent)
-          - ``dict``                -> ``tuple`` of ``(key, value)`` pairs
-                                      sorted by ``repr(key)`` so equivalent
-                                      dicts hash the same and dicts with
-                                      mixed-type / non-comparable keys still
-                                      normalize without crashing.
-          - everything else         -> returned unchanged (already-hashable
-                                      scalars: ``None``, ``str``, ``int``,
-                                      ``float``, ``bool``, ...).
-
-        The conversion is structural and equality-preserving for the common
-        case (``list`` and its equivalent ``tuple`` collapse to the same
-        dedupe slot), so existing dedupe semantics are unchanged.
-        """
-        if isinstance(value, list):
-            return tuple(OpenTelemetry._make_hashable(v) for v in value)
-        if isinstance(value, tuple):
-            # Tuples are already hashable iff every element is hashable; a
-            # tuple containing e.g. a list would still fail. Normalize each
-            # element so a tuple-of-lists is also safe.
-            return tuple(OpenTelemetry._make_hashable(v) for v in value)
-        if isinstance(value, (set, frozenset)):
-            return frozenset(OpenTelemetry._make_hashable(v) for v in value)
-        if isinstance(value, dict):
-            return tuple(
-                sorted(
-                    ((k, OpenTelemetry._make_hashable(v)) for k, v in value.items()),
-                    key=lambda kv: repr(kv[0]),
-                )
-            )
-        return value
-
     def _emit_once(self, kwargs: dict, *scope: object) -> bool:
         """Return True the first time this handler is asked to emit a span
         for the given (handler, scope) on this kwargs; False on repeats.
@@ -1006,11 +968,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             spans_logged = {}
             _otel_internal["spans_logged"] = spans_logged
 
-        dedupe_key = (
-            self.__class__.__name__,
-            id(self),
-            *(self._make_hashable(s) for s in scope),
-        )
+        dedupe_key = (self.__class__.__name__, id(self), *scope)
         if spans_logged.get(dedupe_key) is True:
             return False
 
@@ -3103,6 +3061,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=value,
                     )
 
+            self._set_team_attributes_on_span(
+                span=management_endpoint_span,
+                team_id=logging_payload.team_id,
+                team_alias=logging_payload.team_alias,
+            )
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
 
@@ -3157,6 +3120,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span=management_endpoint_span,
                 key="exception",
                 value=str(_exception),
+            )
+            self._set_team_attributes_on_span(
+                span=management_endpoint_span,
+                team_id=logging_payload.team_id,
+                team_alias=logging_payload.team_alias,
             )
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
