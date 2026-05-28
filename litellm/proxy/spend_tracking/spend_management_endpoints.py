@@ -1310,8 +1310,6 @@ async def get_global_spend_report(
         )
 
 
-
-
 # ============================================================================
 # LIT-2401: Caller-scoped /spend/report variants.
 #
@@ -1497,11 +1495,7 @@ async def _resolve_org_scope(
                 "error": "No organization_id resolved for caller; pass ?organization_id=..."
             },
         )
-    if (
-        not is_admin
-        and is_org_admin
-        and target_org != user_api_key_dict.org_id
-    ):
+    if not is_admin and is_org_admin and target_org != user_api_key_dict.org_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
