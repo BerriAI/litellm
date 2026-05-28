@@ -1896,7 +1896,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
-    model_max_budget: Optional[dict] = None  # team-level per-model max budgets (LIT-2768)
+    model_max_budget: Optional[dict] = (
+        None  # team-level per-model max budgets (LIT-2768)
+    )
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
