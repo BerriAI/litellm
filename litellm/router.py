@@ -3719,7 +3719,7 @@ class Router:
             messages,
             optional_params,
         ) = litellm_logging_object.get_chat_completion_prompt(
-            model=litellm_model,
+            model=cast(str, litellm_model),
             messages=messages,
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,

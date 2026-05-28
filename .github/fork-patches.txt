@@ -1,0 +1,11 @@
+# Fork-maintained patches for rayward-external/litellm
+#
+# Upstream (BerriAI/litellm) uses ARG-variable FROM in Dockerfiles.
+# Our fork pins literal image@sha256 digests so Scorecard/OpenSSF does not flag them.
+# Upstream syncs may revert to ARG-only FROM; daily-patch-verify detects and re-pins.
+#
+# Format: <file> | <grep_pattern_that_proves_patch_is_present> | <human_description>
+
+backend/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
+gateway/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
+migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
