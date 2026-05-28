@@ -309,16 +309,23 @@ async def _get_stale_mcp_server_ids(
     Queries the DB when *prisma_client* is available (authoritative); falls back
     to the in-memory registry for config-only deployments without a DB.
     """
-    if prisma_client is not None:
-        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers
-
-        existing = await get_mcp_servers(prisma_client, list(requested_servers))
-        existing_ids = {s.server_id for s in existing}
-        return requested_servers - existing_ids
-
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+
+    if prisma_client is not None:
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers
+
+        existing_in_db = await get_mcp_servers(prisma_client, list(requested_servers))
+        existing_ids = {s.server_id for s in existing_in_db}
+        # Config-file servers live only in the in-memory registry and are never
+        # written to the DB — include them so they are not misclassified as stale.
+        existing_ids |= {
+            sid
+            for sid in requested_servers
+            if global_mcp_server_manager.get_mcp_server_by_id(sid) is not None
+        }
+        return requested_servers - existing_ids
 
     return {
         sid
