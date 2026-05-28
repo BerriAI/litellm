@@ -281,12 +281,13 @@ class CatoNetworksGuardrail(CustomGuardrail):
                         status_code=400,
                         detail=cato_output_guardrail_result.get("detection_message"),
                     )
-                if cato_output_guardrail_result and cato_output_guardrail_result.get(
-                    "redacted_output"
-                ):
-                    choice.message.content = cato_output_guardrail_result.get(
-                        "redacted_output"
-                    )
+                redacted_output = (
+                    cato_output_guardrail_result.get("redacted_output")
+                    if cato_output_guardrail_result
+                    else None
+                )
+                if redacted_output is not None:
+                    choice.message.content = redacted_output
         return response
 
     async def async_post_call_streaming_iterator_hook(
