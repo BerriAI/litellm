@@ -76,6 +76,33 @@ def _safe_set(span: Any, key: str, value: Any) -> None:
         verbose_logger.debug("mcp_otel_span: failed to set %s: %s", key, e)
 
 
+def _sanitize_resource_uri(uri: str) -> str:
+    """Return uri with credentials, query, and fragment stripped.
+
+    Resource URIs come straight from the MCP client (caller-provided) and may
+    legitimately embed presigned tokens, user:password@ credentials, or
+    short-lived fragments. Spans get persisted to a tracing backend (often
+    long-lived; sometimes shared with vendors), so we MUST NOT export raw
+    URLs. We keep scheme + sanitised netloc (host[:port], no userinfo) +
+    path so the trace is still useful for debugging which resource was
+    accessed, while dropping every component that could carry a secret.
+    """
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(uri)
+        host = parts.hostname or ""
+        port = parts.port
+        netloc = host if port is None else f"{host}:{port}"
+        if not parts.scheme and not netloc:
+            # Opaque / non-URL value (e.g. plain identifier) - return as-is.
+            return uri
+        # urlunsplit needs all 5 components; drop query + fragment.
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    except Exception:  # pragma: no cover - defensive
+        return uri
+
+
 def _http_status_code(exc: BaseException) -> Optional[int]:
     """Return a 3-digit HTTP status code if ``exc`` is an HTTPException-like.
 
@@ -169,7 +196,9 @@ async def mcp_otel_span(  # noqa: PLR0915
         if prompt_name:
             _safe_set(span, "mcp.prompt.name", prompt_name)
         if resource_uri is not None:
-            _safe_set(span, "mcp.resource.uri", str(resource_uri))
+            _safe_set(
+                span, "mcp.resource.uri", _sanitize_resource_uri(str(resource_uri))
+            )
         if arguments is not None:
             try:
                 _safe_set(span, "mcp.arguments_count", len(arguments))
