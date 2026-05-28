@@ -5697,7 +5697,8 @@ async def test_get_and_validate_existing_key_resolves_via_key_alias():
         where={"token": alias}
     )
     mock_prisma_client.db.litellm_verificationtoken.find_first.assert_called_once_with(
-        where={"key_alias": alias}
+        where={"key_alias": alias},
+        order={"created_at": "asc"},
     )
 
 
