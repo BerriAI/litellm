@@ -311,3 +311,74 @@ def test_upsert_deployment_routing_no_longer_round_robins_stale_entry():
         seen.add(dep["litellm_params"]["model"])
 
     assert seen == {"openai/gpt-4o"}, seen
+
+
+def test_evict_stale_pattern_entries_direct_call():
+    """Directly invoke :meth:`Router._evict_stale_pattern_entries` to pin its
+    contract independent of `upsert_deployment`. Two stale entries seeded into
+    `pattern_router` + `team_pattern_routers["team-A"]` for the same
+    `model_info.id` must both be evicted after one helper call."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                "model_info": {"id": "stub"},
+            }
+        ]
+    )
+
+    # Seed stale dicts that would normally be planted by an earlier upsert.
+    router.pattern_router.add_pattern(
+        "openai/*",
+        {
+            "model_info": {"id": "stale-dep"},
+            "litellm_params": {"model": "openai/openai/*"},
+        },
+    )
+    router.team_pattern_routers["team-A"] = PatternMatchRouter()
+    router.team_pattern_routers["team-A"].add_pattern(
+        "openai/*",
+        {
+            "model_info": {"id": "stale-dep", "team_id": "team-A"},
+            "litellm_params": {"model": "openai/openai/*"},
+        },
+    )
+
+    prev = Deployment(
+        model_name="model-internal",
+        litellm_params=LiteLLM_Params(model="openai/openai/*", api_key="fake"),
+        model_info={"id": "stale-dep", "team_id": "team-A"},
+    )
+
+    router._evict_stale_pattern_entries(
+        deployment_id="stale-dep",
+        previous_deployment=prev,
+    )
+
+    assert _pattern_entries(router.pattern_router) == []
+    assert _pattern_entries(router.team_pattern_routers["team-A"]) == []
+
+
+def test_evict_stale_pattern_entries_no_id_is_safe_noop():
+    """Calling :meth:`Router._evict_stale_pattern_entries` with a blank
+    deployment_id (e.g. legacy deployment without a populated model_info.id)
+    must not touch any pattern bucket."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {"id": "keep-me"},
+            }
+        ]
+    )
+    snapshot_before = list(_pattern_entries(router.pattern_router))
+
+    router._evict_stale_pattern_entries(
+        deployment_id="",
+        previous_deployment=None,
+    )
+
+    assert _pattern_entries(router.pattern_router) == snapshot_before
+
