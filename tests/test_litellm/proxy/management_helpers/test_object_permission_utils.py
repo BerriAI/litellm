@@ -152,16 +152,31 @@ def _make_team_obj(
     return mock_team
 
 
-def _make_mock_mcp_manager(*existing_ids: str):
+def _make_mock_mcp_server(
+    server_id: str,
+    alias=None,
+    server_name=None,
+    name=None,
+):
+    mock_server = MagicMock()
+    mock_server.server_id = server_id
+    mock_server.alias = alias
+    mock_server.server_name = server_name
+    mock_server.name = name or server_name or alias or server_id
+    return mock_server
+
+
+def _make_mock_mcp_manager(*existing_ids: str, servers=None):
     """
-    Return a mock global_mcp_server_manager whose get_mcp_server_by_id returns a
-    non-None value for every ID in *existing_ids and None for everything else.
+    Return a mock global_mcp_server_manager with a registry containing every
+    explicit server plus simple server objects for every ID in *existing_ids.
     """
     mock_mgr = MagicMock()
-    existing = set(existing_ids)
-    mock_mgr.get_mcp_server_by_id.side_effect = lambda sid: (
-        MagicMock() if sid in existing else None
-    )
+    server_objs = {server.server_id: server for server in (servers or [])}
+    for server_id in existing_ids:
+        server_objs.setdefault(server_id, _make_mock_mcp_server(server_id))
+    mock_mgr.get_registry.return_value = server_objs
+    mock_mgr.get_mcp_server_by_id.side_effect = lambda sid: server_objs.get(sid)
     return mock_mgr
 
 
@@ -419,10 +434,152 @@ async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
     mcp_servers) must also be silently stripped rather than raising a 403.
     """
     team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
+    object_permission = {"mcp_tool_permissions": {"s1-stale": ["tool1"]}}
     await validate_key_mcp_servers_against_team(
-        object_permission={"mcp_tool_permissions": {"s1-stale": ["tool1"]}},
+        object_permission=object_permission,
         team_obj=team_obj,
     )  # Must not raise
+    assert object_permission["mcp_tool_permissions"] == {}
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
+    mock_access_groups, mock_allow_all
+):
+    team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
+    object_permission = {"mcp_servers": ["s1-stale", "s2-stale"]}
+    await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=team_obj,
+    )
+    assert object_permission["mcp_servers"] == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(
+        "team-server",
+        servers=[
+            _make_mock_mcp_server(
+                "private-server-id",
+                alias="private-alias",
+                server_name="Private Server",
+            )
+        ],
+    ),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_mcp_server_alias_outside_team_scope_raises(
+    mock_access_groups, mock_allow_all
+):
+    team_obj = _make_team_obj(mcp_servers=["team-server"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["private-alias"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "private-server-id" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(
+        servers=[
+            _make_mock_mcp_server(
+                "allowed-server-id",
+                alias="allowed-alias",
+                server_name="Allowed Server",
+            )
+        ],
+    ),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_mcp_server_alias_is_normalized_before_save(
+    mock_access_groups, mock_allow_all
+):
+    team_obj = _make_team_obj(mcp_servers=["allowed-server-id"])
+    object_permission = {
+        "mcp_servers": ["allowed-alias"],
+        "mcp_tool_permissions": {"Allowed Server": ["tool1"], "stale-id": ["tool2"]},
+    }
+
+    await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=team_obj,
+    )
+
+    assert object_permission["mcp_servers"] == ["allowed-server-id"]
+    assert object_permission["mcp_tool_permissions"] == {"allowed-server-id": ["tool1"]}
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_registry_empty(
+    mock_access_groups, mock_allow_all
+):
+    mock_prisma_client = MagicMock()
+    mock_db_server = MagicMock()
+    mock_db_server.server_id = "private-server-id"
+    mock_db_server.alias = "private-alias"
+    mock_db_server.server_name = "Private Server"
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[mock_db_server]
+    )
+
+    team_obj = _make_team_obj(mcp_servers=[])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["private-alias"]},
+            team_obj=team_obj,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "private-server-id" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
