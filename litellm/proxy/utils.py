@@ -34,6 +34,7 @@ from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
+    LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     SpendLogsMetadata,
@@ -6056,8 +6057,6 @@ async def get_available_models_for_user(
     # modal. PROXY_ADMIN sees every model the proxy serves, so bypass the
     # key/team filter and defer to `proxy_model_list` (wildcard / access
     # group expansion still applies downstream).
-    from litellm.proxy._types import LitellmUserRoles
-
     if (
         user_api_key_dict is not None
         and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -6068,7 +6067,9 @@ async def get_available_models_for_user(
             team_models=[],
             proxy_model_list=proxy_model_list,
             user_model=user_model,
-            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            infer_model_from_keys=general_settings.get(
+                "infer_model_from_keys", False
+            ),
             return_wildcard_routes=return_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
