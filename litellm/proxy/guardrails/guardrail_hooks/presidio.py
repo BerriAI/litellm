@@ -1230,6 +1230,61 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 break
         return max(0, candidate)
 
+    async def _emit_masked_tool_call_args(
+        self,
+        template: "ModelResponseStream",
+        tool_arg_buffer: "Dict[Tuple[int, int], str]",
+        mask_fn,
+    ):
+        """Emit a synthetic tool-call chunk with masked arguments for each
+        (choice_index, tool_call_index) entry in ``tool_arg_buffer`` and
+        clear the buffer.
+
+        We send one chunk per tool call so the client reassembles each set of
+        arguments correctly. The legacy ``function_call`` slot
+        (``tool_call_index == -1``) is emitted on ``delta.function_call``.
+
+        ``mask_fn`` may be sync or async — we await coroutine results when
+        the unmask path passes a plain ``lambda``.
+        """
+        import inspect
+
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        for (choice_idx, tc_idx), args in list(tool_arg_buffer.items()):
+            if not args:
+                continue
+            result = mask_fn(args)
+            if inspect.isawaitable(result):
+                masked = await result
+            else:
+                masked = result
+            if tc_idx == -1:
+                delta = Delta(function_call=Function(arguments=masked))
+            else:
+                delta = Delta(
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            index=tc_idx,
+                            function=Function(arguments=masked),
+                        )
+                    ]
+                )
+            yield ModelResponseStream(
+                id=template.id,
+                object="chat.completion.chunk",
+                created=template.created,
+                model=template.model,
+                choices=[StreamingChoices(index=choice_idx, delta=delta)],
+            )
+            tool_arg_buffer[(choice_idx, tc_idx)] = ""
+
     @staticmethod
     def _find_safe_flush_boundary(text: str, max_window: int) -> int:
         """Return the index (exclusive) of a safe place to cut ``text`` for flushing.
@@ -1293,10 +1348,44 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             delta.content = ""
         return buf
 
+    @staticmethod
+    def _accumulate_tool_call_arg_fragments(
+        delta: Any,
+        tool_arg_buffer: Dict[Tuple[int, int], str],
+        choice_index: int,
+    ) -> None:
+        """Strip in-flight ``function.arguments`` fragments from ``delta`` and
+        accumulate them in ``tool_arg_buffer`` so they can be masked / unmasked
+        as a single coherent string at end-of-stream.
+
+        Other fields on the tool-call delta (``id``, ``type``, ``function.name``)
+        are left intact so the client still sees the OpenAI-shaped tool-call
+        lifecycle (call start, name, argument fragments redacted, end).
+        """
+        tool_calls = getattr(delta, "tool_calls", None) or []
+        for tc in tool_calls:
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            args = getattr(fn, "arguments", None)
+            if args:
+                key = (choice_index, getattr(tc, "index", 0) or 0)
+                tool_arg_buffer[key] = tool_arg_buffer.get(key, "") + args
+                fn.arguments = ""
+        legacy = getattr(delta, "function_call", None)
+        if legacy is not None:
+            args = getattr(legacy, "arguments", None)
+            if args:
+                # Use a synthetic tool index of -1 for the legacy function_call slot.
+                key = (choice_index, -1)
+                tool_arg_buffer[key] = tool_arg_buffer.get(key, "") + args
+                legacy.arguments = ""
+
     async def _mask_process_model_chunk(
         self,
         chunk: "ModelResponseStream",
         text_buffer: Dict[int, str],
+        tool_arg_buffer: Dict[Tuple[int, int], str],
         flush_chars: int,
         tail_overlap: int,
         mask_fn,
@@ -1304,7 +1393,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """Apply incremental Presidio masking to every choice on ``chunk``.
 
         Mutates the chunk's ``delta.content`` in place and updates the per-
-        choice ``text_buffer`` rolling window.
+        choice ``text_buffer`` rolling window. Also strips streamed
+        ``tool_calls`` / ``function_call`` argument fragments into
+        ``tool_arg_buffer`` so they are masked once the call completes (see
+        ``_emit_masked_tool_calls``).
         """
         for choice in chunk.choices or []:
             delta = getattr(choice, "delta", None)
@@ -1322,6 +1414,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 flush_chars,
                 tail_overlap,
                 mask_fn,
+            )
+            self._accumulate_tool_call_arg_fragments(
+                delta, tool_arg_buffer, choice.index
             )
 
     def _flush_buffer_unmasked(
@@ -1379,6 +1474,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         tail_overlap = self._PRESIDIO_TAIL_OVERLAP
 
         text_buffer: Dict[int, str] = {}
+        # (choice_index, tool_call_index) → accumulated arguments fragment.
+        # tool_call_index == -1 is reserved for the legacy ``function_call`` slot.
+        tool_arg_buffer: Dict[Tuple[int, int], str] = {}
         template: Optional[ModelResponseStream] = None
         saw_model_response = False
         saw_unknown_event = False
@@ -1433,7 +1531,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 saw_model_response = True
                 template = chunk
                 await self._mask_process_model_chunk(
-                    chunk, text_buffer, flush_chars, tail_overlap, _mask
+                    chunk,
+                    text_buffer,
+                    tool_arg_buffer,
+                    flush_chars,
+                    tail_overlap,
+                    _mask,
                 )
                 yield chunk
 
@@ -1442,6 +1545,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if remaining:
                         masked = await _mask(remaining)
                         yield self._build_text_only_chunk(template, idx, masked)
+                async for tc_chunk in self._emit_masked_tool_call_args(
+                    template, tool_arg_buffer, _mask
+                ):
+                    yield tc_chunk
 
             if saw_unknown_event:
                 verbose_proxy_logger.warning(
@@ -1494,6 +1601,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         max_token_len = max((len(t) for t in pii_tokens.keys()), default=0)
 
         text_buffer: Dict[int, str] = {}
+        tool_arg_buffer: Dict[Tuple[int, int], str] = {}
         template: Optional[ModelResponseStream] = None
 
         try:
@@ -1541,6 +1649,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             self._unmask_pii_text(safe, pii_tokens) if safe else ""
                         )
                         text_buffer[choice.index] = buf[safe_len:]
+                    self._accumulate_tool_call_arg_fragments(
+                        delta, tool_arg_buffer, choice.index
+                    )
 
                 yield chunk
 
@@ -1552,6 +1663,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             idx,
                             self._unmask_pii_text(remaining, pii_tokens),
                         )
+                async for tc_chunk in self._emit_masked_tool_call_args(
+                    template,
+                    tool_arg_buffer,
+                    lambda t: self._unmask_pii_text(t, pii_tokens),
+                ):
+                    yield tc_chunk
 
         except Exception as e:  # noqa: BLE001
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
