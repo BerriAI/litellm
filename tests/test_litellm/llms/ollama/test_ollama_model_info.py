@@ -1,6 +1,5 @@
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +22,7 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_mod
 
 import httpx
+import litellm
 
 from litellm.llms.ollama.common_utils import OllamaModelInfo
 
@@ -104,6 +104,47 @@ class TestOllamaModelInfo:
         assert call_headers and call_headers[0] == {
             "Authorization": "Bearer test_api_key"
         }
+
+    def test_get_models_does_not_leak_server_key_to_provided_api_base(
+        self, monkeypatch
+    ):
+        """Model discovery should not send server-side keys to caller-supplied bases."""
+        call_headers = []
+
+        def mock_get(url, headers):
+            call_headers.append(headers)
+            return DummyResponse({"models": []}, status_code=200)
+
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+        monkeypatch.setattr(litellm, "openai_key", "global-openai-key")
+        monkeypatch.setattr(httpx, "get", mock_get)
+
+        info = OllamaModelInfo()
+        models = info.get_models(api_base="https://attacker.example")
+
+        assert models == []
+        assert call_headers[0] == {}
+
+    def test_get_models_uses_explicit_api_key_for_provided_api_base(self, monkeypatch):
+        """Model discovery should send an explicitly supplied key to the provided base."""
+        call_headers = []
+
+        def mock_get(url, headers):
+            call_headers.append(headers)
+            return DummyResponse({"models": []}, status_code=200)
+
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        monkeypatch.setattr(httpx, "get", mock_get)
+
+        info = OllamaModelInfo()
+        models = info.get_models(
+            api_base="https://ollama.example",
+            api_key="explicit-api-key",
+        )
+
+        assert models == []
+        assert call_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
     def test_get_models_from_list_response(self, monkeypatch):
         """
@@ -201,18 +242,94 @@ class TestOllamaGetModelInfo:
         from litellm.llms.ollama.completion.transformation import OllamaConfig
 
         captured_urls = []
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            captured_headers.append(headers)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.setenv("OLLAMA_API_BASE", "http://env-server:11434")
+        monkeypatch.setenv("OLLAMA_API_KEY", "env-api-key")
+
+        config = OllamaConfig()
+        config.get_model_info("llama3")
+
+        assert captured_urls[0] == "http://env-server:11434/api/show"
+        assert captured_headers[0] == {"Authorization": "Bearer env-api-key"}
+
+    def test_get_model_info_uses_explicit_api_key_for_provided_api_base(
+        self, monkeypatch
+    ):
+        """When api_key is explicit, model info should send it to the provided api_base."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_headers.append(headers)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        config.get_model_info(
+            "llama3",
+            api_base="http://my-remote-server:11434",
+            api_key="explicit-api-key",
+        )
+
+        assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
+
+    def test_litellm_get_model_info_does_not_leak_server_key_to_provided_api_base(
+        self, monkeypatch
+    ):
+        """Global model info should not send server-side keys to caller-supplied bases."""
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_headers.append(headers)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+        monkeypatch.setattr(litellm, "openai_key", "global-openai-key")
+        try:
+            model_info = litellm.get_model_info(
+                "ollama/unknown-model",
+                api_base="https://attacker.example",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["max_input_tokens"] == 32768
+        assert captured_headers[0] == {}
+
+    def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
+        """When completion passes the final generate URL, model info should use the server base."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
 
         def mock_post(url, json, headers=None):
             captured_urls.append(url)
             return DummyResponse({"template": "", "model_info": {}}, status_code=200)
 
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
-        monkeypatch.setenv("OLLAMA_API_BASE", "http://env-server:11434")
 
         config = OllamaConfig()
-        config.get_model_info("llama3")
+        config.get_model_info("llama3", api_base="http://localhost:11434/api/generate")
 
-        assert captured_urls[0] == "http://env-server:11434/api/show"
+        assert captured_urls[0] == "http://localhost:11434/api/show"
 
     def test_get_model_info_graceful_fallback_on_connection_error(self, monkeypatch):
         """When the Ollama server is unreachable, should return defaults instead of raising."""
@@ -251,6 +368,51 @@ class TestOllamaGetModelInfo:
 
         config.get_model_info("ollama_chat/llama3", api_base="http://localhost:11434")
         assert captured_json[1]["name"] == "llama3"
+
+    def test_litellm_get_model_info_uses_provider_hook_for_unknown_model(
+        self, monkeypatch
+    ):
+        """Unmapped Ollama models should use the provider-level dynamic hook."""
+        captured_json = []
+
+        def mock_post(url, json, headers=None):
+            captured_json.append(json)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        try:
+            model_info = litellm.get_model_info(
+                "ollama/unknown-model", api_base="http://localhost:11434"
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["max_input_tokens"] == 32768
+        assert model_info["supports_function_calling"] is True
+        assert captured_json[0]["name"] == "unknown-model"
+
+    def test_litellm_get_model_info_keeps_static_map_for_known_model(self, monkeypatch):
+        """Mapped Ollama models should keep using the static model map."""
+
+        def mock_post(url, json, headers=None):
+            raise AssertionError("Static Ollama model should not query /api/show")
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        try:
+            model_info = litellm.get_model_info("ollama/llama2")
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["key"] == "ollama/llama2"
+        assert model_info["litellm_provider"] == "ollama"
 
 
 class TestOllamaAuthHeaders:
