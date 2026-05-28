@@ -426,8 +426,28 @@ def test_mcp_span_5xx_http_exception_still_marks_error(exporter):
             "s3://bucket-x/key/with/slashes",
             [],
         ),
+        # IPv6 netloc with an explicit port must keep brackets intact - otherwise
+        # the recorded "host:port" string is ambiguous (e.g. ::1:8080).
+        (
+            "http://[::1]:8080/path",
+            "http://[::1]:8080/path",
+            [],
+        ),
+        # IPv6 with userinfo: strip credentials but keep brackets.
+        (
+            "https://user:pwd@[2001:db8::1]:443/x?token=t",
+            "https://[2001:db8::1]:443/x",
+            ["user", "pwd", "token"],
+        ),
     ],
-    ids=["userinfo_query_frag", "presigned_query", "file_uri", "s3_uri"],
+    ids=[
+        "userinfo_query_frag",
+        "presigned_query",
+        "file_uri",
+        "s3_uri",
+        "ipv6_port",
+        "ipv6_userinfo",
+    ],
 )
 def test_mcp_span_resource_uri_is_sanitised(
     exporter, raw, expected_substring, forbidden_substrings
