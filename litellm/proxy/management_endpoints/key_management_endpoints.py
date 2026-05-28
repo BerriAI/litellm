@@ -2596,7 +2596,14 @@ async def update_key_fn(  # noqa: PLR0915
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        # Scrub the resolved verification-token hash from the response. The
+        # row returned by `update_data` includes the raw DB `token` column;
+        # callers that authenticated by `key_alias` rather than the raw
+        # token must not be able to learn the hashed-token identifier of a
+        # key they don't already hold. The bulk path
+        # (`_process_single_key_update`) already strips this field.
+        scrubbed = {k: v for k, v in response["data"].items() if k != "token"}
+        return {"key": key, **scrubbed}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception(
