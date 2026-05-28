@@ -1422,22 +1422,6 @@ class ProxyBaseLLMRequestProcessing:
                         verbose_proxy_logger.exception(
                             "Error in orphaned streaming async logging: %s", e
                         )
-                    try:
-                        from litellm.litellm_core_utils.thread_pool_executor import (
-                            executor as _exc,
-                        )
-
-                        _exc.submit(
-                            logging_obj.success_handler,
-                            response,
-                            cache_hit=None,
-                            start_time=None,
-                            end_time=None,
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.exception(
-                            "Error in orphaned streaming sync logging: %s", e
-                        )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.

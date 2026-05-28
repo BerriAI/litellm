@@ -1623,41 +1623,24 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
         )
 
-    def _is_final_streaming_success_emission(self) -> bool:
+    def _is_assembled_stream_success(self, result=None) -> bool:
+        """True when exporting an assembled streaming response (not a per-chunk call)."""
         if self.stream is not True:
             return False
+        if result is not None:
+            return True
         return (
             "async_complete_streaming_response" in self.model_call_details
             or self.model_call_details.get("complete_streaming_response") is not None
         )
 
-    def _is_streaming_final_success_dispatch_context(self, result=None) -> bool:
-        if self.stream is not True:
+    def _skip_repeat_final_stream_dispatch(self, result=None) -> bool:
+        """True if this final-stream dispatch should be dropped (already handled)."""
+        if not self._is_assembled_stream_success(result):
             return False
-        if self._is_final_streaming_success_emission():
+        if self.model_call_details.get("has_dispatched_final_stream_success"):
             return True
-        # Assembled response passed to dispatch before model_call_details is updated.
-        return result is not None
-
-    def _should_skip_duplicate_final_stream_success_log(self) -> bool:
-        """Skip repeat final-stream exports (per-chunk logging disables has_logged_*)."""
-        if not self._is_final_streaming_success_emission():
-            return False
-        if self.model_call_details.get("has_logged_async_success_final") is True:
-            return True
-        self.model_call_details["has_logged_async_success_final"] = True
-        return False
-
-    def _should_skip_duplicate_final_stream_dispatch(self, result=None) -> bool:
-        """Skip a second ``dispatch_success_handlers`` for the same final stream."""
-        if not self._is_streaming_final_success_dispatch_context(result):
-            return False
-        if (
-            self.model_call_details.get("has_dispatched_final_stream_success_handlers")
-            is True
-        ):
-            return True
-        self.model_call_details["has_dispatched_final_stream_success_handlers"] = True
+        self.model_call_details["has_dispatched_final_stream_success"] = True
         return False
 
     async def dispatch_success_handlers(
@@ -1672,7 +1655,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Route success logging to async and/or sync handlers for this request."""
         from litellm.litellm_core_utils.thread_pool_executor import executor
 
-        if self._should_skip_duplicate_final_stream_dispatch(result):
+        if self._skip_repeat_final_stream_dispatch(result):
             return
 
         litellm_params = self.model_call_details.get("litellm_params", {}) or {}
@@ -2585,10 +2568,8 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
-        if self._should_skip_duplicate_final_stream_success_log():
-            return
         if (
-            not self._is_final_streaming_success_emission()
+            not self._is_assembled_stream_success(result)
             and not self.should_run_logging(event_type="async_success")
         ):  # prevent double logging (non-streaming)
             return
