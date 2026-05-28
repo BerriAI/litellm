@@ -459,3 +459,70 @@ def test_delete_deployment_non_wildcard_does_not_touch_pattern_router():
     assert router.pattern_router.patterns == {}
     assert router.model_list == []
 
+
+def test_evict_stale_pattern_entries_cleans_all_team_buckets():
+    """Veria follow-up — when stale entries for the same deployment id exist
+    in multiple team-pattern-router buckets (e.g. legacy pollution from
+    pre-fix upserts that moved the deployment across teams), one call to
+    `_evict_stale_pattern_entries` must clean every bucket, not just the
+    prior team's bucket.
+
+    Without the unconditional sweep, the deployment could keep receiving
+    traffic on a team it no longer belongs to (and to which it can be
+    deleted from cleanly), and Veria flagged the original scoped-cleanup as
+    Medium risk.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "stub",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                "model_info": {"id": "stub-keep"},
+            }
+        ]
+    )
+
+    # Seed three team buckets with stale entries for the same deployment id.
+    for tid in ("team-A", "team-B", "team-C"):
+        router.team_pattern_routers[tid] = PatternMatchRouter()
+        router.team_pattern_routers[tid].add_pattern(
+            "openai/*",
+            {
+                "model_info": {"id": "shared-stale", "team_id": tid},
+                "litellm_params": {"model": "openai/openai/*"},
+            },
+        )
+    # And one unrelated entry that MUST be preserved.
+    router.team_pattern_routers["team-A"].add_pattern(
+        "anthropic/*",
+        {
+            "model_info": {"id": "unrelated", "team_id": "team-A"},
+            "litellm_params": {"model": "anthropic/*"},
+        },
+    )
+
+    prev = Deployment(
+        model_name="model-internal",
+        litellm_params=LiteLLM_Params(model="openai/openai/*", api_key="fake"),
+        # Even though we only pass a hint for team-A, all three buckets
+        # must be cleaned.
+        model_info={"id": "shared-stale", "team_id": "team-A"},
+    )
+
+    router._evict_stale_pattern_entries(
+        deployment_id="shared-stale", previous_deployment=prev
+    )
+
+    for tid in ("team-A", "team-B", "team-C"):
+        bucket = router.team_pattern_routers.get(tid)
+        if bucket is None:
+            continue
+        remaining = [e["model_info"]["id"] for e in _pattern_entries(bucket)]
+        assert "shared-stale" not in remaining, (tid, remaining)
+
+    # Unrelated entry must survive.
+    bucket_a_remaining = [
+        e["model_info"]["id"] for e in _pattern_entries(router.team_pattern_routers["team-A"])
+    ]
+    assert "unrelated" in bucket_a_remaining
+
