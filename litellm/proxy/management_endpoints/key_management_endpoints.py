@@ -1958,10 +1958,8 @@ async def _get_and_validate_existing_key(
         # by its alias without exposing the underlying token. Mirrors the
         # alias-based affordance already provided by /key/delete via
         # `key_aliases`.
-        existing_key_row = (
-            await prisma_client.db.litellm_verificationtoken.find_first(
-                where={"key_alias": token}
-            )
+        existing_key_row = await prisma_client.db.litellm_verificationtoken.find_first(
+            where={"key_alias": token}
         )
 
     if existing_key_row is None:
