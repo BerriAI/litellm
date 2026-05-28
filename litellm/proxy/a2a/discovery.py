@@ -119,7 +119,12 @@ async def fetch_well_known_card(
             # redirect hop. Even though the discovery endpoint is admin-only,
             # we don't want a compromised admin key to be able to probe
             # internal infrastructure through this fetcher.
-            response = await async_safe_get(client, url, headers=headers)
+            # Pass ``headers or {}`` because ``async_safe_get`` (in the
+            # URL-validation path) uses ``kwargs.pop("headers", {})`` which
+            # returns ``None`` when the key is present-but-None, then crashes
+            # on ``{**None, "Host": ...}``. Default the kwarg to an empty
+            # dict so production (``user_url_validation=True``) doesn't 500.
+            response = await async_safe_get(client, url, headers=headers or {})
         except SSRFError as exc:
             last_error = f"{url}: {exc!s}"
             verbose_proxy_logger.debug(

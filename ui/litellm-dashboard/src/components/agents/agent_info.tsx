@@ -131,6 +131,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     const fieldsToSet: Record<string, any> = {
       name: selected_card.name,
       description: selected_card.description,
+      url: selection.upstream_url,
       streaming: Boolean(selected_card.capabilities?.streaming),
       skills,
       iconUrl: selected_card.iconUrl,
