@@ -2053,6 +2053,12 @@ async def _run_centralized_common_checks(  # noqa: PLR0915
         llm_router=llm_router,
     )
 
+    # Key metadata.tags must be on request_data before _tag_max_budget_check.
+    LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+        request_data=request_data,
+        user_api_key_dict=user_api_key_auth_obj,
+    )
+
     # Merge x-litellm-tags into request_data BEFORE common_checks runs.
     # _tag_max_budget_check inside common_checks only inspects request_data;
     # without this pre-merge, header-supplied tags bypass tag-budget
