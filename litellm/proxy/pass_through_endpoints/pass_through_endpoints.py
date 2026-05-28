@@ -971,7 +971,7 @@ async def pass_through_request(  # noqa: PLR0915
         )
         stream = (
             HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-                parsed_body=_parsed_body,
+                parsed_body=_parsed_body or {},
                 stream=stream,
             )
         )
@@ -1198,7 +1198,7 @@ async def pass_through_request(  # noqa: PLR0915
                 end_time=end_time,
                 logging_obj=logging_obj,
                 cache_hit=False,
-                request_body=_parsed_body,
+                request_body=_parsed_body or {},
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
