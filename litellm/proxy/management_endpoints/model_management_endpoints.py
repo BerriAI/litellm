@@ -941,8 +941,7 @@ async def delete_team_model_alias(
         # Rows missing a `team` relation are skipped under scoping because we
         # have no way to attribute them.
         if team_id is not None and (
-            team_model_alias.team is None
-            or team_model_alias.team.team_id != team_id
+            team_model_alias.team is None or team_model_alias.team.team_id != team_id
         ):
             continue
 

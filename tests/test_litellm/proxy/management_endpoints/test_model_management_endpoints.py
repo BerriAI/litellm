@@ -1363,7 +1363,6 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
-
 class TestDeleteTeamBYOKGhostFix_LIT2120:
     """
     LIT-2120 regression: deleting a team-scoped BYOK model used to leave a ghost
@@ -1719,6 +1718,7 @@ class TestDeleteTeamBYOKGhostFix_LIT2120:
         updated_models = team_update_calls[0]["data"]["models"]
         assert public_name not in updated_models
         assert "untouched" in updated_models
+
 
 class TestGetTeamDeployments:
     """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
