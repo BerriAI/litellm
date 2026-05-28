@@ -3185,3 +3185,280 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         assert where["api_key"] == "hashed::sk-raw-admin-token"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+# ---------- LIT-3301: team-scoped key spend-logs scoping ----------
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_team_scoped_admin_key_is_not_admin():
+    """A PROXY_ADMIN key that also carries a team_id is a team-scoped key
+    and must NOT be treated as admin-view (LIT-3301)."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+    assert spend_management_endpoints._is_team_scoped_key(auth) is True
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_personal_admin_key_is_admin():
+    """A PROXY_ADMIN personal (non-team) key is still admin-view."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+    )
+    assert spend_management_endpoints._is_admin_view_safe(auth) is True
+    assert spend_management_endpoints._is_team_scoped_key(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_team_key_date_range_forces_team_filter(
+    client, monkeypatch
+):
+    """Legacy /spend/logs date-range path must force team_id filter for a
+    team-scoped admin-created key (LIT-3301)."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["team_id"] == "team-A"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_team_key_non_date_range_forces_team_filter(
+    client, monkeypatch
+):
+    """Legacy /spend/logs non-date-range path must force team_id filter for a
+    team-scoped admin-created key (LIT-3301)."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={"api_key": "sk-leaked-key"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["team_id"] == "team-A"
+        # api_key filter still applied alongside team scoping
+        assert where["api_key"] == "hashed::sk-leaked-key"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_personal_admin_key_no_team_filter(
+    client, monkeypatch
+):
+    """A personal (non-team) PROXY_ADMIN key must still see global logs."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert "team_id" not in where
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_key_forces_team_filter(client, monkeypatch):
+    """/spend/logs/ui must force team_id=key.team_id for a team-scoped
+    PROXY_ADMIN-created key, even if no team_id was provided in the query (LIT-3301)."""
+    start_date, end_date = _default_date_range()
+
+    captured = {}
+
+    def filter_fn(where):
+        captured["where"] = dict(where)
+        return []
+
+    mock_client = make_ui_spend_logs_mock_prisma(
+        mock_spend_logs=[], filter_fn=filter_fn
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert captured.get("where", {}).get("team_id") == "team-A"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_key_rejects_cross_team_query(client, monkeypatch):
+    """A team-scoped key requesting team_id != its own must 403 (LIT-3301)."""
+    start_date, end_date = _default_date_range()
+
+    mock_client = make_ui_spend_logs_mock_prisma(
+        mock_spend_logs=[], filter_fn=lambda w: []
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "team_id": "team-B",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_key_same_team_allowed(client, monkeypatch):
+    """A team-scoped key requesting team_id == its own is allowed (LIT-3301)."""
+    start_date, end_date = _default_date_range()
+
+    captured = {}
+
+    def filter_fn(where):
+        captured["where"] = dict(where)
+        return []
+
+    mock_client = make_ui_spend_logs_mock_prisma(
+        mock_spend_logs=[], filter_fn=filter_fn
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "team_id": "team-A",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert captured.get("where", {}).get("team_id") == "team-A"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_team_key_same_team_allowed():
+    """A team-scoped key viewing a spend-log row from its OWN team passes."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+
+    row = MagicMock()
+    row.team_id = "team-A"
+    row.user = "some_other_user"
+
+    class _DB:
+        litellm_spendlogs = MagicMock()
+    _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
+
+    class _Client:
+        db = _DB
+
+    # Should not raise
+    await spend_management_endpoints._assert_user_can_view_request_id(
+        prisma_client=_Client(),
+        user_api_key_dict=auth,
+        request_id="r1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_team_key_other_team_denied():
+    """A team-scoped key viewing a spend-log row from a DIFFERENT team is 403."""
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_1",
+        team_id="team-A",
+    )
+
+    row = MagicMock()
+    row.team_id = "team-B"
+    row.user = "admin_user_1"  # even matching user_id must not leak
+
+    class _DB:
+        litellm_spendlogs = MagicMock()
+    _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
+
+    class _Client:
+        db = _DB
+
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            prisma_client=_Client(),
+            user_api_key_dict=auth,
+            request_id="r1",
+        )
+    assert exc_info.value.status_code == 403
