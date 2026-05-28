@@ -2675,6 +2675,16 @@ async def team_member_delete(
         data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
     )
 
+    # Emit team-members gauge delta (-1) immediately after the authoritative
+    # team-table update, BEFORE any secondary cleanups (user table / team
+    # membership rows / keys) so the gauge stays consistent with the team-
+    # table state even if a downstream cleanup raises.
+    _emit_team_members_metric_delta(
+        team_id=existing_team_row.team_id,
+        team_alias=existing_team_row.team_alias,
+        delta=-1,
+    )
+
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row
     key_val = {}
@@ -2745,16 +2755,6 @@ async def team_member_delete(
                 "team_id": data.team_id,
             }
         )
-
-    # Emit team-members gauge delta (-1) for the removed member. The membership
-    # was verified to exist via ``is_member_in_team`` above, so this is always a
-    # real net deletion.
-    _emit_team_members_metric_delta(
-        team_id=existing_team_row.team_id,
-        team_alias=existing_team_row.team_alias,
-        delta=-1,
-    )
-
     return existing_team_row
 
 
