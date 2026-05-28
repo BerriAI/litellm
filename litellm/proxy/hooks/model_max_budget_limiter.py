@@ -140,7 +140,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
-
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -335,14 +334,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             "user_api_key_team_id", None
         )
         if (
-            user_api_key_model_max_budget is None
-            or len(user_api_key_model_max_budget) == 0
-        ) and (
-            user_api_key_end_user_model_max_budget is None
-            or len(user_api_key_end_user_model_max_budget) == 0
-        ) and (
-            user_api_key_team_model_max_budget is None
-            or len(user_api_key_team_model_max_budget) == 0
+            (
+                user_api_key_model_max_budget is None
+                or len(user_api_key_model_max_budget) == 0
+            )
+            and (
+                user_api_key_end_user_model_max_budget is None
+                or len(user_api_key_end_user_model_max_budget) == 0
+            )
+            and (
+                user_api_key_team_model_max_budget is None
+                or len(user_api_key_team_model_max_budget) == 0
+            )
         ):
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget, user_api_key_end_user_model_max_budget, and user_api_key_team_model_max_budget are None or empty."
@@ -427,7 +430,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             if key_budget_config is not None and key_budget_config.budget_duration:
                 team_spend_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{user_api_key_team_id}:{model}:{key_budget_config.budget_duration}"
-                team_start_time_key = f"team_model_budget_start_time:{user_api_key_team_id}"
+                team_start_time_key = (
+                    f"team_model_budget_start_time:{user_api_key_team_id}"
+                )
                 await self._increment_spend_for_key(
                     budget_config=key_budget_config,
                     spend_key=team_spend_key,
