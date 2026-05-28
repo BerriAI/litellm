@@ -40,9 +40,10 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn==23.0.0",
     "uvicorn==0.33.0",
-    "granian==2.5.7",
+    "granian==2.7.4",
     "uvloop==0.21.0; sys_platform != 'win32'",
-    "fastapi==0.124.4",
+    "fastapi==0.136.3",
+    "starlette>=1.0.1",
     "backoff==2.2.1",
     "pyyaml==6.0.3",
     "rq==2.7.0",
@@ -85,7 +86,7 @@ utils = [
 ]
 caching = ["diskcache==5.6.3"]
 semantic-router = [
-    "semantic-router==0.1.12; python_version < '3.14'",
+    "semantic-router==0.1.15; python_version < '3.14'",
     "aurelio-sdk==0.0.19; python_version < '3.14'",
 ]
 mlflow = ["mlflow==3.11.1"]
@@ -188,7 +189,7 @@ ci = [
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
     "pytest-retry==1.7.0",
-    "pyarrow==22.0.0",
+    "pyarrow==23.0.1",
     "langchain==1.2.10",
     "lunary==1.4.36; python_version == '3.10'",
     "lunary==1.4.37; python_version >= '3.11'",
