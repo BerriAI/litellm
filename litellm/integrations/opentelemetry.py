@@ -1233,7 +1233,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     @staticmethod
     def _get_provider_request_id_from_hidden_params(
-        hidden_params: Optional[Dict[str, Any]],
+        hidden_params: Any,
     ) -> Optional[str]:
         """Return the upstream provider's request id from
         ``standard_logging_payload.hidden_params.additional_headers``.
