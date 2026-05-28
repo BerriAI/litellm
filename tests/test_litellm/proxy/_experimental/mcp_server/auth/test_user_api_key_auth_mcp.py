@@ -2479,36 +2479,37 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
             team_id="team-789",
         )
 
-        # _get_team_object replaced _get_team_object_permission inside
-        # _get_allowed_mcp_servers_for_team in the LIT-3399 Greptile-P2 fix
-        # (single cached team fetch). Test mocks the new helper.
-        fake_team_obj = MagicMock()
-        fake_team_obj.object_permission = mock_object_permission
-        fake_team_obj.access_group_ids = []  # no unified access groups
+        # Mock the helper methods
         with patch.object(
-            MCPRequestHandler,
-            "_get_team_object",
-            new=AsyncMock(return_value=fake_team_obj),
-        ) as mock_get_team_obj:
+            MCPRequestHandler, "_get_team_object_permission"
+        ) as mock_get_team_perm:
             with patch.object(
                 MCPRequestHandler, "_get_mcp_servers_from_access_groups"
             ) as mock_get_access_group_servers:
+                # Configure mocks
+                mock_get_team_perm.return_value = mock_object_permission
                 mock_get_access_group_servers.return_value = [
                     "group-server1",
                     "group-server2",
                 ]
 
+                # Call the method
                 result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
                     mock_user_auth
                 )
 
+                # Assert the result contains both direct and access group servers
                 assert set(result) == {
                     "direct-server1",
                     "direct-server2",
                     "group-server1",
                     "group-server2",
                 }
-                mock_get_team_obj.assert_called_once_with(mock_user_auth)
+
+                # Verify _get_team_object_permission was called (the helper we fixed)
+                mock_get_team_perm.assert_called_once_with(mock_user_auth)
+
+                # Verify access groups were resolved
                 mock_get_access_group_servers.assert_called_once_with(["dev-group"])
     finally:
         for sid in ("direct-server1", "direct-server2"):
@@ -2528,18 +2529,22 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
         team_id="team-no-perm",
     )
 
-    # _get_team_object replaced _get_team_object_permission in
-    # _get_allowed_mcp_servers_for_team (LIT-3399 Greptile-P2 fix).
+    # Mock the helper to return None (no object permission)
     with patch.object(
-        MCPRequestHandler,
-        "_get_team_object",
-        new=AsyncMock(return_value=None),
-    ) as mock_get_team_obj:
+        MCPRequestHandler, "_get_team_object_permission"
+    ) as mock_get_team_perm:
+        mock_get_team_perm.return_value = None
+
+        # Call the method
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
             mock_user_auth
         )
+
+        # Assert empty list is returned
         assert result == []
-        mock_get_team_obj.assert_called_once_with(mock_user_auth)
+
+        # Verify the helper was called
+        mock_get_team_perm.assert_called_once_with(mock_user_auth)
 
 
 @pytest.mark.asyncio
@@ -3391,14 +3396,16 @@ async def test_lit3399_team_unified_access_group_grants_mcp():
         access_group_ids=None,
     )
 
-    fake_team_obj = MagicMock()
-    fake_team_obj.object_permission = None
-    fake_team_obj.access_group_ids = ["G-team"]
     with (
         patch.object(
             MCPRequestHandler,
-            "_get_team_object",
-            new=AsyncMock(return_value=fake_team_obj),
+            "_get_team_object_permission",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_team_unified_access_group_ids",
+            new=AsyncMock(return_value=["G-team"]),
         ),
         patch.object(
             MCPRequestHandler,
