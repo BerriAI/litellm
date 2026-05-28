@@ -189,8 +189,11 @@ def _make_tx(*, ref_count: int, default_budget_fields=None):
     }
 
     tx = SimpleNamespace()
+    # Mock find_first returns a sentinel object iff there is at least one
+    # OTHER membership pointing at this budget_id (i.e. ref_count >= 2).
+    other_ref = object() if ref_count >= 2 else None
     tx.litellm_teammembership = SimpleNamespace(
-        count=AsyncMock(return_value=ref_count),
+        find_first=AsyncMock(return_value=other_ref),
         update=AsyncMock(),
         upsert=AsyncMock(),
     )
@@ -315,14 +318,14 @@ class TestUpsertBudgetMembershipSharedRow:
         tx.litellm_budgettable.create.assert_called_once()
         tx.litellm_teammembership.upsert.assert_called_once()
         # And we did NOT bother running the ref-count probe in this path
-        tx.litellm_teammembership.count.assert_not_called()
+        tx.litellm_teammembership.find_first.assert_not_called()
 
     async def test_count_probe_failure_defaults_to_clone_on_write(self):
         """If the ref-count probe raises, the function must take the safer
         clone-on-write branch (never silently fall through to in-place update
         of a possibly-shared row)."""
         tx = _make_tx(ref_count=1)
-        tx.litellm_teammembership.count = AsyncMock(
+        tx.litellm_teammembership.find_first = AsyncMock(
             side_effect=RuntimeError("simulated DB failure")
         )
         await _upsert_budget_and_membership(
@@ -352,4 +355,4 @@ class TestUpsertBudgetMembershipSharedRow:
         )
         tx.litellm_teammembership.update.assert_called_once()
         tx.litellm_teammembership.upsert.assert_not_called()
-        tx.litellm_teammembership.count.assert_not_called()
+        tx.litellm_teammembership.find_first.assert_not_called()
