@@ -2754,3 +2754,208 @@ def test_build_decode_kwargs_no_warning_when_scoped(
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert matching == []
+
+
+# ---------------------------------------------------------------------------
+# LIT-2684 / GH #26789: orphaned spend for pre-JWT users
+#
+# When user_id_upsert is enabled with JWT auth and a legacy LiteLLM_UserTable
+# row exists whose user_email matches the JWT email but whose user_id is a
+# pre-JWT UUID (or any non-email id), JWTAuthManager.get_objects correctly
+# resolves the legacy row via the email/sso_user_id fuzzy lookup in
+# get_user_object. But before the fix, downstream code (team_membership
+# lookup inside get_objects, _resolve_single_team_fallback in auth_builder,
+# JWTAuthBuilderResult.user_id and finally UserAPIKeyAuth.user_id) all kept
+# using the JWT-claim user_id, orphaning all spend under a phantom id and
+# leaving /user/info?user_id=<legacy-uuid> stuck at $0.
+#
+# The fix introduces JWTAuthManager._effective_user_id which rebinds the
+# effective user_id to user_object.user_id when fuzzy lookup landed on a
+# different row, and the rebind is applied (a) before the team_membership
+# lookup inside get_objects, and (b) before JWTAuthBuilderResult is
+# constructed in auth_builder.
+# ---------------------------------------------------------------------------
+
+
+def test_effective_user_id_rebinds_when_fuzzy_matches_legacy_uuid():
+    """LIT-2684: JWT claim email maps to a legacy UUID row -> rebind."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    legacy_uuid = "bb8ab11f-09aa-47ae-b063-6e80506ac3bc"
+    jwt_email = "matt@example.com"
+    user_object = LiteLLM_UserTable(user_id=legacy_uuid, user_email=jwt_email)
+
+    assert (
+        JWTAuthManager._effective_user_id(
+            jwt_user_id=jwt_email, user_object=user_object
+        )
+        == legacy_uuid
+    )
+
+
+def test_effective_user_id_no_rebind_when_ids_match():
+    """If JWT-claim id already equals the DB user_id, no rebind."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    same = "alice@example.com"
+    user_object = LiteLLM_UserTable(user_id=same, user_email=same)
+
+    assert (
+        JWTAuthManager._effective_user_id(jwt_user_id=same, user_object=user_object)
+        == same
+    )
+
+
+def test_effective_user_id_no_rebind_when_user_object_missing():
+    """No user_object -> return the JWT-claim id unchanged."""
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    assert (
+        JWTAuthManager._effective_user_id(
+            jwt_user_id="newcomer@example.com", user_object=None
+        )
+        == "newcomer@example.com"
+    )
+
+
+def test_effective_user_id_no_rebind_when_jwt_id_is_none():
+    """Defensive: if no JWT-claim id, keep it None (do not invent one)."""
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    user_object = LiteLLM_UserTable(user_id="some-uuid", user_email=None)
+    assert (
+        JWTAuthManager._effective_user_id(jwt_user_id=None, user_object=user_object)
+        is None
+    )
+
+
+def test_effective_user_id_no_rebind_when_db_user_id_empty():
+    """Defensive: if user_object.user_id is falsy, do not rebind."""
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    class _Stub:
+        user_id = ""
+
+    assert (
+        JWTAuthManager._effective_user_id(
+            jwt_user_id="jwt@example.com", user_object=_Stub()
+        )
+        == "jwt@example.com"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_objects_uses_rebound_user_id_for_team_membership():
+    """LIT-2684: team_membership lookup must use the rebound DB user_id.
+
+    Drives the real JWTAuthManager.get_objects with a prisma double whose
+    LiteLLM_UserTable.find_first (case-insensitive email match) returns a
+    legacy UUID row. The team_membership find query must then be keyed by
+    that legacy UUID, not the JWT-claim email.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+
+    legacy_uuid = "bb8ab11f-09aa-47ae-b063-6e80506ac3bc"
+    jwt_email = "matt@example.com"
+    team_id = "team-1"
+
+    class _LegacyRow:
+        def __init__(self):
+            self.user_id = legacy_uuid
+            self.user_email = jwt_email
+            self.sso_user_id = None
+            self.organization_id = None
+            self.organization_memberships = []
+            self.teams = []
+            self.user_role = None
+            self.spend = 0.0
+            self.models = []
+            self.metadata = {}
+            self.max_budget = None
+            self.tpm_limit = None
+            self.rpm_limit = None
+            self.model_spend = {}
+            self.model_max_budget = {}
+
+        def __iter__(self):
+            for k, v in vars(self).items():
+                yield k, v
+
+    seen = {"user_id": None, "team_id": None}
+
+    async def _find_unique_user(where, include=None):
+        if (where or {}).get("user_id") == legacy_uuid:
+            return _LegacyRow()
+        return None
+
+    async def _find_first_user(where, include=None):
+        ec = (where or {}).get("user_email")
+        if isinstance(ec, dict) and (ec.get("equals") or "").lower() == jwt_email.lower():
+            return _LegacyRow()
+        return None
+
+    async def _find_team_member(where, include=None):
+        composite = (where or {}).get("user_id_team_id") or where or {}
+        seen["user_id"] = composite.get("user_id")
+        seen["team_id"] = composite.get("team_id")
+        return None
+
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=_find_unique_user)
+    prisma.db.litellm_usertable.find_first = AsyncMock(side_effect=_find_first_user)
+    prisma.db.litellm_usertable.create = AsyncMock(
+        side_effect=AssertionError("create() must not run; fuzzy must resolve legacy")
+    )
+    prisma.db.litellm_usertable.update = AsyncMock(return_value=_LegacyRow())
+    prisma.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_team_member)
+    prisma.db.litellm_teammembership.find_first = AsyncMock(side_effect=_find_team_member)
+
+    cache = DualCache()
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="email",
+        user_id_upsert=True,
+        team_id_jwt_field="tid",
+    )
+    jwt_handler.update_environment(
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        litellm_jwtauth=jwt_handler.litellm_jwtauth,
+        leeway=0,
+    )
+
+    (
+        user_object,
+        org_object,
+        end_user_object,
+        team_membership_object,
+    ) = await JWTAuthManager.get_objects(
+        user_id=jwt_email,
+        user_email=jwt_email,
+        org_id=None,
+        end_user_id=None,
+        team_id=team_id,
+        valid_user_email=None,
+        jwt_handler=jwt_handler,
+        prisma_client=prisma,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+        route="/v1/chat/completions",
+        org_alias=None,
+    )
+
+    assert user_object is not None
+    assert user_object.user_id == legacy_uuid
+    assert seen["user_id"] == legacy_uuid, (
+        "team_membership lookup must be keyed by the rebound DB user_id, "
+        "got: %r" % seen
+    )
+    assert seen["team_id"] == team_id
