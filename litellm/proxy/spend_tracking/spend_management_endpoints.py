@@ -34,12 +34,16 @@ router = APIRouter()
 @router.get(
     "/spend/keys",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    View all keys created, ordered by spend
+    View all keys created, ordered by spend.
+
+    Non-admin callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY) receive only
+    the keys they own.  Proxy admins receive all keys.
 
     Example Request:
     ```
@@ -56,7 +60,22 @@ async def spend_key_fn():
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role
+            == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            # Non-admin: only return keys belonging to this caller
+            caller_user_id = user_api_key_dict.user_id
+            key_info = await prisma_client.get_data(
+                table_name="key",
+                query_type="find_all",
+                user_id=caller_user_id,
+            )
+        else:
+            key_info = await prisma_client.get_data(
+                table_name="key", query_type="find_all"
+            )
         return key_info
 
     except Exception as e:
@@ -78,7 +97,6 @@ def _strip_password_from_users(users) -> None:
 @router.get(
     "/spend/users",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
 async def spend_user_fn(
@@ -86,9 +104,15 @@ async def spend_user_fn(
         default=None,
         description="Get User Table row for user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    View all users created, ordered by spend
+    View all users created, ordered by spend.
+
+    Non-admin callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY) can only see
+    their own user row.  Passing a ``user_id`` query param that does not match
+    the caller's own ID returns 403 for non-admins.  Proxy admins receive all
+    users (or the requested user when ``user_id`` is supplied).
 
     Example Request:
     ```
@@ -103,6 +127,24 @@ async def spend_user_fn(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    is_non_admin = user_api_key_dict.user_role in (
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+
+    if is_non_admin:
+        caller_user_id = user_api_key_dict.user_id
+        # Non-admin: reject requests for a different user's data
+        if user_id is not None and user_id != caller_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "You are not authorized to view spend for another user."
+                },
+            )
+        # Clamp to the caller's own user_id regardless of the query param
+        user_id = caller_user_id
 
     try:
         if prisma_client is None:
@@ -1817,7 +1859,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        is_v2 = "/spend/logs/v2" in request.url.path
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+        is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
