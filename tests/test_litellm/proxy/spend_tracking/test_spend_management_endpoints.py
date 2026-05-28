@@ -3277,9 +3277,7 @@ async def test_view_spend_logs_team_key_non_date_range_forces_team_filter(
 
 
 @pytest.mark.asyncio
-async def test_view_spend_logs_personal_admin_key_no_team_filter(
-    client, monkeypatch
-):
+async def test_view_spend_logs_personal_admin_key_no_team_filter(client, monkeypatch):
     """A personal (non-team) PROXY_ADMIN key must still see global logs."""
     mock_client = _CapturePrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
@@ -3341,7 +3339,9 @@ async def test_ui_view_spend_logs_team_key_forces_team_filter(client, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_team_key_rejects_cross_team_query(client, monkeypatch):
+async def test_ui_view_spend_logs_team_key_rejects_cross_team_query(
+    client, monkeypatch
+):
     """A team-scoped key requesting team_id != its own must 403 (LIT-3301)."""
     start_date, end_date = _default_date_range()
 
@@ -3422,6 +3422,7 @@ async def test_assert_user_can_view_request_id_team_key_same_team_allowed():
 
     class _DB:
         litellm_spendlogs = MagicMock()
+
     _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
 
     class _Client:
@@ -3450,6 +3451,7 @@ async def test_assert_user_can_view_request_id_team_key_other_team_denied():
 
     class _DB:
         litellm_spendlogs = MagicMock()
+
     _DB.litellm_spendlogs.find_unique = AsyncMock(return_value=row)
 
     class _Client:
