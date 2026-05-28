@@ -91,7 +91,7 @@ def _http_status_code(exc: BaseException) -> Optional[int]:
 
 
 @contextlib.asynccontextmanager
-async def mcp_otel_span(
+async def mcp_otel_span(  # noqa: PLR0915
     operation: str,
     *,
     server_name: Optional[str] = None,
