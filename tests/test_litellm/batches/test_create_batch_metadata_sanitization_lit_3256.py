@@ -23,7 +23,9 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.batches.batch_utils import sanitize_openai_batch_metadata
+from litellm.llms.openai.batches.transformation import (
+    sanitize_openai_batch_metadata,
+)
 
 # ---------------------------------------------------------------------------
 # Unit tests on the helper
