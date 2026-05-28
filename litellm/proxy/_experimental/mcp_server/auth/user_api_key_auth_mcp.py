@@ -986,14 +986,12 @@ class MCPRequestHandler:
             # assigned_key_ids. Done independently of object_permission so a
             # key with ONLY unified access groups (no object_permission row)
             # still gets MCP access.
-            unified_access_group_servers = (
-                await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
-                    access_group_ids=(
-                        list(user_api_key_auth.access_group_ids)
-                        if user_api_key_auth and user_api_key_auth.access_group_ids
-                        else []
-                    ),
-                )
+            unified_access_group_servers = await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=(
+                    list(user_api_key_auth.access_group_ids)
+                    if user_api_key_auth and user_api_key_auth.access_group_ids
+                    else []
+                ),
             )
 
             if key_object_permission is None:
@@ -1062,10 +1060,8 @@ class MCPRequestHandler:
                     user_api_key_auth
                 )
             )
-            unified_access_group_servers = (
-                await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
-                    access_group_ids=team_access_group_ids,
-                )
+            unified_access_group_servers = await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=team_access_group_ids,
             )
 
             if object_permissions is None:
