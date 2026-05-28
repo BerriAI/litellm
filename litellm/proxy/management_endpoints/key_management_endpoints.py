@@ -4887,6 +4887,13 @@ async def get_member_team_ids(
     return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
+# Whitelist for the `?expires=` filter on `GET /key/list`. Defined ahead of
+# the endpoint so the validation block reads top-to-bottom; the actual
+# Prisma where-clause translation lives in `_build_expires_filter_clause`
+# alongside the other key filter helpers below.
+VALID_EXPIRES_FILTER_VALUES = {"expired", "active"}
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -4939,7 +4946,7 @@ async def list_keys(
             "Filter keys by expiration state relative to the proxy's wall-clock now. "
             "'expired' = only keys whose `expires` is set and in the past. "
             "'active'  = keys with no `expires` set OR `expires` in the future. "
-            "Omit (or pass any other value) to return all keys."
+            "Omit the parameter to return all keys; any other string value returns HTTP 400."
         ),
     ),
 ) -> KeyListResponseObject:
@@ -5292,9 +5299,6 @@ def _validate_sort_params(
     order_by[sort_by] = sort_order.lower()
 
     return order_by
-
-
-VALID_EXPIRES_FILTER_VALUES = {"expired", "active"}
 
 
 def _build_expires_filter_clause(
