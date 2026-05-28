@@ -15,7 +15,11 @@ The helper is intentionally defensive:
 
 The exception is still re-raised by the surrounding ``yield`` to preserve
 caller-visible behaviour; ERROR status + ``record_exception`` are set on
-the span before re-raising.
+the span before re-raising. Client-side ``HTTPException`` 4xx outcomes
+are NOT elevated to ``StatusCode.ERROR`` because they are expected
+caller-side outcomes and would otherwise inflate operator error-rate
+dashboards. The exception is still recorded as a span event and the HTTP
+status code is recorded as ``mcp.http.status_code``.
 """
 
 from __future__ import annotations
@@ -72,6 +76,20 @@ def _safe_set(span: Any, key: str, value: Any) -> None:
         verbose_logger.debug("mcp_otel_span: failed to set %s: %s", key, e)
 
 
+def _http_status_code(exc: BaseException) -> Optional[int]:
+    """Return a 3-digit HTTP status code if ``exc`` is an HTTPException-like.
+
+    Recognises both Starlette / FastAPI ``HTTPException`` and the upstream
+    MCP server's wrapper exceptions. Returns ``None`` when no integer
+    status_code attribute is present.
+    """
+    code = getattr(exc, "status_code", None)
+    try:
+        return int(code) if code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 @contextlib.asynccontextmanager
 async def mcp_otel_span(
     operation: str,
@@ -86,8 +104,16 @@ async def mcp_otel_span(
     """Async context manager that emits one OTEL span per MCP operation.
 
     Yields the active span (or ``None`` if OTEL isn't configured). The
-    span is closed when the block exits. On exception the span is marked
-    ``ERROR``, ``record_exception`` is called, and ``mcp.error.type`` is set.
+    span is attached to the active OTEL context for the duration of the
+    block so any child spans created inside the block (e.g. auto-
+    instrumented HTTP calls to upstream MCP servers) parent to the MCP
+    span. The span is detached + ended when the block exits.
+
+    On exception the span is marked ``ERROR``, ``record_exception`` is
+    called, and ``mcp.error.type`` is set. Client-side ``HTTPException``
+    4xx outcomes are recorded but stay at ``StatusCode.OK`` to avoid
+    inflating error-rate metrics for expected outcomes
+    (auth-denied, malformed argument, etc.).
 
     The span name is ``mcp.<operation>``. Standard attributes:
 
@@ -106,6 +132,8 @@ async def mcp_otel_span(
         return
 
     try:
+        from opentelemetry import context as otel_context
+        from opentelemetry import trace as otel_trace
         from opentelemetry.trace import Status, StatusCode
     except Exception:
         # opentelemetry isn't installed even though a logger object exists -
@@ -120,6 +148,17 @@ async def mcp_otel_span(
         verbose_logger.debug("mcp_otel_span: tracer.start_span failed: %s", e)
         yield None
         return
+
+    # Attach the new span to the active OTEL context so child spans
+    # (e.g. HTTP auto-instrumentation calling out to upstream MCP servers)
+    # parent to this span instead of to whatever was current before the
+    # block. The detach token is restored in the finally branch so we
+    # never leak the context slot.
+    try:
+        ctx_token = otel_context.attach(otel_trace.set_span_in_context(span))
+    except Exception as e:  # pragma: no cover - defensive
+        verbose_logger.debug("mcp_otel_span: context.attach failed: %s", e)
+        ctx_token = None
 
     try:
         _safe_set(span, "mcp.operation", operation)
@@ -146,7 +185,23 @@ async def mcp_otel_span(
             try:
                 span.record_exception(exc)
                 _safe_set(span, "mcp.error.type", type(exc).__name__)
-                span.set_status(Status(StatusCode.ERROR, str(exc)[:256]))
+                http_status = _http_status_code(exc)
+                if http_status is not None:
+                    _safe_set(span, "mcp.http.status_code", http_status)
+                    # OTEL convention: client errors (4xx) are expected
+                    # caller-side outcomes; only treat 5xx + non-HTTP
+                    # exceptions as span ERRORs so dashboards don't
+                    # conflate "key not authorised" with "upstream MCP
+                    # server crashed".
+                    if 400 <= http_status < 500:
+                        # Leave status UNSET (default) - operators can
+                        # still see the recorded exception event and the
+                        # ``mcp.error.type`` attribute.
+                        pass
+                    else:
+                        span.set_status(Status(StatusCode.ERROR, str(exc)[:256]))
+                else:
+                    span.set_status(Status(StatusCode.ERROR, str(exc)[:256]))
             except Exception:  # pragma: no cover - defensive
                 pass
             raise
@@ -156,6 +211,14 @@ async def mcp_otel_span(
             except Exception:  # pragma: no cover - defensive
                 pass
     finally:
+        # Detach context BEFORE ending the span - otherwise the OTEL
+        # context slot keeps a reference to the now-ended span for the
+        # rest of the request and confuses downstream child spans.
+        if ctx_token is not None:
+            try:
+                otel_context.detach(ctx_token)
+            except Exception:  # pragma: no cover - defensive
+                pass
         try:
             span.end()
         except Exception:  # pragma: no cover - defensive
