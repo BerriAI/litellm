@@ -8010,6 +8010,8 @@ async def test_new_team_encrypts_callback_vars(
     assert cv["langfuse_secret_key"] != "sk-real"
     recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-real"
+
+
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
