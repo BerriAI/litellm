@@ -671,9 +671,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     )
 
     @classmethod
-    def _extract_bedrock_request_id(
-        cls, headers: Optional[Any]
-    ) -> Optional[str]:
+    def _extract_bedrock_request_id(cls, headers: Optional[Any]) -> Optional[str]:
         """
         Return AWS Bedrock\'s per-call request ID from response headers if
         present, else ``None``. Case-insensitive lookup via ``httpx.Headers``;
