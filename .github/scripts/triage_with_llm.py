@@ -1113,6 +1113,16 @@ def review_gate(
 
     label_present = label_key in labels_now
     explanation = verdict.get("explanation") or ""
+    # When the rubric short-circuited to pass (linked-issue regex) but
+    # Greptile dragged the PR below the bar, the synthetic verdict's
+    # explanation ("LLM was not called") would mislead a contributor reading
+    # the regression / close comment. Surface the real reason instead.
+    if rubric_pass and not greptile_ok:
+        explanation = (
+            f"Greptile's most recent review scored this PR "
+            f"{greptile_score}/5 (below the {min_greptile_score}/5 bar)."
+        )
+        verdict = {**verdict, "explanation": explanation}
     base_result = {
         **base_result,
         "verdict": verdict,
@@ -1152,8 +1162,18 @@ def review_gate(
     # `format_regression_comment` and skip the close path. Without this guard,
     # any PR older than `grace_days` would be closed on the next evaluation,
     # giving the contributor no realistic window to address the regression.
+    #
+    # The promise has a deliberate expiration: once `grace_days` have elapsed
+    # since the regression notice, fall through to the close path so a PR that
+    # was abandoned post-regression doesn't sit open forever.
     if _has_marker(comments, REGRESSED_MARKER):
-        return {**base_result, "action": "regressed-already-notified"}
+        reference = now or dt.datetime.now(dt.timezone.utc)
+        seconds_since_regression = seconds_since_latest_marker_comment(
+            comments, marker=REGRESSED_MARKER, now=reference
+        )
+        grace_seconds = grace_days * 86400
+        if seconds_since_regression is None or seconds_since_regression < grace_seconds:
+            return {**base_result, "action": "regressed-already-notified"}
 
     # Not passing and not tagged: close if past the grace window, else notify once.
     if age_days is not None and age_days >= grace_days:

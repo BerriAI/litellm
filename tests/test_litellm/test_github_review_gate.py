@@ -274,6 +274,77 @@ class TestReviewGateGraceAndClose:
         # The close comment must carry the reconsider provenance marker.
         assert triage_module.AGENT_SHIN_AUTO_CLOSE_MARKER in rec.comments[0]
 
+    def test_recent_regression_marker_blocks_close(self, triage_module, monkeypatch):
+        """A failing PR with a fresh regression notice must NOT be closed —
+        the contributor needs a window to address the regression."""
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.REGRESSED_MARKER,
+                # Posted just an hour before NOW -> well inside grace_days.
+                "created_at": "2026-05-24T11:00:00Z",
+            }
+        ]
+
+        result = _gate(triage_module, judge=_fail, greptile_score=None, comments=prior)
+
+        assert result["action"] == "regressed-already-notified"
+        assert rec.closed == [] and rec.comments == []
+
+    def test_stale_regression_marker_allows_close(self, triage_module, monkeypatch):
+        """Once grace_days have elapsed since the regression notice, the
+        review gate must let the close path fire — otherwise PRs that were
+        regressed and then abandoned stay open forever."""
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.REGRESSED_MARKER,
+                # Posted 30 days before NOW -> well past the default 1-day grace.
+                "created_at": "2026-04-24T11:00:00Z",
+            }
+        ]
+
+        result = _gate(triage_module, judge=_fail, greptile_score=None, comments=prior)
+
+        assert result["action"] == "closed"
+        assert rec.closed == [7]
+        assert len(rec.comments) == 1
+
+    def test_linked_issue_with_greptile_fail_uses_greptile_explanation(
+        self, triage_module, monkeypatch
+    ):
+        """When the rubric short-circuits to pass (linked-issue regex) but
+        Greptile dragged the PR under the bar, the close comment's
+        explanation must describe the Greptile shortfall, not the
+        misleading "LLM was not called" rubric placeholder."""
+        pr = _make_pr(body="Fixes #4321\n\nbody", created_at=TWO_DAYS_AGO)
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(
+            triage_module,
+            judge=lambda p: pytest.fail("LLM must not be called for linked issue"),
+            greptile_score=2,
+        )
+
+        assert result["action"] == "closed"
+        assert len(rec.comments) == 1
+        body = rec.comments[0]
+        assert "LLM was not called" not in body
+        assert "Greptile" in body and "2/5" in body
+
 
 class TestReviewGateDryRun:
     @pytest.mark.parametrize(

@@ -45,7 +45,10 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _agent_shin_actions import maybe_post_comment  # noqa: E402
-from agent_shin_shared import list_open_items  # noqa: E402
+from agent_shin_shared import (  # noqa: E402
+    AGENT_SHIN_DEFAULT_BOT_LOGIN,
+    list_open_items,
+)
 from triage_with_llm import (  # noqa: E402
     DEFAULT_MODEL,
     call_llm_judge,
@@ -231,13 +234,23 @@ def _has_heads_up_marker(item: dict) -> bool:
     return HEADS_UP_MARKER in body
 
 
-def _comments_have_marker(repo: str, kind: str, number: int) -> bool:
-    """True if any existing issue-style comment already carries the marker.
+def _comments_have_marker(repo: str, number: int) -> bool:
+    """True if the bot already posted a comment carrying the marker.
 
     Used for idempotency: a re-run skips items the previous run notified.
-    The marker is unique to this rollout and never appears in steady-state
-    Agent Shin comments, so a substring match is sufficient.
+    Filters by author (matching the sibling marker-checks in
+    ``triage_with_llm._has_marker`` and
+    ``agent_shin_shared.seconds_since_latest_marker_comment``) so a
+    contributor who quotes the heads-up via GitHub's "Quote reply" — which
+    preserves HTML comments in the raw markdown — can't trick the
+    idempotency check into silently skipping a real heads-up.
+
+    Comments live on the unified issues endpoint regardless of whether the
+    item is a PR or an issue, so no ``kind`` argument is required here.
     """
+    expected_login = (
+        os.environ.get("AGENT_SHIN_BOT_LOGIN") or AGENT_SHIN_DEFAULT_BOT_LOGIN
+    ).lower()
     raw = gh(
         "api",
         "--paginate",
@@ -253,6 +266,9 @@ def _comments_have_marker(repo: str, kind: str, number: int) -> bool:
             continue
         comments = payload if isinstance(payload, list) else [payload]
         for comment in comments:
+            author = ((comment.get("user") or {}).get("login") or "").lower()
+            if author != expected_login:
+                continue
             if HEADS_UP_MARKER in (comment.get("body") or ""):
                 return True
     return False
@@ -325,7 +341,7 @@ def _process_one(
         return {**base, "action": "skip-internal-author"}
     if not skip_marker_check and _has_heads_up_marker(item):
         return {**base, "action": "skip-already-marked-in-body"}
-    if not skip_marker_check and _comments_have_marker(repo, kind, number):
+    if not skip_marker_check and _comments_have_marker(repo, number):
         return {**base, "action": "skip-already-notified"}
 
     if kind == "pr":

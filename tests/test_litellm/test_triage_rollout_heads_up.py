@@ -231,7 +231,7 @@ class TestProcessOne:
         )
         monkeypatch.setattr(heads_up_module, "_has_heads_up_marker", lambda item: False)
         monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, kind, n: False
+            heads_up_module, "_comments_have_marker", lambda repo, n: False
         )
 
         def _install(item):
@@ -408,7 +408,7 @@ class TestProcessOne:
         )
         # Override the marker check for this scenario only.
         monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, kind, n: True
+            heads_up_module, "_comments_have_marker", lambda repo, n: True
         )
         r = heads_up_module._process_one(
             repo="o/r",
@@ -436,7 +436,7 @@ class TestProcessOne:
             }
         )
         monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, kind, n: True
+            heads_up_module, "_comments_have_marker", lambda repo, n: True
         )
         monkeypatch.setattr(
             heads_up_module,
@@ -478,7 +478,7 @@ class TestRun:
         )
         monkeypatch.setattr(heads_up_module, "_has_heads_up_marker", lambda item: False)
         monkeypatch.setattr(
-            heads_up_module, "_comments_have_marker", lambda repo, kind, n: False
+            heads_up_module, "_comments_have_marker", lambda repo, n: False
         )
 
         def fake_list(repo, kind):
