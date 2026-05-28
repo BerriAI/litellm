@@ -6,6 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
+import re
 import sys
 
 sys.path.insert(
@@ -421,6 +422,50 @@ _default_detect_secrets_config = {
 }
 
 
+# Regex helpers for PEM-armored private key redaction (LIT-3292).
+#
+# ``detect-secrets`` is line-based: ``PrivateKeyDetector`` returns only the
+# ``BEGIN ... PRIVATE KEY`` header line as ``secret_value``. A plain
+# ``str.replace(secret_value, "[REDACTED]")`` therefore leaves the base64 key
+# body and ``-----END ... PRIVATE KEY-----`` footer in the forwarded payload,
+# which is the bug this guardrail is supposed to prevent.
+#
+# To redact the *entire* armored block we expand any "Private Key" match to
+# the full ``BEGIN ... END`` span before substituting. A fallback regex covers
+# malformed/truncated PEMs where the END footer is missing so residual key
+# material still does not leak downstream.
+_PEM_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+_PEM_PRIVATE_KEY_FALLBACK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
+    r"(?:\r?\n[A-Za-z0-9+/=:.\- _,]+)*",
+)
+
+
+def _redact_text_with_detected_secrets(text: str, detected_secrets) -> str:
+    """Redact every detected secret in ``text`` with ``[REDACTED]``.
+
+    For ``"Private Key"`` matches the entire ``BEGIN ... END`` PEM block is
+    replaced (not just the single-line header that ``detect-secrets`` returns).
+    All other secret types fall back to the existing ``str.replace`` behavior.
+    """
+    if not detected_secrets:
+        return text
+    has_pem = any(s.get("type") == "Private Key" for s in detected_secrets)
+    if has_pem:
+        text = _PEM_PRIVATE_KEY_BLOCK_RE.sub("[REDACTED]", text)
+        text = _PEM_PRIVATE_KEY_FALLBACK_RE.sub("[REDACTED]", text)
+    for secret in detected_secrets:
+        if secret.get("type") == "Private Key":
+            continue
+        value = secret.get("value")
+        if value:
+            text = text.replace(value, "[REDACTED]")
+    return text
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
@@ -477,8 +522,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         # Covers multimodal list content + Responses-API input.
         def _redact_message_text(text: str) -> str:
             detected_secrets = self.scan_message_for_secrets(text)
-            for secret in detected_secrets:
-                text = text.replace(secret["value"], "[REDACTED]")
+            text = _redact_text_with_detected_secrets(text, detected_secrets)
             if detected_secrets:
                 secret_types = [secret["type"] for secret in detected_secrets]
                 verbose_proxy_logger.warning(
@@ -491,10 +535,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if "prompt" in data:
             if isinstance(data["prompt"], str):
                 detected_secrets = self.scan_message_for_secrets(data["prompt"])
-                for secret in detected_secrets:
-                    data["prompt"] = data["prompt"].replace(
-                        secret["value"], "[REDACTED]"
-                    )
+                data["prompt"] = _redact_text_with_detected_secrets(
+                    data["prompt"], detected_secrets
+                )
                 if len(detected_secrets) > 0:
                     secret_types = [secret["type"] for secret in detected_secrets]
                     verbose_proxy_logger.warning(
@@ -507,8 +550,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 for idx, item in enumerate(data["prompt"]):
                     if isinstance(item, str):
                         detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            item = item.replace(secret["value"], "[REDACTED]")
+                        item = _redact_text_with_detected_secrets(item, detected_secrets)
                         data["prompt"][idx] = item
                         if len(detected_secrets) > 0:
                             secret_types = [
