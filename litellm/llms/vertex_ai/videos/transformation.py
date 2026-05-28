@@ -648,14 +648,121 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
     def transform_video_edit_request(
-        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
-    ):
-        raise NotImplementedError("video edit is not supported for Vertex AI")
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video edit request for Veo API.
+
+        Veo does not have a dedicated edit endpoint. Instead, this implementation:
+        1. Fetches the source video from the completed operation via fetchPredictOperation
+        2. Constructs a new predictLongRunning request using the source video as input
+
+        The source video is passed as bytesBase64Encoded (or gcsUri if available).
+        """
+        import httpx as _httpx
+
+        operation_name = extract_original_video_id(video_id)
+        model = self.extract_model_from_operation_name(operation_name)
+
+        if not model:
+            raise ValueError(
+                f"Cannot extract model from operation name: {operation_name}. "
+                "Expected format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID"
+            )
+
+        # Step 1: Fetch the source video data from the completed operation
+        fetch_url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
+        with _httpx.Client() as client:
+            fetch_response = client.post(
+                url=fetch_url,
+                headers=headers,
+                json={"operationName": operation_name},
+                timeout=30,
+            )
+            fetch_response.raise_for_status()
+
+        fetch_data = fetch_response.json()
+
+        if not fetch_data.get("done", False):
+            raise ValueError(
+                "Source video generation is not complete yet. "
+                "Check the video status before editing."
+            )
+
+        response_data = fetch_data.get("response", {})
+        videos = response_data.get("videos", [])
+        if not videos:
+            raise ValueError("No videos found in the completed operation. Cannot edit.")
+
+        source_video = videos[0]
+        video_input: Dict[str, Any] = {}
+        if "gcsUri" in source_video:
+            video_input["gcsUri"] = source_video["gcsUri"]
+        elif "bytesBase64Encoded" in source_video:
+            video_input["bytesBase64Encoded"] = source_video["bytesBase64Encoded"]
+            video_input["mimeType"] = source_video.get("mimeType", "video/mp4")
+        else:
+            raise ValueError(
+                "Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit."
+            )
+
+        # Step 2: Build the edit request using the same predictLongRunning endpoint
+        instance_dict: Dict[str, Any] = {"prompt": prompt, "video": video_input}
+
+        request_data: Dict[str, Any] = {"instances": [instance_dict]}
+
+        # Allow caller to pass extra parameters (e.g. durationSeconds, aspectRatio)
+        if extra_body:
+            nested_params = extra_body.pop("parameters", None)
+            vertex_params: Dict[str, Any] = {}
+            if isinstance(nested_params, dict):
+                vertex_params.update(nested_params)
+            vertex_params.update(extra_body)
+            if vertex_params:
+                request_data["parameters"] = vertex_params
+
+        edit_url = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
+        return edit_url, request_data
 
     def transform_video_edit_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
-    ):
-        raise NotImplementedError("video edit is not supported for Vertex AI")
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+    ) -> VideoObject:
+        """
+        Transform the Veo video edit response.
+
+        Veo returns the same operation response as video generation:
+        {"name": "projects/.../operations/OPERATION_ID"}
+        """
+        response_data = raw_response.json()
+
+        operation_name = response_data.get("name")
+        if not operation_name:
+            raise ValueError(f"No operation name in Veo edit response: {response_data}")
+
+        model = self.extract_model_from_operation_name(operation_name) or ""
+
+        if custom_llm_provider:
+            video_id = encode_video_id_with_provider(
+                operation_name, custom_llm_provider, model
+            )
+        else:
+            video_id = operation_name
+
+        return VideoObject(
+            id=video_id,
+            object="video",
+            status="processing",
+            model=model,
+        )
 
     def transform_video_extension_request(
         self,

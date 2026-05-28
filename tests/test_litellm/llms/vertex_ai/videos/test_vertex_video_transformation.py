@@ -456,6 +456,127 @@ class TestVertexAIVideoConfig:
                 raw_response=mock_response, logging_obj=self.mock_logging_obj
             )
 
+    def test_transform_video_edit_request_with_bytes(self):
+        """Test video edit request fetches source video and builds predictLongRunning body."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-123"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+        fake_bytes = base64.b64encode(b"fake_video").decode()
+
+        fetch_payload = {
+            "name": operation_name,
+            "done": True,
+            "response": {
+                "videos": [{"bytesBase64Encoded": fake_bytes, "mimeType": "video/mp4"}]
+            },
+        }
+
+        mock_fetch_response = Mock(spec=httpx.Response)
+        mock_fetch_response.json.return_value = fetch_payload
+        mock_fetch_response.raise_for_status = Mock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = Mock()
+            mock_client.__enter__ = Mock(return_value=mock_client)
+            mock_client.__exit__ = Mock(return_value=False)
+            mock_client.post.return_value = mock_fetch_response
+            mock_client_cls.return_value = mock_client
+
+            url, data = self.config.transform_video_edit_request(
+                prompt="Make it brighter",
+                video_id=operation_name,
+                api_base=api_base,
+                litellm_params=GenericLiteLLMParams(),
+                headers={"Authorization": "Bearer token"},
+            )
+
+        assert url.endswith(":predictLongRunning")
+        assert "veo-3.1-generate-001" in url
+        instance = data["instances"][0]
+        assert instance["prompt"] == "Make it brighter"
+        assert instance["video"]["bytesBase64Encoded"] == fake_bytes
+        assert instance["video"]["mimeType"] == "video/mp4"
+
+    def test_transform_video_edit_request_with_gcs_uri(self):
+        """Test that gcsUri is preferred over bytes when present in source video."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-456"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+
+        fetch_payload = {
+            "name": operation_name,
+            "done": True,
+            "response": {
+                "videos": [
+                    {
+                        "gcsUri": "gs://bucket/video.mp4",
+                        "mimeType": "video/mp4",
+                    }
+                ]
+            },
+        }
+
+        mock_fetch_response = Mock(spec=httpx.Response)
+        mock_fetch_response.json.return_value = fetch_payload
+        mock_fetch_response.raise_for_status = Mock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = Mock()
+            mock_client.__enter__ = Mock(return_value=mock_client)
+            mock_client.__exit__ = Mock(return_value=False)
+            mock_client.post.return_value = mock_fetch_response
+            mock_client_cls.return_value = mock_client
+
+            url, data = self.config.transform_video_edit_request(
+                prompt="Make it darker",
+                video_id=operation_name,
+                api_base=api_base,
+                litellm_params=GenericLiteLLMParams(),
+                headers={"Authorization": "Bearer token"},
+            )
+
+        assert data["instances"][0]["video"] == {"gcsUri": "gs://bucket/video.mp4"}
+
+    def test_transform_video_edit_request_source_not_done_raises(self):
+        """Test that editing an in-progress video raises a clear error."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/op-789"
+        api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models"
+
+        mock_fetch_response = Mock(spec=httpx.Response)
+        mock_fetch_response.json.return_value = {"name": operation_name, "done": False}
+        mock_fetch_response.raise_for_status = Mock()
+
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = Mock()
+            mock_client.__enter__ = Mock(return_value=mock_client)
+            mock_client.__exit__ = Mock(return_value=False)
+            mock_client.post.return_value = mock_fetch_response
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(ValueError, match="not complete yet"):
+                self.config.transform_video_edit_request(
+                    prompt="Make it brighter",
+                    video_id=operation_name,
+                    api_base=api_base,
+                    litellm_params=GenericLiteLLMParams(),
+                    headers={"Authorization": "Bearer token"},
+                )
+
+    def test_transform_video_edit_response(self):
+        """Test that edit response returns a processing VideoObject with encoded ID."""
+        operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-3.1-generate-001/operations/new-op-123"
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"name": operation_name}
+
+        video_obj = self.config.transform_video_edit_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert isinstance(video_obj, VideoObject)
+        assert video_obj.status == "processing"
+        assert video_obj.id
+        assert video_obj.model == "veo-3.1-generate-001"
+
     def test_transform_video_remix_request_not_supported(self):
         """Test that video remix raises NotImplementedError."""
         with pytest.raises(NotImplementedError, match="Video remix is not supported"):

@@ -6560,6 +6560,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6642,6 +6643,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6734,6 +6736,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6805,6 +6808,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6888,6 +6892,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6945,6 +6950,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7021,6 +7027,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7093,6 +7100,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7182,6 +7190,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7256,6 +7265,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7467,6 +7477,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
