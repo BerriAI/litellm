@@ -585,3 +585,183 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+# ===========================================================================
+# LIT-2698: timezone-adjusted daily-aggregate query must NOT widen the
+# UTC date range. The Daily*Spend tables are pre-aggregated per UTC day --
+# widening pulls an adjacent UTC day's totals into the user-selected day,
+# inflating the dashboard for any non-UTC user. Regression tests below.
+# ===========================================================================
+
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    _adjust_dates_for_timezone,
+    _build_aggregated_sql_query,
+    _build_where_conditions,
+)
+
+
+@pytest.mark.parametrize(
+    "timezone_offset_minutes,label",
+    [
+        (None, "no-timezone"),
+        (0, "utc"),
+        (-330, "ist"),
+        (480, "pst"),
+        (-540, "jst"),
+        (300, "est"),
+    ],
+)
+def test_lit_2698_adjust_dates_returns_input_unchanged(timezone_offset_minutes, label):
+    """All timezone offsets are now no-ops; UTC-day buckets cannot be sub-divided."""
+    start, end = _adjust_dates_for_timezone(
+        "2026-04-15", "2026-04-15", timezone_offset_minutes
+    )
+    assert (start, end) == ("2026-04-15", "2026-04-15"), label
+
+    # Multi-day range also unchanged
+    start, end = _adjust_dates_for_timezone(
+        "2026-04-09", "2026-04-15", timezone_offset_minutes
+    )
+    assert (start, end) == ("2026-04-09", "2026-04-15"), label
+
+
+@pytest.mark.parametrize("tz", [None, 0, -330, 480, -540, 300])
+def test_lit_2698_where_conditions_use_unmodified_dates(tz):
+    """_build_where_conditions must hand the unmodified user-selected range to Prisma."""
+    where = _build_where_conditions(
+        entity_id_field="user_id",
+        entity_id="user-x",
+        start_date="2026-04-15",
+        end_date="2026-04-15",
+        model=None,
+        api_key=None,
+        timezone_offset_minutes=tz,
+    )
+    assert where["date"] == {"gte": "2026-04-15", "lte": "2026-04-15"}
+
+
+@pytest.mark.parametrize("tz", [None, 0, -330, 480, -540, 300])
+def test_lit_2698_aggregated_sql_uses_unmodified_dates(tz):
+    """_build_aggregated_sql_query must bind the unmodified user-selected dates."""
+    sql, params = _build_aggregated_sql_query(
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-x",
+        start_date="2026-04-15",
+        end_date="2026-04-15",
+        model=None,
+        api_key=None,
+        timezone_offset_minutes=tz,
+    )
+    # First two parameters are date >= start, date <= end
+    assert params[0] == "2026-04-15"
+    assert params[1] == "2026-04-15"
+    assert "date >= $1" in sql and "date <= $2" in sql
+
+
+def test_lit_2698_aggregated_sql_multi_day_range_unchanged():
+    """A multi-day range must not bleed into adjacent UTC days for any timezone."""
+    for tz in (-330, 480, -540, 300):
+        _, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-x",
+            start_date="2026-04-09",
+            end_date="2026-04-15",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=tz,
+        )
+        assert params[0] == "2026-04-09", f"tz={tz}"
+        assert params[1] == "2026-04-15", f"tz={tz}"
+
+
+@pytest.mark.asyncio
+async def test_lit_2698_aggregated_endpoint_queries_unwidened_range_for_non_utc():
+    """get_daily_activity_aggregated must not widen the SQL window for non-UTC timezones."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    captured = {}
+
+    async def fake_query_raw(sql, *params):
+        captured["sql"] = sql
+        captured["params"] = list(params)
+        return []
+
+    mock_prisma.db.query_raw = fake_query_raw
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    # IST (-330) user picks Apr 15 -- pre-fix this would have hit Apr 14..Apr 15.
+    await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-x",
+        entity_metadata_field=None,
+        start_date="2026-04-15",
+        end_date="2026-04-15",
+        model=None,
+        api_key=None,
+        timezone_offset_minutes=-330,
+    )
+    assert captured["params"][0] == "2026-04-15"
+    assert captured["params"][1] == "2026-04-15"
+
+    # PST (+480) user picks Apr 15 -- pre-fix this would have hit Apr 15..Apr 16.
+    captured.clear()
+    await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-x",
+        entity_metadata_field=None,
+        start_date="2026-04-15",
+        end_date="2026-04-15",
+        model=None,
+        api_key=None,
+        timezone_offset_minutes=480,
+    )
+    assert captured["params"][0] == "2026-04-15"
+    assert captured["params"][1] == "2026-04-15"
+
+
+@pytest.mark.asyncio
+async def test_lit_2698_paginated_endpoint_queries_unwidened_range_for_non_utc():
+    """get_daily_activity (paginated) must also not widen its prisma where-clause."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    captured = {}
+
+    mock_table = MagicMock()
+
+    async def fake_count(*, where):
+        captured["where"] = where
+        return 0
+
+    async def fake_find_many(**kwargs):
+        return []
+
+    mock_table.count = AsyncMock(side_effect=fake_count)
+    mock_table.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-x",
+        entity_metadata_field=None,
+        start_date="2026-04-15",
+        end_date="2026-04-15",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=50,
+        timezone_offset_minutes=-330,
+    )
+    assert captured["where"]["date"] == {"gte": "2026-04-15", "lte": "2026-04-15"}
+# LIT-2698 regression tests appended above.

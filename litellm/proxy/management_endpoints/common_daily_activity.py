@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -386,38 +386,36 @@ def _adjust_dates_for_timezone(
     timezone_offset_minutes: Optional[int],
 ) -> Tuple[str, str]:
     """
-    Adjust date range to account for timezone differences.
+    Return the user-selected date range unchanged for daily-aggregate queries.
 
-    The database stores dates in UTC. When a user in a different timezone
-    selects a local date range, we need to expand the UTC query range to
-    capture all records that fall within their local date range.
+    Earlier versions widened the SQL window by one UTC day when the caller
+    was in a non-UTC timezone, on the assumption that the underlying rows
+    could be re-bucketed by local time. The ``LiteLLM_Daily*Spend`` tables
+    that this helper feeds are pre-aggregated per UTC day, so widening the
+    range simply pulls in an adjacent UTC day's totals and adds them to the
+    user-selected day, inflating the dashboard (LIT-2698 — single-day
+    selects in IST/PST returned ~2x the correct totals).
+
+    The correct behavior given UTC-day storage is to query the user-selected
+    local-date range as-is. UTC users get exact results; non-UTC users get a
+    one-day-aligned view that matches the date labels the dashboard renders
+    (and that this code path returned before any timezone parameter existed).
+    Sub-day timezone-accurate aggregation would require hourly buckets,
+    which these tables do not provide.
 
     Args:
-        start_date: Start date in YYYY-MM-DD format (user's local date)
-        end_date: End date in YYYY-MM-DD format (user's local date)
-        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
-            This matches JavaScript's Date.getTimezoneOffset() convention.
-            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
+        start_date: Start date in YYYY-MM-DD format (user's local date).
+        end_date: End date in YYYY-MM-DD format (user's local date).
+        timezone_offset_minutes: Accepted for backwards compatibility; the
+            value is intentionally ignored. Matches JavaScript's
+            ``Date.getTimezoneOffset()`` convention (minutes BEHIND UTC).
 
     Returns:
-        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+        Tuple of ``(start_date, end_date)`` -- unchanged.
     """
-    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
-        return start_date, end_date
-
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-
-    if timezone_offset_minutes > 0:
-        # West of UTC (Americas): local evening extends into next UTC day
-        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
-        end = end + timedelta(days=1)
-    else:
-        # East of UTC (Asia/Europe): local morning starts in previous UTC day
-        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
-        start = start - timedelta(days=1)
-
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    # No-op: see LIT-2698. Parameter retained so call sites do not change.
+    _ = timezone_offset_minutes
+    return start_date, end_date
 
 
 def _build_where_conditions(
