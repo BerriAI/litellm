@@ -255,6 +255,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_check_batch_cost_jobs_processed_total",
     "litellm_check_batch_cost_errors_total",
     "litellm_check_batch_cost_last_run_timestamp",
+    # Team member metrics
+    "litellm_team_members_metric",
 ]
 
 
@@ -709,6 +711,14 @@ class PrometheusMetricLabels:
     litellm_check_batch_cost_errors_total: List[str] = []  # label: error_type (custom)
 
     litellm_check_batch_cost_last_run_timestamp: List[str] = []
+
+    # Team member count metric — incremented when a team member is added,
+    # decremented when one is removed. Labelled by team_id (``team``) and
+    # ``team_alias`` per the dashboards' team-level grouping.
+    litellm_team_members_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:

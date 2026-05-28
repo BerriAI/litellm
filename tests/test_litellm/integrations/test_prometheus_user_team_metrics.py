@@ -922,3 +922,85 @@ def test_custom_latency_buckets():
                 REGISTRY.unregister(collector)
             except Exception:
                 pass
+
+
+class TestPrometheusTeamMembersMetric:
+    """Tests for the per-team Prometheus team-members gauge.
+
+    The gauge increments when a member is added to a team and decrements when
+    one is removed. It is labelled by ``team`` (team_id) and ``team_alias``.
+    """
+
+    def _gauge_value(self, prometheus_logger, team_id: str, team_alias: str) -> float:
+        """Read the current value of the team-members gauge for a label combo."""
+        for metric in REGISTRY.collect():
+            for sample in metric.samples:
+                if sample.name != "litellm_team_members_metric":
+                    continue
+                if (
+                    sample.labels.get("team") == team_id
+                    and sample.labels.get("team_alias") == team_alias
+                ):
+                    return sample.value
+        return 0.0
+
+    def test_metric_is_initialized_with_team_labels(self, prometheus_logger):
+        """The gauge should exist and carry the two team-level labels."""
+        assert hasattr(prometheus_logger, "litellm_team_members_metric")
+        assert prometheus_logger.litellm_team_members_metric is not None
+        # Sanity-check the label names by labelling and reading back the sample.
+        prometheus_logger.litellm_team_members_metric.labels(
+            team="t-init", team_alias="t-init-alias"
+        ).set(0)
+        for metric in REGISTRY.collect():
+            for sample in metric.samples:
+                if (
+                    sample.name == "litellm_team_members_metric"
+                    and sample.labels.get("team") == "t-init"
+                ):
+                    assert set(sample.labels.keys()) >= {"team", "team_alias"}
+                    return
+        pytest.fail("litellm_team_members_metric sample not found in registry")
+
+    def test_increment_then_decrement_round_trips_to_zero(self, prometheus_logger):
+        """Add 3 members, then remove 3 — gauge should land back at 0."""
+        team_id, team_alias = "t-rt", "rt-alias"
+        for _ in range(3):
+            prometheus_logger.increment_team_members_metric(
+                team_id=team_id, team_alias=team_alias
+            )
+        assert self._gauge_value(prometheus_logger, team_id, team_alias) == 3.0
+        for _ in range(3):
+            prometheus_logger.decrement_team_members_metric(
+                team_id=team_id, team_alias=team_alias
+            )
+        assert self._gauge_value(prometheus_logger, team_id, team_alias) == 0.0
+
+    def test_increment_with_amount_supports_bulk_add(self, prometheus_logger):
+        """A single bulk add of N members should produce a +N delta."""
+        prometheus_logger.increment_team_members_metric(
+            team_id="t-bulk", team_alias="bulk-alias", amount=5
+        )
+        assert self._gauge_value(prometheus_logger, "t-bulk", "bulk-alias") == 5.0
+
+    def test_independent_teams_track_independently(self, prometheus_logger):
+        """Counts on different teams must not bleed into each other."""
+        prometheus_logger.increment_team_members_metric(
+            team_id="team-a", team_alias="alias-a"
+        )
+        prometheus_logger.increment_team_members_metric(
+            team_id="team-a", team_alias="alias-a"
+        )
+        prometheus_logger.increment_team_members_metric(
+            team_id="team-b", team_alias="alias-b"
+        )
+        assert self._gauge_value(prometheus_logger, "team-a", "alias-a") == 2.0
+        assert self._gauge_value(prometheus_logger, "team-b", "alias-b") == 1.0
+
+    def test_missing_team_alias_falls_back_to_empty_string(self, prometheus_logger):
+        """Teams without an alias must not crash the labels() call."""
+        prometheus_logger.increment_team_members_metric(
+            team_id="t-noalias", team_alias=None
+        )
+        # Empty string is the documented fallback when alias is None.
+        assert self._gauge_value(prometheus_logger, "t-noalias", "") == 1.0

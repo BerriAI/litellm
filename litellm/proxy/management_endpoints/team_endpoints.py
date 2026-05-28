@@ -102,6 +102,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.router import Router
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -119,6 +120,32 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 )
 
 router = APIRouter()
+
+
+def _emit_team_members_metric_delta(
+    team_id: Optional[str],
+    team_alias: Optional[str],
+    delta: int,
+) -> None:
+    """Emit a delta to the per-team Prometheus team-members gauge.
+
+    Positive ``delta`` increments the gauge (member added), negative decrements
+    (member removed). Silently no-ops when the Prometheus callback is not
+    registered or when ``delta`` is zero.
+    """
+    if delta == 0:
+        return
+    prometheus_logger = PrometheusLogger.get_instance()
+    if prometheus_logger is None:
+        return
+    if delta > 0:
+        prometheus_logger.increment_team_members_metric(
+            team_id=team_id, team_alias=team_alias, amount=float(delta)
+        )
+    else:
+        prometheus_logger.decrement_team_members_metric(
+            team_id=team_id, team_alias=team_alias, amount=float(-delta)
+        )
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -2482,6 +2509,11 @@ async def team_member_add(
                 prisma_client=prisma_client,
             )
 
+    # Snapshot pre-add member count so we can compute the real ``+N`` delta for
+    # the Prometheus team-members gauge below (independent of any duplicates
+    # silently skipped by ``_update_team_members_list``).
+    members_before_count = len(complete_team_data.members_with_roles or [])
+
     (
         updated_team,
         updated_users,
@@ -2499,6 +2531,23 @@ async def team_member_add(
         raise HTTPException(
             status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
         )
+
+    # Emit team-members gauge delta for *actual* net-new memberships only.
+    # ``team_member_add_duplication_check`` above only raises when *every*
+    # member in a bulk request is already a duplicate; partial-duplicate bulk
+    # adds fall through and ``_update_team_members_list`` silently skips the
+    # already-present ones. We therefore read the real delta off the
+    # team_members list we just persisted (``complete_team_data.members_with_roles``
+    # is mutated in-place by ``_add_team_members_to_team``) rather than
+    # trusting ``len(data.member)``.
+    members_after_count = len(complete_team_data.members_with_roles or [])
+    members_added = max(0, members_after_count - members_before_count)
+    _emit_team_members_metric_delta(
+        team_id=updated_team.team_id,
+        team_alias=updated_team.team_alias,
+        delta=members_added,
+    )
+
     return TeamAddMemberResponse(
         **updated_team.model_dump(),
         updated_users=updated_users,
@@ -2696,6 +2745,15 @@ async def team_member_delete(
                 "team_id": data.team_id,
             }
         )
+
+    # Emit team-members gauge delta (-1) for the removed member. The membership
+    # was verified to exist via ``is_member_in_team`` above, so this is always a
+    # real net deletion.
+    _emit_team_members_metric_delta(
+        team_id=existing_team_row.team_id,
+        team_alias=existing_team_row.team_alias,
+        delta=-1,
+    )
 
     return existing_team_row
 
