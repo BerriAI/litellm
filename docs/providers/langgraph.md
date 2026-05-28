@@ -235,7 +235,7 @@ curl -s --request POST \
 
 ## LiteLLM A2A Gateway
 
-You can also connect to LangGraph agents through LiteLLM's A2A (Agent-to-Agent) Gateway UI. This provides a visual way to register and test agents without writing code.
+You can register LangGraph agents in LiteLLM's [A2A (Agent-to-Agent) Gateway](../a2a.md), discover their upstream agent card, curate skills and capabilities, and invoke them through the LiteLLM proxy.
 
 ### 1. Navigate to Agents
 
@@ -264,34 +264,95 @@ Fill in the following fields:
 
 ![Enter API Base](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/6a6a03a7-f235-41db-b4ba-d32ced330f25/ascreenshot.jpeg?tl_px=0,251&br_px=2617,1714&force_format=jpeg&q=100&width=1120.0)
 
-Click "Create Agent" to save.
+### 4: Discover the agent card
 
-![Create Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/ddee4295-9a32-4cda-8e3f-543e5047eb6a/ascreenshot.jpeg?tl_px=416,653&br_px=2618,1883&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=686,316)
+Discovery runs automatically once the base URL and assistant ID are filled in. You can also trigger it manually from the discovery panel. 
 
-### 4. Test in Playground
+The preview is a form. You can:
 
+- **Edit** the name, description, provider, icon URL, and documentation URL.
+- **Add, remove, or reorder skills**, and edit each skill's name, description, tags, examples, and input/output modes.
+- **Toggle capabilities** that LiteLLM supports.
+
+Select or deselect skills and capabilities before saving. LiteLLM only persists what you keep in the form.
+
+Fields LiteLLM does not proxy are not shown. For the full support matrix, see [Agent card support](../a2a_agent_card.md#agent-card-support).
+
+![Agent Card Fields on UI](../../img/providers/langgraph/agent-card-fields-on-ui.png)
+
+### 5: Save the agent
+
+Click on Next to save. And complete the rest of the steps
+
+![Click on Next](../../img/providers/langgraph/click-on-next.png)
+
+### 6: Verify the served card
+
+From your terminal, fetch the agent card LiteLLM is serving:
+
+```bash
+curl -H "Authorization: Bearer sk-1234" \
+  http://localhost:4000/a2a/{agent_id}/.well-known/agent.json | jq
+```
+
+You should see the card you saved, with:
+
+- `supportedInterfaces[0].url` pointing at LiteLLM, not the upstream
+- `securitySchemes` showing `LiteLLMKey` (HTTP bearer)
+- The skills you kept during registration
+
+### 7. Test in Playground
 Go to "Playground" in the sidebar to test your agent. Change the endpoint type to `/v1/a2a/message/send`.
 
 ![Go to Playground](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/c4262189-95ac-4fbc-b5af-8aba8126e4f7/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=41,104)
 
 ![Select A2A Endpoint](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/6cbc8e93-7d0c-47fc-9ad4-562663f759d5/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=324,265)
 
-### 5. Select Your Agent and Send a Message
-
+### 8. Select Your Agent and Send a Message
 Pick your LangGraph agent from the dropdown and send a test message.
 
 ![Select Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/d01da2f1-3b89-47d7-ba95-de2dd8efbc1e/ascreenshot.jpeg?tl_px=0,92&br_px=2201,1323&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=348,277)
 
 ![Send Message](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/79db724e-a99e-493a-9747-dc91cb398370/ascreenshot.jpeg?tl_px=51,653&br_px=2252,1883&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,444)
 
-The agent responds with its capabilities. You can now interact with your LangGraph agent through the A2A protocol.
-
 ![Agent Response](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/82aa546a-0eb5-4836-b986-9aefcfe09e10/ascreenshot.jpeg?tl_px=295,28&br_px=2496,1259&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,277)
+
+### 9: Invoke the agent manually
+
+Send an A2A `message/send` request to the LiteLLM proxy URL:
+
+```bash
+curl -X POST http://localhost:4000/a2a/{agent_id} \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "req-1",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "messageId": "msg-001",
+        "role": "user",
+        "parts": [{"kind": "text", "text": "My order is urgent and still not delivered"}],
+        "metadata": {"skillId": "triage_ticket"}
+      }
+    }
+  }'
+```
+
+For streaming, use `message/stream` and add `-N -H "Accept: text/event-stream"` to the curl.
+
+See also [Invoking A2A Agents](../a2a_invoking_agents.md) for SDK examples.
+
 
 ## Further Reading
 
 - [LangGraph Platform Documentation](https://langchain-ai.github.io/langgraph/cloud/quick_start/)
+- [LangGraph A2A endpoint docs](https://docs.langchain.com/langsmith/server-a2a)
 - [LangGraph GitHub](https://github.com/langchain-ai/langgraph)
 - [A2A Agent Gateway](../a2a.md)
+- [A2A Agent Card on LiteLLM](../a2a_agent_card.md)
 - [A2A Cost Tracking](../a2a_cost_tracking.md)
+- [A2A Protocol Specification](https://a2a-protocol.org/latest/specification/)
 

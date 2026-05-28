@@ -61,7 +61,7 @@ Follow [this guide, to add your bedrock agentcore agent to LiteLLM Agent Gateway
 
 ### Add LangGraph Agents
 
-Follow [this guide, to add your langgraph agent to LiteLLM Agent Gateway](./providers/langgraph#litellm-a2a-gateway)
+Follow [this guide to register a LangGraph agent and configure its agent card](./providers/langgraph#register-a-langgraph-platform-agent)
 
 ### Add Pydantic AI Agents
 
