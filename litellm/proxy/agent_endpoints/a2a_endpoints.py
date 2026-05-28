@@ -258,9 +258,17 @@ async def get_agent_card(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        if not agent.agent_card_params:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' has no agent card configured",
+            )
+
         # Copy and rewrite URL to point to LiteLLM proxy
-        agent_card = dict(agent.agent_card_params)
-        agent_card["url"] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+        agent_card = {
+            **agent.agent_card_params,
+            "url": f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}",
+        }
 
         verbose_proxy_logger.debug(
             f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}"
