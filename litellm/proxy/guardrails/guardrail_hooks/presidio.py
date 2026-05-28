@@ -1197,6 +1197,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             created=getattr(chunk, "created", None),
             model=getattr(chunk, "model", None),
             system_fingerprint=getattr(chunk, "system_fingerprint", None),
+            # Forward usage from the source chunk (Bedrock Converse + OpenAI
+            # `stream_options: include_usage=True` embed token counts in the
+            # combined content+finish chunk; the finish-only clone is the only
+            # terminal chunk emitted in that case, so dropping it would lose
+            # the token-count payload — Greptile P1).
+            usage=getattr(chunk, "usage", None),
             choices=[
                 StreamingChoices(
                     index=getattr(src_choice, "index", 0),
@@ -1288,6 +1294,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             created=getattr(template, "created", None),
             model=getattr(template, "model", None),
             system_fingerprint=getattr(template, "system_fingerprint", None),
+            # Forward usage from the template chunk (some providers carry usage
+            # on every chunk, not just the last one).
+            usage=getattr(template, "usage", None),
             choices=[new_choice],
         )
 
