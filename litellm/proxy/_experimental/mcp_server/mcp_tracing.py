@@ -91,9 +91,14 @@ def _sanitize_resource_uri(uri: str) -> str:
         from urllib.parse import urlsplit, urlunsplit
 
         parts = urlsplit(uri)
-        host = parts.hostname or ""
-        port = parts.port
-        netloc = host if port is None else f"{host}:{port}"
+        # parts.netloc keeps IPv6 brackets intact (e.g. "[::1]:8080")
+        # whereas reconstructing from parts.hostname + parts.port
+        # strips them and produces an ambiguous "::1:8080". Use the raw
+        # netloc and strip only the userinfo prefix (everything up to and
+        # including the last @).
+        netloc = (
+            parts.netloc.rsplit("@", 1)[-1] if "@" in parts.netloc else parts.netloc
+        )
         if not parts.scheme and not netloc:
             # Opaque / non-URL value (e.g. plain identifier) - return as-is.
             return uri
