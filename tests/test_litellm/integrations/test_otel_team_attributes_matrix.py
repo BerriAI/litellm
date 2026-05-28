@@ -394,12 +394,12 @@ class TestServiceSpanCells(unittest.TestCase):
         )
         parent.end()
         span = _spans_by_name(exporter)["redis"]
-        assert span.attributes.get(TEAM_ID_ATTR) is None, (
-            "blank team_id leaked as canonical attr"
-        )
-        assert span.attributes.get(TEAM_ALIAS_ATTR) is None, (
-            "blank team_alias leaked as canonical attr"
-        )
+        assert (
+            span.attributes.get(TEAM_ID_ATTR) is None
+        ), "blank team_id leaked as canonical attr"
+        assert (
+            span.attributes.get(TEAM_ALIAS_ATTR) is None
+        ), "blank team_alias leaked as canonical attr"
 
 
 # ---------------------------------------------------------------------------
