@@ -16,6 +16,7 @@ from litellm.llms.hunyuan.image_edit import (
     hunyuan_image_edit,
 )
 from litellm.llms.hunyuan.image_edit.transformation import (
+    _image_to_param,
     _image_to_url,
 )
 from litellm.types.utils import ImageResponse, LlmProviders
@@ -125,7 +126,7 @@ class TestHunyuanImageEditConfig:
         assert data["prompt"] == "generate something"
 
     def test_transform_image_edit_request_with_bytes(self):
-        """Bytes are converted to a base64 data URL."""
+        """Bytes are converted to a base64 data URL wrapped in {"image_url": ...}."""
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
         data, files = self.cfg.transform_image_edit_request(
             model="gpt-image-2",
@@ -136,11 +137,12 @@ class TestHunyuanImageEditConfig:
             headers={},
         )
         assert len(data["images"]) == 1
-        assert data["images"][0].startswith("data:image/png;base64,")
+        assert isinstance(data["images"][0], dict)
+        assert data["images"][0]["image_url"].startswith("data:image/png;base64,")
         assert files == []
 
     def test_transform_image_edit_request_with_file_object(self):
-        """File-like objects are read and converted to a base64 data URL."""
+        """File-like objects are read and converted to a base64 data URL wrapped in {"image_url": ...}."""
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
         file_obj = io.BytesIO(png_bytes)
         data, files = self.cfg.transform_image_edit_request(
@@ -152,7 +154,22 @@ class TestHunyuanImageEditConfig:
             headers={},
         )
         assert len(data["images"]) == 1
-        assert data["images"][0].startswith("data:image/png;base64,")
+        assert isinstance(data["images"][0], dict)
+        assert data["images"][0]["image_url"].startswith("data:image/png;base64,")
+        assert files == []
+
+    def test_transform_image_edit_request_with_base64_url(self):
+        """Base64 data URL strings are wrapped in {"image_url": ...}."""
+        data_url = "data:image/jpeg;base64,/9j/4AAQSk..."
+        data, files = self.cfg.transform_image_edit_request(
+            model="gpt-image-2",
+            prompt="edit",
+            image=data_url,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert data["images"] == [{"image_url": data_url}]
         assert files == []
 
     def test_transform_image_edit_request_n_is_cast_to_int(self):
@@ -260,6 +277,37 @@ class TestImageToUrl:
     def test_unsupported_type_raises(self):
         with pytest.raises(TypeError, match="unsupported image type"):
             _image_to_url(12345)  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# _image_to_param helper
+# ---------------------------------------------------------------------------
+
+
+class TestImageToParam:
+    def test_http_url_passthrough(self):
+        assert _image_to_param("https://example.com/img.png") == "https://example.com/img.png"
+
+    def test_data_url_wrapped(self):
+        data_url = "data:image/jpeg;base64,/9j/4AAQSk.............."
+        assert _image_to_param(data_url) == {"image_url": data_url}
+
+    def test_png_data_url_wrapped(self):
+        data_url = "data:image/png;base64,abc123"
+        result = _image_to_param(data_url)
+        assert result == {"image_url": data_url}
+
+    def test_bytes_produce_wrapped_dict(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_param(png)
+        assert isinstance(result, dict)
+        assert result["image_url"].startswith("data:image/png;base64,")
+
+    def test_file_like_produces_wrapped_dict(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        result = _image_to_param(io.BytesIO(png))
+        assert isinstance(result, dict)
+        assert result["image_url"].startswith("data:image/png;base64,")
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +465,8 @@ class TestHunyuanImageEditHandler:
 
         assert isinstance(result, ImageResponse)
         call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert call_body["images"][0].startswith("data:image/png;base64,")
+        assert isinstance(call_body["images"][0], dict)
+        assert call_body["images"][0]["image_url"].startswith("data:image/png;base64,")
 
 
 # ---------------------------------------------------------------------------

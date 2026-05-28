@@ -104,6 +104,18 @@ def _image_to_url(image: Any) -> str:
     )
 
 
+def _image_to_param(image: Any) -> Union[str, Dict[str, str]]:
+    """Convert image to the Hunyuan API request parameter format.
+
+    Hunyuan requires base64 data URLs to be wrapped as {"image_url": "data:..."}.
+    HTTP/HTTPS URL strings are passed through unchanged.
+    """
+    url = _image_to_url(image)
+    if url.startswith("data:"):
+        return {"image_url": url}
+    return url
+
+
 class HunyuanImageEditConfig(BaseImageEditConfig):
     """
     Configuration for Tencent Hunyuan image editing.
@@ -180,11 +192,11 @@ class HunyuanImageEditConfig(BaseImageEditConfig):
 
         if image is not None:
             images = image if isinstance(image, list) else [image]
-            request_body["images"] = [_image_to_url(img) for img in images]
+            request_body["images"] = [_image_to_param(img) for img in images]
 
         for k, v in image_edit_optional_request_params.items():
             if k == "mask" and v is not None:
-                request_body["mask"] = _image_to_url(v)
+                request_body["mask"] = _image_to_param(v)
             elif k == "n" and v is not None:
                 request_body["n"] = int(v)
             elif k not in ("mask",) and v is not None:
