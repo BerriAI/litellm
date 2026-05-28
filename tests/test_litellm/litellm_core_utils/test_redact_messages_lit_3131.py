@@ -134,7 +134,6 @@ def _build_choice_with_provider_specific_fields():
 def test_perform_redaction_clears_message_provider_specific_fields_reasoning():
     choice = _build_choice_with_provider_specific_fields()
     response = litellm.ModelResponse(choices=[choice], model="m")
-    perform_redaction(_make_model_call_details_with_body({}), None)
     redacted = perform_redaction(_make_model_call_details_with_body({}), response)
     psf = redacted.choices[0].message.provider_specific_fields
     assert psf["reasoning_content"] is None
