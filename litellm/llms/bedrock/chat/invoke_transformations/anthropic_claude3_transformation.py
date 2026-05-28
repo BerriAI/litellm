@@ -16,8 +16,11 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    convert_bedrock_invoke_output_format_to_inline_schema,
     get_anthropic_beta_from_headers,
+    normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -75,6 +78,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
 
+        # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
+        # parent mapping converts it to ``output_config.effort`` and the
+        # downstream effort gate runs. Mirrors the converse path's
+        # ``_handle_reasoning_effort_parameter`` and the messages path's
+        # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
+        # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
+        # models like Opus 4.6 that don't natively advertise xhigh.
+        self._clamp_adaptive_reasoning_effort_for_bedrock(
+            model=original_model, params=non_default_params
+        )
+
         optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
@@ -87,6 +101,27 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model = original_model
 
         return optional_params
+
+    @staticmethod
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict) -> None:
+        """Lower ``reasoning_effort`` to the Bedrock effort ceiling before mapping.
+
+        Bedrock's adaptive Claude models accept the OpenAI-style
+        ``reasoning_effort`` tier, but the request validator can reject tiers
+        the model does not natively advertise (e.g. ``xhigh`` on Opus 4.6).
+        Clamp the raw tier to the model's
+        ``bedrock_output_config_effort_ceiling`` so Claude Code "goal mode"
+        keeps working. Non-adaptive models and models without a ceiling are
+        left untouched.
+        """
+        if not AnthropicConfig._is_adaptive_thinking_model(model):
+            return
+        effort = params.get("reasoning_effort")
+        if not isinstance(effort, str):
+            return
+        clamped = {"effort": effort}
+        normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
+        params["reasoning_effort"] = clamped["effort"]
 
     def transform_request(
         self,
@@ -157,6 +192,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             for k, v in optional_params.items()
             if k not in self.aws_authentication_params
         }
+        output_config = filtered_params.get("output_config")
+        if isinstance(output_config, dict):
+            filtered_params["output_config"] = dict(output_config)
+            normalize_bedrock_opus_output_config_effort(
+                model=model,
+                output_config=filtered_params["output_config"],
+            )
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
 
         anthropic_request = AnthropicConfig.transform_request(
@@ -170,7 +212,20 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        anthropic_request.pop("output_format", None)
+        output_format = anthropic_request.pop("output_format", None)
+        output_config_format = pop_bedrock_invoke_output_config_format(
+            anthropic_request
+        )
+        if output_format:
+            convert_bedrock_invoke_output_format_to_inline_schema(
+                output_format=output_format,
+                request_body=anthropic_request,
+            )
+        elif output_config_format:
+            convert_bedrock_invoke_output_format_to_inline_schema(
+                output_format=output_config_format,
+                request_body=anthropic_request,
+            )
         if not (
             _supports_factory(
                 model=model,
