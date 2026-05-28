@@ -326,13 +326,23 @@ class CheckBatchCost:
                     # IDs against. The provider transformations typically set this,
                     # but populate defensively from the deployment we just resolved so
                     # the helper has the metadata it needs to register new rows.
-                    _hidden_params = getattr(response, "_hidden_params", None)
-                    if _hidden_params is None:
-                        _hidden_params = {}
-                        try:
-                            response._hidden_params = _hidden_params
-                        except Exception:
-                            _hidden_params = None
+                    # Copy-on-read so we never mutate a class-level default dict that
+                    # might be shared by another LiteLLMBatch instance in the same poll
+                    # cycle (Greptile P2).
+                    _hidden_params = dict(getattr(response, "_hidden_params", None) or {})
+                    try:
+                        response._hidden_params = _hidden_params
+                    except Exception:
+                        # response disallows attribute assignment (e.g. __slots__).
+                        # The helper will then see whatever was already on the response
+                        # (possibly empty) and silently skip new managed-row creation;
+                        # surface that so operators can tell.
+                        _hidden_params = None
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: could not attach _hidden_params to "
+                            f"response for batch {batch_id}; managed-file registration "
+                            "may be skipped for raw provider IDs"
+                        )
                     if _hidden_params is not None:
                         _hidden_params.setdefault("model_id", model_id)
                         _resolved_model_name = (
