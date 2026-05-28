@@ -1,6 +1,5 @@
 """
-LIT-3407 regression tests for DataDog 413 (Payload Too Large) handling and
-DD_BATCH_SIZE env-var support.
+LIT-3407 regression tests for DataDog 413 (Payload Too Large) handling.
 
 Bug summary
 -----------
@@ -10,8 +9,7 @@ production codepath for a 413 from Datadog is an *exception*, not a Response
 with status_code == 413 - the old `if response.status_code == 413` branch
 inside async_send_batch was unreachable, the bare `except` re-queued the
 whole oversized batch, and every flush interval replayed the same 413
-forever. DD_BATCH_SIZE - referenced in the user-facing error message as the
-documented workaround - was never read from the environment.
+forever.
 
 These tests pin the new behaviour:
     * Masked 413 exception -> recursive halve-and-retry, single-event drop.
@@ -19,7 +17,6 @@ These tests pin the new behaviour:
     * Partial split: first half 413, second half 202 -> first half is dropped
       after a 1-event recurse, second half is delivered in one call.
     * Non-413 transport errors -> events are preserved for retry.
-    * DD_BATCH_SIZE: honored when valid, ignored (with a warning) when invalid.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -28,23 +25,15 @@ import httpx
 import pytest
 from httpx import Request, Response
 
-from litellm.integrations.datadog.datadog import (
-    DataDogLogger,
-    _is_413_error,
-    _resolve_dd_batch_size,
-)
+from litellm.integrations.datadog.datadog import DataDogLogger, _is_413_error
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
-from litellm.types.integrations.datadog import (
-    DD_MAX_BATCH_SIZE,
-    DatadogPayload,
-)
+from litellm.types.integrations.datadog import DatadogPayload
 
 
 @pytest.fixture
 def datadog_env(monkeypatch):
     monkeypatch.setenv("DD_API_KEY", "test_api_key")
     monkeypatch.setenv("DD_SITE", "test.datadoghq.com")
-    monkeypatch.delenv("DD_BATCH_SIZE", raising=False)
 
 
 def _payloads(n):
@@ -107,7 +96,7 @@ async def test_masked_413_exception_triggers_chunking_and_drop(datadog_env):
 
     await logger.async_send_batch()
 
-    # 1 (full batch of 4) + 2 (halves of 2) + 4 (single events) = 7 calls
+    # Recursive halving of 4 events: 1 full + 2 halves + 4 single events = 7 calls.
     assert logger.async_send_compressed_data.await_count == 7
     # Queue is fully drained - no infinite retry.
     assert logger.log_queue == []
@@ -221,52 +210,3 @@ async def test_413_response_without_exception_also_chunks(datadog_env):
     # 1 full batch + 2 single-event retries = 3 calls
     assert logger.async_send_compressed_data.await_count == 3
     assert logger.log_queue == []
-
-
-# --------------------------------------------------------------------------- #
-# DD_BATCH_SIZE env-var (previously documented but never read)                #
-# --------------------------------------------------------------------------- #
-def test_resolve_dd_batch_size_unset_returns_default():
-    assert _resolve_dd_batch_size() == DD_MAX_BATCH_SIZE
-
-
-def test_resolve_dd_batch_size_honors_valid_int(monkeypatch):
-    monkeypatch.setenv("DD_BATCH_SIZE", "50")
-    assert _resolve_dd_batch_size() == 50
-
-
-def test_resolve_dd_batch_size_clamps_to_dd_max(monkeypatch):
-    monkeypatch.setenv("DD_BATCH_SIZE", str(DD_MAX_BATCH_SIZE * 10))
-    assert _resolve_dd_batch_size() == DD_MAX_BATCH_SIZE
-
-
-def test_resolve_dd_batch_size_ignores_non_integer(monkeypatch):
-    monkeypatch.setenv("DD_BATCH_SIZE", "not-a-number")
-    assert _resolve_dd_batch_size() == DD_MAX_BATCH_SIZE
-
-
-def test_resolve_dd_batch_size_ignores_non_positive(monkeypatch):
-    monkeypatch.setenv("DD_BATCH_SIZE", "0")
-    assert _resolve_dd_batch_size() == DD_MAX_BATCH_SIZE
-    monkeypatch.setenv("DD_BATCH_SIZE", "-5")
-    assert _resolve_dd_batch_size() == DD_MAX_BATCH_SIZE
-
-
-@pytest.mark.asyncio
-async def test_dd_batch_size_env_var_applied_to_logger_init(monkeypatch):
-    monkeypatch.setenv("DD_API_KEY", "test")
-    monkeypatch.setenv("DD_SITE", "test.datadoghq.com")
-    monkeypatch.setenv("DD_BATCH_SIZE", "50")
-    with patch("asyncio.create_task"):
-        logger = DataDogLogger()
-    assert logger.batch_size == 50
-
-
-@pytest.mark.asyncio
-async def test_dd_batch_size_default_when_env_unset(monkeypatch):
-    monkeypatch.setenv("DD_API_KEY", "test")
-    monkeypatch.setenv("DD_SITE", "test.datadoghq.com")
-    monkeypatch.delenv("DD_BATCH_SIZE", raising=False)
-    with patch("asyncio.create_task"):
-        logger = DataDogLogger()
-    assert logger.batch_size == DD_MAX_BATCH_SIZE
