@@ -331,7 +331,12 @@ class CheckBatchCost:
                         _hidden_params = {}
                         try:
                             response._hidden_params = _hidden_params
-                        except Exception:
+                        except Exception as _hp_err:
+                            verbose_proxy_logger.warning(
+                                f"CheckBatchCost: could not set _hidden_params on response "
+                                f"for batch {batch_id}; output/error file IDs may not be "
+                                f"registered as new managed rows: {_hp_err}"
+                            )
                             _hidden_params = None
                     if _hidden_params is not None:
                         _hidden_params.setdefault("model_id", model_id)
