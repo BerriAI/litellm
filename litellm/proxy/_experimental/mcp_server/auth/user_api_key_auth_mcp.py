@@ -954,12 +954,16 @@ class MCPRequestHandler:
             )
 
             # Unified key.access_group_ids → MCP servers (ungated: the group is
-            # attached to the key, so it grants the key's own scope).
-            key_access_group_servers = await _get_mcp_server_ids_from_access_groups(
-                access_group_ids=user_api_key_auth.access_group_ids or [],
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+            # attached to the key, so it grants the key's own scope). Entries in
+            # access_mcp_server_ids may be server_ids OR names/aliases, so expand
+            # to ids here — matching the legacy object_permission path below.
+            key_access_group_servers = global_mcp_server_manager.expand_permission_list(
+                await _get_mcp_server_ids_from_access_groups(
+                    access_group_ids=user_api_key_auth.access_group_ids or [],
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
