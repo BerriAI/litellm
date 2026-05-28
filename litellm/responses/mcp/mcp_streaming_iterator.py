@@ -658,6 +658,18 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.tool_execution_events.extend(call_events[:-1])
 
             # Execute the tools
+            # LIT-3304: forward parent /responses request_tags so MCP
+            # sub-calls inherit them on SpendLogs / Tag Usage.
+            _iter_request_tags = None
+            try:
+                _params_meta = (self.original_request_params or {}).get("metadata")
+                if isinstance(_params_meta, dict):
+                    _tags = _params_meta.get("tags")
+                    if isinstance(_tags, list) and _tags:
+                        _iter_request_tags = list(_tags)
+            except Exception:
+                _iter_request_tags = None
+
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=self.tool_server_map,
                 tool_calls=tool_calls,
@@ -668,6 +680,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_headers=self.raw_headers,
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
+                request_tags=_iter_request_tags,
             )
 
             # Create completion events and output_item.done events for tool execution
