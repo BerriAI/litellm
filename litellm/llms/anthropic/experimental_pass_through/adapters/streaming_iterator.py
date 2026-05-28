@@ -52,10 +52,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     holding_stop_reason_chunk: Optional[Any] = None
     queued_usage_chunk: bool = False
     current_content_block_index: int = 0
-    current_content_block_start: ContentBlockContentBlockDict = TextBlock(
-        type="text",
-        text="",
-    )
 
     def __init__(
         self,
@@ -80,6 +76,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
         self.chunk_queue: deque = deque()
+        # Per-instance default content block. Must be initialized here (not at
+        # class level) so concurrent streams don't share the same mutable dict
+        # — `_should_start_new_content_block` mutates `tool_block["name"]` in
+        # place, which would otherwise leak across streams.
+        self.current_content_block_start: (
+            "AnthropicStreamWrapper.ContentBlockContentBlockDict"
+        ) = self.TextBlock(
+            type="text",
+            text="",
+        )
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> Dict[str, Any]:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
