@@ -862,6 +862,11 @@ async def cancel_batch(
             )
             # Fix: The helper sets "file_id" but we need "batch_id"
             data["batch_id"] = data.pop("file_id", original_batch_id)
+            # Provider-config providers (e.g. bedrock) require `model` in kwargs
+            # so litellm.acancel_batch can load BedrockBatchesConfig. Without
+            # it the call falls into the legacy provider switch and 400s.
+            # Mirrors retrieve_batch SCENARIO 1 (LIT-2454).
+            data["model"] = model_from_id
 
             # Cancel batch using model credentials
             response = await litellm.acancel_batch(
@@ -875,8 +880,16 @@ async def cancel_batch(
                 f"Cancelled batch using model: {model_from_id}, original_id: {original_batch_id}"
             )
 
-        # SCENARIO 2: target_model_names based routing
-        elif unified_batch_id:
+        # SCENARIO 2: loadbalancing OR target_model_names based routing
+        # Mirrors retrieve_batch SCENARIO 2 so that proxies with
+        # enable_loadbalancing_on_batch_endpoints=True can cancel batches that
+        # were created through the router (raw provider batch_id, no model
+        # encoding) instead of falling through to the env-var fallback below
+        # (LIT-2454).
+        elif (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            or unified_batch_id
+        ):
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
