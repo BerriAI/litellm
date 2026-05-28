@@ -1890,6 +1890,85 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     },
                 )
 
+    def _cap_floor_to_smallest_tpm_bucket(
+        self,
+        estimated_tokens: int,
+        data: dict,
+        descriptors: List[RateLimitDescriptor],
+    ) -> int:
+        """Cap the synthetic output-budget floor at the smallest TPM bucket.
+
+        ``_estimate_tokens_for_request`` adds a
+        ``DEFAULT_MAX_TOKENS_ESTIMATE // 4`` (~1024) output-budget floor
+        whenever the caller does not set ``max_tokens`` /
+        ``max_completion_tokens``. The floor exists to slow burst-bypass
+        via concurrency, not to model client intent. Uncapped, it rejects
+        the FIRST request from any key whose ``tpm_limit`` is below the
+        floor: counter starts at 0, reservation of ~1024 > limit of e.g.
+        100 -> OVER_LIMIT before any usage.
+
+        Capping at the smallest TPM bucket lets the request through;
+        post-call reconciliation charges the (actual - reserved) delta.
+        Backpressure still holds because the reservation fills the
+        bucket -- concurrent requests see no headroom and are rejected.
+
+        IMPORTANT: keep a lower bound of ``estimated_input_tokens`` so a
+        no-``max_tokens`` request whose KNOWN input already exceeds the
+        bucket still gets rejected upfront. Without that floor, an
+        unbounded prompt could pass pre-call and only get charged after
+        the upstream call -- a quota bypass.
+
+        When ``max_tokens`` IS set explicitly, the estimate reflects the
+        client declared output budget; if it exceeds the limit the
+        request genuinely cannot fit, so we return ``estimated_tokens``
+        unchanged. ``is not None`` checks so a deliberate ``max_tokens=0``
+        (or ``max_completion_tokens=0``) is treated as explicitly
+        declared, not as absent.
+        """
+        explicit_max_tokens_set = (
+            data.get("max_tokens") is not None
+            or data.get("max_completion_tokens") is not None
+        )
+        if explicit_max_tokens_set:
+            return estimated_tokens
+
+        smallest_tpm_limit: Optional[int] = None
+        for d in descriptors:
+            tpu = (d.get("rate_limit") or {}).get("tokens_per_unit")
+            if tpu is None or tpu <= 0:
+                continue
+            smallest_tpm_limit = (
+                tpu if smallest_tpm_limit is None else min(smallest_tpm_limit, tpu)
+            )
+        if smallest_tpm_limit is None:
+            return estimated_tokens
+
+        # Honest input-token floor -- never cap below known input.
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_str_from_messages,
+        )
+
+        messages = data.get("messages")
+        prompt = data.get("prompt")
+        input_text = data.get("input")
+        if messages:
+            total_chars = len(get_str_from_messages(messages))
+        elif isinstance(prompt, str):
+            total_chars = len(prompt)
+        elif isinstance(prompt, list):
+            total_chars = sum(len(str(item)) for item in prompt)
+        elif isinstance(input_text, str):
+            total_chars = len(input_text)
+        elif isinstance(input_text, list):
+            total_chars = sum(len(str(item)) for item in input_text)
+        else:
+            total_chars = 0
+        input_floor = (
+            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        )
+        capped = min(estimated_tokens, smallest_tpm_limit)
+        return max(capped, input_floor)
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2031,79 +2110,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 # Cap ONLY the synthetic output-budget floor that
-                # ``_estimate_tokens_for_request`` adds (~1024 tokens via
-                # ``DEFAULT_MAX_TOKENS_ESTIMATE // 4``) when the caller did
-                # not set ``max_tokens`` / ``max_completion_tokens``. That
-                # floor exists to slow burst-bypass via concurrency, not to
-                # model client intent. Uncapped, it rejects the FIRST
-                # request from any key whose ``tpm_limit`` is below the
-                # floor: counter starts at 0, reservation of 1024 > limit
-                # of e.g. 100 -> OVER_LIMIT before any usage.
-                #
-                # Cap the floor at the smallest TPM bucket so the request
-                # passes; post-call reconciliation charges the
-                # (actual - reserved) delta. Backpressure still holds
-                # because the reservation fills the bucket -- concurrent
-                # requests see no headroom and are rejected.
-                #
-                # IMPORTANT: keep a floor of ``estimated_input_tokens`` so
-                # a no-``max_tokens`` request whose KNOWN input already
-                # exceeds the bucket still gets rejected upfront. Without
-                # that floor, an unbounded prompt could pass pre-call and
-                # only get charged after the upstream call -- a quota
-                # bypass.
-                #
-                # When ``max_tokens`` IS set explicitly, the estimate
-                # reflects the client declared output budget; if it
-                # exceeds the limit the request genuinely cannot fit, so
-                # we leave the estimate uncapped. Use explicit
-                # ``is not None`` checks so a deliberate ``max_tokens=0``
-                # (or ``max_completion_tokens=0``) is treated as
-                # explicitly declared, not as absent.
-                explicit_max_tokens_set = (
-                    data.get("max_tokens") is not None
-                    or data.get("max_completion_tokens") is not None
+                # ``_estimate_tokens_for_request`` adds when the caller
+                # did not set ``max_tokens`` / ``max_completion_tokens``;
+                # see ``_cap_floor_to_smallest_tpm_bucket`` for the
+                # full rationale (preserves input-token floor, leaves
+                # explicit budgets uncapped, treats zero as explicit).
+                estimated_tokens = self._cap_floor_to_smallest_tpm_bucket(
+                    estimated_tokens=estimated_tokens,
+                    data=data,
+                    descriptors=descriptors,
                 )
-                if not explicit_max_tokens_set:
-                    smallest_tpm_limit: Optional[int] = None
-                    for d in descriptors:
-                        tpu = (d.get("rate_limit") or {}).get("tokens_per_unit")
-                        if tpu is None or tpu <= 0:
-                            continue
-                        smallest_tpm_limit = (
-                            tpu
-                            if smallest_tpm_limit is None
-                            else min(smallest_tpm_limit, tpu)
-                        )
-                    if smallest_tpm_limit is not None:
-                        # Recompute the honest input-token estimate to use
-                        # as a lower bound -- never cap below known input.
-                        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                            get_str_from_messages,
-                        )
-
-                        messages = data.get("messages")
-                        prompt = data.get("prompt")
-                        input_text = data.get("input")
-                        if messages:
-                            total_chars = len(get_str_from_messages(messages))
-                        elif isinstance(prompt, str):
-                            total_chars = len(prompt)
-                        elif isinstance(prompt, list):
-                            total_chars = sum(len(str(item)) for item in prompt)
-                        elif isinstance(input_text, str):
-                            total_chars = len(input_text)
-                        elif isinstance(input_text, list):
-                            total_chars = sum(len(str(item)) for item in input_text)
-                        else:
-                            total_chars = 0
-                        input_floor = (
-                            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN)
-                            if total_chars > 0
-                            else 0
-                        )
-                        capped = min(estimated_tokens, smallest_tpm_limit)
-                        estimated_tokens = max(capped, input_floor)
 
                 tpm_response = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
