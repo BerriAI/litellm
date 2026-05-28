@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -37,6 +38,22 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self.collected_chunks: List[bytes] = []
         self.model = model
         self._hidden_params: Dict[str, Any] = hidden_params or {}
+
+    @staticmethod
+    def _is_terminal_sse_chunk(chunk: Any) -> bool:
+        if isinstance(chunk, bytes):
+            try:
+                chunk = chunk.decode("utf-8")
+            except UnicodeDecodeError:
+                return False
+        if not isinstance(chunk, str):
+            return False
+
+        payload = chunk.strip()
+        if payload.startswith("data:"):
+            payload = payload[5:].strip()
+
+        return payload == STREAM_SSE_DONE_STRING
 
     async def _handle_async_streaming_logging(
         self,
@@ -98,14 +115,15 @@ class GoogleGenAIGenerateContentStreamingIterator(
         return self
 
     def __next__(self):
-        try:
-            # Get the next chunk from the stored iterator
-            chunk = next(self.stream_iterator)
-            self.collected_chunks.append(chunk)
-            # Just yield raw bytes
-            return chunk
-        except StopIteration:
-            raise StopIteration
+        while True:
+            try:
+                chunk = next(self.stream_iterator)
+                self.collected_chunks.append(chunk)
+                if self._is_terminal_sse_chunk(chunk):
+                    continue
+                return chunk
+            except StopIteration:
+                raise StopIteration
 
     def __aiter__(self):
         return self
@@ -154,12 +172,13 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(
         return self
 
     async def __anext__(self):
-        try:
-            # Get the next chunk from the stored async iterator
-            chunk = await self.stream_iterator.__anext__()
-            self.collected_chunks.append(chunk)
-            # Just yield raw bytes
-            return chunk
-        except StopAsyncIteration:
-            await self._handle_async_streaming_logging()
-            raise StopAsyncIteration
+        while True:
+            try:
+                chunk = await self.stream_iterator.__anext__()
+                self.collected_chunks.append(chunk)
+                if self._is_terminal_sse_chunk(chunk):
+                    continue
+                return chunk
+            except StopAsyncIteration:
+                await self._handle_async_streaming_logging()
+                raise StopAsyncIteration

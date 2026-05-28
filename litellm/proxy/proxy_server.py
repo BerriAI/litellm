@@ -6952,6 +6952,12 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
     return f"data: {chunk}\n\n"
 
 
+def _should_emit_done_sentinel(request_data: dict) -> bool:
+    logging_obj = request_data.get("litellm_logging_obj")
+    call_type = getattr(logging_obj, "call_type", None)
+    return call_type != "agenerate_content_stream"
+
+
 async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -7033,8 +7039,9 @@ async def async_data_generator(  # noqa: PLR0915
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        if _should_emit_done_sentinel(request_data=request_data):
+            done_message = "[DONE]"
+            yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(

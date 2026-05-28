@@ -15,6 +15,7 @@
     "minimatch": "10.2.5",
     "picomatch": "2.3.2",
     "@isaacs/brace-expansion": "5.0.0",
+    "brace-expansion": "5.0.6",
     "@babel/traverse": "7.28.5",
     "braces": "3.0.3"
   }

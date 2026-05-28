@@ -4973,13 +4973,42 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
+def _get_geo_routing_order(
+    deployment: Union[Dict, Any], geo_bucket: Optional[str] = None
+) -> Optional[int]:
+    if not geo_bucket:
+        return None
+
+    geo_orders = deployment.get("model_info", {}).get("geo_routing_orders")
+    if not isinstance(geo_orders, dict):
+        geo_orders = deployment.get("litellm_params", {}).get("geo_routing_orders")
+    if not isinstance(geo_orders, dict):
+        return None
+
+    geo_order = geo_orders.get(geo_bucket)
+    if isinstance(geo_order, int):
+        return geo_order
+    if isinstance(geo_order, str):
+        try:
+            return int(geo_order)
+        except ValueError:
+            return None
+    return None
+
+
+def _get_deployment_order(
+    deployment: Union[Dict, Any], geo_bucket: Optional[str] = None
+) -> Optional[int]:
     """
     Returns the routing order for a deployment.
 
     Checks litellm_params first (static config), then model_info (dynamic/team
     models added via API where order lives in model_info, not litellm_params).
     """
+    geo_order = _get_geo_routing_order(deployment=deployment, geo_bucket=geo_bucket)
+    if geo_order is not None:
+        return geo_order
+
     order = deployment.get("litellm_params", {}).get("order")
     if order is None:
         order = deployment.get("model_info", {}).get("order")
@@ -4987,11 +5016,15 @@ def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
 
 
 def _get_order_filtered_deployments(
-    healthy_deployments: List[Dict], target_order: Optional[int] = None
+    healthy_deployments: List[Dict],
+    target_order: Optional[int] = None,
+    geo_bucket: Optional[str] = None,
 ) -> List:
     if target_order is not None:
         filtered = [
-            d for d in healthy_deployments if _get_deployment_order(d) == target_order
+            d
+            for d in healthy_deployments
+            if _get_deployment_order(d, geo_bucket=geo_bucket) == target_order
         ]
         if filtered:
             return filtered
@@ -5002,7 +5035,7 @@ def _get_order_filtered_deployments(
     _valid_orders: List[int] = [
         o
         for deployment in healthy_deployments
-        for o in [_get_deployment_order(deployment)]
+        for o in [_get_deployment_order(deployment, geo_bucket=geo_bucket)]
         if o is not None
     ]
     min_order: Optional[int] = min(_valid_orders) if _valid_orders else None
@@ -5011,7 +5044,7 @@ def _get_order_filtered_deployments(
         filtered_deployments = [
             deployment
             for deployment in healthy_deployments
-            if _get_deployment_order(deployment) == min_order
+            if _get_deployment_order(deployment, geo_bucket=geo_bucket) == min_order
         ]
 
         return filtered_deployments
