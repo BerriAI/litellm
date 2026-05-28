@@ -524,6 +524,13 @@ class PrometheusLogger(CustomLogger):
                 labelnames=[],
             )
 
+            # Per-team member count (incremented on add, decremented on remove)
+            self.litellm_team_members_metric = self._gauge_factory(
+                "litellm_team_members_metric",
+                "Net change in team member count since proxy startup, per team. Incremented by 1 on each successful /team/member_add and decremented by 1 on each /team/member_delete. NOTE: this is delta-since-startup, not absolute current membership - the gauge resets to 0 on proxy restart and is never reseeded from the database, so consumers should treat it as a rate-of-change signal rather than a ground-truth count.",
+                labelnames=self.get_labels_for_metric("litellm_team_members_metric"),
+            )
+
             ########################################
             # Managed Batch Metrics
             ########################################
@@ -3408,6 +3415,57 @@ class PrometheusLogger(CustomLogger):
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=team.budget_reset_at
                 )
+            )
+
+    def _team_members_metric_labels(
+        self,
+        team_id: Optional[str],
+        team_alias: Optional[str],
+    ) -> dict:
+        """Build the label dict for litellm_team_members_metric."""
+        enum_values = UserAPIKeyLabelValues(
+            team=team_id or "",
+            team_alias=team_alias or "",
+        )
+        return prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_team_members_metric"
+            ),
+            enum_values=enum_values,
+        )
+
+    def increment_team_members_metric(
+        self,
+        team_id: Optional[str],
+        team_alias: Optional[str],
+        amount: float = 1.0,
+    ) -> None:
+        """Increment the team-members gauge by ``amount`` (default +1)."""
+        try:
+            labels = self._team_members_metric_labels(
+                team_id=team_id, team_alias=team_alias
+            )
+            self.litellm_team_members_metric.labels(**labels).inc(amount)
+        except Exception as e:
+            verbose_logger.exception(
+                "Error incrementing litellm_team_members_metric: %s", str(e)
+            )
+
+    def decrement_team_members_metric(
+        self,
+        team_id: Optional[str],
+        team_alias: Optional[str],
+        amount: float = 1.0,
+    ) -> None:
+        """Decrement the team-members gauge by ``amount`` (default -1)."""
+        try:
+            labels = self._team_members_metric_labels(
+                team_id=team_id, team_alias=team_alias
+            )
+            self.litellm_team_members_metric.labels(**labels).dec(amount)
+        except Exception as e:
+            verbose_logger.exception(
+                "Error decrementing litellm_team_members_metric: %s", str(e)
             )
 
     async def _set_org_budget_metrics_after_api_request(

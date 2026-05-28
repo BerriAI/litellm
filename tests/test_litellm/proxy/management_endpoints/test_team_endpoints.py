@@ -8108,3 +8108,154 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
             )
     assert str(exc.value.code) == "403"
     assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+class TestEmitTeamMembersMetricDelta:
+    """Tests for the ``_emit_team_members_metric_delta`` helper.
+
+    The helper is the seam between the team management endpoints and the
+    Prometheus team-members gauge — it should call the right
+    ``PrometheusLogger`` method (inc or dec) based on sign, and silently
+    no-op when Prometheus is not configured.
+    """
+
+    def test_no_op_when_prometheus_logger_not_registered(self):
+        """Without a PrometheusLogger in callbacks the helper must not raise."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=None,
+        ):
+            # Should not raise, and there's nothing to assert on the call — the
+            # absence of an exception is the contract being tested.
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=3
+            )
+
+    def test_zero_delta_short_circuits_before_lookup(self):
+        """delta=0 must not even touch get_instance — no work to do."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance"
+        ) as mock_get:
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=0
+            )
+            mock_get.assert_not_called()
+
+    def test_positive_delta_calls_increment(self):
+        """A +N delta routes to ``increment_team_members_metric(amount=N)``."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        mock_logger = MagicMock()
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=mock_logger,
+        ):
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=3
+            )
+
+        mock_logger.increment_team_members_metric.assert_called_once_with(
+            team_id="t-1", team_alias="alias-1", amount=3.0
+        )
+        mock_logger.decrement_team_members_metric.assert_not_called()
+
+    def test_negative_delta_calls_decrement_with_absolute_amount(self):
+        """A -N delta routes to ``decrement_team_members_metric(amount=N)``."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric_delta,
+        )
+
+        mock_logger = MagicMock()
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.PrometheusLogger.get_instance",
+            return_value=mock_logger,
+        ):
+            _emit_team_members_metric_delta(
+                team_id="t-1", team_alias="alias-1", delta=-1
+            )
+
+        mock_logger.decrement_team_members_metric.assert_called_once_with(
+            team_id="t-1", team_alias="alias-1", amount=1.0
+        )
+        mock_logger.increment_team_members_metric.assert_not_called()
+
+
+
+class TestTeamMembersMetricBulkAddDeltaCalculation:
+    """Verify the math used by ``team_member_add`` to compute the gauge delta.
+
+    The endpoint emits ``members_after - members_before`` to the Prometheus
+    team-members gauge so a bulk add with mixed (some duplicate, some new)
+    members increments the gauge only by the count of actually-added members.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_duplicate_bulk_add_does_not_overcount(self):
+        """3 requested + 1 already-present member => delta is +2, never +3."""
+        from litellm.proxy._types import (
+            LiteLLM_TeamTable, Member, TeamMemberAddRequest,
+        )
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _update_team_members_list,
+        )
+
+        existing_member = Member(
+            user_id="u-existing", user_email="existing@x.com", role="user"
+        )
+        complete_team_data = LiteLLM_TeamTable(
+            team_id="t-partial-dup", team_alias="partial-dup-alias",
+            members_with_roles=[existing_member],
+        )
+        data = TeamMemberAddRequest(
+            team_id="t-partial-dup",
+            member=[
+                Member(user_id="u-existing", user_email="existing@x.com", role="user"),
+                Member(user_id="u-new-a", user_email="new-a@x.com", role="user"),
+                Member(user_id="u-new-b", user_email="new-b@x.com", role="user"),
+            ],
+        )
+        members_before_count = len(complete_team_data.members_with_roles or [])
+        await _update_team_members_list(
+            data=data, complete_team_data=complete_team_data, updated_users=[],
+        )
+        members_after_count = len(complete_team_data.members_with_roles or [])
+        delta = max(0, members_after_count - members_before_count)
+        assert members_before_count == 1
+        assert members_after_count == 3
+        assert delta == 2, (
+            f"Expected gauge delta of +2 (only the two new members), "
+            f"got +{delta}. ``len(data.member)`` would have wrongly given +3."
+        )
+
+    @pytest.mark.asyncio
+    async def test_single_member_add_delta_is_one(self):
+        """The single-member (non-bulk) path emits exactly +1."""
+        from litellm.proxy._types import (
+            LiteLLM_TeamTable, Member, TeamMemberAddRequest,
+        )
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _update_team_members_list,
+        )
+        complete_team_data = LiteLLM_TeamTable(
+            team_id="t-single", team_alias="single-alias", members_with_roles=[],
+        )
+        data = TeamMemberAddRequest(
+            team_id="t-single",
+            member=Member(user_id="u-only", user_email="only@x.com", role="user"),
+        )
+        members_before_count = len(complete_team_data.members_with_roles or [])
+        await _update_team_members_list(
+            data=data, complete_team_data=complete_team_data, updated_users=[],
+        )
+        members_after_count = len(complete_team_data.members_with_roles or [])
+        assert max(0, members_after_count - members_before_count) == 1
