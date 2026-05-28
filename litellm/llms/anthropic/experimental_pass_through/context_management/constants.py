@@ -18,6 +18,11 @@ COMPACT_MIN_TRIGGER_TOKENS = 50_000
 # ``general_settings.context_management_summary_max_tokens``.
 COMPACT_SUMMARY_MAX_TOKENS = 4096
 COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY = "context_management_summary_max_tokens"
+# Wall-clock bound for the summary sub-call. Without this a slow or
+# unresponsive summary model would hang the parent ``/v1/messages`` request
+# with no escape hatch; on timeout the editor falls into the standard
+# ``summary_call_failed`` path and forwards the request without compaction.
+COMPACT_SUMMARY_TIMEOUT_SECONDS = 60.0
 COMPACT_SUMMARY_MODEL_SETTING_KEY = "context_management_summary_model"
 COMPACT_SUMMARY_SYSTEM_PREFIX = "Previous conversation summary: "
 

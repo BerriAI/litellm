@@ -33,6 +33,7 @@ from ..constants import (
     COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY,
     COMPACT_SUMMARY_MODEL_SETTING_KEY,
     COMPACT_SUMMARY_SYSTEM_PREFIX,
+    COMPACT_SUMMARY_TIMEOUT_SECONDS,
 )
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
@@ -569,10 +570,15 @@ async def _call_summary_model(
     # (see ``Router._common_checks_available_deployment``); without this the
     # summary subrequest could be routed to a deployment outside the caller's
     # permitted region.
+    # ``timeout`` bounds how long a slow/unresponsive summary model can stall
+    # the parent ``/v1/messages`` request. On timeout the caller catches the
+    # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
+    # forwarding the request without compaction rather than hanging.
     call_kwargs: Dict[str, Any] = {
         "model": summary_model,
         "messages": summary_messages,
         "max_tokens": max_tokens,
+        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
         "litellm_metadata": metadata,
     }
     if allowed_model_region is not None:

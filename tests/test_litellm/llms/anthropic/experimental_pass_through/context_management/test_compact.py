@@ -1105,6 +1105,33 @@ def test_summary_max_tokens_setting_falls_back_for_invalid_values():
             ), f"expected default for invalid override {bad!r}"
 
 
+async def test_summary_call_sends_default_timeout():
+    """``timeout`` is set on the summary call so a slow or unresponsive summary
+    model cannot hang the parent ``/v1/messages`` request indefinitely."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        COMPACT_SUMMARY_TIMEOUT_SECONDS,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={},
+        llm_router=_FakeRouter(),
+    )
+
+    assert captured_kwargs.get("timeout") == COMPACT_SUMMARY_TIMEOUT_SECONDS
+
+
 # ---------------------------------------------------------------------------
 # Editor: summary model key/team access gate
 # ---------------------------------------------------------------------------
