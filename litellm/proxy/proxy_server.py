@@ -12419,6 +12419,7 @@ async def model_info_v1(  # noqa: PLR0915
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
+        team_id=user_api_key_dict.team_id,
     )
 
     if len(all_models_str) > 0:
