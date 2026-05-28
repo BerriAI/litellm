@@ -2067,7 +2067,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             else min(smallest_tpm_limit, tpu)
                         )
                     if smallest_tpm_limit is not None:
-                        estimated_tokens = min(estimated_tokens, smallest_tpm_limit)
+                        # Recompute the input-token estimate (mirrors
+                        # ``_estimate_tokens_for_request``) so we only cap
+                        # the speculative output-budget floor, not the
+                        # known input cost. If the input alone already
+                        # exceeds the smallest TPM bucket, the request
+                        # genuinely cannot fit and the unaltered estimate
+                        # must reach the OVER_LIMIT reject path -- capping
+                        # it would let the call through and overspend the
+                        # budget once the model emits any output. Only the
+                        # ``input_tokens <= smallest_tpm_limit`` case
+                        # (small request, floor dominates) gets the cap.
+                        messages = data.get("messages")
+                        prompt = data.get("prompt")
+                        input_text = data.get("input")
+                        if messages:
+                            total_chars = len(get_str_from_messages(messages))
+                        elif isinstance(prompt, str):
+                            total_chars = len(prompt)
+                        elif isinstance(prompt, list):
+                            total_chars = sum(len(str(p)) for p in prompt)
+                        elif isinstance(input_text, str):
+                            total_chars = len(input_text)
+                        elif isinstance(input_text, list):
+                            total_chars = sum(len(str(t)) for t in input_text)
+                        else:
+                            total_chars = 0
+                        input_tokens_estimate = (
+                            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN)
+                            if total_chars > 0
+                            else 0
+                        )
+                        if input_tokens_estimate <= smallest_tpm_limit:
+                            estimated_tokens = min(estimated_tokens, smallest_tpm_limit)
 
                 tpm_response = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
