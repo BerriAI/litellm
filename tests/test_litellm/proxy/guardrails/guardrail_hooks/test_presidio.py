@@ -2213,7 +2213,10 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
 
         warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
         assert any("mixed stream detected" in msg for msg in warning_messages)
-        assert mock_logger.warning.call_count >= 1
+        # Empty-choices MRS chunk no longer triggers a warning under incremental
+        # streaming (nothing to mask), so we expect exactly the single mixed-stream
+        # warning — not the previous two-warning pattern.
+        assert mock_logger.warning.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2622,8 +2625,9 @@ async def test_lit3222_apply_to_output_flushes_on_char_limit(monkeypatch):
 
     monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
 
-    # 200 chars of word-only content, no period anywhere — must still chunk on char limit
-    chunks_in = [("abcdefghij " * 5).strip() + " "] * 4  # ~55 chars each
+    # Word-only content, no period anywhere; each upstream chunk ends in whitespace
+    # so the tightened char-limit flush rule can still fire (word boundary).
+    chunks_in = ["abcdefghij " * 5] * 4  # 55 chars each, all end in " "
 
     async def upstream():
         for c in chunks_in:
@@ -2798,3 +2802,64 @@ async def test_lit3222_apply_to_output_no_pii_no_extra_calls(monkeypatch):
     full = "".join(c.choices[0].delta.content for c in text_chunks)
     assert full == "First sentence. Second sentence. Third sentence."
     assert len(text_chunks) > 1, "no progressive chunking happened"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_does_not_flush_mid_word(monkeypatch):
+    """
+    LIT-3222 (Greptile P1): the char-limit flush fallback must NOT fire when
+    the buffer ends mid-word. Otherwise a multi-token entity straddling the
+    flush boundary (e.g. "John Smith" → "John " in flush N, "Smith" in
+    flush N+1) gets analyzed in fragments and Presidio may miss the
+    multi-token NER class.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    calls = []
+
+    async def fake_check_pii(text, **_kwargs):
+        calls.append(text)
+        return text
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    # 200 chars of contiguous text with NO whitespace anywhere — must NOT
+    # trigger a char-limit flush, since the buffer never ends on a word boundary.
+    long_token = "a" * 200
+    chunks_in = [long_token[i : i + 40] for i in range(0, len(long_token), 40)]
+
+    async def upstream():
+        for c in chunks_in:
+            yield _mrs_text_chunk(c)
+        yield _mrs_finish_chunk("stop")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Only one Presidio call (the final EOS drain) — never split mid-word.
+    assert len(calls) == 1, f"unexpected mid-word flush: {len(calls)} calls"
+    assert calls[0] == long_token
+
+
+def test_lit3222_split_unmask_safe_prefix_signature():
+    """`_split_unmask_safe_prefix` accepts (buffer, pii_tokens) — no unused params."""
+    pii = {"<PERSON_1>": "Alice"}
+    safe, tail = _OPTIONAL_PresidioPIIMasking._split_unmask_safe_prefix(
+        "Hi <PERSO", pii
+    )
+    assert safe == "Hi "
+    assert tail == "<PERSO"
+    # Closed token: entire buffer is safe.
+    safe, tail = _OPTIONAL_PresidioPIIMasking._split_unmask_safe_prefix(
+        "Hi <PERSON_1>!", pii
+    )
+    assert safe == "Hi <PERSON_1>!"
+    assert tail == ""
