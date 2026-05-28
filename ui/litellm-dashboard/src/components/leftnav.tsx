@@ -32,6 +32,7 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -43,7 +44,7 @@ import {
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
-import { serverRootPath } from "./networking";
+import { legacyHref, migratedHref, uiRootBase } from "@/utils/uiRoutes";
 const { Sider } = Layout;
 
 /**
@@ -55,21 +56,6 @@ const { Sider } = Layout;
 const MIGRATED_PAGES: Record<string, string> = {
   "api-reference": "api-reference",
 };
-
-/** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
-function migratedHref(routeSegment: string): string {
-  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = raw.replace(/^\/+|\/+$/g, "");
-  let base = trimmed ? `/${trimmed}/` : "/";
-
-  if (serverRootPath && serverRootPath !== "/") {
-    const cleanRoot = serverRootPath.replace(/\/+$/, "");
-    const cleanBase = base.replace(/^\/+/, "");
-    base = `${cleanRoot}/${cleanBase}`;
-  }
-
-  return `${base}${routeSegment}`;
-}
 
 // Define the props type
 interface SidebarProps {
@@ -422,6 +408,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
+  const router = useRouter();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {
@@ -436,14 +423,26 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   // Navigate to page helper
   const navigateToPage = (page: string) => {
-    // For migrated pages, just call setPage — the parent layout handles routing
+    // Migrated (path-based) pages are routed by the parent layout (full
+    // router.push to the matching segment under (dashboard)/).
     if (MIGRATED_PAGES[page]) {
       setPage(page);
       return;
     }
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+    // Legacy (query-param) pages live at the UI root \`<serverRootPath>/ui/\`.
+    // When the user is currently on a migrated path such as \`/ui/api-reference\`,
+    // a relative \`pushState(\"?page=...\")\` would produce \`/ui/api-reference?page=...\`
+    // and leave the previous route segment in the URL. Build the absolute
+    // target and hand off to the Next.js router so the root SPA re-mounts.
+    const target = legacyHref(page);
+    const currentPath = window.location.pathname.replace(/\/+$/, "");
+    const rootPath = uiRootBase().replace(/\/+$/, "");
+    if (currentPath === rootPath) {
+      // Already at the UI root — pushState avoids a full re-render.
+      window.history.pushState(null, "", target);
+    } else {
+      router.push(target);
+    }
     setPage(page);
   };
 
@@ -467,11 +466,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         </a>
       );
     }
-    // For migrated pages, generate a path-based href for right-click "Open in new tab"
+    // Resolve to an absolute href so that right-click "Open in new tab" and
+    // Ctrl/Cmd+click work consistently regardless of the current path.
     const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute
-      ? migratedHref(migratedRoute)
-      : (() => { const params = new URLSearchParams(window.location.search); params.set("page", page); return `?${params.toString()}`; })();
+    const href = migratedRoute ? migratedHref(migratedRoute) : legacyHref(page);
     return (
       <a
         href={href}

@@ -7,19 +7,21 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { uiRootBase } from "@/utils/uiRoutes";
 
-/** ---- BASE URL HELPERS ---- */
-function normalizeBasePrefix(raw: string | undefined | null): string {
-  const trimmed = (raw ?? "").trim();
-  if (!trimmed) return "";
-  const core = trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
-  return core ? `/${core}/` : "/";
-}
-const BASE_PREFIX = normalizeBasePrefix(process.env.NEXT_PUBLIC_BASE_URL);
+/** ---- BASE URL HELPER ---- */
+/**
+ * Resolve a router target relative to the UI root \`<serverRootPath>/ui/\`.
+ *
+ * The proxy always mounts the static UI at \`/ui\` (see \`uiRootBase\` in
+ * \`@/utils/uiRoutes\`); router pushes must therefore be anchored to that
+ * mount regardless of \`NEXT_PUBLIC_BASE_URL\`.
+ */
 function withBase(path: string): string {
-  const body = path.startsWith("/") ? path.slice(1) : path;
-  const combined = `${BASE_PREFIX}${body}`;
-  return combined.startsWith("/") ? combined : `/${combined}`;
+  const base = uiRootBase();
+  if (path.startsWith("?")) return `${base}${path}`;
+  if (path.startsWith("/")) return `${base}${path.slice(1)}`;
+  return `${base}${path}`;
 }
 /** -------------------------------- */
 
