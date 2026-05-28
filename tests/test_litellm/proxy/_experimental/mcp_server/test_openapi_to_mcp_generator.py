@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _inline_schema_refs,
+    _lookup_ref,
     _request_auth_header,
     _request_extra_headers,
     _resolve_param_list,
@@ -1207,3 +1209,286 @@ class TestRequestExtraHeaders:
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert "X-TOKEN" not in headers_sent
+
+
+class TestLookupRef:
+    """Cover :func:`_lookup_ref` JSON Pointer resolution."""
+
+    def test_resolves_components_schemas(self):
+        spec = {"components": {"schemas": {"Foo": {"type": "object"}}}}
+        assert _lookup_ref("#/components/schemas/Foo", spec) == {"type": "object"}
+
+    def test_resolves_swagger_definitions(self):
+        spec = {"definitions": {"Foo": {"type": "integer"}}}
+        assert _lookup_ref("#/definitions/Foo", spec) == {"type": "integer"}
+
+    def test_returns_none_for_external_ref(self):
+        spec = {"components": {"schemas": {"Foo": {"type": "object"}}}}
+        assert _lookup_ref("https://example.com/schema.json", spec) is None
+
+    def test_returns_none_for_missing_target(self):
+        spec = {"components": {"schemas": {}}}
+        assert _lookup_ref("#/components/schemas/Missing", spec) is None
+
+    def test_returns_none_for_none_spec(self):
+        assert _lookup_ref("#/components/schemas/Foo", None) is None
+
+    def test_json_pointer_unescape(self):
+        # RFC 6901: "~1" -> "/", "~0" -> "~"
+        spec = {"weird/key": {"foo~bar": "value"}}
+        assert _lookup_ref("#/weird~1key/foo~0bar", spec) == "value"
+
+    def test_walks_list_indices(self):
+        spec = {"items": [{"a": 1}, {"a": 2}]}
+        assert _lookup_ref("#/items/1/a", spec) == 2
+
+    def test_invalid_list_index_returns_none(self):
+        spec = {"items": [{"a": 1}]}
+        assert _lookup_ref("#/items/notanindex/a", spec) is None
+        assert _lookup_ref("#/items/99/a", spec) is None
+
+
+class TestInlineSchemaRefs:
+    """Cover :func:`_inline_schema_refs` recursive ``$ref`` expansion."""
+
+    def test_returns_input_when_spec_is_none(self):
+        schema = {"$ref": "#/components/schemas/Foo"}
+        assert _inline_schema_refs(schema, None) is schema
+
+    def test_inlines_top_level_ref(self):
+        spec = {
+            "components": {
+                "schemas": {"Foo": {"type": "object", "properties": {"x": {"type": "integer"}}}}
+            }
+        }
+        result = _inline_schema_refs({"$ref": "#/components/schemas/Foo"}, spec)
+        assert result == {"type": "object", "properties": {"x": {"type": "integer"}}}
+
+    def test_inlines_nested_property_ref(self):
+        spec = {
+            "components": {
+                "schemas": {
+                    "Outer": {
+                        "type": "object",
+                        "properties": {"inner": {"$ref": "#/components/schemas/Inner"}},
+                    },
+                    "Inner": {"type": "string", "format": "uuid"},
+                }
+            }
+        }
+        result = _inline_schema_refs({"$ref": "#/components/schemas/Outer"}, spec)
+        assert result["properties"]["inner"] == {"type": "string", "format": "uuid"}
+
+    def test_inlines_array_items_ref(self):
+        spec = {
+            "components": {
+                "schemas": {"Item": {"type": "object", "properties": {"id": {"type": "string"}}}}
+            }
+        }
+        schema = {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}
+        result = _inline_schema_refs(schema, spec)
+        assert result["items"] == {"type": "object", "properties": {"id": {"type": "string"}}}
+
+    def test_sibling_fields_preserved_and_win(self):
+        # OpenAPI 3.1 sibling overlay: siblings to $ref win over the resolved
+        # target. We expose this via merge precedence.
+        spec = {
+            "components": {
+                "schemas": {"Foo": {"type": "string", "description": "from-ref"}}
+            }
+        }
+        schema = {
+            "$ref": "#/components/schemas/Foo",
+            "description": "sibling-wins",
+            "nullable": True,
+        }
+        result = _inline_schema_refs(schema, spec)
+        assert result["type"] == "string"
+        assert result["description"] == "sibling-wins"
+        assert result["nullable"] is True
+
+    def test_cycle_is_left_in_place(self):
+        # ``Node -> next: Node``. We must not recurse infinitely.
+        spec = {
+            "components": {
+                "schemas": {
+                    "Node": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"},
+                            "next": {"$ref": "#/components/schemas/Node"},
+                        },
+                    }
+                }
+            }
+        }
+        result = _inline_schema_refs({"$ref": "#/components/schemas/Node"}, spec)
+        assert result["type"] == "object"
+        # The cycle is preserved as a $ref instead of expanding forever.
+        assert result["properties"]["next"] == {"$ref": "#/components/schemas/Node"}
+
+    def test_unresolvable_ref_is_preserved(self):
+        spec = {"components": {"schemas": {}}}
+        schema = {"$ref": "#/components/schemas/Missing"}
+        result = _inline_schema_refs(schema, spec)
+        # Don't drop the ref - leave it so the legacy behaviour is preserved
+        # and the user can see what was unresolvable.
+        assert result == {"$ref": "#/components/schemas/Missing"}
+
+    def test_external_ref_is_preserved(self):
+        spec = {"components": {"schemas": {}}}
+        schema = {"$ref": "https://example.com/schema.json#/Foo"}
+        result = _inline_schema_refs(schema, spec)
+        assert result == {"$ref": "https://example.com/schema.json#/Foo"}
+
+    def test_swagger_definitions_path(self):
+        spec = {"definitions": {"Foo": {"type": "integer"}}}
+        result = _inline_schema_refs({"$ref": "#/definitions/Foo"}, spec)
+        assert result == {"type": "integer"}
+
+    def test_preserves_non_dict_non_list_inputs(self):
+        assert _inline_schema_refs("string-value", {"components": {}}) == "string-value"
+        assert _inline_schema_refs(42, {"components": {}}) == 42
+        assert _inline_schema_refs(None, {"components": {}}) is None
+
+
+class TestBuildInputSchemaWithRefs:
+    """End-to-end behaviour of :func:`build_input_schema` when ``spec`` is provided."""
+
+    def _spec(self):
+        return {
+            "components": {
+                "schemas": {
+                    "Presentation": {
+                        "type": "object",
+                        "required": ["title"],
+                        "properties": {
+                            "title": {"type": "string"},
+                            "page_size": {"$ref": "#/components/schemas/Size"},
+                            "slides": {
+                                "type": "array",
+                                "items": {"$ref": "#/components/schemas/Slide"},
+                            },
+                        },
+                    },
+                    "Size": {
+                        "type": "object",
+                        "properties": {
+                            "width": {"type": "number"},
+                            "height": {"type": "number"},
+                        },
+                    },
+                    "Slide": {
+                        "type": "object",
+                        "properties": {"object_id": {"type": "string"}},
+                    },
+                }
+            }
+        }
+
+    def test_legacy_no_spec_drops_top_level_ref(self):
+        # Pre-fix behaviour: properties is silently empty. We keep the test
+        # so any future change to the no-spec path is intentional.
+        op = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Presentation"}
+                    }
+                }
+            }
+        }
+        schema = build_input_schema(op)
+        assert schema["properties"]["body"]["properties"] == {}
+        assert "required" not in schema["properties"]["body"]
+
+    def test_top_level_request_body_ref_is_inlined(self):
+        op = {
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Presentation"}
+                    }
+                },
+            }
+        }
+        schema = build_input_schema(op, spec=self._spec())
+        body = schema["properties"]["body"]
+        # Top-level $ref expanded to its target's properties.
+        assert set(body["properties"].keys()) == {"title", "page_size", "slides"}
+        # Nested $ref expanded too.
+        assert body["properties"]["page_size"]["properties"]["width"] == {"type": "number"}
+        # array items $ref expanded.
+        assert (
+            body["properties"]["slides"]["items"]["properties"]["object_id"]
+            == {"type": "string"}
+        )
+        # The target's ``required`` list propagates to the body schema so
+        # downstream LLMs see the hard requirement.
+        assert body["required"] == ["title"]
+        assert schema["required"] == ["body"]
+
+    def test_nested_property_ref_inlined_when_top_level_inline(self):
+        op = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "page_size": {"$ref": "#/components/schemas/Size"}
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        schema = build_input_schema(op, spec=self._spec())
+        assert (
+            schema["properties"]["body"]["properties"]["page_size"]["properties"]["width"]
+            == {"type": "number"}
+        )
+
+    def test_parameter_ref_resolves_to_actual_type(self):
+        # Pre-fix: $ref under a query parameter's ``schema`` was forwarded as
+        # ``{"$ref": "..."}`` and ``param_schema.get("type", "string")`` fell
+        # back to "string", masking the real type.
+        spec = {
+            "components": {
+                "schemas": {"PageNumber": {"type": "integer", "minimum": 1}}
+            }
+        }
+        op = {
+            "parameters": [
+                {
+                    "name": "page",
+                    "in": "query",
+                    "required": True,
+                    "schema": {"$ref": "#/components/schemas/PageNumber"},
+                }
+            ]
+        }
+        schema = build_input_schema(op, spec=spec)
+        assert schema["properties"]["page"]["type"] == "integer"
+        assert schema["required"] == ["page"]
+
+    def test_unresolved_request_body_ref_does_not_crash(self):
+        # When spec is provided but the ref points to nothing, the body
+        # remains structurally intact (no crash, no exception).
+        spec = {"components": {"schemas": {}}}
+        op = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Missing"}
+                    }
+                }
+            }
+        }
+        schema = build_input_schema(op, spec=spec)
+        body = schema["properties"]["body"]
+        assert body["type"] == "object"
+        # No ``required`` added since the unresolved target carries no info.
+        assert "required" not in body
+
