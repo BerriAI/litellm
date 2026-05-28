@@ -1309,9 +1309,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_metadata = user_api_key_dict.metadata or {}
         key_model_rpm = key_metadata.get("model_rpm_limit") or {}
         key_model_tpm = key_metadata.get("model_tpm_limit") or {}
-        if (
-            isinstance(key_model_rpm, dict) and requested_model in key_model_rpm
-        ) or (
+        if (isinstance(key_model_rpm, dict) and requested_model in key_model_rpm) or (
             isinstance(key_model_tpm, dict) and requested_model in key_model_tpm
         ):
             return True
@@ -1320,8 +1318,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if isinstance(key_model_max_budget, dict):
             entry = key_model_max_budget.get(requested_model)
             if isinstance(entry, dict) and (
-                entry.get("rpm_limit") is not None
-                or entry.get("tpm_limit") is not None
+                entry.get("rpm_limit") is not None or entry.get("tpm_limit") is not None
             ):
                 return True
 
