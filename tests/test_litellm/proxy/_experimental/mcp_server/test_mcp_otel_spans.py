@@ -395,3 +395,55 @@ def test_mcp_span_5xx_http_exception_still_marks_error(exporter):
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes["mcp.http.status_code"] == 502
     assert span.attributes["mcp.error.type"] == "_HttpExc"
+
+
+# ---------------------------------------------------------------------------
+# Veria - sensitive components in resource URI must be stripped before export
+# (credentials, query string, fragment). Scheme + host[:port] + path stay.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected_substring, forbidden_substrings",
+    [
+        (
+            "https://user:pwd@example.com/path?token=secret#frag",
+            "https://example.com/path",
+            ["user", "pwd", "token", "secret", "frag"],
+        ),
+        (
+            "https://example.com/path?Signature=ABCDEF",
+            "https://example.com/path",
+            ["Signature", "ABCDEF"],
+        ),
+        (
+            "file:///etc/hostname",
+            "file:///etc/hostname",
+            ["?", "#"],
+        ),
+        (
+            "s3://bucket-x/key/with/slashes",
+            "s3://bucket-x/key/with/slashes",
+            [],
+        ),
+    ],
+    ids=["userinfo_query_frag", "presigned_query", "file_uri", "s3_uri"],
+)
+def test_mcp_span_resource_uri_is_sanitised(
+    exporter, raw, expected_substring, forbidden_substrings
+):
+    async def run():
+        async with mcp_otel_span("read_resource", resource_uri=raw):
+            pass
+
+    _run(run())
+    spans = _finished(exporter)
+    assert len(spans) == 1
+    recorded = spans[0].attributes["mcp.resource.uri"]
+    assert (
+        expected_substring in recorded
+    ), f"sanitised URI {recorded!r} should keep {expected_substring!r}"
+    for forbidden in forbidden_substrings:
+        assert (
+            forbidden not in recorded
+        ), f"sanitised URI {recorded!r} must not contain {forbidden!r}"
