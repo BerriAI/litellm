@@ -476,4 +476,73 @@ describe("CreateUserButton", () => {
       expect(within(dialog).getByRole("checkbox", { name: /send invitation email/i })).toBeChecked();
     });
   });
+
+  describe("default user role (LIT-3149)", () => {
+    const possibleUIRoles = {
+      internal_user: { ui_label: "Internal User", description: "Owns keys" },
+      internal_user_viewer: { ui_label: "Internal Viewer", description: "Read-only" },
+    };
+
+    it("submits user_role=internal_user when the embedded form is left at its default", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "embedded-default" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-embedded-default",
+        user_id: "embedded-default",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} isEmbedded />,
+      );
+
+      await user.type(screen.getByLabelText(/user email/i), "embedded-default@example.com");
+      await user.click(screen.getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "embedded-default@example.com",
+            user_role: "internal_user",
+          }),
+        );
+      });
+    });
+
+    it("submits user_role=internal_user when the standalone modal form is left at its default", async () => {
+      const user = userEvent.setup();
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "standalone-default" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-standalone-default",
+        user_id: "standalone-default",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      await user.type(within(dialog).getByLabelText(/user email/i), "standalone-default@example.com");
+      await user.click(within(dialog).getByRole("button", { name: /create user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "standalone-default@example.com",
+            user_role: "internal_user",
+          }),
+        );
+      });
+    });
+  });
 });
