@@ -2,6 +2,7 @@
 
 from typing import (
     Any,
+    Dict,
     List,
     Optional,
     Union,
@@ -75,6 +76,25 @@ def _add_mcp_metadata_to_response(
 
             # Set the provider_specific_fields
             setattr(message, "provider_specific_fields", provider_fields)
+
+
+def _extract_request_tags_from_kwargs(
+    kwargs: Dict[str, Any],
+) -> Optional[List[str]]:
+    """LIT-3304: extract request_tags from parent /chat/completions kwargs.
+
+    Auto-executed MCP sub-calls must inherit the parent request tags so
+    they roll up into the same Tag Usage view as the /chat/completions call
+    that triggered them. Tags can live on either ``metadata`` or
+    ``litellm_metadata`` depending on which entrypoint built the kwargs.
+    """
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _meta = kwargs.get(_meta_key)
+        if isinstance(_meta, dict):
+            tags = _meta.get("tags")
+            if isinstance(tags, list) and tags:
+                return list(tags)
+    return None
 
 
 async def acompletion_with_mcp(  # noqa: PLR0915
@@ -220,6 +240,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                request_tags=None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -242,6 +263,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self.request_tags = request_tags
 
             async def __aiter__(self):
                 return self
@@ -456,6 +478,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                                 raw_headers=self.raw_headers,
                                 litellm_call_id=self.litellm_call_id,
                                 litellm_trace_id=self.litellm_trace_id,
+                                request_tags=self.request_tags,
                             )
                         )
 
@@ -518,6 +541,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            request_tags=_extract_request_tags_from_kwargs(kwargs),
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -637,6 +661,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        request_tags=_extract_request_tags_from_kwargs(kwargs),
     )
 
     if not tool_results:
