@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 from urllib.parse import quote, unquote
 
 from fastapi import HTTPException

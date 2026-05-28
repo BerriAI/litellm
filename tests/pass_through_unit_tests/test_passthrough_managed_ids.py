@@ -17,11 +17,10 @@ Tests cover:
 from __future__ import annotations
 
 import base64
-import json
 import sys
 import os
-from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -29,7 +28,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.managed_id_codec import (
-    ManagedIdPayload,
     decode,
     encode,
     is_managed,
