@@ -1196,6 +1196,37 @@ class JWTAuthManager:
         return user_id, user_email, valid_user_email
 
     @staticmethod
+    def _effective_user_id(
+        jwt_user_id: Optional[str],
+        user_object: Optional[LiteLLM_UserTable],
+    ) -> Optional[str]:
+        """Return the user_id that should be used for spend attribution.
+
+        Fixes LIT-2684 / GH #26789: when ``user_id_upsert`` is enabled and the
+        JWT-claim ``user_id`` (typically the user’s email) does not match any
+        ``LiteLLM_UserTable.user_id`` directly but the email/sso_user_id fuzzy
+        lookup resolves to an existing pre-JWT-migration row with a different
+        ``user_id`` (e.g. a UUID), we must use the resolved row’s ``user_id``
+        for all downstream attribution. Otherwise spend is logged against the
+        JWT-claim id (a phantom user) and ``/user/info?user_id=<legacy-uuid>``
+        keeps showing $0 forever.
+
+        Returns the JWT-claim ``user_id`` unchanged when no fuzzy rebind is
+        needed (no user_object, or user_object.user_id already matches).
+        """
+        if (
+            user_object is not None
+            and user_object.user_id
+            and jwt_user_id is not None
+            and user_object.user_id != jwt_user_id
+        ):
+            # The single INFO log lives at the auth_builder call site (LIT-2684);
+            # keeping this helper log-free lets us call it from get_objects
+            # without producing a duplicate log line per request.
+            return user_object.user_id
+        return jwt_user_id
+
+    @staticmethod
     async def get_objects(
         user_id: Optional[str],
         user_email: Optional[str],
@@ -1276,6 +1307,16 @@ class JWTAuthManager:
                 else None
             )
 
+        # When the JWT-claim user_id (e.g. the email) doesn’t match any DB row
+        # but the email/sso_user_id fuzzy lookup resolved to an existing user
+        # (typically a pre-JWT-migration record with a UUID user_id), rebind the
+        # effective user_id to the resolved row so downstream lookups
+        # (team_membership) and spend attribution land on the existing record
+        # instead of orphaning all activity under the JWT-claim id.
+        effective_user_id = JWTAuthManager._effective_user_id(
+            jwt_user_id=user_id, user_object=user_object
+        )
+
         end_user_object: Optional[LiteLLM_EndUserTable] = None
         if end_user_id:
             end_user_object = (
@@ -1292,17 +1333,17 @@ class JWTAuthManager:
             )
 
         team_membership_object: Optional[LiteLLM_TeamMembership] = None
-        if user_id and team_id:
+        if effective_user_id and team_id:
             team_membership_object = (
                 await get_team_membership(
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-                if user_id and team_id
+                if effective_user_id and team_id
                 else None
             )
 
@@ -1581,7 +1622,7 @@ class JWTAuthManager:
             return None, None, None
 
     @staticmethod
-    async def auth_builder(
+    async def auth_builder(  # noqa: PLR0915
         api_key: str,
         jwt_handler: JWTHandler,
         request_data: dict,
@@ -1756,6 +1797,22 @@ class JWTAuthManager:
 
         # Derive org_id from org_object if resolved by alias
         resolved_org_id = org_object.organization_id if org_object else org_id
+
+        # Rebind user_id when JWT claim didn’t match DB user_id directly but a
+        # legacy pre-JWT row was resolved via email/sso_user_id fuzzy lookup.
+        # See JWTAuthManager._effective_user_id docstring (LIT-2684).
+        rebound_user_id = JWTAuthManager._effective_user_id(
+            jwt_user_id=user_id, user_object=user_object
+        )
+        if rebound_user_id != user_id:
+            verbose_proxy_logger.info(
+                "JWT Auth: rebinding user_id from JWT claim %r to existing DB "
+                "user_id %r (matched via email/sso_user_id). Spend will be "
+                "attributed to the existing user record.",
+                user_id,
+                rebound_user_id,
+            )
+        user_id = rebound_user_id
 
         await JWTAuthManager.sync_user_role_and_teams(
             jwt_handler=jwt_handler,
