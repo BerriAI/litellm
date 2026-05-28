@@ -257,6 +257,202 @@ class TestCustomGuardrailShouldRunGuardrail:
             result is False
         ), "Admin config in metadata must be respected when other metadata key is empty"
 
+    def test_disable_global_guardrail_team_kill_switch_not_overridden_by_key_false(
+        self,
+    ):
+        """LIT-1825 regression: a team's ``disable_global_guardrails=True``
+        must remain a kill-switch even when a key was edited via the UI
+        and ended up with the form's default
+        ``disable_global_guardrails=False`` stored in
+        ``user_api_key_metadata``. Without this guarantee, every key edit
+        silently re-enables global guardrails for that key."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Team kill-switch ON, key form-default OFF.
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "disable_global_guardrails": True,
+                },
+                "user_api_key_metadata": {
+                    "disable_global_guardrails": False,
+                },
+            },
+        }
+        assert custom_guardrail.get_disable_global_guardrail(data) is True, (
+            "team-level kill-switch must not be overridden by key-level False"
+        )
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        ), "team-level kill-switch must skip the guardrail"
+
+    def test_disable_global_guardrail_key_kill_switch_when_team_false(self):
+        """A key can still independently disable a global guardrail when
+        the team has not set the kill-switch."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "disable_global_guardrails": False,
+                },
+                "user_api_key_metadata": {
+                    "disable_global_guardrails": True,
+                },
+            },
+        }
+        assert custom_guardrail.get_disable_global_guardrail(data) is True
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+    def test_disable_global_guardrail_neither_set_runs_guardrail(self):
+        """Baseline: neither team nor key set ``disable_global_guardrails``,
+        guardrail must run because ``default_on=True``."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "user_api_key_team_metadata": {},
+                "user_api_key_metadata": {},
+            },
+        }
+        assert custom_guardrail.get_disable_global_guardrail(data) is False
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+    def test_opted_out_global_guardrails_team_union_key(self):
+        """LIT-1825 regression: opted_out lists must union across team
+        and key. A key opting out of one guardrail must not erase the
+        team's opt-out list (which is what last-write-wins did)."""
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="g_a",
+            default_on=True,
+        )
+        data = {
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "opted_out_global_guardrails": ["g_a", "g_b"],
+                },
+                "user_api_key_metadata": {
+                    "opted_out_global_guardrails": ["g_c"],
+                },
+            },
+        }
+        assert custom_guardrail.get_opted_out_global_guardrails_from_metadata(
+            data
+        ) == ["g_a", "g_b", "g_c"]
+
+    def test_opted_out_global_guardrails_key_empty_does_not_erase_team(self):
+        """LIT-1825 regression: a key submitted with
+        ``opted_out_global_guardrails: []`` (the UI form's default for
+        any key edited without per-key opt-outs) must not erase
+        team-level opt-outs."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="g_a",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+        data = {
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "opted_out_global_guardrails": ["g_a", "g_b"],
+                },
+                "user_api_key_metadata": {
+                    "opted_out_global_guardrails": [],
+                },
+            },
+        }
+        assert custom_guardrail.get_opted_out_global_guardrails_from_metadata(
+            data
+        ) == ["g_a", "g_b"]
+        # And the guardrail itself, named g_a, should still be skipped.
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+    def test_opted_out_global_guardrails_dedup_with_stable_order(self):
+        """Team entries appear first; duplicates removed without
+        re-ordering."""
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="anything",
+            default_on=True,
+        )
+        data = {
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "opted_out_global_guardrails": ["g_a", "g_b"],
+                },
+                "user_api_key_metadata": {
+                    "opted_out_global_guardrails": ["g_b", "g_c"],
+                },
+            },
+        }
+        assert custom_guardrail.get_opted_out_global_guardrails_from_metadata(
+            data
+        ) == ["g_a", "g_b", "g_c"]
+
+    def test_opted_out_global_guardrails_non_string_entries_ignored(self):
+        """Non-string entries (e.g. a future-typed value or malformed JSON
+        leaking into metadata) are silently dropped instead of poisoning
+        the result."""
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="anything",
+            default_on=True,
+        )
+        data = {
+            "metadata": {
+                "user_api_key_team_metadata": {
+                    "opted_out_global_guardrails": ["g_a", 5, None],
+                },
+                "user_api_key_metadata": {
+                    "opted_out_global_guardrails": [{"name": "g_b"}, "g_c"],
+                },
+            },
+        }
+        assert custom_guardrail.get_opted_out_global_guardrails_from_metadata(
+            data
+        ) == ["g_a", "g_c"]
+
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
         """Test that per-guardrail opt-out only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks
