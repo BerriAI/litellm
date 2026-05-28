@@ -959,7 +959,13 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         is_pre_first_chunk: bool = False,
     ):
         original_status = getattr(original_exception, "status_code", None)
-        self.status_code = int(original_status) if original_status is not None else 503
+        if original_status is None:
+            self.status_code = 503
+        else:
+            try:
+                self.status_code = int(original_status)
+            except (ValueError, TypeError):
+                self.status_code = 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
