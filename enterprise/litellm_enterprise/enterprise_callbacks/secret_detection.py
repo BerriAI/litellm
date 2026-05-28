@@ -422,7 +422,7 @@ _default_detect_secrets_config = {
 }
 
 
-# Regex helpers for PEM-armored private key redaction (LIT-3292).
+# Regex for PEM-armored private key redaction (LIT-3292).
 #
 # ``detect-secrets`` is line-based: ``PrivateKeyDetector`` returns only the
 # ``BEGIN ... PRIVATE KEY`` header line as ``secret_value``. A plain
@@ -430,18 +430,15 @@ _default_detect_secrets_config = {
 # body and ``-----END ... PRIVATE KEY-----`` footer in the forwarded payload,
 # which is the bug this guardrail is supposed to prevent.
 #
-# To redact the *entire* armored block we expand any "Private Key" match to
-# the full ``BEGIN ... END`` span before substituting. A fallback regex covers
-# malformed/truncated PEMs where the END footer is missing so residual key
-# material still does not leak downstream.
-# A single non-greedy span that matches:
-#   - BEGIN ... END  (closed armored block, normal case), or
-#   - BEGIN ... \Z   (truncated PEM with no END footer in the message — the
-#                     fallback consumes everything from BEGIN to end-of-string,
-#                     so partial encrypted keys with header lines and blank
-#                     separator lines can not leak past the BEGIN marker).
-# Using a single ``re.DOTALL`` span avoids the encrypted-PEM blank-line gap
-# that an earlier two-regex pass-and-fallback formulation missed.
+# A single non-greedy span matches:
+#   - BEGIN ... END   — closed armored block (RSA, EC, OpenSSH, generic,
+#                       encrypted-with-Proc-Type-headers); the trailing END
+#                       footer wins because of the non-greedy ``*?``.
+#   - BEGIN ... \Z    — truncated paste with no END footer in the message;
+#                       consume everything from BEGIN to end-of-string so the
+#                       base64 key body (including any blank-line separator
+#                       that follows the encrypted-PEM Proc-Type / DEK-Info
+#                       headers) cannot leak.
 _PEM_PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
     r"[\s\S]*?"
