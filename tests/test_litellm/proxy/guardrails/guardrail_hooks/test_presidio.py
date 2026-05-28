@@ -2609,25 +2609,28 @@ async def test_lit3222_apply_to_output_streams_incrementally(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lit3222_apply_to_output_flushes_on_char_limit(monkeypatch):
+async def test_lit3222_apply_to_output_no_flush_without_sentence_boundary(monkeypatch):
     """
-    LIT-3222: when no sentence boundary is reached, the buffer must still
-    flush after `_STREAM_MASK_FLUSH_CHARS` characters so TTFT does not
-    regress on long-token streams.
+    LIT-3222 + Veria HIGH: when no sentence boundary appears in the stream
+    (pathological case), the mask path now buffers the entire response and
+    flushes exactly once at end-of-stream — matching the prior buffered
+    behaviour and removing the fragmented-PII bypass class that a char-limit
+    fallback would have introduced (e.g. CC numbers split across windows).
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
     )
 
+    calls = []
+
     async def fake_check_pii(text, **_kwargs):
-        return "X" * len(text)  # marker
+        calls.append(text)
+        return text
 
     monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
 
-    # Word-only content, no period anywhere; each upstream chunk ends in whitespace
-    # so the tightened char-limit flush rule can still fire (word boundary).
-    chunks_in = ["abcdefghij " * 5] * 4  # 55 chars each, all end in " "
+    chunks_in = ["word " * 10] * 6  # 50 chars each, no period/?/! anywhere
 
     async def upstream():
         for c in chunks_in:
@@ -2642,15 +2645,10 @@ async def test_lit3222_apply_to_output_flushes_on_char_limit(monkeypatch):
     ):
         received.append(chunk)
 
-    # Must produce >1 text chunk before EOS even without sentence enders.
-    text_chunks = [
-        c
-        for c in received
-        if isinstance(c, ModelResponseStream)
-        and c.choices
-        and getattr(c.choices[0].delta, "content", None)
-    ]
-    assert len(text_chunks) > 1, f"char-limit flush failed: {len(text_chunks)}"
+    # Exactly one Presidio call — at EOS — never split into fragments.
+    assert len(calls) == 1, f"expected single EOS flush, got {len(calls)} calls"
+    # And the single call sees the full content.
+    assert calls[0] == "".join(chunks_in)
 
 
 @pytest.mark.asyncio
@@ -2972,3 +2970,83 @@ async def test_lit3222_unmask_content_with_finish_reason_in_same_chunk():
     assert len(finish_chunks) == 1
     assert finish_chunks[0].choices[0].finish_reason == "stop"
     assert finish_chunks[0].choices[0].delta.content is None
+
+
+@pytest.mark.asyncio
+async def test_lit3222_apply_to_output_masks_tool_call_arguments(monkeypatch):
+    """
+    LIT-3222 + Veria HIGH: with apply_to_output=True, PII embedded in
+    `function.arguments` on a streaming tool_call chunk must be masked before
+    being yielded to the client.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, StreamingChoices
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    calls = []
+
+    async def fake_check_pii(text, **_kwargs):
+        calls.append(text)
+        # Mask any "Jane" → "<PERSON>" in the input
+        return text.replace("Jane", "<PERSON>")
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    tool_call_chunk = ModelResponseStream(
+        id="chatcmpl-tc",
+        object="chat.completion.chunk",
+        created=1700000000,
+        model="gpt-test",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            index=0,
+                            type="function",
+                            function={
+                                "name": "lookup_user",
+                                "arguments": '{"name":"Jane Doe","email":"jane@example.com"}',
+                            },
+                        )
+                    ],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    async def upstream():
+        yield tool_call_chunk
+        yield _mrs_finish_chunk("tool_calls")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    tc_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream)
+        and c.choices
+        and getattr(c.choices[0].delta, "tool_calls", None)
+    ]
+    assert len(tc_chunks) >= 1
+    # The args string must have been rewritten by Presidio.
+    args_str = tc_chunks[0].choices[0].delta.tool_calls[0].function.arguments
+    assert "Jane" not in args_str, f"PII leaked through tool_call: {args_str}"
+    assert "<PERSON>" in args_str, f"masked token missing: {args_str}"
+    # Presidio was actually invoked on the args string.
+    assert any(
+        "Jane Doe" in c for c in calls
+    ), f"Presidio not called with args: {calls}"
