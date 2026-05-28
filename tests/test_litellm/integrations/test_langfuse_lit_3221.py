@@ -13,6 +13,7 @@ Fix: store the HTTPHandler on `self._http_handler` so it (and its underlying
 httpx.Client) outlive the cache eviction.
 """
 
+import copy
 import gc
 import os
 from unittest.mock import MagicMock, patch
@@ -25,29 +26,64 @@ from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 
 @pytest.fixture(autouse=True)
-def _langfuse_env():
+def _langfuse_env_and_cache_isolation():
+    """
+    Isolate every test from global state:
+      * Set well-known Langfuse env vars.
+      * Snapshot `litellm.in_memory_llm_clients_cache` so test eviction does
+        not leak into other tests in the same worker.
+      * Reset `litellm.initialized_langfuse_clients` afterwards.
+    """
     env = {
         "LANGFUSE_PUBLIC_KEY": "pk-lf-lit-3221",
         "LANGFUSE_SECRET_KEY": "sk-lf-lit-3221",
         "LANGFUSE_HOST": "http://127.0.0.1:9999",
     }
-    # Track original litellm counter to restore
-    orig = litellm.initialized_langfuse_clients
-    with patch.dict(os.environ, env, clear=False):
-        yield
-    litellm.initialized_langfuse_clients = orig
+    orig_counter = litellm.initialized_langfuse_clients
+    cache = litellm.in_memory_llm_clients_cache
+    cache_snapshot = (
+        dict(cache.cache_dict) if hasattr(cache, "cache_dict") else None
+    )
+    try:
+        with patch.dict(os.environ, env, clear=False):
+            yield
+    finally:
+        litellm.initialized_langfuse_clients = orig_counter
+        if cache_snapshot is not None and hasattr(cache, "cache_dict"):
+            cache.cache_dict.clear()
+            cache.cache_dict.update(cache_snapshot)
 
 
-def _safe_init_logger():
-    """Build a LangFuseLogger without contacting Langfuse on init."""
+def _safe_init_logger(mock_mode: bool = False):
+    """
+    Build a LangFuseLogger without contacting Langfuse on init.
+
+    Always patches `should_use_langfuse_mock` so the chosen path is
+    deterministic regardless of any global flag elsewhere in the suite, and
+    also patches the network-touching `safe_init_langfuse_client`.
+    """
     mock_lf_client = MagicMock()
     mock_lf_client.client = MagicMock()
     mock_lf_client.client.projects.get.return_value.data = [MagicMock(id="proj-1")]
-    with patch.object(
-        LangFuseLogger,
-        "safe_init_langfuse_client",
-        return_value=mock_lf_client,
+    with (
+        patch.object(
+            langfuse_module,
+            "should_use_langfuse_mock",
+            return_value=mock_mode,
+        ),
+        patch.object(
+            LangFuseLogger,
+            "safe_init_langfuse_client",
+            return_value=mock_lf_client,
+        ),
     ):
+        if mock_mode:
+            with patch.object(
+                langfuse_module,
+                "create_mock_langfuse_client",
+                return_value=MagicMock(),
+            ):
+                return LangFuseLogger()
         return LangFuseLogger()
 
 
@@ -72,8 +108,8 @@ def test_langfuse_logger_holds_http_handler_reference():
 def test_langfuse_httpx_client_survives_cache_eviction_and_gc():
     """
     End-to-end regression: after evicting the HTTPHandler from the in-memory
-    LLM-clients cache AND forcing GC, the httpx.Client held by the LangFuseLogger
-    must still be usable (i.e. not closed).
+    LLM-clients cache AND forcing GC, the httpx.Client held by the
+    LangFuseLogger must still be usable (i.e. not closed).
     """
     lf = _safe_init_logger()
     client = lf.langfuse_client
@@ -95,18 +131,9 @@ def test_langfuse_httpx_client_survives_cache_eviction_and_gc():
 
 def test_langfuse_mock_mode_does_not_set_http_handler():
     """
-    The mock-mode path must not call _get_httpx_client. We assert by checking
+    The mock-mode path must not call _get_httpx_client. Confirms by asserting
     that _http_handler is not set when langfuse-mock mode is active.
     """
-    with patch.object(langfuse_module, "should_use_langfuse_mock", return_value=True),          patch.object(
-             langfuse_module,
-             "create_mock_langfuse_client",
-             return_value=MagicMock(),
-         ),          patch.object(
-             LangFuseLogger,
-             "safe_init_langfuse_client",
-             return_value=MagicMock(client=MagicMock(projects=MagicMock(get=MagicMock(return_value=MagicMock(data=[MagicMock(id="m")]))))),
-         ):
-        lf = LangFuseLogger()
+    lf = _safe_init_logger(mock_mode=True)
     assert lf.is_mock_mode is True
     assert getattr(lf, "_http_handler", None) is None
