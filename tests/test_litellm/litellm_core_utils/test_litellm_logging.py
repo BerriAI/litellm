@@ -2744,6 +2744,78 @@ def test_mcp_tool_model_dump_response_is_captured_in_standard_logging_payload(
     )
 
 
+def test_mcp_tool_legacy_dict_response_is_captured_in_standard_logging_payload(
+    logging_obj,
+):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes
+
+    class FakeLegacyMCPCallToolResult:
+        def dict(self):
+            return {
+                "content": [{"type": "text", "text": "legacy"}],
+                "structuredContent": {"runtime": "pydantic-v1"},
+                "isError": False,
+            }
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "mcp-legacy-response-call-id",
+            "model": "MCP: legacy/result",
+            "messages": [],
+            "call_type": CallTypes.call_mcp_tool.value,
+        },
+        init_response_obj=FakeLegacyMCPCallToolResult(),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response"] == {
+        "content": [{"type": "text", "text": "legacy"}],
+        "structuredContent": {"runtime": "pydantic-v1"},
+        "isError": False,
+    }
+
+
+def test_mcp_tool_non_mapping_model_dump_response_is_ignored(logging_obj):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes
+
+    class FakeMalformedMCPCallToolResult:
+        def model_dump(self):
+            return ["not", "a", "mapping"]
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "mcp-malformed-response-call-id",
+            "model": "MCP: malformed/result",
+            "messages": [],
+            "call_type": CallTypes.call_mcp_tool.value,
+        },
+        init_response_obj=FakeMalformedMCPCallToolResult(),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response"] == {}
+
+
 def test_mcp_tool_dict_response_is_captured_in_standard_logging_payload(logging_obj):
     import datetime
 
