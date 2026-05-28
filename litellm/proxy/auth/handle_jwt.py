@@ -1037,6 +1037,16 @@ class JWTAuthManager:
 
         # First try to get team by team_id
         if individual_team_id:
+            # When upserting a new team from the JWT, propagate the
+            # ``team_alias_jwt_field`` value (if configured + present) so the
+            # auto-created team has a human-readable name in the UI / spend
+            # tooling instead of an empty alias.
+            upsert_alias_from_jwt: Optional[str] = None
+            if jwt_handler.litellm_jwtauth.team_id_upsert:
+                upsert_alias_from_jwt = jwt_handler.get_team_alias(
+                    token=jwt_valid_token, default_value=None
+                )
+
             team_object = await get_team_object(
                 team_id=individual_team_id,
                 prisma_client=prisma_client,
@@ -1044,6 +1054,7 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                upsert_team_alias=upsert_alias_from_jwt,
             )
             return individual_team_id, team_object
 

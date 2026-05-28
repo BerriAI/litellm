@@ -1811,6 +1811,156 @@ async def test_is_required_team_id_with_team_alias_field():
 
 
 @pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_upsert_propagates_jwt_alias():
+    """LIT-3087: when a JWT presents both ``team_id`` and ``team_name`` claims
+    and ``team_id_upsert: True`` is configured, the value resolved from
+    ``team_alias_jwt_field`` must flow into ``get_team_object`` as
+    ``upsert_team_alias`` so the auto-created team gets a human-readable
+    name in the UI / spend tooling. The pre-fix path dropped the alias and
+    the team was created with ``team_alias=None``.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_alias_jwt_field="team_name",
+            team_id_upsert=True,
+        ),
+    )
+
+    jwt_token = {
+        "sub": "user-okta-1",
+        "team_id": "okta-eng-platform",
+        "team_name": "Engineering Platform",
+    }
+    expected_team = LiteLLM_TeamTable(
+        team_id="okta-eng-platform", team_alias="Engineering Platform"
+    )
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+    ) as mock_get_team:
+        mock_get_team.return_value = expected_team
+
+        team_id, team_obj = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert team_id == "okta-eng-platform"
+        assert team_obj is expected_team
+        mock_get_team.assert_called_once()
+        kwargs = mock_get_team.call_args.kwargs
+        assert kwargs["team_id"] == "okta-eng-platform"
+        assert kwargs["team_id_upsert"] is True
+        assert kwargs["upsert_team_alias"] == "Engineering Platform"
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_no_alias_passes_none():
+    """LIT-3087: when ``team_alias_jwt_field`` is configured but the JWT does
+    not carry that claim, ``upsert_team_alias`` is propagated as ``None`` —
+    behavior matches pre-fix when no alias was available.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_alias_jwt_field="team_name",
+            team_id_upsert=True,
+        ),
+    )
+
+    jwt_token = {"sub": "u", "team_id": "no-alias-team"}  # team_name absent
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+    ) as mock_get_team:
+        mock_get_team.return_value = LiteLLM_TeamTable(team_id="no-alias-team")
+
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert mock_get_team.call_args.kwargs["upsert_team_alias"] is None
+
+
+@pytest.mark.asyncio
+async def test_find_and_validate_specific_team_id_does_not_resolve_alias_when_upsert_disabled():
+    """LIT-3087: ``get_team_alias`` is a no-op call but we still skip it
+    entirely when ``team_id_upsert`` is False — the alias has no upsert
+    purpose and we should not eagerly do dict lookups on the token for it.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_alias_jwt_field="team_name",
+            team_id_upsert=False,
+        ),
+    )
+    jwt_token = {"sub": "u", "team_id": "tid", "team_name": "Should Not Be Sent"}
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
+        ) as mock_get_team,
+        patch.object(jwt_handler, "get_team_alias") as mock_get_alias,
+    ):
+        mock_get_team.return_value = LiteLLM_TeamTable(team_id="tid")
+        await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_token,
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        # No alias resolution should occur when upsert is disabled
+        mock_get_alias.assert_not_called()
+        assert mock_get_team.call_args.kwargs["upsert_team_alias"] is None
+
+
+@pytest.mark.asyncio
 async def test_find_and_validate_specific_team_id_with_team_alias():
     """
     Test that find_and_validate_specific_team_id resolves team by name when team_id is not found
