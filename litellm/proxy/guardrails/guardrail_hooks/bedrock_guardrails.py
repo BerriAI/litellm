@@ -664,8 +664,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # ``x-amzn-RequestId`` is the canonical header surfaced by the AWS SDK /
     # CloudTrail / Bedrock console; ``x-amz-request-id`` is the legacy S3-style
     # fallback that some Bedrock proxies still emit. Listed in priority order.
+    # ``x-amzn-RequestId`` is the canonical header surfaced by the AWS SDK,
+    # CloudTrail, and the Bedrock console. ``x-amz-request-id`` is the legacy
+    # S3-style fallback some Bedrock proxies still emit. httpx.Headers gives
+    # case-insensitive lookups so listing the canonical capitalisation once
+    # is enough; plain dicts are matched as-is (callers control case).
     _BEDROCK_REQUEST_ID_HEADERS: ClassVar[Tuple[str, ...]] = (
-        "x-amzn-requestid",
         "x-amzn-RequestId",
         "x-amz-request-id",
     )
