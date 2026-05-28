@@ -52,7 +52,7 @@ _PROPAGATED_METADATA_KEYS = (
     "litellm_parent_otel_span",
 )
 
-_SUMMARY_TAG_RE = re.compile(r"<summary>(.*)</summary>", re.IGNORECASE | re.DOTALL)
+_SUMMARY_TAG_RE = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
 
 
 def _read_summary_model_setting() -> Optional[str]:

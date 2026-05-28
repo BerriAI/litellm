@@ -1477,6 +1477,9 @@ class AmazonConverseConfig(BaseConfig):
         anthropic_beta_list: list,
     ) -> None:
         """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
+        from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+            COMPACT_EDIT_TYPE,
+        )
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
         cm = additional_request_params.get("context_management")
@@ -1491,7 +1494,7 @@ class AmazonConverseConfig(BaseConfig):
         compact_edits = [
             e
             for e in edits
-            if isinstance(e, dict) and e.get("type") == "compact_20260112"
+            if isinstance(e, dict) and e.get("type") == COMPACT_EDIT_TYPE
         ]
         if compact_edits:
             compact_beta = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
