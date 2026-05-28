@@ -74,6 +74,17 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             **kwargs,
         )
 
+        # OpenAI Moderation can only block, never redact — so mid-stream
+        # sampling adds no safety benefit; it just multiplies /moderations
+        # RTT. Default end-of-stream-only so a single moderation call runs
+        # at the end of the stream (matching the non-streaming
+        # async_post_call_success_hook path). Users can still set
+        # streaming_end_of_stream_only=False in the guardrail config to
+        # restore mid-stream sampling.
+        self.streaming_end_of_stream_only: bool = bool(
+            kwargs.get("streaming_end_of_stream_only", True)
+        )
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
