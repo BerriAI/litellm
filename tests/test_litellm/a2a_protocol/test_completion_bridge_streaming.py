@@ -32,7 +32,10 @@ class TestA2AStreamingTransformation:
         # Metadata is forwarded on the run payload only, not duplicated on messages.
         assert "metadata" not in openai_messages[0]
 
-        completion_params: dict = {"model": "langgraph/agent", "messages": openai_messages}
+        completion_params: dict = {
+            "model": "langgraph/agent",
+            "messages": openai_messages,
+        }
         A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
             completion_params=completion_params,
             a2a_message=message,
@@ -40,6 +43,38 @@ class TestA2AStreamingTransformation:
         )
         assert completion_params["extra_body"]["metadata"] == {
             "trace": "abc",
+            "skillId": "draft_reply",
+        }
+
+    def test_configured_metadata_wins_over_forwarded_a2a_metadata(self):
+        from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+            A2ACompletionBridgeTransformation,
+        )
+
+        # Agent-owner-configured run metadata in ``extra_body``.
+        completion_params: dict = {
+            "model": "langgraph/agent",
+            "messages": [],
+            "extra_body": {
+                "metadata": {"owner_tag": "prod", "trace": "server-set"},
+                "other": "keep",
+            },
+        }
+        # Client tries to overwrite ``trace`` and inject a new key.
+        message = {
+            "role": "user",
+            "parts": [{"text": "hi"}],
+            "metadata": {"trace": "client-spoof", "skillId": "draft_reply"},
+        }
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params={"metadata": {"trace": "client-spoof-2"}},
+        )
+        assert completion_params["extra_body"]["other"] == "keep"
+        assert completion_params["extra_body"]["metadata"] == {
+            "owner_tag": "prod",
+            "trace": "server-set",
             "skillId": "draft_reply",
         }
 

@@ -164,3 +164,13 @@ def test_does_not_mutate_input():
     snapshot = dict(upstream)
     merge_agent_card(upstream, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert upstream == snapshot
+
+
+def test_strips_additional_interfaces_to_prevent_backend_url_leak():
+    upstream = _full_upstream_card()
+    upstream["additionalInterfaces"] = [
+        {"url": "http://internal-backend:8080/", "transport": "JSONRPC"},
+        {"url": "grpc://internal-backend:50051", "transport": "GRPC"},
+    ]
+    merged = merge_agent_card(upstream, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+    assert "additionalInterfaces" not in merged

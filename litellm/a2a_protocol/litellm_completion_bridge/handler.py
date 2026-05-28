@@ -107,9 +107,9 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
-        # Apply forward metadata AFTER the litellm_params merge so an
-        # agent-configured ``extra_body`` does not overwrite the forwarded
-        # A2A metadata; the helper merges into any existing ``extra_body``.
+        # Apply forward metadata AFTER the litellm_params merge so the helper
+        # sees any agent-owner-configured ``extra_body.metadata`` and can keep
+        # those keys authoritative over the client-supplied A2A metadata.
         A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
             completion_params=completion_params,
             a2a_message=message,
@@ -222,9 +222,9 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
-        # Apply forward metadata AFTER the litellm_params merge so an
-        # agent-configured ``extra_body`` does not overwrite the forwarded
-        # A2A metadata; the helper merges into any existing ``extra_body``.
+        # Apply forward metadata AFTER the litellm_params merge so the helper
+        # sees any agent-owner-configured ``extra_body.metadata`` and can keep
+        # those keys authoritative over the client-supplied A2A metadata.
         A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
             completion_params=completion_params,
             a2a_message=message,

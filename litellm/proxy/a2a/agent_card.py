@@ -43,6 +43,12 @@ _ALLOWED_CAPABILITY_KEYS = {"streaming"}
 # card as a defense against upstream drift. ``supportedInterfaces`` is kept
 # verbatim per product spec even though it is not in the v1.0 schema — clients
 # that expect it will find it; clients that don't will ignore it.
+#
+# ``additionalInterfaces`` is deliberately excluded: it advertises alternate
+# upstream URLs (HTTP/JSONRPC/gRPC backends) that, if persisted and served,
+# would let authenticated agent callers reach the backend directly and bypass
+# the proxy's auth/budget/logging. The proxy publishes its own entrypoint via
+# ``supportedInterfaces`` instead.
 _ALLOWED_TOP_LEVEL_KEYS = {
     "protocolVersion",
     "name",
@@ -53,7 +59,6 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "defaultOutputModes",
     "skills",
     "preferredTransport",
-    "additionalInterfaces",
     "supportedInterfaces",
     "iconUrl",
     "provider",
