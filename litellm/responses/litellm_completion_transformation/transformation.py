@@ -999,7 +999,11 @@ class LiteLLMCompletionResponsesConfig:
             # downstream providers (e.g. anthropic_messages_pt, AnthropicConfig.translate_system_message)
             # can apply it to system/user/assistant blocks. Without this, cache_control_injection_points
             # is silently dropped on the Responses API path. See LIT-2594.
-            cache_control = input_item.get("cache_control") if isinstance(input_item, dict) else None
+            cache_control = (
+                input_item.get("cache_control")
+                if isinstance(input_item, dict)
+                else None
+            )
             if cache_control is not None:
                 message["cache_control"] = cache_control  # type: ignore[typeddict-unknown-key]
             return [message]
