@@ -24,6 +24,8 @@ def app_with_router():
     # must be parameterless or FastAPI will try to bind query params to it.
     from litellm.proxy.auth import user_api_key_auth as auth_mod
 
+    original_auth = auth_mod.user_api_key_auth
+
     async def _fake_auth():
         return auth_mod.UserAPIKeyAuth(
             api_key="sk-test", token="x", user_id="test"
@@ -37,7 +39,13 @@ def app_with_router():
 
     app = FastAPI()
     app.include_router(ep_mod.router)
-    return app, ep_mod
+    try:
+        yield app, ep_mod
+    finally:
+        # Restore the real auth function so any other test module sharing the
+        # pytest session sees the original dependency.
+        auth_mod.user_api_key_auth = original_auth
+        sys.modules.pop("litellm.proxy.response_api_endpoints.endpoints", None)
 
 
 @pytest.fixture()
@@ -284,6 +292,38 @@ class TestResponsesInputTokens:
             json={"model": "openai/gpt-4o", "input": "hi"},
         )
         assert r.status_code == 500, r.text
+
+
+    def test_dict_input_returns_400_even_with_instructions(
+        self, client, fake_token_counter
+    ):
+        """Regression: a dict-shaped ``input`` (not a string, not a list) must
+        return 400 even when ``instructions`` is supplied, otherwise the
+        endpoint would count only the system message and drop the actual
+        invalid input silently. The Responses API spec only accepts string
+        or list inputs.
+        """
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={
+                "model": "openai/gpt-4o",
+                "instructions": "Be helpful",
+                "input": {"text": "ignored"},
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert "input" in r.text
+
+    def test_non_empty_dict_input_returns_400_without_instructions(
+        self, client, fake_token_counter
+    ):
+        r = client.post(
+            "/v1/responses/input_tokens",
+            headers=HEADERS,
+            json={"model": "openai/gpt-4o", "input": {"some": "thing"}},
+        )
+        assert r.status_code == 400, r.text
 
 class TestNormalizeResponsesInputToMessages:
     """Direct unit tests for the input-shape normalizer helper."""
