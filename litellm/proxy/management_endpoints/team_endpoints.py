@@ -4328,27 +4328,70 @@ def _narrow_team_list_response_for_internal_user(
 ) -> "TeamListResponseObject":
     """
     Narrow a /team/list response item so a non-admin caller only sees data
-    scoped to their own membership. Tracking ticket: LIT-2553.
+    scoped to their own membership. Mutates ``response`` in place and
+    returns it.
+
+    Filtered to caller_user_id only:
+        - members_with_roles, admins, members, team_memberships
+        - keys (verification tokens whose owner is the caller)
+
+    Redacted (set to None / cleared):
+        team_member_permissions, metadata, router_settings,
+        object_permission, object_permission_id, litellm_model_table,
+        budget_limits
+
+    Preserved (sufficient for the UI to render the team header + the
+    caller's own membership):
+        team_id, team_alias, organization_id, models, model_aliases,
+        access_group_ids, default_team_member_models, blocked,
+        tpm_limit, rpm_limit, max_budget, soft_budget, budget_duration,
+        budget_reset_at, model_max_budget, spend, created_at, updated_at.
+
+    Tracking ticket: LIT-2553.
     """
-    target_uid: str = (
-        caller_user_id if caller_user_id is not None else "\x00__never_matches__"
-    )
 
     def _entry_uid(entry: Any) -> Optional[str]:
+        # Each list element may be a raw user_id string (admins / members),
+        # a Member / LiteLLM_TeamMembership pydantic object, or a plain
+        # dict (raw prisma row). Handle all three shapes uniformly so the
+        # filter is consistent across every member-identifying field.
+        if isinstance(entry, str):
+            return entry
         if isinstance(entry, dict):
             return entry.get("user_id")
         return getattr(entry, "user_id", None)
 
-    response.members_with_roles = [
-        m for m in (response.members_with_roles or []) if _entry_uid(m) == target_uid
-    ]
-    response.admins = [u for u in (response.admins or []) if u == target_uid]
-    response.members = [u for u in (response.members or []) if u == target_uid]
-    response.team_memberships = [
-        tm for tm in (response.team_memberships or []) if _entry_uid(tm) == target_uid
-    ]
-    response.keys = [k for k in (response.keys or []) if _entry_uid(k) == target_uid]
+    # Defensive: if we can't identify the caller, drop every member-scoped
+    # entry rather than risking a leak. Sensitive team-level fields below
+    # still get redacted.
+    if caller_user_id is None:
+        response.members_with_roles = []
+        response.admins = []
+        response.members = []
+        response.team_memberships = []
+        response.keys = []
+    else:
+        response.members_with_roles = [
+            m
+            for m in (response.members_with_roles or [])
+            if _entry_uid(m) == caller_user_id
+        ]
+        response.admins = [
+            u for u in (response.admins or []) if _entry_uid(u) == caller_user_id
+        ]
+        response.members = [
+            u for u in (response.members or []) if _entry_uid(u) == caller_user_id
+        ]
+        response.team_memberships = [
+            tm
+            for tm in (response.team_memberships or [])
+            if _entry_uid(tm) == caller_user_id
+        ]
+        response.keys = [
+            k for k in (response.keys or []) if _entry_uid(k) == caller_user_id
+        ]
 
+    # Redact admin-only / sensitive fields.
     response.team_member_permissions = None
     response.metadata = None
     response.router_settings = None
