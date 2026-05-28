@@ -498,6 +498,12 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "amazon_nova"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
+        ## anthropic claude models - fallback pattern match for models not yet in model_prices_and_context_window.json
+        elif model.startswith("claude-"):
+            if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+                custom_llm_provider = "anthropic_text"
+            else:
+                custom_llm_provider = "anthropic"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa

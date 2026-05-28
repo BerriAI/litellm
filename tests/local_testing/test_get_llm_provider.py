@@ -478,3 +478,55 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base  # Should use the argument base
 
+
+# -------- Tests for claude-* fallback pattern matching ---------
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-opus-4-8",  # future model not in model_prices_and_context_window.json
+        "claude-opus-4-8-20260601",  # future model with date suffix
+        "claude-sonnet-4-7",  # future model
+        "claude-sonnet-4-7-20260501",  # future model with date suffix
+        "claude-haiku-4-6",  # future model
+        "claude-5-opus-20270101",  # hypothetical claude 5
+        "claude-3-5-sonnet-20241022",  # existing model (but tests fallback path too)
+    ],
+)
+def test_get_llm_provider_claude_fallback_pattern(model_name):
+    """
+    Tests that claude-* models are routed to anthropic provider even if
+    not in model_prices_and_context_window.json. This allows new Claude models
+    to work without requiring a JSON update.
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model=model_name,
+    )
+    assert (
+        custom_llm_provider == "anthropic"
+    ), f"Expected 'anthropic' for {model_name}, got {custom_llm_provider}"
+    assert model == model_name
+
+
+def test_get_llm_provider_claude_with_anthropic_prefix():
+    """
+    Tests that anthropic/claude-* models work correctly with explicit prefix.
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="anthropic/claude-opus-4-8",
+    )
+    assert custom_llm_provider == "anthropic"
+    assert model == "claude-opus-4-8"
+
+
+def test_get_llm_provider_bedrock_claude_not_affected():
+    """
+    Tests that bedrock claude models are NOT affected by the claude-* fallback.
+    Bedrock models use different naming (anthropic.claude-*).
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="anthropic.claude-v2:1",
+    )
+    assert custom_llm_provider == "bedrock"
+    assert model == "anthropic.claude-v2:1"
