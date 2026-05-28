@@ -459,21 +459,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     self.holding_chunk = None
-                    # If a final ``message_delta`` is also held, the
-                    # dangling ``content_block_delta`` must be followed
-                    # by ``content_block_stop`` before the
-                    # ``message_delta`` so the emitted SSE stays in
-                    # valid Anthropic order (content_block_delta ->
-                    # content_block_stop -> message_delta) rather than
-                    # the invalid content_block_delta -> message_delta.
-                    if self.holding_stop_reason_chunk is not None:
+                if self.holding_stop_reason_chunk is not None:
+                    # A final ``message_delta`` must be preceded by
+                    # ``content_block_stop`` so the emitted SSE stays in
+                    # valid Anthropic order (... -> content_block_stop ->
+                    # message_delta). Emit ``content_block_stop`` here if
+                    # the active content block was not already closed.
+                    if not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
                                 "index": self.current_content_block_index,
                             }
                         )
-                if self.holding_stop_reason_chunk is not None:
+                        self.sent_content_block_finish = True
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
                             self.holding_stop_reason_chunk
@@ -494,8 +493,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         except StopIteration:
             if self.chunk_queue:
                 return self.chunk_queue.popleft()
-            # Handle any held stop_reason chunk
+            # Handle any held stop_reason chunk. Emit ``content_block_stop``
+            # first if the active content block was not already closed, so
+            # Anthropic SSE ordering is preserved (content_block_stop ->
+            # message_delta).
             if self.holding_stop_reason_chunk is not None:
+                if not self.sent_content_block_finish:
+                    self.sent_content_block_finish = True
+                    self.chunk_queue.append(
+                        self._augment_message_delta_usage(
+                            self.holding_stop_reason_chunk
+                        )
+                    )
+                    self.holding_stop_reason_chunk = None
+                    return {
+                        "type": "content_block_stop",
+                        "index": self.current_content_block_index,
+                    }
                 held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
@@ -691,21 +705,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if self.holding_chunk is not None:
                     self.chunk_queue.append(self.holding_chunk)
                     self.holding_chunk = None
-                    # If a final ``message_delta`` is also held, the
-                    # dangling ``content_block_delta`` must be followed
-                    # by ``content_block_stop`` before the
-                    # ``message_delta`` so the emitted SSE stays in
-                    # valid Anthropic order (content_block_delta ->
-                    # content_block_stop -> message_delta) rather than
-                    # the invalid content_block_delta -> message_delta.
-                    if self.holding_stop_reason_chunk is not None:
+                if self.holding_stop_reason_chunk is not None:
+                    # A final ``message_delta`` must be preceded by
+                    # ``content_block_stop`` so the emitted SSE stays in
+                    # valid Anthropic order (... -> content_block_stop ->
+                    # message_delta). Emit ``content_block_stop`` here if
+                    # the active content block was not already closed.
+                    if not self.sent_content_block_finish:
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
                                 "index": self.current_content_block_index,
                             }
                         )
-                if self.holding_stop_reason_chunk is not None:
+                        self.sent_content_block_finish = True
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
                             self.holding_stop_reason_chunk
@@ -731,8 +744,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return self.chunk_queue.popleft()
             # Handle any held stop_reason chunk — clear after capturing so a
             # subsequent ``__anext__`` call doesn't re-emit the same chunk
-            # (matches the sync ``__next__`` path).
+            # (matches the sync ``__next__`` path). Emit ``content_block_stop``
+            # first if the active content block was not already closed, so
+            # Anthropic SSE ordering is preserved (content_block_stop ->
+            # message_delta).
             if self.holding_stop_reason_chunk is not None:
+                if not self.sent_content_block_finish:
+                    self.sent_content_block_finish = True
+                    self.chunk_queue.append(
+                        self._augment_message_delta_usage(
+                            self.holding_stop_reason_chunk
+                        )
+                    )
+                    self.holding_stop_reason_chunk = None
+                    return {
+                        "type": "content_block_stop",
+                        "index": self.current_content_block_index,
+                    }
                 held = self._augment_message_delta_usage(self.holding_stop_reason_chunk)
                 self.holding_stop_reason_chunk = None
                 return held
