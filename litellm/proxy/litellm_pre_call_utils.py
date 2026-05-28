@@ -1712,6 +1712,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
+    geo_bucket = ""
+    if (
+        request is not None
+        and hasattr(request, "headers")
+        and "x-rayward-geo-bucket" in request.headers
+    ):
+        geo_bucket = request.headers["x-rayward-geo-bucket"]
+    data[_metadata_variable_name]["geo_bucket"] = geo_bucket
+
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
