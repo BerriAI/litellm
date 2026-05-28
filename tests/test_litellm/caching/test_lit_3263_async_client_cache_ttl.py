@@ -53,10 +53,20 @@ def redis_cache_instance(redis_no_ping):
         yield RedisCache(host="lit-3263-host", port=6379)
 
 
-def test_redis_async_client_cache_ttl_constant_default():
+def test_redis_async_client_cache_ttl_constant_default(monkeypatch):
     """The TTL constant defaults to 86400 (1 day) — long enough that the
-    pool is never recycled by the default LLMClientCache eviction."""
-    assert REDIS_ASYNC_CLIENT_CACHE_TTL == 86400
+    pool is never recycled by the default LLMClientCache eviction.
+
+    Clears any pre-existing REDIS_ASYNC_CLIENT_CACHE_TTL env var so the
+    assertion pins the in-source default rather than whatever the CI runner
+    happens to have configured.
+    """
+    monkeypatch.delenv("REDIS_ASYNC_CLIENT_CACHE_TTL", raising=False)
+    importlib.reload(litellm_constants)
+    try:
+        assert litellm_constants.REDIS_ASYNC_CLIENT_CACHE_TTL == 86400
+    finally:
+        importlib.reload(litellm_constants)
 
 
 def test_redis_async_client_cache_ttl_env_override(monkeypatch):
