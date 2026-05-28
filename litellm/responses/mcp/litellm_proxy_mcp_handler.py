@@ -753,10 +753,8 @@ class LiteLLM_Proxy_MCP_Handler:
                             LiteLLMProxyRequestSetup,
                         )
 
-                        sanitized_user_api_key_metadata = (
-                            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                                user_api_key_dict=user_api_key_auth,
-                            )
+                        sanitized_user_api_key_metadata = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                            user_api_key_dict=user_api_key_auth,
                         )
                         if sanitized_user_api_key_metadata:
                             for _k, _v in sanitized_user_api_key_metadata.items():
