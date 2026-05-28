@@ -3113,3 +3113,200 @@ async def test_lit3222_usage_forwarded_on_finish_chunk(monkeypatch):
     assert finish.usage.prompt_tokens == 10
     assert finish.usage.completion_tokens == 20
     assert finish.usage.total_tokens == 30
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_does_not_flush_on_dotted_email(monkeypatch):
+    """
+    LIT-3222 + Veria HIGH round 2: a chunk ending in `jane@example.`
+    followed by `com` must NOT trigger a sentence-boundary flush — there is
+    no whitespace after the `.`, so the period is not a true sentence ender.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    calls = []
+
+    async def fake_check_pii(text, **_kwargs):
+        calls.append(text)
+        return text
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    async def upstream():
+        yield _mrs_text_chunk("Email me at jane@example.")
+        yield _mrs_text_chunk("com please")
+        yield _mrs_finish_chunk("stop")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Single Presidio call at EOS — the email is NOT split across calls.
+    assert len(calls) == 1, f"email split across {len(calls)} Presidio calls: {calls}"
+    assert "jane@example.com" in calls[0], f"unexpected payload: {calls[0]!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_does_flush_on_sentence_followed_by_space(monkeypatch):
+    """
+    LIT-3222 + Veria HIGH round 2: a chunk ending in `. ` (period + space)
+    IS a true sentence boundary and should flush — this preserves TTFT
+    improvement for natural prose.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    calls = []
+
+    async def fake_check_pii(text, **_kwargs):
+        calls.append(text)
+        return text
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    async def upstream():
+        yield _mrs_text_chunk("Hello there. ")
+        yield _mrs_text_chunk("How are you today.")
+        yield _mrs_finish_chunk("stop")
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # >1 Presidio calls — the first sentence flushes on its `. ` boundary,
+    # the trailing fragment (no whitespace after final `.`) flushes at EOS.
+    assert len(calls) >= 2, f"expected progressive flushes, got {calls}"
+    assert calls[0] == "Hello there. "
+
+
+@pytest.mark.asyncio
+async def test_lit3222_mask_multi_choice_all_masked(monkeypatch):
+    """
+    LIT-3222 + Veria HIGH round 2: with n>1 streamed choices, every choice
+    must be masked, not only choices[0].
+    """
+    from litellm.types.utils import Delta, StreamingChoices
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    async def fake_check_pii(text, **_kwargs):
+        return text.replace("Jane", "<PERSON>")
+
+    monkeypatch.setattr(guardrail, "check_pii", fake_check_pii)
+
+    multi = ModelResponseStream(
+        id="x",
+        object="chat.completion.chunk",
+        created=1,
+        model="m",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="First Jane says hi."),
+                finish_reason="stop",
+            ),
+            StreamingChoices(
+                index=1,
+                delta=Delta(role="assistant", content="Second Jane says bye."),
+                finish_reason="stop",
+            ),
+        ],
+    )
+
+    async def upstream():
+        yield multi
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # Find the multi-choice chunk
+    multi_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream) and c.choices and len(c.choices) > 1
+    ]
+    assert len(multi_chunks) == 1
+    c0 = multi_chunks[0].choices[0].delta.content
+    c1 = multi_chunks[0].choices[1].delta.content
+    assert "Jane" not in c0, f"choice[0] leaked: {c0}"
+    assert "Jane" not in c1, f"choice[1] leaked: {c1}"
+    assert "<PERSON>" in c0 and "<PERSON>" in c1
+
+
+@pytest.mark.asyncio
+async def test_lit3222_unmask_multi_choice_all_unmasked():
+    """
+    LIT-3222 + Veria HIGH round 2: with n>1 streamed choices in the unmask
+    path, every choice's text must be unmasked, not only choices[0].
+    """
+    from litellm.types.utils import Delta, StreamingChoices
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    pii_tokens = {"<PERSON_1>": "Alice"}
+
+    multi = ModelResponseStream(
+        id="x",
+        object="chat.completion.chunk",
+        created=1,
+        model="m",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="First <PERSON_1>!"),
+                finish_reason="stop",
+            ),
+            StreamingChoices(
+                index=1,
+                delta=Delta(role="assistant", content="Second <PERSON_1>!"),
+                finish_reason="stop",
+            ),
+        ],
+    )
+
+    async def upstream():
+        yield multi
+
+    received = []
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=upstream(),
+        request_data=request_data,
+    ):
+        received.append(chunk)
+
+    multi_chunks = [
+        c
+        for c in received
+        if isinstance(c, ModelResponseStream) and c.choices and len(c.choices) > 1
+    ]
+    assert len(multi_chunks) == 1
+    c0 = multi_chunks[0].choices[0].delta.content
+    c1 = multi_chunks[0].choices[1].delta.content
+    assert "<PERSON_1>" not in c0, f"choice[0] not unmasked: {c0}"
+    assert "<PERSON_1>" not in c1, f"choice[1] not unmasked: {c1}"
+    assert "Alice" in c0 and "Alice" in c1
