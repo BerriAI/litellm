@@ -6342,7 +6342,6 @@ export interface DiscoverAgentCardOptions {
   discovery_mode?: DiscoveryMode;
   /** Mode-specific params. ``langgraph_platform`` requires ``assistant_id``. */
   params?: Record<string, any>;
-  headers?: Record<string, string>;
 }
 
 export const discoverAgentCardCall = async (
@@ -6354,7 +6353,6 @@ export const discoverAgentCardCall = async (
   const body: Record<string, any> = { url };
   if (options?.discovery_mode) body.discovery_mode = options.discovery_mode;
   if (options?.params) body.params = options.params;
-  if (options?.headers) body.headers = options.headers;
 
   const response = await fetch(endpoint, {
     method: "POST",
