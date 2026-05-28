@@ -6067,9 +6067,7 @@ async def get_available_models_for_user(
             team_models=[],
             proxy_model_list=proxy_model_list,
             user_model=user_model,
-            infer_model_from_keys=general_settings.get(
-                "infer_model_from_keys", False
-            ),
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
             return_wildcard_routes=return_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
