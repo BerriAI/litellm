@@ -305,3 +305,72 @@ class TestHandlerRouting:
             )
 
         mock_translate.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# ProviderConfigManager integration — real (unmocked) path
+# ---------------------------------------------------------------------------
+
+
+class TestProviderConfigManager:
+    """Exercises the real ProviderConfigManager.get_provider_anthropic_messages_config
+    to cover the hosted_vllm branch that CI codecov flags as uncovered."""
+
+    def test_hosted_vllm_with_flag_returns_config(self):
+        from litellm.utils import ProviderConfigManager
+
+        params = GenericLiteLLMParams(disable_anthropic_translation=True)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION", None)
+            config = ProviderConfigManager.get_provider_anthropic_messages_config(
+                model="qwen36-27b",
+                provider=litellm.LlmProviders.HOSTED_VLLM,
+                litellm_params=params,
+            )
+        assert isinstance(config, HostedVLLMAnthropicMessagesConfig)
+
+    def test_hosted_vllm_without_flag_returns_none(self):
+        from litellm.utils import ProviderConfigManager
+
+        params = GenericLiteLLMParams()
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION", None)
+            config = ProviderConfigManager.get_provider_anthropic_messages_config(
+                model="qwen36-27b",
+                provider=litellm.LlmProviders.HOSTED_VLLM,
+                litellm_params=params,
+            )
+        assert config is None
+
+    def test_hosted_vllm_no_litellm_params_returns_none(self):
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="qwen36-27b",
+            provider=litellm.LlmProviders.HOSTED_VLLM,
+            litellm_params=None,
+        )
+        assert config is None
+
+    def test_hosted_vllm_env_var_returns_config(self):
+        from litellm.utils import ProviderConfigManager
+
+        params = GenericLiteLLMParams()
+        with patch.dict(os.environ, {"DISABLE_HOSTED_VLLM_ANTHROPIC_TRANSLATION": "true"}):
+            config = ProviderConfigManager.get_provider_anthropic_messages_config(
+                model="qwen36-27b",
+                provider=litellm.LlmProviders.HOSTED_VLLM,
+                litellm_params=params,
+            )
+        assert isinstance(config, HostedVLLMAnthropicMessagesConfig)
+
+    def test_non_hosted_vllm_delegates_to_cached(self):
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-3",
+            provider=litellm.LlmProviders.ANTHROPIC,
+            litellm_params=None,
+        )
+        assert config is not None
+        assert not isinstance(config, HostedVLLMAnthropicMessagesConfig)
