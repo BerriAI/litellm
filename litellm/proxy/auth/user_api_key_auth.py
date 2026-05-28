@@ -1604,6 +1604,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 model=model_name,
                             )
 
+                    # Check 5c. Team-level model max budget (LIT-2768)
+                    team_mmb = valid_token.team_model_max_budget
+                    if (
+                        team_mmb is not None
+                        and isinstance(team_mmb, dict)
+                        and len(team_mmb) > 0
+                        and current_models
+                        and valid_token.team_id is not None
+                    ):
+                        for model_name in current_models:
+                            await model_max_budget_limiter.is_team_within_model_budget(
+                                team_id=valid_token.team_id,
+                                team_model_max_budget=team_mmb,
+                                model=model_name,
+                            )
+
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
@@ -2622,6 +2638,22 @@ async def _run_post_custom_auth_checks(
             await model_max_budget_limiter.is_end_user_within_model_budget(
                 end_user_id=valid_token.end_user_id,
                 end_user_model_max_budget=end_user_mmb,
+                model=model_name,
+            )
+
+    # 5. Check team-level model_max_budget (LIT-2768)
+    team_mmb = valid_token.team_model_max_budget
+    if (
+        team_mmb is not None
+        and isinstance(team_mmb, dict)
+        and len(team_mmb) > 0
+        and current_models
+        and valid_token.team_id is not None
+    ):
+        for model_name in current_models:
+            await model_max_budget_limiter.is_team_within_model_budget(
+                team_id=valid_token.team_id,
+                team_model_max_budget=team_mmb,
                 model=model_name,
             )
 
