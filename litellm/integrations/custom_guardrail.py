@@ -7,6 +7,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     Union,
     get_args,
@@ -237,18 +238,43 @@ class CustomGuardrail(CustomLogger):
         ``litellm_metadata`` depending on endpoint. Check both so a caller
         cannot shadow admin config by pre-populating the other key.
         Key-level settings override team-level.
+
+        NOTE: this last-write-wins merge is the wrong semantic for
+        kill-switch style settings (``disable_global_guardrails``) and
+        union-style settings (``opted_out_global_guardrails``) where a
+        permissive key value should never override a restrictive team
+        value. See LIT-1825 — the dedicated getters
+        ``get_disable_global_guardrail`` and
+        ``get_opted_out_global_guardrails_from_metadata`` read team and key
+        independently via ``_get_admin_metadata_team_and_key`` instead of
+        calling this method. Continue using this only for settings where
+        last-write-wins is the intended behavior.
+        """
+        team_meta, key_meta = CustomGuardrail._get_admin_metadata_team_and_key(data)
+        return {**team_meta, **key_meta}
+
+    @staticmethod
+    def _get_admin_metadata_team_and_key(data: dict) -> Tuple[dict, dict]:
+        """Return ``(team_admin_metadata, key_admin_metadata)`` without merging.
+
+        Same source-of-truth as ``_get_admin_metadata`` (proxy-injected
+        ``user_api_key_team_metadata`` / ``user_api_key_metadata`` under
+        either ``metadata`` or ``litellm_metadata``), but returns the two
+        dicts separately so callers can apply the merge semantic that
+        fits their setting (boolean OR, list UNION, last-write-wins,
+        etc.).
         """
         team_meta: dict = {}
         key_meta: dict = {}
         for key in ("metadata", "litellm_metadata"):
-            # Defensive: an unparsed JSON-string metadata could leak past the
-            # proxy's normal parse path; don't AttributeError on .get().
+            # Defensive: an unparsed JSON-string metadata could leak past
+            # the proxy's normal parse path; don't AttributeError on .get().
             meta = data.get(key)
             if not isinstance(meta, dict):
                 continue
             team_meta = meta.get("user_api_key_team_metadata") or team_meta
             key_meta = meta.get("user_api_key_metadata") or key_meta
-        return {**team_meta, **key_meta}
+        return team_meta, key_meta
 
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
         """
@@ -256,17 +282,53 @@ class CustomGuardrail(CustomLogger):
 
         Reads from admin-configured key/team metadata only, not from
         the request body, to prevent callers from disabling guardrails.
+
+        Team and key are treated as **independent kill-switches**: if
+        either admin-configured ``disable_global_guardrails`` is True the
+        guardrail is skipped. A key cannot un-disable a guardrail that
+        the team has disabled — necessary because the UI form
+        (``ui/litellm-dashboard/src/components/templates/key_edit_view.tsx``)
+        always submits ``disable_global_guardrails: false`` on key edit
+        unless the operator explicitly checks the box, which would
+        otherwise silently shadow the team kill-switch on every key edit.
+        See LIT-1825.
         """
-        return self._get_admin_metadata(data).get("disable_global_guardrails", False)
+        team_meta, key_meta = self._get_admin_metadata_team_and_key(data)
+        if team_meta.get("disable_global_guardrails") is True:
+            return True
+        if key_meta.get("disable_global_guardrails") is True:
+            return True
+        return False
 
     def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> List[str]:
         """
-        Returns the list of global guardrail names the team/key has opted out of.
+        Returns the list of global guardrail names the team/key has opted
+        out of.
 
         Reads from admin-configured key/team metadata only.
+
+        Returns the **union** of team-level and key-level opt-out lists,
+        with team entries appearing first and duplicates removed in
+        stable order. A key-level empty list never erases the team's
+        opt-outs — necessary because the UI form persists
+        ``opted_out_global_guardrails: []`` on every key edit where the
+        operator hasn't picked any per-key opt-outs, which would
+        otherwise silently shadow the team-level opt-out list. See
+        LIT-1825.
         """
-        value = self._get_admin_metadata(data).get("opted_out_global_guardrails")
-        return value if isinstance(value, list) else []
+        team_meta, key_meta = self._get_admin_metadata_team_and_key(data)
+        team_list = team_meta.get("opted_out_global_guardrails")
+        key_list = key_meta.get("opted_out_global_guardrails")
+        out: List[str] = []
+        seen: set = set()
+        for src_list in (team_list, key_list):
+            if not isinstance(src_list, list):
+                continue
+            for name in src_list:
+                if isinstance(name, str) and name not in seen:
+                    seen.add(name)
+                    out.append(name)
+        return out
 
     def _is_valid_response_type(self, result: Any) -> bool:
         """
