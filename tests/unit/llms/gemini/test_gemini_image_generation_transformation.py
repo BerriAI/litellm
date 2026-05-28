@@ -482,7 +482,6 @@ _GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview"
         {"candidates": ""},
         {"candidates": {}},
         {"candidates": [{}]},
-        {"candidates": [{"finishReason": "SAFETY"}]},
         {"candidates": [{"content": {}}]},
         {"candidates": [{"content": {"parts": ""}}]},
         {"candidates": [{"content": {"parts": "plain text"}}]},

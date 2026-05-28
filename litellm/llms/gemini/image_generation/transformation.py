@@ -43,6 +43,35 @@ _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]
 )
 
 
+def raise_if_image_gen_flagged(
+    response_object: Mapping[str, object],
+    model: str,
+    raw_response: httpx.Response,
+    llm_provider: str = "gemini",
+) -> None:
+    """
+    Gemini image-gen returns a candidate with a flagged finishReason (e.g.
+    IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT) and no inlineData on a refusal.
+    The chat path surfaces these; the image path used to drop them silently
+    and return an empty ImageResponse. Raise so callers can tell a refusal
+    apart from an unrelated failure. Reasons go through the central finish-reason
+    map (content_filter == flagged).
+    """
+    from litellm.exceptions import ContentPolicyViolationError
+    from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
+    for candidate in _JSON_OBJECTS.validate_python(response_object.get("candidates", [])):
+        finish_reason = candidate.get("finishReason")
+        if isinstance(finish_reason, str) and map_finish_reason(finish_reason) == "content_filter":
+            raise ContentPolicyViolationError(
+                message=f"Gemini image generation blocked with finishReason={finish_reason}",
+                model=model,
+                llm_provider=llm_provider,
+                response=raw_response,
+                provider_specific_fields={"finish_reason": finish_reason},
+            )
+
+
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -225,6 +254,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                                     ),
                                 )
                             )
+
+            # A safety/prohibited block returns a candidate with finishReason and
+            # no inlineData — surface it instead of returning empty data.
+            if not model_response.data:
+                raise_if_image_gen_flagged(response_object, model, raw_response)
 
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_object:
