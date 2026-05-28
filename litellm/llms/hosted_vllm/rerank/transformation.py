@@ -168,9 +168,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             message=error_message, status_code=status_code, headers=headers
         )
 
-    def _transform_response(
-        self, response: Union[dict, list]
-    ) -> RerankResponse:
+    def _transform_response(self, response: Union[dict, list]) -> RerankResponse:
         # SGLang's /v1/rerank endpoint returns a bare list of result objects
         # instead of the OpenAI/Cohere-style {"results": [...], "usage": {...}}
         # envelope. Normalize both shapes here so hosted_vllm covers both.
