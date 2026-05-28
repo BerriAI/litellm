@@ -10992,6 +10992,13 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "dashscope/qwen3-rerank": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "dashscope",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+    },
     "dashscope/qwen3-vl-235b-a22b-instruct": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "dashscope",

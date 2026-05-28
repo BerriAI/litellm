@@ -22,7 +22,7 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -38,6 +38,7 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankTokens,
 )
+from litellm.types.utils import ModelInfo
 
 from ..common_utils import DashScopeError
 
@@ -239,3 +240,33 @@ class DashScopeRerankConfig(BaseRerankConfig):
             message=error_message,
             headers=headers,
         )
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+        billed_units: Optional[RerankBilledUnits] = None,
+        model_info: Optional[ModelInfo] = None,
+    ) -> Tuple[float, float]:
+        """
+        qwen3-rerank is billed per token. DashScope reports the count in
+        usage.total_tokens, surfaced here as billed_units["total_tokens"];
+        set the per-token price via `input_cost_per_token` on the model.
+
+        The base BaseRerankConfig prices per query (input_cost_per_query *
+        search_units), which DashScope does not report — hence this override.
+        """
+        if (
+            model_info is None
+            or "input_cost_per_token" not in model_info
+            or model_info["input_cost_per_token"] is None
+            or billed_units is None
+        ):
+            return 0.0, 0.0
+
+        total_tokens = billed_units.get("total_tokens")
+        if total_tokens is None:
+            return 0.0, 0.0
+
+        input_cost = model_info["input_cost_per_token"] * total_tokens
+        return input_cost, 0.0
