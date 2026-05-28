@@ -3658,6 +3658,7 @@ from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
 from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
+from litellm.types.llms.bedrock import SearchResultBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
@@ -4115,14 +4116,19 @@ def _convert_to_bedrock_tool_call_result(
     # If `search_results` is present, we intentionally prefer it over `content`
     # to avoid generating mixed text + searchResult blocks.
     search_results = message.get("search_results")
+    used_search_results = False
     if isinstance(search_results, list):
         for result in search_results:
             if not isinstance(result, dict):
                 continue
             tool_result_content_blocks.append(
-                BedrockToolResultContentBlock(searchResult=result)  # type: ignore[arg-type]
+                BedrockToolResultContentBlock(
+                    searchResult=cast(SearchResultBlock, result)
+                )
             )
-    else:
+        used_search_results = len(tool_result_content_blocks) > 0
+
+    if not used_search_results:
         if isinstance(message["content"], str):
             tool_result_content_blocks.append(
                 BedrockToolResultContentBlock(text=message["content"])
@@ -4209,7 +4215,7 @@ def _convert_to_bedrock_tool_call_result(
     tool_result = BedrockToolResultBlock(
         content=tool_result_content_blocks, toolUseId=id
     )
-    if isinstance(search_results, list):
+    if used_search_results:
         tool_result["status"] = cast(Literal["success"], "success")
 
     content_block = BedrockContentBlock(toolResult=tool_result)

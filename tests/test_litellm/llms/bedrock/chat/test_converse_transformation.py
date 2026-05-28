@@ -1715,6 +1715,160 @@ async def test_tool_message_search_results_maps_to_bedrock_search_result_block()
 
 
 @pytest.mark.asyncio
+async def test_tool_message_empty_search_results_falls_back_to_content():
+    """Empty search_results must not skip normal tool content processing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_empty_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_empty_search",
+            "content": "fallback tool text",
+            "search_results": [],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_empty_search"
+    assert "status" not in tool_result
+    assert len(tool_result["content"]) == 1
+    assert tool_result["content"][0]["text"] == "fallback tool text"
+
+
+def test_transform_response_omits_annotations_when_citations_not_stitched():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": "cited sentence only in citations"}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 5,
+                                        }
+                                    },
+                                    "source": "https://example.com",
+                                    "title": "Example",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "separate assistant answer"},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content == "separate assistant answer"
+    assert message.model_dump().get("annotations") is None
+
+
+def test_extract_search_results_text_counts_hidden_tool_payload():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+        extract_search_results_text,
+    )
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    hidden = "x" * 500
+    message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {
+                "source": "s",
+                "title": "t",
+                "content": [{"text": hidden}],
+            }
+        ],
+    }
+
+    assert extract_search_results_text(message["search_results"]) == hidden
+    assert len(convert_content_list_to_str(message)) > len("small")
+
+    tokens_with_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[message],
+    )
+    tokens_without_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "tool", "content": "small"}],
+    )
+    assert tokens_with_search > tokens_without_search
+
+
+@pytest.mark.asyncio
 async def test_assistant_tool_calls_cache_control():
     """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (

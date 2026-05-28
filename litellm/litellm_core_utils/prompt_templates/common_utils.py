@@ -132,6 +132,30 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
+def extract_search_results_text(search_results: object) -> str:
+    """
+    Extract model-visible text from OpenAI tool-message ``search_results``.
+
+    Used by token estimators and TPM limiters so large search result payloads
+    cannot bypass preflight checks via a small ``content`` field.
+    """
+    if not isinstance(search_results, list):
+        return ""
+    texts = ""
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+        content = result.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    texts += text
+    return texts
+
+
 def convert_content_list_to_str(
     message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
@@ -152,6 +176,7 @@ def convert_content_list_to_str(
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
+    texts += extract_search_results_text(message.get("search_results"))
     return texts
 
 

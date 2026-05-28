@@ -1911,25 +1911,33 @@ class AmazonConverseConfig(BaseConfig):
 
         for citations_block in citations_content_blocks:
             block_text = ""
-            for content_part in citations_block.get("content", []):
-                if isinstance(content_part, dict):
-                    _text = content_part.get("text")
-                    if isinstance(_text, str):
-                        block_text += _text
+            raw_content = citations_block.get("content")
+            if isinstance(raw_content, list):
+                for content_part in raw_content:
+                    if isinstance(content_part, dict):
+                        _text = content_part.get("text")
+                        if isinstance(_text, str):
+                            block_text += _text
 
             if block_text:
                 citations_text_parts.append(block_text)
 
-            for citation in citations_block.get("citations", []):
+            raw_citations = citations_block.get("citations")
+            if not isinstance(raw_citations, list):
+                continue
+
+            for citation in raw_citations:
                 if not isinstance(citation, dict):
                     continue
 
-                location = citation.get("location", {})
-                search_location = (
-                    location.get("searchResultLocation", {})
-                    if isinstance(location, dict)
-                    else {}
-                )
+                location = citation.get("location")
+                if not isinstance(location, dict):
+                    continue
+
+                search_location = location.get("searchResultLocation")
+                if not isinstance(search_location, dict):
+                    continue
+
                 start = search_location.get("start")
                 end = search_location.get("end")
                 if not isinstance(start, int) or not isinstance(end, int):
@@ -2137,14 +2145,17 @@ class AmazonConverseConfig(BaseConfig):
         citations_text, annotations = self._transform_citations_to_annotations(
             citationsContentBlocks
         )
+        citations_included_in_content = False
         if citations_text:
             if not content_str:
                 content_str = citations_text
+                citations_included_in_content = True
             elif content_str.strip() == ".":
                 # Bedrock may emit the cited sentence in citationsContent and only
                 # punctuation in text blocks; stitch them for user-facing content.
                 content_str = citations_text + content_str
-        if annotations:
+                citations_included_in_content = True
+        if annotations and citations_included_in_content:
             chat_completion_message["annotations"] = annotations
 
         if reasoningContentBlocks is not None:
