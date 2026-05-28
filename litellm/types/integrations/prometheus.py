@@ -670,6 +670,17 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
+            # Token-type detail metrics — share the same emission path
+            # as litellm_input_tokens_metric / litellm_output_tokens_metric
+            # (see PrometheusLogger._increment_token_detail_metrics), so the
+            # org_id / org_alias values on enum_values are available; opt them
+            # into the org-label set so dashboards can break detailed token
+            # types down by org alongside the primary token metrics. LIT-2825.
+            "litellm_input_cached_tokens_metric",
+            "litellm_input_cache_creation_tokens_metric",
+            "litellm_input_audio_tokens_metric",
+            "litellm_output_reasoning_tokens_metric",
+            "litellm_output_audio_tokens_metric",
         }
     )
 
