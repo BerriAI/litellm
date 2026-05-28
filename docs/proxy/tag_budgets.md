@@ -20,7 +20,7 @@ Tags are labels you can attach to your LLM requests to track and limit spending 
 - **Customer Attribution**: Track spend per customer or client (e.g., "customer-acme", "customer-techcorp")
 - **Feature Monitoring**: Monitor costs for specific features (e.g., "feature-chat", "feature-summarization")
 
-Tags are added to each request in the `metadata` field to track and enforce budget limits.
+Tags can be set on each request (in `metadata` or via `x-litellm-tags`), or attached to a virtual key so every request using that key inherits the tag and its budget limits automatically.
 
 ## Setting Tag Budgets
 
@@ -93,15 +93,48 @@ Navigate to the **Tag Management** page and click **Create New Tag**. Fill in th
 | `budget_duration="7d"` | every 1 week |
 | `budget_duration="30d"` | every 1 month |
 
-### 2. Use the tag in your requests
+### 2. Attach the tag to an API key (recommended)
 
-Add tags to your API requests in the `metadata` field:
+Attach the tag when creating or updating a virtual key. Every request made with that key automatically inherits the tag, and the proxy enforces the tag's budget **without** requiring clients to pass `metadata.tags` on each request.
 
-:::info Tags Budgets on API Keys
+#### API
 
-Currently, tag budget enforcement is only supported per request. If you'd like to set tags on API keys so all requests automatically inherit the tags budgets, please [create a feature request on GitHub](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeat%5D%3A).
+Use the top-level `tags` field on `/key/generate` or `/key/update`:
 
-:::
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+     -H 'Authorization: Bearer sk-1234' \
+     -H 'Content-Type: application/json' \
+     -d '{
+            "tags": ["engineering"]
+        }'
+```
+
+You can also set tags under key `metadata`:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+     -H 'Authorization: Bearer sk-1234' \
+     -H 'Content-Type: application/json' \
+     -d '{
+            "metadata": {
+              "tags": ["engineering"]
+            }
+        }'
+```
+
+#### LiteLLM Admin UI
+
+Navigate to **Virtual Keys** → **Create Key** (or edit an existing key) and select the tag(s) in the **Tags** field.
+
+<Image
+  img={require('../../img/add_tag_in_key_creation.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+### 3. Use the tag in your requests (optional)
+
+If you did not attach tags to the API key, add tags to each request in the `metadata` field (or via the `x-litellm-tags` header — see [Request Tags](request_tags.md)):
 
 <Tabs>
 
@@ -147,9 +180,21 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 </Tabs>
 
-### 3. Test It
+### 4. Test It
 
-Make requests until the budget is exceeded:
+Make requests with the virtual key from step 2 until the tag budget is exceeded. You do **not** need to pass `metadata.tags` if the tag is already on the key:
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+     -H 'Authorization: Bearer sk-your-key-with-engineering-tag' \
+     -H 'Content-Type: application/json' \
+     -d '{
+           "model": "gpt-4",
+           "messages": [{"role": "user", "content": "Hello"}]
+         }'
+```
+
+If you skipped step 2, include the tag in the request body instead:
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
