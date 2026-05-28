@@ -438,27 +438,52 @@ def build_pr_prompt(*, title: str, body: str) -> str:
         repository (BerriAI/litellm). Decide whether this external pull request
         meets the project's contribution standards.
 
-        The PR PASSES triage if it satisfies AT LEAST ONE of:
+        A PR PASSES triage only if BOTH (1) AND (2) are satisfied. A linked
+        issue alone is NOT enough — it covers context, not proof.
 
-          (A) It links to a related GitHub issue. Acceptable forms:
-              "Fixes #1234", "Closes #1234", "Resolves #1234",
-              "Refs https://github.com/BerriAI/litellm/issues/1234". A bare
-              issue number without a closing keyword counts only if it's
-              clearly the related issue (not a passing mention).
+          (1) CONTEXT — the PR provides AT LEAST ONE of:
+              (a) A link to a related GitHub issue. Acceptable forms:
+                  "Fixes #1234", "Closes #1234", "Resolves #1234",
+                  "Refs https://github.com/BerriAI/litellm/issues/1234". A
+                  bare "#1234" without a closing keyword counts only if it
+                  is clearly the related issue (not a passing mention).
+              (b) A clear problem description in the body (what bug or
+                  missing feature this addresses, beyond the title) AND
+                  expected vs. actual behavior (or, for features, "what's
+                  possible now vs. with this PR").
 
-          (B) The PR body contains ALL of:
-              - A clear problem description (what bug or missing feature this
-                addresses, beyond the title).
-              - Expected vs. actual behavior (or, for features, "what's
-                possible now vs. with this PR").
-              - Visual QA proof: before/after screenshots, a screen recording,
-                terminal output, log output, or test output demonstrating the
-                fix or feature works end-to-end. Saying "I tested it" is NOT
-                proof.
+          (2) END-TO-END QA PROOF — the PR body contains AT LEAST ONE of:
+              (a) A screenshot (or before/after screenshots) showing the
+                  fix or feature working.
+              (b) A screen recording / video link showing the fix or
+                  feature working.
+              (c) Specific commands that were actually run (curl, pytest,
+                  python, a CLI invocation, etc.) PAIRED WITH their real
+                  output, demonstrating the change works end-to-end against
+                  the real system. Commands whose external dependencies
+                  (LLM provider, DB, network) are mocked or stubbed do NOT
+                  satisfy (2c) — they are not end-to-end.
 
-        Bias toward PASS when the PR has structure and context — only FAIL when
-        the body is empty, copy-paste filler from the template, or genuinely
-        missing both a linked issue AND the core elements of (B).
+              `has_qa_proof` must be set to `true` only when (2a), (2b),
+              or a non-mocked (2c) is actually present in the body. If the
+              only "proof" is mocked tests, `has_qa_proof` is `false` and
+              the verdict is "fail".
+
+              The following do NOT count as QA proof:
+              - Generic claims like "I tested it", "works locally", "all
+                tests pass", or a checked "I added tests" checkbox with no
+                output shown.
+              - A description of what tests exist or were added, without
+                their actual output in the PR body.
+              - Unit tests whose dependencies (LLM provider, DB, network)
+                are mocked or stubbed — those do not prove end-to-end
+                behavior. Output from real integration runs is required.
+              - A linked issue. The linked issue is context (1a), never
+                proof (2).
+
+        FAIL the PR if EITHER (1) or (2) is missing. Do not bias toward PASS:
+        if QA proof is absent, the verdict is "fail" even when the rest of
+        the PR is well-written.
 
         Respond with a single JSON object, no prose:
 
@@ -468,6 +493,7 @@ def build_pr_prompt(*, title: str, body: str) -> str:
           "has_problem_description": boolean,
           "has_expected_vs_actual": boolean,
           "has_qa_proof": boolean,
+          "qa_proof_type": "screenshot" | "video" | "commands_with_output" | "none",
           "missing": ["plain-english strings naming what is missing"],
           "explanation": "1-2 sentence reasoning for the team to skim"
         }}
