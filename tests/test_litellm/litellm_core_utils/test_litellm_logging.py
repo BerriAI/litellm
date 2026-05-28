@@ -1006,6 +1006,66 @@ async def test_dispatch_success_handlers_uses_async_path_for_acompletion(logging
     mock_sync.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_uses_async_path_for_pass_through(logging_obj):
+    from litellm.types.utils import CallTypes
+
+    logging_obj.call_type = CallTypes.pass_through.value
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=False,
+        ),
+    ):
+        await logging_obj.dispatch_success_handlers(result={"id": "pt-1"})
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through(
+    logging_obj,
+):
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import CallTypes
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [mock_callback]
+
+    logging_obj.call_type = CallTypes.pass_through.value
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    try:
+        with (
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+        ):
+            await logging_obj.dispatch_success_handlers(result={"id": "pt-1"})
+
+        mock_async_log.assert_awaited_once()
+        mock_sync_log.assert_not_called()
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+
 def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
     """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
     import datetime

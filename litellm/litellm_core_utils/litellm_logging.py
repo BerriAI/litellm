@@ -1623,6 +1623,16 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
         )
 
+    def _should_dispatch_sync_success_only(
+        self, litellm_params: dict, *, prefer_async_handlers: bool
+    ) -> bool:
+        """Sync-only dispatch for sync SDK calls; proxy pass-through always uses async."""
+        if prefer_async_handlers:
+            return False
+        if self.call_type == CallTypes.pass_through.value:
+            return False
+        return self._is_sync_litellm_request(litellm_params)
+
     def _is_assembled_stream_success(self, result=None) -> bool:
         """True when exporting an assembled streaming response (not a per-chunk call)."""
         if self.stream is not True:
@@ -1659,7 +1669,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         litellm_params = self.model_call_details.get("litellm_params", {}) or {}
-        if self._is_sync_litellm_request(litellm_params) and not prefer_async_handlers:
+        if self._should_dispatch_sync_success_only(
+            litellm_params, prefer_async_handlers=prefer_async_handlers
+        ):
             self.success_handler(
                 result,
                 start_time=start_time,
@@ -2568,9 +2580,10 @@ class Logging(LiteLLMLoggingBaseClass):
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
-        if (
-            not self._is_assembled_stream_success(result)
-            and not self.should_run_logging(event_type="async_success")
+        if not self._is_assembled_stream_success(
+            result
+        ) and not self.should_run_logging(
+            event_type="async_success"
         ):  # prevent double logging (non-streaming)
             return
 
