@@ -300,41 +300,61 @@ class CheckBatchCost:
                     custom_llm_provider=custom_llm_provider,
                 )
 
-                # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-                # output/error file IDs to managed base64 IDs before the DB write here.
+                # CheckBatchCost bypasses async_post_call_success_hook, so reconcile any
+                # raw provider file IDs on the response (input_file_id, output_file_id,
+                # error_file_id) with managed unified IDs before the DB write here.
+                # Delegate to ensure_batch_response_managed_file_ids — the same helper
+                # update_batch_in_database uses on the retrieve/cancel HTTP path — so
+                # CheckBatchCost picks up any managed_file row that already exists for
+                # a raw ID (avoiding duplicate rows), resolves input_file_id (the
+                # legacy manual block only handled output/error), and only registers a
+                # new managed row when none exists — using the batch creators
+                # UserAPIKeyAuth as the auth context so registered rows are owned by
+                # the real user (not default_user_id).
                 managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
                 if managed_files_hook is not None:
                     from litellm.proxy._types import UserAPIKeyAuth
+                    from litellm.proxy.openai_files_endpoints.common_utils import (
+                        ensure_batch_response_managed_file_ids,
+                    )
                     _minimal_auth = UserAPIKeyAuth(
                         user_id=job.created_by or "default-user-id",
                         team_id=getattr(job, "team_id", None),
                     )
-                    for _file_attr in ["output_file_id", "error_file_id"]:
-                        _raw_file_id = getattr(response, _file_attr, None)
-                        if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
-                            try:
-                                _unified_file_id = managed_files_hook.get_unified_output_file_id(
-                                    output_file_id=_raw_file_id,
-                                    model_id=model_id,
-                                    model_name=str(model_name) if model_name else deployment_info.model_name or None,
-                                )
-                                await managed_files_hook.store_unified_file_id(
-                                    file_id=_unified_file_id,
-                                    file_object=None,
-                                    litellm_parent_otel_span=None,
-                                    model_mappings={model_id: _raw_file_id},
-                                    user_api_key_dict=_minimal_auth,
-                                )
-                                setattr(response, _file_attr, _unified_file_id)
-                                verbose_proxy_logger.info(
-                                    f"CheckBatchCost: converted {_file_attr} "
-                                    f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
-                                )
-                            except Exception as _e:
-                                verbose_proxy_logger.warning(
-                                    f"CheckBatchCost: failed to create managed file ID for "
-                                    f"{_file_attr}={_raw_file_id!r}: {_e}"
-                                )
+                    # ensure_batch_response_managed_file_ids reads model_id/model_name
+                    # from response._hidden_params to know which deployment to map raw
+                    # IDs against. The provider transformations typically set this,
+                    # but populate defensively from the deployment we just resolved so
+                    # the helper has the metadata it needs to register new rows.
+                    _hidden_params = getattr(response, "_hidden_params", None)
+                    if _hidden_params is None:
+                        _hidden_params = {}
+                        try:
+                            response._hidden_params = _hidden_params
+                        except Exception:
+                            _hidden_params = None
+                    if _hidden_params is not None:
+                        _hidden_params.setdefault("model_id", model_id)
+                        _resolved_model_name = (
+                            str(model_name)
+                            if model_name
+                            else (getattr(deployment_info, "model_name", None) or None)
+                        )
+                        if _resolved_model_name and "model_name" not in _hidden_params:
+                            _hidden_params["model_name"] = _resolved_model_name
+                    try:
+                        await ensure_batch_response_managed_file_ids(
+                            response=response,
+                            managed_files_obj=managed_files_hook,
+                            prisma_client=self.prisma_client,
+                            verbose_proxy_logger=verbose_proxy_logger,
+                            user_api_key_dict=_minimal_auth,
+                        )
+                    except Exception as _e:
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: ensure_batch_response_managed_file_ids "
+                            f"failed for batch {batch_id}: {_e}"
+                        )
 
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
