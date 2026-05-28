@@ -1570,14 +1570,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # (e.g. ``mode: ["pre_call", "post_call"]``); ``_emit_once``
             # requires hashable scope parts, so normalize lists to tuples.
             guardrail_mode = guardrail_information.get("guardrail_mode")
-            if isinstance(guardrail_mode, list):
-                guardrail_mode = tuple(guardrail_mode)
+            hashable_guardrail_mode: Any = (
+                tuple(guardrail_mode)
+                if isinstance(guardrail_mode, list)
+                else guardrail_mode
+            )
             if not self._emit_once(
                 kwargs,
                 "guardrail",
                 guardrail_information.get("guardrail_name"),
                 start_time_float,
-                guardrail_mode,
+                hashable_guardrail_mode,
             ):
                 continue
 
