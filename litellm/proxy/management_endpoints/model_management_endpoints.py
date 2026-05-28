@@ -798,8 +798,22 @@ async def delete_model(
 
         # delete team model alias
         if model_params.model_info.team_id is not None:
+            # For team-scoped BYOK models, `_add_team_model_to_db` mutates
+            # `model_name` to an internal unique identifier
+            # ("model_name_<team>_<uuid>") and preserves the caller-supplied
+            # public name on `model_info.team_public_model_name`. The team
+            # alias map and `team.models` are both keyed by the public name,
+            # so the alias lookup and the team.models cleanup must both
+            # operate on the public name — passing `model_params.model_name`
+            # silently no-ops and leaves a ghost entry in `team.models`
+            # (LIT-2120). Fall back to `model_name` for any legacy row that
+            # pre-dates `team_public_model_name`.
+            public_model_name_for_team = (
+                model_params.model_info.team_public_model_name
+                or model_params.model_name
+            )
             removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
+                public_model_name=public_model_name_for_team,
                 prisma_client=prisma_client,
             )
 
@@ -808,6 +822,13 @@ async def delete_model(
                 for team_id, model in removed_model_aliases
                 if team_id == model_params.model_info.team_id
             ]
+            # `_add_team_model_to_db` adds the public name directly to
+            # `team.models` via `team_model_add` without ever writing a row
+            # to `LiteLLM_ModelTable`, so the alias scan above can legitimately
+            # return zero entries for that team while `team.models` still
+            # holds the public name. Always include it in the exclusion set.
+            if public_model_name_for_team not in valid_team_model_aliases:
+                valid_team_model_aliases.append(public_model_name_for_team)
 
             ## UPDATE TEAM TO NOT LIST MODEL ##
             existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
