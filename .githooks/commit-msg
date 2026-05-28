@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# .githooks/commit-msg — enforce Conventional Commits 1.0.0
+#
+# Validates the first non-comment, non-empty line of a commit message
+# against the Conventional Commits spec:
+#
+#     <type>[optional scope][!]: <description>
+#
+# where <type> is one of:
+#   feat | fix | docs | style | refactor | perf | test | build | ci | chore | revert
+#
+# Pass-throughs (always accepted):
+#   - Merge commits (subject starts with "Merge ")
+#   - Revert commits (subject starts with "Revert ")  — Conventional Commits
+#       reverts using `revert:` are still accepted by the regex below
+#   - Fixup / squash / amend commits (subject starts with "fixup!", "squash!",
+#       or "amend!" — `amend!` is git's autosquash-amend prefix, used by
+#       `git rebase --autosquash`)
+#
+# Bypass:
+#   - Run `git commit --no-verify` to skip this hook entirely.
+#
+# Exit codes:
+#   0 — accepted
+#   1 — rejected (subject line does not match the spec)
+set -euo pipefail
+
+commit_msg_file=${1:-}
+if [[ -z "$commit_msg_file" || ! -f "$commit_msg_file" ]]; then
+  echo "commit-msg hook: missing commit message file argument" >&2
+  exit 1
+fi
+
+# Find the first non-empty, non-comment line — that's the subject.
+subject=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Skip comment lines (git prefixes them with '#')
+  [[ "$line" =~ ^# ]] && continue
+  # Skip empty lines
+  [[ -z "${line//[[:space:]]/}" ]] && continue
+  subject="$line"
+  break
+done < "$commit_msg_file"
+
+if [[ -z "$subject" ]]; then
+  echo "commit-msg hook: empty commit message" >&2
+  exit 1
+fi
+
+# Pass-throughs for messages git itself generates.
+case "$subject" in
+  "Merge "*|"Revert "*|"fixup!"*|"squash!"*|"amend!"*)
+    exit 0
+    ;;
+esac
+
+# Conventional Commits regex (anchored to subject line):
+#   <type>(<optional scope>)?!?: <subject text>
+# Allow alphanumeric + dash + dot + underscore + slash inside the scope to
+# accommodate scopes like `bedrock-converse`, `proxy/auth`, `v1.messages`.
+# Note: hyphen sits at the END of the bracket expression to remain POSIX-portable
+# (`\-` inside `[...]` is not portable across BSD / macOS regex engines).
+re='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: .+'
+
+if [[ "$subject" =~ $re ]]; then
+  exit 0
+fi
+
+cat >&2 <<EOF
+✖ Commit message does not follow Conventional Commits 1.0.0.
+
+  subject: $subject
+
+  Expected format:
+    <type>[optional scope][!]: <description>
+
+  Where <type> is one of:
+    feat | fix | docs | style | refactor | perf | test | build | ci | chore | revert
+
+  Examples:
+    feat(router): add cooldown for upstream 5xx
+    fix(bedrock): handle empty toolUse blocks
+    docs: clarify proxy install
+    chore!: drop python 3.8 support
+
+  To bypass this check for a single commit:  git commit --no-verify
+  See: https://www.conventionalcommits.org/en/v1.0.0/
+EOF
+exit 1

@@ -50,6 +50,18 @@ make help
 
 That's it! Your local development environment is ready.
 
+### Optional: Conventional Commits / Branches git hooks
+
+These hooks are developer-tooling guidance (kept in this repo intentionally, since they only apply to contributors with a local checkout — not the LiteLLM user-facing docs in `litellm-docs`).
+
+To install the optional Conventional Commits + Conventional Branches git hooks, run:
+
+```bash
+make install-hooks
+```
+
+Bypass for a single commit/push: `git commit --no-verify` / `git push --no-verify`.
+
 ### 2. Development Workflow
 
 Here's the recommended workflow for making changes:
