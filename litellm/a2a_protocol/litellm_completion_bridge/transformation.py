@@ -303,4 +303,3 @@ class A2ACompletionBridgeTransformation:
                 "taskId": ctx.task_id,
             },
         }
-
