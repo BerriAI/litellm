@@ -719,40 +719,6 @@ class MCPRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
-    async def _get_team_object(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> Optional["LiteLLM_TeamTable"]:
-        """
-        LIT-3399: fetch the full team row in a single cached call so callers
-        can read both .object_permission (legacy MCP grants) and
-        .access_group_ids (unified access-group grants) without a second
-        round-trip. Returns None if there is no team_id / no prisma_client /
-        no team row.
-        """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-
-        if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
-            return None
-
-        try:
-            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
-                team_id=user_api_key_auth.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception:
-            return None
-
-        return team_obj or None
-
-    @staticmethod
     async def _get_team_unified_access_group_ids(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
@@ -1079,23 +1045,24 @@ class MCPRequestHandler:
         Note: object_permission is automatically loaded by get_team_object() in main auth flow.
         """
         try:
-            # LIT-3399: fetch the team row exactly once and pull both the
-            # legacy object_permission and the unified access_group_ids off
-            # the same object, so the team MCP auth path makes a single
-            # cached get_team_object() call per request (Greptile P2).
-            team_obj = await MCPRequestHandler._get_team_object(user_api_key_auth)
-
-            object_permissions = (
-                team_obj.object_permission if team_obj is not None else None
+            # Get team object permission (already loaded in main auth flow)
+            object_permissions = await MCPRequestHandler._get_team_object_permission(
+                user_api_key_auth
             )
+
+            # LIT-3399: also resolve the team's unified access_group_ids ->
+            # MCP server IDs (mirrors can_team_access_model). This grants
+            # MCP servers via an access group attached to the team, without
+            # requiring the team to also be listed in the group's
+            # assigned_team_ids. Both this helper and
+            # _get_team_object_permission go through the same cached
+            # get_team_object() call, so the second call is served from
+            # cache.
             team_access_group_ids = (
-                list(team_obj.access_group_ids)
-                if team_obj is not None and team_obj.access_group_ids
-                else []
+                await MCPRequestHandler._get_team_unified_access_group_ids(
+                    user_api_key_auth
+                )
             )
-
-            # LIT-3399: resolve unified team.access_group_ids -> MCP server IDs.
-            # Mirrors can_team_access_model.
             unified_access_group_servers = await MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
                 access_group_ids=team_access_group_ids,
             )
