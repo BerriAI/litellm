@@ -176,8 +176,18 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     // ``discoveryMode`` / ``discoveryParamsKey`` are primitive proxies for
     // ``discoveryRequest`` content; the actual object is read via the ref
     // above so identity churn from the parent doesn't recreate this callback.
+    // ``savedAgentCard`` is captured indirectly via ``resetSelections``: if
+    // the parent refetches the agent and hands us a new saved card, we need
+    // a fresh callback so "Re-discover" pre-selects against the latest data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey]);
+  }, [
+    accessToken,
+    effectiveUrl,
+    isParentDriven,
+    discoveryMode,
+    discoveryParamsKey,
+    savedAgentCard,
+  ]);
 
   // Auto-discover when the URL (or parent plan) becomes available.
   useEffect(() => {
