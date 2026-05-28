@@ -215,6 +215,17 @@ guardrails:
       ssl_verify: "/path/to/aim_cert.pem" # Use specific cert for AIM
 ```
 
+### Cato Networks Guardrail (Proxy)
+You can configure `ssl_verify` per guardrail in your `config.yaml`.
+
+```yaml
+guardrails:
+  - guardrail_name: cato-protected-app
+    litellm_params:
+      guardrail: cato_networks
+      ssl_verify: "/path/to/cato_cert.pem" # Use specific cert for AIM
+```
+
 ### Priority Logic
 LiteLLM resolves `ssl_verify` using the following priority:
 1. **Explicit Parameter**: Passed in `completion()` or guardrail config.

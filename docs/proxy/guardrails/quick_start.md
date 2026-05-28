@@ -20,10 +20,10 @@ model_list:
 guardrails:
   - guardrail_name: general-guard
     litellm_params:
-      guardrail: aim
+      guardrail: cato_networks
       mode: [pre_call, post_call]
-      api_key: os.environ/AIM_API_KEY
-      api_base: os.environ/AIM_API_BASE
+      api_key: os.environ/CATO_API_KEY
+      api_base: os.environ/CATO_API_BASE
       default_on: true # Optional
   
   - guardrail_name: "aporia-pre-guard"
@@ -114,7 +114,7 @@ litellm_settings:
 
 **Where this applies:** Only the **unified** guardrail path (providers that implement `apply_guardrail` and run through LiteLLM’s message translation layer) on **OpenAI Chat Completions** (`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages`). Examples include Presidio, Bedrock guardrails, `litellm_content_filter`, OpenAI Moderation, Generic Guardrail API, and custom code guardrails that define `apply_guardrail`.
 
-**Where this does *not* apply:** Guardrails that run only via direct hooks on the raw request (e.g. Lakera v2, Aporia, DynamoAI, Javelin, Lasso, Pangea, Model Armor, Azure Content Safety hooks, Guardrails AI, AIM, tool permission, MCP security). It also does not apply to other routes until those endpoints use the same translation layer (e.g. Responses API, embeddings, speech).
+**Where this does *not* apply:** Guardrails that run only via direct hooks on the raw request (e.g. Lakera v2, Aporia, DynamoAI, Javelin, Lasso, Pangea, Model Armor, Azure Content Safety hooks, Guardrails AI, AIM, Cato Networks, tool permission, MCP security). It also does not apply to other routes until those endpoints use the same translation layer (e.g. Responses API, embeddings, speech).
 
 ### Load Balancing Guardrails
 
