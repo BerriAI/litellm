@@ -3160,3 +3160,295 @@ class TestOrgMCPPermissions:
                 user_api_key_auth=auth,
             )
             assert sorted(result) == ["tool_a", "tool_b"]
+
+# ---------------------------------------------------------------------------
+# LIT-3399: unified key.access_group_ids / team.access_group_ids -> MCP servers
+# ---------------------------------------------------------------------------
+# Bug: attaching a unified access group G (with access_mcp_server_ids = [S])
+# to a virtual key K via key.access_group_ids did NOT grant MCP access — the
+# proxy returned 403 unless G.assigned_key_ids also included K. Same problem on
+# the team side. Fix: an inclusive (un-gated) resolution path that mirrors
+# can_token_call_model / can_team_access_model.
+# ---------------------------------------------------------------------------
+
+
+def _lit3399_make_unified_access_group(
+    *,
+    access_group_id,
+    access_mcp_server_ids=None,
+    assigned_team_ids=None,
+    assigned_key_ids=None,
+):
+    """Build a LiteLLM_AccessGroupTable row for tests."""
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    return LiteLLM_AccessGroupTable(
+        access_group_id=access_group_id,
+        access_group_name=access_group_id,
+        access_model_names=[],
+        access_mcp_server_ids=access_mcp_server_ids or [],
+        access_agent_ids=[],
+        assigned_team_ids=assigned_team_ids or [],
+        assigned_key_ids=assigned_key_ids or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_lit3399_key_access_group_grants_mcp_without_assigned_key_ids():
+    """End-to-end repro: key K with access_group_ids=[G], G has
+    access_mcp_server_ids=[S] but G.assigned_key_ids is empty. Pre-fix the
+    allowed list was []; post-fix it contains S."""
+    auth = UserAPIKeyAuth(
+        api_key="sk-lit3399-fake",
+        token="sk-lit3399-fake",
+        access_group_ids=["group-G"],
+        team_id=None,
+        object_permission_id=None,
+    )
+
+    group = _lit3399_make_unified_access_group(
+        access_group_id="group-G",
+        access_mcp_server_ids=["server-S"],
+    )
+
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list = MagicMock(side_effect=lambda lst: list(lst or []))
+    mock_mgr.expand_tool_permissions = MagicMock(return_value={})
+    mock_mgr.config_mcp_servers = []
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
+         patch(
+             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+             mock_mgr,
+         ), \
+         patch(
+             "litellm.proxy.auth.auth_checks.get_access_object",
+             new=AsyncMock(return_value=group),
+         ):
+        result = await MCPRequestHandler.get_allowed_mcp_servers(
+            user_api_key_auth=auth
+        )
+
+    assert "server-S" in result, (
+        f"Expected server-S to be granted via unified key.access_group_ids, "
+        f"got {result}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lit3399_key_no_unified_groups_returns_empty_when_no_object_perm():
+    """A key without unified access_group_ids and without object_permission still
+    returns []. LIT-3399 fix must not change the negative case."""
+    auth = UserAPIKeyAuth(
+        api_key="sk-empty-key",
+        token="sk-empty-key",
+        access_group_ids=None,
+        team_id=None,
+        object_permission_id=None,
+    )
+
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list = MagicMock(side_effect=lambda lst: list(lst or []))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
+         patch(
+             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+             mock_mgr,
+         ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_lit3399_get_unified_helper_resolves_servers():
+    """_get_unified_access_group_mcp_servers_for_object resolves via
+    auth_checks._get_mcp_server_ids_from_access_groups, then expands each
+    server via global_mcp_server_manager.expand_permission_list."""
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list = MagicMock(
+        side_effect=lambda lst: [f"resolved-{x}" for x in (lst or [])]
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_mgr,
+    ), patch(
+        "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+        new=AsyncMock(return_value=["raw-S1", "raw-S2"]),
+    ):
+        result = await (
+            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=["G1", "G2"],
+            )
+        )
+
+    assert set(result) == {"resolved-raw-S1", "resolved-raw-S2"}
+    mock_mgr.expand_permission_list.assert_called_once_with(["raw-S1", "raw-S2"])
+
+
+@pytest.mark.asyncio
+async def test_lit3399_get_unified_helper_empty_input_returns_empty():
+    """No access_group_ids -> no DB hit, returns []."""
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+        new=AsyncMock(return_value=["should-not-be-called"]),
+    ) as mock_resolve:
+        result = await (
+            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=[],
+            )
+        )
+    assert result == []
+    mock_resolve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lit3399_get_unified_helper_swallows_exceptions():
+    """Resolver throwing must not break MCP auth -> return []."""
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        result = await (
+            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                access_group_ids=["G1"],
+            )
+        )
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_lit3399_key_with_object_perm_and_unified_groups_unions_both():
+    """A key that has BOTH a legacy object_permission AND unified
+    access_group_ids gets the union of both server sets."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-1",
+        mcp_servers=["legacy-S"],
+        mcp_access_groups=[],
+        mcp_tool_permissions=None,
+    )
+    auth = UserAPIKeyAuth(
+        api_key="sk-both",
+        token="sk-both",
+        access_group_ids=["G-unified"],
+        team_id=None,
+        object_permission=object_permission,
+    )
+
+    mock_mgr = MagicMock()
+    mock_mgr.expand_permission_list = MagicMock(side_effect=lambda lst: list(lst or []))
+    mock_mgr.expand_tool_permissions = MagicMock(return_value={})
+    mock_mgr.config_mcp_servers = []
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
+         patch(
+             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+             mock_mgr,
+         ), \
+         patch.object(
+             MCPRequestHandler,
+             "_get_mcp_servers_from_access_groups",
+             new=AsyncMock(return_value=[]),
+         ), \
+         patch.object(
+             MCPRequestHandler,
+             "_get_unified_access_group_mcp_servers_for_object",
+             new=AsyncMock(return_value=["unified-S"]),
+         ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
+
+    assert set(result) == {"legacy-S", "unified-S"}
+
+
+@pytest.mark.asyncio
+async def test_lit3399_team_unified_access_group_grants_mcp():
+    """Team has access_group_ids=[G] where G.access_mcp_server_ids=[S] but
+    G.assigned_team_ids is empty -> team gets server S."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    auth = UserAPIKeyAuth(
+        api_key="sk-team-key",
+        token="sk-team-key",
+        team_id="team-T",
+        access_group_ids=None,
+    )
+
+    with patch.object(
+        MCPRequestHandler,
+        "_get_team_object_permission",
+        new=AsyncMock(return_value=None),
+    ), patch.object(
+        MCPRequestHandler,
+        "_get_team_unified_access_group_ids",
+        new=AsyncMock(return_value=["G-team"]),
+    ), patch.object(
+        MCPRequestHandler,
+        "_get_unified_access_group_mcp_servers_for_object",
+        new=AsyncMock(return_value=["team-server-S"]),
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+
+    assert result == ["team-server-S"]
+
+
+@pytest.mark.asyncio
+async def test_lit3399_get_team_unified_access_group_ids_returns_empty_for_no_team():
+    """_get_team_unified_access_group_ids() returns [] when there is no team_id
+    or prisma_client."""
+    auth_no_team = UserAPIKeyAuth(api_key="sk", token="sk", team_id=None)
+
+    result = await MCPRequestHandler._get_team_unified_access_group_ids(auth_no_team)
+    assert result == []
+
+    auth = UserAPIKeyAuth(api_key="sk", token="sk", team_id="team-T")
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        result = await MCPRequestHandler._get_team_unified_access_group_ids(auth)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_lit3399_get_team_unified_access_group_ids_reads_team_field():
+    """Returns team.access_group_ids when set; tolerates None (legacy teams)."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    auth = UserAPIKeyAuth(api_key="sk", token="sk", team_id="team-T")
+
+    team_with = MagicMock(spec=LiteLLM_TeamTable)
+    team_with.access_group_ids = ["AG-1"]
+    team_without = MagicMock(spec=LiteLLM_TeamTable)
+    team_without.access_group_ids = None
+
+    common_patches = [
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ]
+
+    for p in common_patches:
+        p.start()
+    try:
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team_with),
+        ):
+            out = await MCPRequestHandler._get_team_unified_access_group_ids(auth)
+        assert out == ["AG-1"]
+
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team_without),
+        ):
+            out = await MCPRequestHandler._get_team_unified_access_group_ids(auth)
+        assert out == []
+    finally:
+        for p in common_patches:
+            p.stop()
