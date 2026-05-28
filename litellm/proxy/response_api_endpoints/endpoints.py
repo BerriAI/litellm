@@ -17,8 +17,10 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
 
@@ -284,6 +286,136 @@ async def responses_api(
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
+        )
+
+
+def _normalize_responses_input_to_messages(
+    instructions,
+    input_value,
+):
+    """Convert OpenAI Responses-API ``input`` + ``instructions`` into chat-style messages.
+
+    Supported shapes (per OpenAI Responses API spec):
+    - input: str  -> single user message with that text.
+    - input: list of items, each either:
+        * {"role": ..., "content": <str>}
+        * {"role": ..., "content": [{"type": "input_text"|"output_text"|..., "text": ...}, ...]}
+    Unknown item shapes are skipped quietly so the counter never crashes
+    on a novel item type.
+    """
+    messages = []
+    if isinstance(instructions, str) and instructions:
+        messages.append({"role": "system", "content": instructions})
+
+    if isinstance(input_value, str):
+        if input_value:
+            messages.append({"role": "user", "content": input_value})
+        return messages
+
+    if isinstance(input_value, list):
+        for item in input_value:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role") or "user"
+            content = item.get("content")
+            if isinstance(content, str):
+                if content:
+                    messages.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        parts.append(text)
+                joined = "".join(parts)
+                if joined:
+                    messages.append({"role": role, "content": joined})
+    return messages
+
+
+@router.post(
+    "/v1/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/openai/v1/responses/input_tokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def responses_input_tokens(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Count input tokens for an OpenAI Responses-API payload.
+
+    Counterpart to ``POST /v1/messages/count_tokens`` (Anthropic) for the
+    Responses API. Accepts the same body shape as ``POST /v1/responses``
+    (``model`` + ``input`` + optional ``instructions`` + optional ``tools``)
+    and returns ``{"input_tokens": <n>}``.
+
+    Before this endpoint existed, a POST to ``/v1/responses/input_tokens``
+    fell through to ``GET /v1/responses/{response_id}`` (with
+    ``response_id="input_tokens"``) and FastAPI returned
+    ``405 Method Not Allowed``.
+    """
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+
+    try:
+        body = await _read_request_body(request=request)
+        model_name = body.get("model")
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model parameter is required"},
+            )
+
+        messages = _normalize_responses_input_to_messages(
+            instructions=body.get("instructions"),
+            input_value=body.get("input"),
+        )
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "input parameter is required"},
+            )
+
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages,
+            tools=body.get("tools"),
+        )
+
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+
+        token_response_dict = {}
+        if isinstance(token_response, TokenCountResponse):
+            token_response_dict = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            token_response_dict = token_response
+
+        return {"input_tokens": token_response_dict.get("total_tokens", 0)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.response_api_endpoints.responses_input_tokens(): "
+            "Exception occurred - %s",
+            str(e),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Internal server error: {str(e)}"},
         )
 
 
