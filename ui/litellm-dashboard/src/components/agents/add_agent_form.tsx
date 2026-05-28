@@ -211,9 +211,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   };
 
   // Overlay the user's discovery selections onto the agent_card_params built
-  // from the form. Form-driven fields (name, description, version, url) stay
-  // as-is; only skills, capabilities, input/output modes, provider, and
-  // icon/doc URLs are overlaid because dynamic agent forms (e.g. LangGraph)
+  // from the form. Name and description are overlaid (falling back to the
+  // form-built value) along with skills, capabilities, input/output modes,
+  // provider, and icon/doc URLs because dynamic agent forms (e.g. LangGraph)
   // don't register Form.Items for them, so AntD's setFieldsValue silently
   // drops those keys and the values never make it back through buildAgentData.
   const overlayDiscoveredCardParams = (
@@ -225,6 +225,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       ...agentData,
       agent_card_params: {
         ...agentData.agent_card_params,
+        name: discovered.name ?? agentData.agent_card_params?.name,
+        description:
+          discovered.description ?? agentData.agent_card_params?.description,
         ...(Array.isArray(discovered.skills) && {
           skills: discovered.skills,
         }),
