@@ -858,12 +858,6 @@ async def pass_through_request(  # noqa: PLR0915
             request.query_params
         )
 
-        requested_query_params_str = None
-        if requested_query_params:
-            requested_query_params_str = "&".join(
-                f"{k}={v}" for k, v in requested_query_params.items()
-            )
-
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
         # provider IDs before forwarding upstream.  Gated by feature flag and
@@ -952,6 +946,12 @@ async def pass_through_request(  # noqa: PLR0915
                     request.url.path,
                     request.method,
                 )
+
+        requested_query_params_str = None
+        if requested_query_params:
+            requested_query_params_str = "&".join(
+                f"{k}={v}" for k, v in requested_query_params.items()
+            )
 
         logging_url = str(url)
         if requested_query_params_str:
