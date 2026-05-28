@@ -16,6 +16,7 @@ from litellm.types.utils import (
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX = "end_user_model_spend"
+TEAM_MODEL_SPEND_CACHE_KEY_PREFIX = "team_model_spend"
 
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
@@ -139,6 +140,122 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    def _key_already_covers_model(
+        self,
+        user_api_key_model_max_budget: Optional[dict],
+        model: str,
+    ) -> bool:
+        """Return True iff the requesting key has its own model_max_budget
+        entry for ``model`` (matching by exact name or by the
+        ``{provider}/{model}`` normalization)."""
+        if not user_api_key_model_max_budget:
+            return False
+        key_internal: GenericBudgetConfigType = {}
+        for _model, _budget_info in user_api_key_model_max_budget.items():
+            key_internal[_model] = BudgetConfig(**_budget_info)
+        return (
+            self._get_request_model_budget_config(
+                model=model, internal_model_max_budget=key_internal
+            )
+            is not None
+        )
+
+    async def is_team_within_model_budget(
+        self,
+        team_id: str,
+        team_model_max_budget: dict,
+        model: str,
+        key_model_max_budget: Optional[dict] = None,
+    ) -> bool:
+        """
+        Check if a team is within the team-level model budget.
+
+        Team-level model budgets are shared by every key on the team and act
+        as the **default cap** when the requesting key does not declare its
+        own entry for ``model``. A key-level ``model_max_budget`` entry that
+        covers ``model`` takes precedence and short-circuits the team check
+        — :meth:`is_key_within_model_budget` runs first in the auth path,
+        and this method additionally no-ops here so the team counter is not
+        consulted for keys that have their own per-model cap.
+
+        Raises:
+            BudgetExceededError: If the team has exceeded the model budget.
+        """
+        # Key precedence: if the requesting key already declares a budget
+        # for `model` (or its `{provider}/{model}` form), the team default
+        # is irrelevant for this (key, model) pair.
+        if self._key_already_covers_model(key_model_max_budget, model):
+            verbose_proxy_logger.debug(
+                f"Team check skipped for model={model}: key has own model_max_budget entry"
+            )
+            return True
+
+        internal_model_max_budget: GenericBudgetConfigType = {}
+
+        for _model, _budget_info in team_model_max_budget.items():
+            internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
+
+        verbose_proxy_logger.debug(
+            "team internal_model_max_budget %s",
+            json.dumps(internal_model_max_budget, indent=4, default=str),
+        )
+
+        _current_model_budget_info = self._get_request_model_budget_config(
+            model=model, internal_model_max_budget=internal_model_max_budget
+        )
+        if _current_model_budget_info is None:
+            verbose_proxy_logger.debug(
+                f"Model {model} not found in team_model_max_budget"
+            )
+            return True
+
+        if (
+            _current_model_budget_info.max_budget
+            and _current_model_budget_info.max_budget > 0
+        ):
+            _current_spend = await self._get_team_spend_for_model(
+                team_id=team_id,
+                model=model,
+                key_budget_config=_current_model_budget_info,
+            )
+            if (
+                _current_spend is not None
+                and _current_model_budget_info.max_budget is not None
+                and _current_spend > _current_model_budget_info.max_budget
+            ):
+                raise litellm.BudgetExceededError(
+                    message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
+                    current_cost=_current_spend,
+                    max_budget=_current_model_budget_info.max_budget,
+                )
+
+        return True
+
+    async def _get_team_spend_for_model(
+        self,
+        team_id: str,
+        model: str,
+        key_budget_config: BudgetConfig,
+    ) -> Optional[float]:
+        """
+        Get the current spend for a team for a model.
+
+        Lookup model in this order:
+            1. model: directly look up ``model``
+            2. If 1 does not exist, check if passed as ``{custom_llm_provider}/model``
+        """
+        team_model_spend_cache_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{model}:{key_budget_config.budget_duration}"
+        _current_spend = await self.dual_cache.async_get_cache(
+            key=team_model_spend_cache_key,
+        )
+
+        if _current_spend is None:
+            team_model_spend_cache_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{team_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
+            _current_spend = await self.dual_cache.async_get_cache(
+                key=team_model_spend_cache_key,
+            )
+        return _current_spend
+
     async def _get_end_user_spend_for_model(
         self,
         end_user_id: str,
@@ -242,15 +359,28 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         user_api_key_end_user_model_max_budget: Optional[dict] = _metadata.get(
             "user_api_key_end_user_model_max_budget", None
         )
+        user_api_key_team_model_max_budget: Optional[dict] = _metadata.get(
+            "user_api_key_team_model_max_budget", None
+        )
+        user_api_key_team_id: Optional[str] = _metadata.get(
+            "user_api_key_team_id", None
+        )
         if (
-            user_api_key_model_max_budget is None
-            or len(user_api_key_model_max_budget) == 0
-        ) and (
-            user_api_key_end_user_model_max_budget is None
-            or len(user_api_key_end_user_model_max_budget) == 0
+            (
+                user_api_key_model_max_budget is None
+                or len(user_api_key_model_max_budget) == 0
+            )
+            and (
+                user_api_key_end_user_model_max_budget is None
+                or len(user_api_key_end_user_model_max_budget) == 0
+            )
+            and (
+                user_api_key_team_model_max_budget is None
+                or len(user_api_key_team_model_max_budget) == 0
+            )
         ):
             verbose_proxy_logger.debug(
-                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget and user_api_key_end_user_model_max_budget are None or empty."
+                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget, user_api_key_end_user_model_max_budget, and user_api_key_team_model_max_budget are None or empty."
             )
             return
 
@@ -318,6 +448,36 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     start_time_key=end_user_start_time_key,
                     response_cost=response_cost,
                 )
+
+        if (
+            user_api_key_team_id is not None
+            and user_api_key_team_model_max_budget is not None
+            and len(user_api_key_team_model_max_budget) > 0
+        ):
+            # Key precedence: if the requesting key already has its own
+            # model_max_budget entry for this model, the team counter must
+            # NOT be incremented (mirror of the precedence rule applied in
+            # is_team_within_model_budget). Otherwise a key with its own
+            # private cap would still drive the shared team counter and
+            # block siblings unnecessarily.
+            if not self._key_already_covers_model(user_api_key_model_max_budget, model):
+                internal_model_max_budget: GenericBudgetConfigType = {}
+                for _model, _budget_info in user_api_key_team_model_max_budget.items():
+                    internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
+                key_budget_config = self._get_request_model_budget_config(
+                    model=model, internal_model_max_budget=internal_model_max_budget
+                )
+                if key_budget_config is not None and key_budget_config.budget_duration:
+                    team_spend_key = f"{TEAM_MODEL_SPEND_CACHE_KEY_PREFIX}:{user_api_key_team_id}:{model}:{key_budget_config.budget_duration}"
+                    team_start_time_key = (
+                        f"team_model_budget_start_time:{user_api_key_team_id}"
+                    )
+                    await self._increment_spend_for_key(
+                        budget_config=key_budget_config,
+                        spend_key=team_spend_key,
+                        start_time_key=team_start_time_key,
+                        response_cost=response_cost,
+                    )
 
         if self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()

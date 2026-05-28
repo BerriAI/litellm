@@ -3467,6 +3467,7 @@ class PrismaClient:
                             t.models AS team_models,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,
+                            t.model_max_budget AS team_model_max_budget,
                             t.team_alias AS team_alias,
                             t.metadata AS team_metadata,
                             t.members_with_roles AS team_members_with_roles,
