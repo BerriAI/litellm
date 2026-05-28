@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -110,6 +110,20 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   onApplyRef.current = onApply;
   const discoverRequestIdRef = useRef(0);
   const lastSyncedSelectionRef = useRef<string | null>(null);
+  // Hold the latest ``discoveryRequest`` in a ref so ``handleDiscover`` can
+  // read its ``discovery_mode``/``params`` without depending on the object
+  // identity itself — the parent recreates the object on every form keystroke
+  // even when the underlying values are unchanged. We use stable primitive
+  // keys (``discoveryMode`` + ``discoveryParamsKey``) as the actual deps so
+  // the callback / effect only re-run when content actually changes.
+  const discoveryRequestRef = useRef(discoveryRequest);
+  discoveryRequestRef.current = discoveryRequest;
+
+  const discoveryMode = discoveryRequest?.discovery_mode;
+  const discoveryParamsKey = useMemo(
+    () => JSON.stringify(discoveryRequest?.params ?? null),
+    [discoveryRequest?.params],
+  );
 
   const handleDiscover = useCallback(async () => {
     if (!accessToken) {
@@ -129,6 +143,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       return;
     }
 
+    const currentDiscoveryRequest = discoveryRequestRef.current;
     const requestId = ++discoverRequestIdRef.current;
     setLoading(true);
     setError(null);
@@ -136,10 +151,10 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       const response = await discoverAgentCardCall(
         accessToken,
         trimmed,
-        isParentDriven
+        isParentDriven && currentDiscoveryRequest
           ? {
-              discovery_mode: discoveryRequest!.discovery_mode,
-              params: discoveryRequest!.params,
+              discovery_mode: currentDiscoveryRequest.discovery_mode,
+              params: currentDiscoveryRequest.params,
             }
           : undefined,
       );
@@ -158,7 +173,11 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
         setLoading(false);
       }
     }
-  }, [accessToken, discoveryRequest, effectiveUrl, isParentDriven]);
+    // ``discoveryMode`` / ``discoveryParamsKey`` are primitive proxies for
+    // ``discoveryRequest`` content; the actual object is read via the ref
+    // above so identity churn from the parent doesn't recreate this callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey]);
 
   // Auto-discover when the URL (or parent plan) becomes available.
   useEffect(() => {
@@ -177,15 +196,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       void handleDiscover();
     }, debounceMs);
     return () => window.clearTimeout(timer);
-  }, [
-    accessToken,
-    effectiveUrl,
-    isParentDriven,
-    discoveryRequest?.url,
-    discoveryRequest?.discovery_mode,
-    discoveryRequest?.params,
-    handleDiscover,
-  ]);
+  }, [accessToken, effectiveUrl, isParentDriven, handleDiscover]);
 
   const toggleSkill = (id: string, checked: boolean) => {
     setSelectedSkillIds((prev) => {

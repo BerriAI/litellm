@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.a2a.discovery import (
     AGENT_CARD_WELL_KNOWN_PATHS,
@@ -15,6 +16,17 @@ from litellm.proxy.a2a.discovery import (
 )
 from litellm.proxy.a2a.endpoints import router as a2a_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+
+@pytest.fixture(autouse=True)
+def _disable_url_validation_for_mocks(monkeypatch):
+    """The fetch tests use placeholder hostnames (``upstream.example``,
+    ``localhost:2024``) with mocked HTTP clients. ``async_safe_get`` would
+    otherwise resolve those hostnames and either fail DNS or block on the
+    SSRF guard. Disabling validation here lets the unit tests focus on
+    fallback / parsing logic; SSRF behavior is covered in its own test."""
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
 
 # ---------------------------------------------------------------------------
 # fetch_well_known_card

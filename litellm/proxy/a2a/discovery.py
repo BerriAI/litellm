@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -113,7 +114,18 @@ async def fetch_well_known_card(
     for path in paths:
         url = f"{normalized}{path}"
         try:
-            response = await client.get(url, headers=headers)
+            # ``async_safe_get`` validates the URL against the SSRF blocklist
+            # (private/loopback IPs, cloud metadata endpoints, etc.) on every
+            # redirect hop. Even though the discovery endpoint is admin-only,
+            # we don't want a compromised admin key to be able to probe
+            # internal infrastructure through this fetcher.
+            response = await async_safe_get(client, url, headers=headers)
+        except SSRFError as exc:
+            last_error = f"{url}: {exc!s}"
+            verbose_proxy_logger.debug(
+                "A2A discovery blocked by SSRF guard for %s: %s", url, exc
+            )
+            continue
         except Exception as exc:
             last_error = f"{url}: {exc!s}"
             verbose_proxy_logger.debug("A2A discovery failed for %s: %s", url, exc)
