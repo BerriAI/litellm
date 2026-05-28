@@ -589,6 +589,12 @@ async def stream_usage_ai_chat(
             choice = response.choices[0]  # type: ignore
 
             if not choice.message.tool_calls:
+                # Visible feedback when the model transitions from tool use to
+                # composing the final answer; mirrors the status event emitted
+                # by _stream_final_response on the cap path. Skip round 0 so we
+                # don't double-status with the initial 'Thinking...' event.
+                if _round > 0:
+                    yield _sse({"type": "status", "message": "Analyzing results..."})
                 if choice.message.content:
                     yield _sse({"type": "chunk", "content": choice.message.content})
                 yield _sse({"type": "done"})
