@@ -176,7 +176,6 @@ def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
     return vertex_jsonl_content
 
 
-
 def _iter_openai_file_lines(
     openai_file_content,
 ):
