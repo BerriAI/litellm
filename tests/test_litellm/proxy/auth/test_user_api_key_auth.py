@@ -3457,3 +3457,257 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+# ---------------------------------------------------------------------------
+# LIT-2956 — Regression: ``x-litellm-tags`` header must be enforced for
+# tag budgets at the centralized common-checks gate.
+#
+# Older builds silently bypassed tag-budget enforcement when tags were
+# supplied via the ``x-litellm-tags`` header. The fix added
+# ``LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth`` and a
+# call-site inside ``_run_centralized_common_checks`` just BEFORE
+# ``common_checks``. Function-level tests of the helper already exist —
+# these tests lock the *call site* in by exercising the centralized gate
+# and verifying both that the merged tags reach ``common_checks`` AND
+# that an over-budget tag from the header surfaces ``BudgetExceededError``.
+# If a future change moves the merge after ``common_checks`` (or drops it
+# entirely), both tests fail.
+# ---------------------------------------------------------------------------
+
+
+def _request_mock_with_header_tags(header_tags: str):
+    """Lightweight Request mock that satisfies _safe_get_request_headers."""
+    request_mock = MagicMock()
+    request_mock.headers = {"x-litellm-tags": header_tags}
+    request_mock.state = MagicMock()
+    request_mock.state._cached_headers = None
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_merges_header_tags_into_metadata_before_common_checks():
+    """LIT-2956: ``apply_client_tag_policy_pre_auth`` must run BEFORE
+    ``common_checks``. Verified by capturing the ``request_body`` argument
+    passed to ``common_checks`` and asserting ``metadata.tags`` contains
+    the tag value from the ``x-litellm-tags`` header."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    token = UserAPIKeyAuth(api_key="sk-test")
+    request_mock = _request_mock_with_header_tags("tenant:acme,env:prod")
+    request_data = {"model": "gpt-3.5-turbo"}
+
+    captured: dict = {}
+
+    class _StopAfterCapture(Exception):
+        pass
+
+    async def fake_common_checks(**kwargs):
+        # Capture the request_body the centralized gate forwards into
+        # common_checks, then raise a sentinel so the trailing
+        # _reserve_budget_after_common_checks path is skipped (its
+        # internal proxy_logging hooks are mocked and not awaitable).
+        captured["request_body"] = kwargs["request_body"]
+        raise _StopAfterCapture()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new=fake_common_checks,
+        ):
+            with pytest.raises(_StopAfterCapture):
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request_mock,
+                    request_data=request_data,
+                    route="/chat/completions",
+                )
+
+        metadata = captured["request_body"].get("metadata") or captured[
+            "request_body"
+        ].get("litellm_metadata")
+        assert metadata is not None, (
+            "common_checks must see a populated metadata dict — "
+            "apply_client_tag_policy_pre_auth was not called before common_checks"
+        )
+        tags = metadata.get("tags") or []
+        assert "tenant:acme" in tags and "env:prod" in tags, (
+            f"x-litellm-tags header values not merged into metadata.tags "
+            f"before common_checks (got tags={tags!r})"
+        )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_blocks_over_budget_tag_from_header():
+    """LIT-2956: an x-litellm-tags header pointing at a budget-exceeded
+    tag must surface ``BudgetExceededError`` from the centralized gate.
+
+    The fake ``common_checks`` shim delegates to the real
+    ``_tag_max_budget_check`` so the test exercises the full
+    pre-auth-merge → common_checks → tag-budget-check chain. If the merge
+    is moved after ``common_checks``, the request_body the shim sees has
+    no tags and ``_tag_max_budget_check`` silently returns — assertion
+    fails."""
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+    from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    token = UserAPIKeyAuth(api_key="sk-test")
+    request_mock = _request_mock_with_header_tags("tenant:acme")
+    request_data = {"model": "gpt-3.5-turbo"}
+
+    over_budget_tag = LiteLLM_TagTable(
+        tag_name="tenant:acme",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:tenant:acme":
+            return 0.50
+        return fallback_spend
+
+    async def fake_common_checks(**kwargs):
+        # Delegate to the real tag-budget check with a non-None prisma
+        # client so it does not short-circuit on the ``prisma_client is
+        # None`` guard.
+        await _tag_max_budget_check(
+            request_body=kwargs["request_body"],
+            prisma_client=MagicMock(),
+            user_api_key_cache=kwargs["valid_token"].__class__.__name__ and DualCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=kwargs["valid_token"],
+        )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new=fake_common_checks,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": over_budget_tag},
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+                create=True,
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request_mock,
+                    request_data=request_data,
+                    route="/chat/completions",
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+            # Sanity: the exception message should name the tag, not a
+            # team or user — proving the tag-budget path fired (not a
+            # bystander check).
+            assert "tenant:acme" in str(exc_info.value)
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_no_header_tags_does_not_enforce_tag_budget():
+    """LIT-2956 negative: when no ``x-litellm-tags`` header is supplied
+    AND no body-level tags are present, the over-budget tag is irrelevant
+    and the request must NOT be blocked. Guards against an over-broad
+    merge that would inject tags even when the caller did not."""
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+    from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    token = UserAPIKeyAuth(api_key="sk-test")
+    # No x-litellm-tags header
+    request_mock = MagicMock()
+    request_mock.headers = {}
+    request_mock.state = MagicMock()
+    request_mock.state._cached_headers = None
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_data = {"model": "gpt-3.5-turbo"}
+
+    over_budget_tag = LiteLLM_TagTable(
+        tag_name="tenant:acme",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:tenant:acme":
+            return 0.50
+        return fallback_spend
+
+    async def fake_common_checks(**kwargs):
+        await _tag_max_budget_check(
+            request_body=kwargs["request_body"],
+            prisma_client=MagicMock(),
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=kwargs["valid_token"],
+        )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new=fake_common_checks,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": over_budget_tag},
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+                create=True,
+            ),
+        ):
+            # No raise — over-budget tag exists in DB but no caller-
+            # supplied tag selected it, so enforcement is a no-op.
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request_mock,
+                request_data=request_data,
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
