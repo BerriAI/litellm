@@ -1235,7 +1235,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _get_provider_request_id_from_hidden_params(
         hidden_params: Any,
     ) -> Optional[str]:
-        """Return the upstream providers request id from
+        """Return the upstream provider's request id from
         standard_logging_payload.hidden_params.additional_headers.
 
         Prefers the OpenAI / Azure / Vertex AI x-request-id (stored as
@@ -2215,18 +2215,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=litellm_call_id,
                 )
 
-            # The upstream providers request identifier (LIT-3091).
-            #  above is the provider response body id
-            # (e.g. ); providers also return a *request* id in
-            # the response headers ( for OpenAI / Azure /
-            # Vertex AI,  for Anthropic) which is what their
+            # The upstream provider's request identifier (LIT-3091).
+            # `gen_ai.response.id` above is the provider response body id
+            # (e.g. `chatcmpl-...`); providers also return a *request* id
+            # in the response headers (`x-request-id` for OpenAI / Azure /
+            # Vertex AI, `request-id` for Anthropic) which is what their
             # support teams use to look up a call in provider-side logs.
             # LiteLLM already captures it into
-            # ,
+            # `standard_logging_payload.hidden_params.additional_headers`
             # but it is otherwise only emitted inside the dumped
-            #  JSON blob and is not queryable / filterable in
-            # OTEL backends. Surface it as a dedicated attribute so traces
-            # can be joined with provider-side logs.
+            # `hidden_params` JSON blob and is not queryable / filterable
+            # in OTEL backends. Surface it as a dedicated attribute so
+            # traces can be joined with provider-side logs.
             provider_request_id = self._get_provider_request_id_from_hidden_params(
                 standard_logging_payload.get("hidden_params")
             )
