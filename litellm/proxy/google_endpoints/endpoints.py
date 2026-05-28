@@ -105,6 +105,15 @@ async def google_stream_generate_content(
     if "model" not in data:
         data["model"] = model_name
     data["stream"] = True
+    # Native Google GenAI `streamGenerateContent` SSE does NOT terminate
+    # with `data: [DONE]` — appending one breaks native Vertex/Gemini
+    # SDK consumers (e.g. the Vertex Java SDK throws
+    # `JsonParseException` on the literal token `DONE`). Tell the
+    # downstream SSE generator (`async_data_generator` in
+    # `proxy_server.py`) to skip the OpenAI-style terminator for this
+    # route only — every other streaming caller (chat/completions,
+    # anthropic messages, responses, etc.) is unaffected (LIT-3411).
+    data["_litellm_skip_sse_done_terminator"] = True
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
