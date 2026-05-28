@@ -1811,6 +1811,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     budget_limits: Optional[List[BudgetLimitEntry]] = (
         None  # multiple concurrent budget windows
     )
+    model_max_budget: Optional[dict] = (
+        None  # team-level per-model max budgets; keys' own model_max_budget take precedence (LIT-2768)
+    )
 
     models: list = []
     blocked: bool = False
@@ -1893,6 +1896,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
+    model_max_budget: Optional[dict] = None  # team-level per-model max budgets (LIT-2768)
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
@@ -2626,6 +2630,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
+    team_model_max_budget: Optional[dict] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
     team_object_permission_id: Optional[str] = None
