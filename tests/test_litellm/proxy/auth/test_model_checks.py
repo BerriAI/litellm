@@ -487,3 +487,90 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
     )
 
     assert "openai/gpt-4o-mini" in result
+
+
+
+# LIT-2861: wildcard literal must be removed from the result when expansion
+# succeeded against a routed deployment. Previously only the no-deployment
+# fallback removed it, leaving "<provider>/*" leaking into /v1/models and
+# /v1/models?team_id=X for every config-level and team-scoped BYOK wildcard.
+def test_lit_2861_global_wildcard_literal_not_leaked_default():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(model_list=[{
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-fake"},
+        "model_info": {"id": "global-1"},
+    }])
+    result = get_complete_model_list(
+        key_models=[], team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None, infer_model_from_keys=False,
+        return_wildcard_routes=False, llm_router=router,
+    )
+    assert "openai/*" not in result
+    assert any(m.startswith("openai/") for m in result)
+
+
+def test_lit_2861_global_wildcard_literal_included_once_when_requested():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(model_list=[{
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-fake"},
+        "model_info": {"id": "global-1"},
+    }])
+    result = get_complete_model_list(
+        key_models=[], team_models=[],
+        proxy_model_list=router.get_model_names(),
+        user_model=None, infer_model_from_keys=False,
+        return_wildcard_routes=True, llm_router=router,
+    )
+    assert result.count("openai/*") == 1
+
+
+def test_lit_2861_team_scoped_wildcard_literal_not_leaked_default():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(model_list=[{
+        "model_name": "model_name_team-X_abc123",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-fake"},
+        "model_info": {
+            "id": "team-byok-1",
+            "team_id": "team-X",
+            "team_public_model_name": "openai/*",
+        },
+    }])
+    result = get_complete_model_list(
+        key_models=[], team_models=["openai/*"],
+        proxy_model_list=router.get_model_names(),
+        user_model=None, infer_model_from_keys=False,
+        return_wildcard_routes=False, llm_router=router, team_id="team-X",
+    )
+    assert "openai/*" not in result
+    assert any(m.startswith("openai/") for m in result)
+
+
+def test_lit_2861_team_scoped_wildcard_literal_included_once_when_requested():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(model_list=[{
+        "model_name": "model_name_team-X_abc123",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-fake"},
+        "model_info": {
+            "id": "team-byok-1",
+            "team_id": "team-X",
+            "team_public_model_name": "openai/*",
+        },
+    }])
+    result = get_complete_model_list(
+        key_models=[], team_models=["openai/*"],
+        proxy_model_list=router.get_model_names(),
+        user_model=None, infer_model_from_keys=False,
+        return_wildcard_routes=True, llm_router=router, team_id="team-X",
+    )
+    assert result.count("openai/*") == 1
