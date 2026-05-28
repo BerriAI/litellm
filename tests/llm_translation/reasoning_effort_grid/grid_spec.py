@@ -71,6 +71,20 @@ _EFFORT_RANK: Dict[str, int] = {
 _BAD_REQUEST_EFFORTS: FrozenSet[str] = frozenset({"disabled", "invalid", ""})
 
 
+def _bedrock_clamps_effort(model: "ModelEntry", effort: str) -> bool:
+    """Whether Bedrock will clamp ``effort`` down to ``bedrock_effort_ceiling``.
+
+    Bedrock chat/messages paths clamp unsupported high tiers (e.g. ``xhigh``
+    on Opus 4.6) to the model's ceiling rather than rejecting them, so the
+    missing native capability is OK — the wire effort just degrades.
+    """
+    if model.bedrock_effort_ceiling is None:
+        return False
+    if effort not in _EFFORT_RANK or model.bedrock_effort_ceiling not in _EFFORT_RANK:
+        return False
+    return _EFFORT_RANK[effort] > _EFFORT_RANK[model.bedrock_effort_ceiling]
+
+
 def expected(model: ModelEntry, effort: str) -> CellExpectation:
     if effort in ("__omit__", "none"):
         if model.mode == "budget":
@@ -82,7 +96,7 @@ def expected(model: ModelEntry, effort: str) -> CellExpectation:
 
     if effort in ("xhigh", "max"):
         cap = f"supports_{effort}_reasoning_effort"
-        if cap not in model.caps:
+        if cap not in model.caps and not _bedrock_clamps_effort(model, effort):
             return CellExpectation(status=400, thinking_type=OMIT)
 
     if model.mode == "adaptive":
@@ -233,7 +247,7 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_4_6,
         bedrock_effort_ceiling="max",
     ),
     ModelEntry(
@@ -262,7 +276,7 @@ BEDROCK_INVOKE_CHAT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
-        caps=_CAPS_OPUS_4_7,
+        caps=_CAPS_4_6,
         bedrock_effort_ceiling="max",
     ),
     ModelEntry(

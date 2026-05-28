@@ -78,6 +78,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
 
+        # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
+        # parent mapping converts it to ``output_config.effort`` and the
+        # downstream effort gate runs. Mirrors the converse path's
+        # ``_handle_reasoning_effort_parameter`` and the messages path's
+        # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
+        # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
+        # models like Opus 4.6 that don't natively advertise xhigh.
+        self._clamp_adaptive_reasoning_effort_for_bedrock(
+            model=original_model, params=non_default_params
+        )
+
         optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
@@ -90,6 +101,27 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model = original_model
 
         return optional_params
+
+    @staticmethod
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict) -> None:
+        """Lower ``reasoning_effort`` to the Bedrock effort ceiling before mapping.
+
+        Bedrock's adaptive Claude models accept the OpenAI-style
+        ``reasoning_effort`` tier, but the request validator can reject tiers
+        the model does not natively advertise (e.g. ``xhigh`` on Opus 4.6).
+        Clamp the raw tier to the model's
+        ``bedrock_output_config_effort_ceiling`` so Claude Code "goal mode"
+        keeps working. Non-adaptive models and models without a ceiling are
+        left untouched.
+        """
+        if not AnthropicConfig._is_adaptive_thinking_model(model):
+            return
+        effort = params.get("reasoning_effort")
+        if not isinstance(effort, str):
+            return
+        clamped = {"effort": effort}
+        normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
+        params["reasoning_effort"] = clamped["effort"]
 
     def transform_request(
         self,
