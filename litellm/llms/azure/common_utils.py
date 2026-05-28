@@ -20,8 +20,6 @@ from litellm.utils import _add_path_to_api_base
 azure_ad_cache = DualCache()
 
 
-
-
 class _OpenAIAzureADBearerClient(OpenAI):
     """``OpenAI`` subclass that resolves its bearer credential via an Azure AD
     token provider on every request.
@@ -106,6 +104,7 @@ class _AsyncOpenAIAzureADBearerClient(AsyncOpenAI):
         if not token:
             return {}
         return {"Authorization": f"Bearer {token}"}
+
 
 class AzureOpenAIError(BaseLLMException):
     def __init__(
@@ -573,9 +572,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                     api_key=azure_client_params.get("api_key"),
                     azure_ad_token=azure_client_params.get("azure_ad_token"),
                 )
-                ad_token_provider = azure_client_params.get(
-                    "azure_ad_token_provider"
-                )
+                ad_token_provider = azure_client_params.get("azure_ad_token_provider")
                 v1_params = {
                     "base_url": f"{api_base}/openai/v1/",
                 }
