@@ -3749,7 +3749,12 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     mock_user_api_key_dict.user_id = "test-user"
     mock_user_api_key_dict.api_key = "test-key"
     mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.team_id = None
     mock_user_api_key_dict.models = ["oci-grok-test"]
+    # LIT-3038: model_info_v1 now branches on user_role; non-admin keeps
+    # the legacy key/team filter path that this test exercises.
+    from litellm.proxy._types import LitellmUserRoles
+    mock_user_api_key_dict.user_role = LitellmUserRoles.INTERNAL_USER
 
     # Mock model data with OCI sensitive information
     mock_model_data = {
