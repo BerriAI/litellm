@@ -391,6 +391,15 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
             return_value=None
         )
+        # LIT-3386: CheckBatchCost now routes raw->managed conversion through
+        # ensure_batch_response_managed_file_ids, which looks up
+        # litellm_managedfiletable to dedupe. None = no existing row, so the
+        # helper falls through to register new managed rows (the behavior
+        # this test pins).
+        mock_prisma_client.db.litellm_managedfiletable = MagicMock()
+        mock_prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
+            return_value=None
+        )
 
         mock_job = MagicMock()
         mock_job.id = "job-raw-file-1"
@@ -408,12 +417,21 @@ class TestCheckBatchCost:
         fake_managed_output_id = "bGl0ZWxsbV9wcm94eTo6b3V0cHV0"
         fake_managed_error_id = "bGl0ZWxsbV9wcm94eTo6ZXJyb3I="
 
-        mock_response = MagicMock()
-        mock_response.status = "completed"
-        mock_response.output_file_id = raw_output_file_id
-        mock_response.error_file_id = raw_error_file_id
-        mock_response.model_dump_json.return_value = (
-            '{"id":"batch-1","status":"completed"}'
+        # LIT-3386: helper reads input_file_id/output_file_id/error_file_id via
+        # getattr — use a real LiteLLMBatch so the helper sees strings, not
+        # MagicMock attributes.
+        from litellm.types.utils import LiteLLMBatch
+        mock_response = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1700000000,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-fake",
+            object="batch",
+            status="completed",
+            completed_at=1700001000,
+            output_file_id=raw_output_file_id,
+            error_file_id=raw_error_file_id,
         )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
@@ -445,9 +463,11 @@ class TestCheckBatchCost:
         with (
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
-                # call 1: job unified_object_id decode, call 2: existing raw check for output_file_id,
-                # call 3: fix guard for output_file_id, call 4: fix guard for error_file_id
-                side_effect=[decoded_id, None, None, None],
+                # LIT-3386: ensure_batch_response_managed_file_ids calls this helper
+                # multiple times (once for the job unified id, then for input/output/
+                # error inside the resolve_* + register loops). Use a callable so the
+                # iterator never exhausts.
+                side_effect=lambda v: decoded_id if v == "dW5pZmllZF9iYXRjaF9pZA==" else False,
             ),
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
