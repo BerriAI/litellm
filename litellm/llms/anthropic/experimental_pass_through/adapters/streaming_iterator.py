@@ -72,6 +72,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
         self.sent_compaction_block: bool = False
+        # Per-phase flags so the compaction block's start/delta/stop events
+        # are emitted (and the public state machine is advanced) in
+        # lock-step with the caller actually consuming each event. Pre-
+        # queuing all three would set ``sent_content_block_finish=True``
+        # before the client received ``content_block_stop``, leaving the
+        # observable state inconsistent during the drain window.
+        self.sent_compaction_block_start: bool = False
+        self.sent_compaction_block_delta: bool = False
         # Per-instance queue for buffering multiple chunks. Must be initialized
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
@@ -194,19 +202,26 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         augmented["usage"] = augmented_usage
         return augmented
 
-    def _queue_compaction_block_events(self) -> None:
-        """Emit compaction content-block SSE events before the main response stream.
+    def _next_compaction_event(self) -> Optional[Dict[str, Any]]:
+        """Return the next compaction content-block SSE event, or ``None``.
 
-        Anthropic delivers compaction as a single delta (no token-by-token streaming).
+        Anthropic delivers compaction as a single delta (no token-by-token
+        streaming), but we still surface it as a proper
+        start → delta → stop trio. Each call returns exactly one event so
+        the state machine (``sent_content_block_finish``,
+        ``current_content_block_index``) is advanced *only* when the
+        terminal stop event is actually handed back to the caller. This
+        prevents an observable window where the flags claim the block is
+        finished while the stop event is still buffered.
         """
-        if self.compaction_block is None:
-            return
+        if self.compaction_block is None or self.sent_compaction_block:
+            return None
 
         compaction_index = self.current_content_block_index
-        summary_content = self.compaction_block.get("content") or ""
 
-        self.chunk_queue.append(
-            {
+        if not self.sent_compaction_block_start:
+            self.sent_compaction_block_start = True
+            return {
                 "type": "content_block_start",
                 "index": compaction_index,
                 # Mirror the text-block shape ({"type": "text", "text": ""}):
@@ -216,21 +231,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # below.
                 "content_block": {"type": "compaction", "content": ""},
             }
-        )
-        self.chunk_queue.append(
-            {
+
+        if not self.sent_compaction_block_delta:
+            self.sent_compaction_block_delta = True
+            summary_content = self.compaction_block.get("content") or ""
+            return {
                 "type": "content_block_delta",
                 "index": compaction_index,
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
-        )
-        self.chunk_queue.append(
-            {
-                "type": "content_block_stop",
-                "index": compaction_index,
-            }
-        )
+
+        stop_event = {
+            "type": "content_block_stop",
+            "index": compaction_index,
+        }
+        # Advance state atomically with returning the terminal event so
+        # outside observers never see ``sent_content_block_finish=True``
+        # before the client has received ``content_block_stop``.
         self._increment_content_block_index()
+        self.sent_compaction_block = True
+        self.sent_content_block_finish = True
+        return stop_event
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -285,15 +306,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.sent_compaction_block is False
                 and self.compaction_block is not None
             ):
-                self.sent_compaction_block = True
-                self._queue_compaction_block_events()
-                # The compaction block emitted a complete start/delta/stop
-                # lifecycle. Reflect that in the state machine so any
-                # downstream check sees a consistent view; the flag is
-                # reset to ``False`` when the next (text) block's
-                # ``content_block_start`` is emitted below.
-                self.sent_content_block_finish = True
-                return self.chunk_queue.popleft()
+                compaction_event = self._next_compaction_event()
+                if compaction_event is not None:
+                    return compaction_event
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
@@ -430,8 +445,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
 
-            # Handle any remaining held chunks after stream ends
+            # Handle any remaining held chunks after stream ends. The
+            # buffered ``holding_chunk`` (a ``content_block_delta``) must
+            # precede the final ``message_delta`` so Anthropic SSE event
+            # ordering is preserved. When ``queued_usage_chunk`` is True,
+            # the final ``message_delta`` has already been emitted; any
+            # buffered content delta is dropped rather than emitted after
+            # ``message_delta`` (which would violate SSE ordering and may
+            # confuse strict Anthropic SDK clients).
             if not self.queued_usage_chunk:
+                if self.holding_chunk is not None:
+                    self.chunk_queue.append(self.holding_chunk)
+                    self.holding_chunk = None
                 if self.holding_stop_reason_chunk is not None:
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
@@ -439,14 +464,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         )
                     )
                     self.holding_stop_reason_chunk = None
-
-            # Always flush any buffered content delta, even when usage has
-            # already been merged + emitted: dropping it would silently lose
-            # provider-emitted content, which is worse than the SSE ordering
-            # nit of trailing a content chunk after the final message_delta
-            # (the prior sync ``__next__`` behavior).
-            if self.holding_chunk is not None:
-                self.chunk_queue.append(self.holding_chunk)
+            else:
                 self.holding_chunk = None
 
             if not self.sent_last_message:
@@ -507,15 +525,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.sent_compaction_block is False
                 and self.compaction_block is not None
             ):
-                self.sent_compaction_block = True
-                self._queue_compaction_block_events()
-                # The compaction block emitted a complete start/delta/stop
-                # lifecycle. Reflect that in the state machine so any
-                # downstream check sees a consistent view; the flag is
-                # reset to ``False`` when the next (text) block's
-                # ``content_block_start`` is emitted below.
-                self.sent_content_block_finish = True
-                return self.chunk_queue.popleft()
+                compaction_event = self._next_compaction_event()
+                if compaction_event is not None:
+                    return compaction_event
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
@@ -651,8 +663,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         self.chunk_queue.append(processed_chunk)
                         return self.chunk_queue.popleft()
 
-            # Handle any remaining held chunks after stream ends
+            # Handle any remaining held chunks after stream ends. The
+            # buffered ``holding_chunk`` (a ``content_block_delta``) must
+            # precede the final ``message_delta`` so Anthropic SSE event
+            # ordering is preserved. When ``queued_usage_chunk`` is True,
+            # the final ``message_delta`` has already been emitted; any
+            # buffered content delta is dropped rather than emitted after
+            # ``message_delta`` (which would violate SSE ordering and may
+            # confuse strict Anthropic SDK clients).
             if not self.queued_usage_chunk:
+                if self.holding_chunk is not None:
+                    self.chunk_queue.append(self.holding_chunk)
+                    self.holding_chunk = None
                 if self.holding_stop_reason_chunk is not None:
                     self.chunk_queue.append(
                         self._augment_message_delta_usage(
@@ -660,14 +682,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         )
                     )
                     self.holding_stop_reason_chunk = None
-
-            # Always flush any buffered content delta, even when usage has
-            # already been merged + emitted: dropping it would silently lose
-            # provider-emitted content, which is worse than the SSE ordering
-            # nit of trailing a content chunk after the final message_delta
-            # (the prior async ``__anext__`` behavior).
-            if self.holding_chunk is not None:
-                self.chunk_queue.append(self.holding_chunk)
+            else:
                 self.holding_chunk = None
 
             if not self.sent_last_message:
