@@ -316,6 +316,7 @@ class PydanticAITransformation:
 
         # Build standard A2A message
         a2a_message = {
+            "kind": "message",
             "role": "agent",
             "parts": parts if parts else [{"kind": "text", "text": full_text}],
             "messageId": message_id,
@@ -325,10 +326,7 @@ class PydanticAITransformation:
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {
-                "kind": "message",
-                **a2a_message,
-            },
+            "result": a2a_message,
         }
 
     @staticmethod

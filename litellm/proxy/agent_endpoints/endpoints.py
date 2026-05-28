@@ -373,22 +373,29 @@ async def create_agent(
                 detail=f"Agent with name {request.get('agent_name')} already exists",
             )
 
-        # Apply the LiteLLM-fronting merge so the stored card already advertises
-        # the proxy URL, LiteLLMKey auth, and the filtered capability set. We
-        # pre-generate the agent_id so the merged card can reference it in
-        # ``supportedInterfaces`` before the DB row exists.
-        new_agent_id = str(uuid.uuid4())
-        merged_card = _build_merged_agent_card(
-            request.get("agent_card_params"),
-            agent_id=new_agent_id,
-            http_request=http_request,
-            agent_name=request.get("agent_name"),
-            description=(request.get("agent_card_params") or {}).get("description"),
-        )
-        merged_request: AgentConfig = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+        # Apply the LiteLLM-fronting merge only when the admin actually
+        # provided an agent card. Plain chat/LLM agents register without
+        # ``agent_card_params``, and synthesising a default A2A card for them
+        # would advertise capabilities (``supportedInterfaces``, security
+        # schemes, default skills) the agent doesn't actually expose.
+        upstream_card = request.get("agent_card_params")
+        agent_to_create: AgentConfig = request
+        new_agent_id: Optional[str] = None
+        if upstream_card:
+            # Pre-generate the agent_id so the merged card can reference it
+            # in ``supportedInterfaces`` before the DB row exists.
+            new_agent_id = str(uuid.uuid4())
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=new_agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+                description=upstream_card.get("description"),
+            )
+            agent_to_create = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 
         result = await AGENT_REGISTRY.add_agent_to_db(
-            agent=merged_request,
+            agent=agent_to_create,
             prisma_client=prisma_client,
             created_by=created_by,
             agent_id=new_agent_id,
@@ -581,19 +588,24 @@ async def update_agent(
 
         # Re-apply the LiteLLM-fronting merge — an update is a re-registration,
         # so any new upstream card the admin pasted must go through the same
-        # transformation as initial create.
-        merged_card = _build_merged_agent_card(
-            request.get("agent_card_params"),
-            agent_id=agent_id,
-            http_request=http_request,
-            agent_name=request.get("agent_name"),
-            description=(request.get("agent_card_params") or {}).get("description"),
-        )
-        merged_request: AgentConfig = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+        # transformation as initial create. Plain agents without an
+        # ``agent_card_params`` skip the merge so we don't synthesise an A2A
+        # card for them.
+        upstream_card = request.get("agent_card_params")
+        agent_to_update: AgentConfig = request
+        if upstream_card:
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+                description=upstream_card.get("description"),
+            )
+            agent_to_update = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 
         result = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
-            agent=merged_request,
+            agent=agent_to_update,
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
@@ -685,17 +697,20 @@ async def patch_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
-        # Re-merge only when the patch actually touches agent_card_params; a
-        # patch updating just litellm_params/rate limits shouldn't rewrite the
-        # stored card.
+        # Re-merge only when the patch actually touches agent_card_params with
+        # a non-empty card; a patch updating just litellm_params/rate limits
+        # shouldn't rewrite the stored card, and a patch clearing
+        # ``agent_card_params`` shouldn't synthesise a default A2A card for
+        # what is effectively a non-A2A agent.
         patch_payload: PatchAgentRequest = request
-        if "agent_card_params" in request:
+        upstream_card = request.get("agent_card_params")
+        if upstream_card:
             merged_card = _build_merged_agent_card(
-                request.get("agent_card_params"),
+                upstream_card,
                 agent_id=agent_id,
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
-                description=(request.get("agent_card_params") or {}).get("description"),
+                description=upstream_card.get("description"),
             )
             patch_payload = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
 
