@@ -103,23 +103,30 @@ class HostedVLLMAnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return f"{base}/v1/messages"
 
     # Anthropic built-in tool types that vLLM does not support in /v1/messages
-    _UNSUPPORTED_TOOL_TYPES = frozenset({
-        "web_search",
-        "computer",
-        "text_editor",
-        "bash",
-    })
+    _UNSUPPORTED_TOOL_TYPES = frozenset(
+        {
+            "web_search",
+            "computer",
+            "text_editor",
+            "bash",
+        }
+    )
 
-    def _strip_unsupported_tools(self, tools: Optional[List[Dict]]) -> Optional[List[Dict]]:
+    def _strip_unsupported_tools(
+        self, tools: Optional[List[Dict]]
+    ) -> Optional[List[Dict]]:
         """Remove Anthropic built-in tools (web_search, computer_use, etc.) that
         vLLM's /v1/messages endpoint does not understand."""
         if not tools:
             return tools
         return [
-            t for t in tools
+            t
+            for t in tools
             if not isinstance(t, dict)
             or t.get("type", "") not in self._UNSUPPORTED_TOOL_TYPES
-            and not t.get("type", "").startswith(tuple(f"{p}_" for p in self._UNSUPPORTED_TOOL_TYPES))
+            and not t.get("type", "").startswith(
+                tuple(f"{p}_" for p in self._UNSUPPORTED_TOOL_TYPES)
+            )
         ]
 
     def transform_anthropic_messages_request(
