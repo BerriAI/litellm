@@ -276,7 +276,7 @@ class CustomGuardrail(CustomLogger):
             key_meta = meta.get("user_api_key_metadata") or key_meta
         return team_meta, key_meta
 
-    def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
+    def get_disable_global_guardrail(self, data: dict) -> bool:
         """
         Returns True if the global guardrail should be disabled.
 
