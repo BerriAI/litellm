@@ -96,16 +96,6 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     Record<string, boolean>
   >({});
 
-  const resetSelections = (fresh: DiscoveredAgentCard) => {
-    const initial = savedAgentCard
-      ? selectionsFromSavedAgentCard(fresh, savedAgentCard)
-      : selectionsFromUpstreamCard(fresh);
-    setEditedName(initial.editedName);
-    setEditedDescription(initial.editedDescription);
-    setSelectedSkillIds(initial.selectedSkillIds);
-    setSelectedCapabilities(initial.selectedCapabilities);
-  };
-
   const onApplyRef = useRef(onApply);
   onApplyRef.current = onApply;
   const discoverRequestIdRef = useRef(0);
@@ -118,6 +108,25 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   // the callback / effect only re-run when content actually changes.
   const discoveryRequestRef = useRef(discoveryRequest);
   discoveryRequestRef.current = discoveryRequest;
+  // Hold ``savedAgentCard`` in a ref so ``resetSelections`` always sees the
+  // latest value without making it a dependency of ``handleDiscover``.
+  // Putting ``savedAgentCard`` directly in the callback deps means any parent
+  // re-render that hands us a new object reference (e.g. a background
+  // agent-data refresh during editing) recreates ``handleDiscover``, which
+  // re-fires the auto-discover effect and overwrites in-progress user edits.
+  const savedAgentCardRef = useRef(savedAgentCard);
+  savedAgentCardRef.current = savedAgentCard;
+
+  const resetSelections = (fresh: DiscoveredAgentCard) => {
+    const saved = savedAgentCardRef.current;
+    const initial = saved
+      ? selectionsFromSavedAgentCard(fresh, saved)
+      : selectionsFromUpstreamCard(fresh);
+    setEditedName(initial.editedName);
+    setEditedDescription(initial.editedDescription);
+    setSelectedSkillIds(initial.selectedSkillIds);
+    setSelectedCapabilities(initial.selectedCapabilities);
+  };
 
   const discoveryMode = discoveryRequest?.discovery_mode;
   const discoveryParamsKey = useMemo(
@@ -176,9 +185,12 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     // ``discoveryMode`` / ``discoveryParamsKey`` are primitive proxies for
     // ``discoveryRequest`` content; the actual object is read via the ref
     // above so identity churn from the parent doesn't recreate this callback.
-    // ``savedAgentCard`` is captured indirectly via ``resetSelections``: if
-    // the parent refetches the agent and hands us a new saved card, we need
-    // a fresh callback so "Re-discover" pre-selects against the latest data.
+    // ``savedAgentCard`` is intentionally NOT a dep — it's read via
+    // ``savedAgentCardRef`` inside ``resetSelections``. Including it here
+    // would recreate this callback whenever the parent hands us a new
+    // ``savedAgentCard`` object (e.g. a background refresh of agent data
+    // during editing), which would re-fire the auto-discover effect and
+    // wipe in-progress user selections.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     accessToken,
@@ -186,7 +198,6 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     isParentDriven,
     discoveryMode,
     discoveryParamsKey,
-    savedAgentCard,
   ]);
 
   // Auto-discover when the URL (or parent plan) becomes available.

@@ -254,8 +254,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         const discovered = appliedDiscoveredSelection.selected_card;
         agentData.agent_card_params = {
           ...agentData.agent_card_params,
-          ...(Array.isArray(discovered.skills) &&
-            discovered.skills.length > 0 && { skills: discovered.skills }),
+          ...(Array.isArray(discovered.skills) && {
+            skills: discovered.skills,
+          }),
           ...(discovered.capabilities && {
             capabilities: discovered.capabilities,
           }),

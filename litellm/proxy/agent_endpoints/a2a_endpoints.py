@@ -332,9 +332,14 @@ async def invoke_agent_a2a(  # noqa: PLR0915
 
         if params:
             # extract any litellm params from the params - eg. 'guardrails'
+            # ``metadata`` is intentionally excluded: it's a first-class A2A
+            # ``MessageSendParams`` field that the completion bridge forwards
+            # downstream via ``get_forward_metadata``. Stripping it here would
+            # collide with litellm's spend-tracking ``metadata`` kwarg and
+            # silently drop the caller's A2A request-level metadata.
             params_to_remove = []
             for key, value in params.items():
-                if key in all_litellm_params:
+                if key in all_litellm_params and key != "metadata":
                     params_to_remove.append(key)
                     body[key] = value
             for key in params_to_remove:
