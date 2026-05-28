@@ -880,7 +880,7 @@ class TestMCPPublicRouteGuard:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
         ) as mock_auth:
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             mock_auth.assert_not_called()
             assert isinstance(auth_result, UserAPIKeyAuth)
 
@@ -997,7 +997,7 @@ class TestMCPOAuth2FallbackTargetGating:
             mock_mgr.get_mcp_server_by_name.return_value = (
                 TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
 
     async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
@@ -1157,7 +1157,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             mock_auth.assert_not_called()
 
@@ -1400,7 +1400,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -1437,7 +1437,7 @@ class TestMCPDelegateAuthToUpstream:
                     delegate_auth_to_upstream=True,
                 )
             )
-            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
             mock_auth.assert_called_once()
@@ -3161,6 +3161,7 @@ class TestOrgMCPPermissions:
             )
             assert sorted(result) == ["tool_a", "tool_b"]
 
+
 # ---------------------------------------------------------------------------
 # LIT-3399: unified key.access_group_ids / team.access_group_ids -> MCP servers
 # ---------------------------------------------------------------------------
@@ -3216,20 +3217,20 @@ async def test_lit3399_key_access_group_grants_mcp_without_assigned_key_ids():
     mock_mgr.expand_tool_permissions = MagicMock(return_value={})
     mock_mgr.config_mcp_servers = []
 
-    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
-         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
-         patch(
-             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-             mock_mgr,
-         ), \
-         patch(
-             "litellm.proxy.auth.auth_checks.get_access_object",
-             new=AsyncMock(return_value=group),
-         ):
-        result = await MCPRequestHandler.get_allowed_mcp_servers(
-            user_api_key_auth=auth
-        )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new=AsyncMock(return_value=group),
+        ),
+    ):
+        result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=auth)
 
     assert "server-S" in result, (
         f"Expected server-S to be granted via unified key.access_group_ids, "
@@ -3252,13 +3253,15 @@ async def test_lit3399_key_no_unified_groups_returns_empty_when_no_object_perm()
     mock_mgr = MagicMock()
     mock_mgr.expand_permission_list = MagicMock(side_effect=lambda lst: list(lst or []))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
-         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
-         patch(
-             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-             mock_mgr,
-         ):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+    ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
 
     assert result == []
@@ -3274,16 +3277,21 @@ async def test_lit3399_get_unified_helper_resolves_servers():
         side_effect=lambda lst: [f"resolved-{x}" for x in (lst or [])]
     )
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        mock_mgr,
-    ), patch(
-        "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
-        new=AsyncMock(return_value=["raw-S1", "raw-S2"]),
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new=AsyncMock(return_value=["raw-S1", "raw-S2"]),
+        ),
     ):
-        result = await (
-            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
-                access_group_ids=["G1", "G2"],
+        result = (
+            await (
+                MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                    access_group_ids=["G1", "G2"],
+                )
             )
         )
 
@@ -3298,9 +3306,11 @@ async def test_lit3399_get_unified_helper_empty_input_returns_empty():
         "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
         new=AsyncMock(return_value=["should-not-be-called"]),
     ) as mock_resolve:
-        result = await (
-            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
-                access_group_ids=[],
+        result = (
+            await (
+                MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                    access_group_ids=[],
+                )
             )
         )
     assert result == []
@@ -3314,9 +3324,11 @@ async def test_lit3399_get_unified_helper_swallows_exceptions():
         "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
-        result = await (
-            MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
-                access_group_ids=["G1"],
+        result = (
+            await (
+                MCPRequestHandler._get_unified_access_group_mcp_servers_for_object(
+                    access_group_ids=["G1"],
+                )
             )
         )
     assert result == []
@@ -3347,23 +3359,25 @@ async def test_lit3399_key_with_object_perm_and_unified_groups_unions_both():
     mock_mgr.expand_tool_permissions = MagicMock(return_value={})
     mock_mgr.config_mcp_servers = []
 
-    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
-         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()), \
-         patch(
-             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-             mock_mgr,
-         ), \
-         patch.object(
-             MCPRequestHandler,
-             "_get_mcp_servers_from_access_groups",
-             new=AsyncMock(return_value=[]),
-         ), \
-         patch.object(
-             MCPRequestHandler,
-             "_get_unified_access_group_mcp_servers_for_object",
-             new=AsyncMock(return_value=["unified-S"]),
-         ):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_mgr,
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_unified_access_group_mcp_servers_for_object",
+            new=AsyncMock(return_value=["unified-S"]),
+        ),
+    ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
 
     assert set(result) == {"legacy-S", "unified-S"}
@@ -3382,18 +3396,22 @@ async def test_lit3399_team_unified_access_group_grants_mcp():
         access_group_ids=None,
     )
 
-    with patch.object(
-        MCPRequestHandler,
-        "_get_team_object_permission",
-        new=AsyncMock(return_value=None),
-    ), patch.object(
-        MCPRequestHandler,
-        "_get_team_unified_access_group_ids",
-        new=AsyncMock(return_value=["G-team"]),
-    ), patch.object(
-        MCPRequestHandler,
-        "_get_unified_access_group_mcp_servers_for_object",
-        new=AsyncMock(return_value=["team-server-S"]),
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_team_object_permission",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_team_unified_access_group_ids",
+            new=AsyncMock(return_value=["G-team"]),
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_unified_access_group_mcp_servers_for_object",
+            new=AsyncMock(return_value=["team-server-S"]),
+        ),
     ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
 
