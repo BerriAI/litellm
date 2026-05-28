@@ -68,38 +68,6 @@ DD_LOGGED_SUCCESS_SERVICE_TYPES = [
 ]
 
 
-def _resolve_dd_batch_size() -> int:
-    """
-    Resolve the per-flush batch size for the Datadog logger.
-
-    Honors the documented ``DD_BATCH_SIZE`` env var (referenced in
-    ``DD_ERRORS.DATADOG_413_ERROR``) so operators can drop the batch size to
-    work around oversized payloads. Falls back to ``DD_MAX_BATCH_SIZE`` (1000)
-    when the env var is unset / invalid / non-positive. Values greater than
-    ``DD_MAX_BATCH_SIZE`` are clamped down to that ceiling.
-    """
-    raw = os.getenv("DD_BATCH_SIZE")
-    if not raw:
-        return DD_MAX_BATCH_SIZE
-    try:
-        parsed = int(raw)
-    except (TypeError, ValueError):
-        verbose_logger.warning(
-            "Datadog: ignoring non-integer DD_BATCH_SIZE=%r; falling back to %s",
-            raw,
-            DD_MAX_BATCH_SIZE,
-        )
-        return DD_MAX_BATCH_SIZE
-    if parsed <= 0:
-        verbose_logger.warning(
-            "Datadog: ignoring non-positive DD_BATCH_SIZE=%r; falling back to %s",
-            raw,
-            DD_MAX_BATCH_SIZE,
-        )
-        return DD_MAX_BATCH_SIZE
-    return min(parsed, DD_MAX_BATCH_SIZE)
-
-
 def _is_413_error(exc: BaseException) -> bool:
     """
     Detect a Datadog 413 (Payload Too Large) hidden inside an exception.
@@ -177,9 +145,7 @@ class DataDogLogger(
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
-                **kwargs,
-                flush_lock=self.flush_lock,
-                batch_size=_resolve_dd_batch_size(),
+                **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE
             )
         except Exception as e:
             verbose_logger.exception(
