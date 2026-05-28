@@ -798,9 +798,24 @@ async def delete_model(
 
         # delete team model alias
         if model_params.model_info.team_id is not None:
+            # For team-scoped BYOK models, `_add_team_model_to_db` mutates
+            # `model_name` to an internal unique identifier
+            # ("model_name_<team>_<uuid>") and preserves the caller-supplied
+            # public name on `model_info.team_public_model_name`. The team
+            # alias map and `team.models` are both keyed by the public name,
+            # so the alias lookup and the team.models cleanup must both
+            # operate on the public name — passing `model_params.model_name`
+            # silently no-ops and leaves a ghost entry in `team.models`
+            # (LIT-2120). Fall back to `model_name` for any legacy row that
+            # pre-dates `team_public_model_name`.
+            public_model_name_for_team = (
+                model_params.model_info.team_public_model_name
+                or model_params.model_name
+            )
             removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
+                public_model_name=public_model_name_for_team,
                 prisma_client=prisma_client,
+                team_id=model_params.model_info.team_id,
             )
 
             valid_team_model_aliases = [
@@ -808,6 +823,13 @@ async def delete_model(
                 for team_id, model in removed_model_aliases
                 if team_id == model_params.model_info.team_id
             ]
+            # `_add_team_model_to_db` adds the public name directly to
+            # `team.models` via `team_model_add` without ever writing a row
+            # to `LiteLLM_ModelTable`, so the alias scan above can legitimately
+            # return zero entries for that team while `team.models` still
+            # holds the public name. Always include it in the exclusion set.
+            if public_model_name_for_team not in valid_team_model_aliases:
+                valid_team_model_aliases.append(public_model_name_for_team)
 
             ## UPDATE TEAM TO NOT LIST MODEL ##
             existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
@@ -892,11 +914,19 @@ async def delete_model(
 async def delete_team_model_alias(
     public_model_name: str,
     prisma_client: PrismaClient,
+    team_id: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """
-    Delete a team model alias
+    Delete a team model alias.
 
-    Iterate through all team model aliases and delete the one that matches the model_id
+    Iterate through team model aliases and delete entries whose value equals
+    `public_model_name`.
+
+    If `team_id` is provided, the deletion is scoped to that team's
+    `LiteLLM_ModelTable` row only — required when this helper is called from a
+    flow where the caller is only authorized for a specific team (e.g.
+    `/model/delete` for a team-scoped BYOK model), so that a public name
+    shared by another team's alias map is never removed by side effect.
 
     Returns:
     - List of team id + model alias pairs that were removed
@@ -907,6 +937,14 @@ async def delete_team_model_alias(
     tasks = []
     removed_model_aliases = []
     for team_model_alias in team_model_aliases:
+        # Authorization scope: only touch the caller-supplied team's row.
+        # Rows missing a `team` relation are skipped under scoping because we
+        # have no way to attribute them.
+        if team_id is not None and (
+            team_model_alias.team is None or team_model_alias.team.team_id != team_id
+        ):
+            continue
+
         model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
         id = team_model_alias.id
 
