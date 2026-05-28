@@ -35,8 +35,8 @@ const getUserIdInput = () =>
   )! as HTMLInputElement;
 
 // Antd renders the open dropdown as a separate floating div with role="listbox".
-// Use this to scope queries so we don't pick up the value rendered inside the
-// closed select's display chip (which also has the option text).
+// Scope queries to it so we don't pick up the selected value rendered inside
+// the closed select's display chip (which also has the option text).
 const getOpenDropdown = (): HTMLElement => {
   const dropdowns = document.querySelectorAll(".ant-select-dropdown");
   for (const el of Array.from(dropdowns)) {
@@ -44,7 +44,6 @@ const getOpenDropdown = (): HTMLElement => {
       return el as HTMLElement;
     }
   }
-  // Fall back to the first one if we can't tell which is open
   return dropdowns[0] as HTMLElement;
 };
 
@@ -122,7 +121,6 @@ describe("UserSearchModal — manual entry fallback (LIT-3389)", () => {
     await user.click(getEmailInput());
     await user.type(getEmailInput(), "bob@example.com");
 
-    // Wait until the dropdown has at least one option matching the API result.
     await waitFor(
       () => {
         const dropdown = getOpenDropdown();
@@ -133,10 +131,40 @@ describe("UserSearchModal — manual entry fallback (LIT-3389)", () => {
       { timeout: 2000 },
     );
 
-    // Only one option in the dropdown — no synthetic duplicate.
     const dropdown = getOpenDropdown();
     expect(
       within(dropdown).queryByText('Use email "bob@example.com"'),
+    ).not.toBeInTheDocument();
+  });
+
+  it("treats the exact-match check as case-insensitive so case-variant emails do not double up", async () => {
+    // Reproduces the Greptile P2: user types Alice@Example.com, API returns
+    // alice@example.com — without the case-insensitive guard we would surface
+    // both, and selecting the synthetic option would submit the
+    // differently-cased value the API doesn't have.
+    const user = userEvent.setup();
+    mockedFilterCall.mockResolvedValue([
+      { user_id: "u-1", user_email: "alice@example.com" },
+    ]);
+
+    openModal();
+
+    await user.click(getEmailInput());
+    await user.type(getEmailInput(), "Alice@Example.com");
+
+    await waitFor(
+      () => {
+        const dropdown = getOpenDropdown();
+        expect(
+          within(dropdown).getAllByText("alice@example.com").length,
+        ).toBeGreaterThan(0);
+      },
+      { timeout: 2000 },
+    );
+
+    const dropdown = getOpenDropdown();
+    expect(
+      within(dropdown).queryByText(/Use email "Alice@Example\.com"/i),
     ).not.toBeInTheDocument();
   });
 
