@@ -152,6 +152,19 @@ def _make_team_obj(
     return mock_team
 
 
+def _make_mock_mcp_manager(*existing_ids: str):
+    """
+    Return a mock global_mcp_server_manager whose get_mcp_server_by_id returns a
+    non-None value for every ID in *existing_ids and None for everything else.
+    """
+    mock_mgr = MagicMock()
+    existing = set(existing_ids)
+    mock_mgr.get_mcp_server_by_id.side_effect = lambda sid: (
+        MagicMock() if sid in existing else None
+    )
+    return mock_mgr
+
+
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
@@ -171,6 +184,10 @@ async def test_validate_no_object_permission(mock_access_groups, mock_allow_all)
 
 
 @pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-2"),
+)
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
@@ -193,6 +210,10 @@ async def test_validate_key_servers_within_team_scope(
 
 @pytest.mark.asyncio
 @patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-outside"),
+)
+@patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )
@@ -204,7 +225,7 @@ async def test_validate_key_servers_within_team_scope(
 async def test_validate_key_servers_outside_team_scope_raises(
     mock_access_groups, mock_allow_all
 ):
-    """Key requests servers NOT in the team's scope — should raise 403."""
+    """Key requests a server that exists but is NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -216,6 +237,10 @@ async def test_validate_key_servers_outside_team_scope_raises(
 
 
 @pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "global-server"),
+)
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value={"global-server"},
@@ -238,6 +263,10 @@ async def test_validate_allow_all_keys_servers_always_allowed(
 
 @pytest.mark.asyncio
 @patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("global-server"),
+)
+@patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value={"global-server"},
 )
@@ -248,7 +277,6 @@ async def test_validate_allow_all_keys_servers_always_allowed(
 )
 async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_allow_all):
     """Key without a team can only use allow_all_keys servers."""
-    # This should pass — requesting a global server without a team
     await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["global-server"]},
         team_obj=None,
@@ -256,6 +284,10 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
 
 
 @pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("private-server"),
+)
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value={"global-server"},
@@ -268,7 +300,7 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
 async def test_validate_no_team_non_global_server_raises(
     mock_access_groups, mock_allow_all
 ):
-    """Key without a team requesting a non-global server — should raise 403."""
+    """Key without a team requesting an existing non-global server — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_servers": ["private-server"]},
@@ -279,6 +311,10 @@ async def test_validate_no_team_non_global_server_raises(
 
 
 @pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("some-server"),
+)
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
@@ -303,6 +339,10 @@ async def test_validate_team_no_mcp_config_blocks_all(
 
 @pytest.mark.asyncio
 @patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-outside"),
+)
+@patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )
@@ -314,7 +354,7 @@ async def test_validate_team_no_mcp_config_blocks_all(
 async def test_validate_tool_permissions_validated_against_team(
     mock_access_groups, mock_allow_all
 ):
-    """Server IDs in mcp_tool_permissions should also be validated."""
+    """Server IDs in mcp_tool_permissions should also be validated when they exist."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -323,6 +363,38 @@ async def test_validate_tool_permissions_validated_against_team(
         )
     assert exc_info.value.status_code == 403
     assert "server-outside" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_stale_mcp_server_ids_are_silently_dropped(
+    mock_access_groups, mock_allow_all
+):
+    """
+    Stale MCP server IDs (servers deleted and no longer in the registry) must not
+    block a key save with a 403. They are silently stripped instead.
+
+    Scenario: key/team were configured with S1+S2, those servers were deleted and
+    replaced with S3+S4. The UI form still holds S1+S2 in its local state. Saving
+    should succeed, not raise a 403.
+    """
+    team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["s1-stale", "s2-stale"]},
+        team_obj=team_obj,
+    )  # Must not raise
 
 
 @pytest.mark.asyncio

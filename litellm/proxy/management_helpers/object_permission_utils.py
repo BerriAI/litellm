@@ -332,7 +332,27 @@ async def validate_key_mcp_servers_against_team(
 
     # Validate requested server IDs
     if requested_servers:
-        disallowed_servers = requested_servers - all_allowed_servers
+        # Strip IDs for servers that no longer exist in the registry (stale/deleted).
+        # These should not block the operation — a deleted server can't be used for
+        # anything, so carrying its old ID in object_permission is harmless and
+        # should not be treated as an authorization violation.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        stale_ids = {
+            sid
+            for sid in requested_servers
+            if global_mcp_server_manager.get_mcp_server_by_id(sid) is None
+        }
+        if stale_ids:
+            verbose_proxy_logger.warning(
+                "validate_key_mcp_servers_against_team: ignoring stale MCP server "
+                f"IDs (no longer in registry): {sorted(stale_ids)}"
+            )
+        active_requested_servers = requested_servers - stale_ids
+
+        disallowed_servers = active_requested_servers - all_allowed_servers
         if disallowed_servers:
             if team_obj is not None:
                 team_id = team_obj.team_id
