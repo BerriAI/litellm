@@ -41,7 +41,6 @@ from litellm.integrations.datadog.datadog_handler import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
-    MaskedHTTPStatusError,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
