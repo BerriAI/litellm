@@ -599,6 +599,140 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(
     mock_new_team.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# LIT-3087: team_alias propagation when JWT triggers team_id_upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_upsert_propagates_team_alias(
+    mock_new_team, monkeypatch
+):
+    """LIT-3087: when ``upsert_team_alias`` is passed alongside
+    ``team_id_upsert``, the auto-create call sends the alias into
+    ``NewTeamRequest`` so the freshly created team has a human-readable name.
+    """
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    team_id_to_create = "jwt-upsert-team-with-alias"
+    expected_alias = "Platform Engineering"
+    mock_new_team.return_value = {
+        "team_id": team_id_to_create,
+        "team_alias": expected_alias,
+        "max_budget": None,
+    }
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+        upsert_team_alias=expected_alias,
+    )
+
+    mock_new_team.assert_called_once()
+    data_arg = mock_new_team.call_args[1]["data"]
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.team_alias == expected_alias
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_upsert_without_alias_preserved_behavior(
+    mock_new_team, monkeypatch
+):
+    """LIT-3087: when ``upsert_team_alias`` is None (default), the upsert
+    request must not stamp an alias — pre-fix behavior is preserved for
+    deployments that do not configure ``team_alias_jwt_field``.
+    """
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    team_id_to_create = "jwt-upsert-team-no-alias"
+    mock_new_team.return_value = {"team_id": team_id_to_create, "max_budget": None}
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+        # upsert_team_alias intentionally omitted
+    )
+
+    mock_new_team.assert_called_once()
+    data_arg = mock_new_team.call_args[1]["data"]
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.team_alias is None
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_upsert_empty_alias_treated_as_unset(
+    mock_new_team, monkeypatch
+):
+    """LIT-3087: an empty string alias from the JWT must not be stamped as
+    the team's ``team_alias`` — empty alias is indistinguishable from "no
+    alias claim" and would produce a confusing blank-name team in the UI.
+    """
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    team_id_to_create = "jwt-upsert-team-empty-alias"
+    mock_new_team.return_value = {"team_id": team_id_to_create, "max_budget": None}
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+        upsert_team_alias="",
+    )
+
+    mock_new_team.assert_called_once()
+    data_arg = mock_new_team.call_args[1]["data"]
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.team_alias is None
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_alias_ignored_when_team_exists(
+    mock_new_team, monkeypatch
+):
+    """LIT-3087: alias backfill is intentionally NOT performed — existing
+    teams keep their alias on every JWT auth. The fix only affects newly
+    created (upserted) teams.
+    """
+    existing_row = MagicMock()
+    existing_row.team_alias = None  # legacy upsert without alias
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = existing_row
+
+    result = await _get_team_db_check(
+        team_id="legacy-team",
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+        upsert_team_alias="A New Alias From JWT",
+    )
+
+    # new_team must NOT be called when the team already exists
+    mock_new_team.assert_not_called()
+    # The returned row is the legacy row, unchanged
+    assert result is existing_row
+    assert result.team_alias is None
+
+
 # Vector Store Auth Check Tests
 
 
