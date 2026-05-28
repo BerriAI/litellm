@@ -1293,6 +1293,57 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             delta.content = ""
         return buf
 
+    async def _mask_process_model_chunk(
+        self,
+        chunk: "ModelResponseStream",
+        text_buffer: Dict[int, str],
+        flush_chars: int,
+        tail_overlap: int,
+        mask_fn,
+    ) -> None:
+        """Apply incremental Presidio masking to every choice on ``chunk``.
+
+        Mutates the chunk's ``delta.content`` in place and updates the per-
+        choice ``text_buffer`` rolling window.
+        """
+        for choice in chunk.choices or []:
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            is_final = getattr(choice, "finish_reason", None) is not None
+            if content:
+                text_buffer[choice.index] = text_buffer.get(choice.index, "") + content
+            text_buffer[choice.index] = await self._mask_apply_to_choice_delta(
+                choice,
+                text_buffer.get(choice.index, ""),
+                bool(content),
+                is_final,
+                flush_chars,
+                tail_overlap,
+                mask_fn,
+            )
+
+    def _flush_buffer_unmasked(
+        self,
+        template: "ModelResponseStream",
+        text_buffer: Dict[int, str],
+    ):
+        """Yield synthetic chunks for any buffered text, unmasked, in choice order.
+
+        Used when a mixed stream (ModelResponseStream + unknown event) forces
+        us off the masking pipeline; we cannot reconstruct Presidio context
+        cleanly, so we flush whatever is in the buffer as-is and let the
+        operator know via the “mixed stream detected” warning. The buffer
+        is cleared in place.
+        """
+        flushed = []
+        for idx, remaining in list(text_buffer.items()):
+            if remaining:
+                flushed.append(self._build_text_only_chunk(template, idx, remaining))
+                text_buffer[idx] = ""
+        return flushed
+
     async def _stream_apply_output_masking(
         self,
         response: Any,
@@ -1331,6 +1382,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         template: Optional[ModelResponseStream] = None
         saw_model_response = False
         saw_unknown_event = False
+        passthrough_active = False  # Set after an unknown event — all subsequent
+        # ModelResponseStream chunks are forwarded unmasked to match the
+        # warning message contract (see Greptile review on PR #29134).
 
         async def _mask(text: str) -> str:
             try:
@@ -1361,42 +1415,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             "buffered text without PII masking and switching "
                             "to transparent passthrough."
                         )
-                        for idx, remaining in list(text_buffer.items()):
-                            if remaining:
-                                yield self._build_text_only_chunk(
-                                    template, idx, remaining
-                                )
-                                text_buffer[idx] = ""
+                        for flush in self._flush_buffer_unmasked(template, text_buffer):
+                            yield flush
                     saw_unknown_event = True
+                    passthrough_active = True
+                    yield chunk
+                    continue
+
+                if passthrough_active:
+                    # Honor the "switched to transparent passthrough" warning:
+                    # once we have seen an unknown event we cannot reconstruct
+                    # the masking context for subsequent ModelResponseStream
+                    # chunks, so forward them unmasked.
                     yield chunk
                     continue
 
                 saw_model_response = True
                 template = chunk
-
-                for choice in chunk.choices or []:
-                    delta = getattr(choice, "delta", None)
-                    if delta is None:
-                        continue
-                    content = getattr(delta, "content", None)
-                    is_final = getattr(choice, "finish_reason", None) is not None
-                    if content:
-                        text_buffer[choice.index] = (
-                            text_buffer.get(choice.index, "") + content
-                        )
-                    text_buffer[choice.index] = await self._mask_apply_to_choice_delta(
-                        choice,
-                        text_buffer.get(choice.index, ""),
-                        bool(content),
-                        is_final,
-                        flush_chars,
-                        tail_overlap,
-                        _mask,
-                    )
-
+                await self._mask_process_model_chunk(
+                    chunk, text_buffer, flush_chars, tail_overlap, _mask
+                )
                 yield chunk
 
-            if template is not None:
+            if template is not None and not passthrough_active:
                 for idx, remaining in text_buffer.items():
                     if remaining:
                         masked = await _mask(remaining)
