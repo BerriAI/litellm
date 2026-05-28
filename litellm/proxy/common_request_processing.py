@@ -1363,16 +1363,6 @@ class ProxyBaseLLMRequestProcessing:
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
-                    # Native Google GenAI streamGenerateContent passes raw Gemini
-                    # SSE bytes through to the client. The Google protocol does
-                    # NOT terminate with `data: [DONE]` — appending one breaks
-                    # native consumers like the Vertex Java SDK, which parses
-                    # the SSE body as JSON and throws `JsonParseException` on
-                    # the token `DONE` (LIT-3411).
-                    # Mark the request so the downstream SSE generator skips
-                    # the OpenAI-style terminator for this route only.
-                    if route_type == "agenerate_content_stream":
-                        self.data["_litellm_skip_sse_done_terminator"] = True
                     selected_data_generator = select_data_generator(
                         response=response,
                         user_api_key_dict=user_api_key_dict,
