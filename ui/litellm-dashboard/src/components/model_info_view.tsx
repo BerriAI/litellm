@@ -241,20 +241,63 @@ export default function ModelInfoView({
         return;
       }
 
-      let updatedLitellmParams = {
+      // Build litellm_params from the JSON textarea (`parsedExtraParams`) and the
+      // dedicated form inputs. The textarea is the source of truth for any key
+      // the user typed there. Dedicated form inputs only override their
+      // corresponding key in litellm_params when the user actually touched the
+      // form input — previously every dedicated input unconditionally won,
+      // which silently dropped user edits made only via the JSON textarea
+      // (LIT-2971).
+      let updatedLitellmParams: Record<string, any> = {
         ...values.litellm_params,
         ...parsedExtraParams,
-        model: values.litellm_model_name,
-        api_base: values.api_base,
-        custom_llm_provider: values.custom_llm_provider,
-        organization: values.organization,
-        tpm: values.tpm,
-        rpm: values.rpm,
-        max_retries: values.max_retries,
-        timeout: values.timeout,
-        stream_timeout: values.stream_timeout,
-        tags: values.tags,
       };
+
+      const FORM_FIELDS_FOR_LITELLM_PARAMS: Array<{
+        formField: string;
+        paramKey: string;
+      }> = [
+        { formField: "litellm_model_name", paramKey: "model" },
+        { formField: "api_base", paramKey: "api_base" },
+        { formField: "custom_llm_provider", paramKey: "custom_llm_provider" },
+        { formField: "organization", paramKey: "organization" },
+        { formField: "tpm", paramKey: "tpm" },
+        { formField: "rpm", paramKey: "rpm" },
+        { formField: "max_retries", paramKey: "max_retries" },
+        { formField: "timeout", paramKey: "timeout" },
+        { formField: "stream_timeout", paramKey: "stream_timeout" },
+        { formField: "tags", paramKey: "tags" },
+      ];
+
+      for (const { formField, paramKey } of FORM_FIELDS_FOR_LITELLM_PARAMS) {
+        const formValue = values[formField];
+        if (form.isFieldTouched(formField)) {
+          // Explicit form edit wins. Clearing the field deletes the key from
+          // litellm_params (mirrors the cache_write_cost touched-clear path).
+          if (
+            formValue === undefined ||
+            formValue === null ||
+            formValue === ""
+          ) {
+            delete updatedLitellmParams[paramKey];
+          } else {
+            updatedLitellmParams[paramKey] = formValue;
+          }
+          continue;
+        }
+        // Form field was not touched. If the textarea also did not carry the
+        // key but the form holds a usable value (e.g. textarea was cleared
+        // by the user), preserve the form value so we don't silently drop
+        // model / api_base / etc.
+        if (
+          !(paramKey in parsedExtraParams) &&
+          formValue !== undefined &&
+          formValue !== null &&
+          formValue !== ""
+        ) {
+          updatedLitellmParams[paramKey] = formValue;
+        }
+      }
 
       if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
         updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
@@ -296,7 +339,24 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      // guardrails follows the same source-of-truth rule as the keys in
+      // FORM_FIELDS_FOR_LITELLM_PARAMS: the JSON textarea wins unless the user
+      // explicitly edited the dedicated multi-select (LIT-2971).
+      if (form.isFieldTouched("guardrails")) {
+        if (
+          values.guardrails &&
+          Array.isArray(values.guardrails) &&
+          values.guardrails.length > 0
+        ) {
+          updatedLitellmParams.guardrails = values.guardrails;
+        } else {
+          delete updatedLitellmParams.guardrails;
+        }
+      } else if (
+        !("guardrails" in parsedExtraParams) &&
+        Array.isArray(values.guardrails) &&
+        values.guardrails.length > 0
+      ) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
       if (values.vector_store_ids?.length > 0) {

@@ -718,4 +718,174 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
   });
+
+  // ===========================================================================
+  // LIT-2971: LiteLLM Params JSON textarea is the source of truth for any key
+  // the user typed there. Dedicated form inputs only override their
+  // corresponding key when the user actually touched the form input.
+  // ===========================================================================
+  describe("LiteLLM Params textarea persistence (LIT-2971)", () => {
+    const modelWithTpmRpm = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        tpm: 50,
+        rpm: 25,
+        timeout: 30,
+      },
+    };
+
+    const renderWithModel = (modelData: any) => {
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [modelData] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [modelData] });
+      return render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    };
+
+    const findLitellmParamsTextarea = () =>
+      screen
+        .getAllByRole("textbox")
+        .find(
+          (input) =>
+            input.tagName === "TEXTAREA" &&
+            (input as HTMLTextAreaElement).value.includes('"model"'),
+        ) as HTMLTextAreaElement | undefined;
+
+    it("persists tpm change made only via the JSON textarea", async () => {
+      const user = userEvent.setup();
+      renderWithModel(modelWithTpmRpm);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      const textarea = findLitellmParamsTextarea();
+      expect(textarea).toBeDefined();
+      if (!textarea) return;
+      // Replace tpm: 50 -> tpm: 100 in the textarea body without touching the
+      // dedicated tpm form input.
+      const next = textarea.value.replace('"tpm": 50', '"tpm": 100');
+      expect(next).not.toBe(textarea.value);
+      await user.clear(textarea);
+      await user.paste(next);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+      expect(updatePayload.litellm_params.tpm).toBe(100);
+    });
+
+    it("persists nested-dict litellm_params (e.g. reasoning_effort) added via the JSON textarea", async () => {
+      const user = userEvent.setup();
+      renderWithModel(modelWithTpmRpm);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      const textarea = findLitellmParamsTextarea();
+      expect(textarea).toBeDefined();
+      if (!textarea) return;
+      // Inject a nested-dict key the form has no dedicated input for.
+      const parsed = JSON.parse(textarea.value);
+      parsed.reasoning_effort = { effort: "high", summary: "detailed" };
+      const next = JSON.stringify(parsed, null, 2);
+      await user.clear(textarea);
+      await user.paste(next);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+      expect(updatePayload.litellm_params.reasoning_effort).toEqual({
+        effort: "high",
+        summary: "detailed",
+      });
+    });
+
+    it("persists guardrails change made only via the JSON textarea (Greptile P1 follow-up)", async () => {
+      const user = userEvent.setup();
+      const modelWithGuardrails = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          guardrails: ["content_filter"],
+        },
+      };
+      renderWithModel(modelWithGuardrails);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      const textarea = findLitellmParamsTextarea();
+      expect(textarea).toBeDefined();
+      if (!textarea) return;
+      const parsed = JSON.parse(textarea.value);
+      // User swaps guardrails via the JSON textarea WITHOUT touching the
+      // dedicated guardrails multi-select.
+      parsed.guardrails = ["toxicity_filter"];
+      const next = JSON.stringify(parsed, null, 2);
+      await user.clear(textarea);
+      await user.paste(next);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+      expect(updatePayload.litellm_params.guardrails).toEqual(["toxicity_filter"]);
+    });
+
+    it("prefers the form input value when the user explicitly edits a form field", async () => {
+      const user = userEvent.setup();
+      renderWithModel(modelWithTpmRpm);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      // Find the dedicated tpm input via its initial value (50) and type a new
+      // value into it. antd InputNumber renders a role="spinbutton".
+      const spinbuttons = screen.queryAllByRole("spinbutton") as HTMLInputElement[];
+      let target: HTMLInputElement | undefined = spinbuttons.find(
+        (el) => el.value === "50",
+      );
+      if (!target) {
+        const textInputs = screen.getAllByRole("textbox") as HTMLInputElement[];
+        target = textInputs.find((el) => el.value === "50");
+      }
+      expect(target).toBeDefined();
+      if (!target) return;
+      await user.clear(target);
+      await user.type(target, "77");
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+      // Whatever the user typed wins; the JSON textarea was untouched (still
+      // says tpm: 50) but the form field was explicitly edited.
+      expect(Number(updatePayload.litellm_params.tpm)).toBe(77);
+    });
+  });
 });
