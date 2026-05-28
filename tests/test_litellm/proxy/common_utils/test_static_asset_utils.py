@@ -95,3 +95,102 @@ class TestResolveValidatedLocalImagePath:
 
     def test_rejects_empty_path(self):
         assert resolve_validated_local_image_path("") is None
+
+
+class TestSvgDetection:
+    """Regression tests for LIT-2150: company logos are commonly SVG, and
+    ``UI_LOGO_PATH`` pointing at an SVG used to silently fall back to the
+    bundled default logo because ``detect_local_image_media_type`` had no
+    SVG signature."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b'<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect/></svg>',
+            # Leading whitespace before <svg>.
+            b'  \n\t<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            # UTF-8 BOM-prefixed SVG.
+            b'\xef\xbb\xbf<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            # XML comment prologue + <svg>.
+            b'<!-- header --><svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            # SVG-specific DOCTYPE + <svg>.
+            b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg></svg>',
+            # Uppercase XML declaration variant.
+            b'<?XML version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        ],
+    )
+    def test_accepts_svg_variants(self, body):
+        assert detect_local_image_media_type(body) == "image/svg+xml"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # HTML must not be misclassified as SVG.
+            b"<!DOCTYPE html><html><head></head><body>oh no</body></html>",
+            b"<html><body><svg></svg></body></html>",
+            # Unrelated XML with no <svg> element.
+            b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>',
+            # Plain text that happens to start with `<`.
+            b"<not-an-image>",
+            # Empty input.
+            b"",
+        ],
+    )
+    def test_rejects_non_svg_payloads(self, body):
+        assert detect_local_image_media_type(body) is None
+
+    def test_resolve_validates_real_svg_file(self, tmp_path):
+        svg = tmp_path / "company.svg"
+        svg.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+
+        result = resolve_validated_local_image_path(str(svg))
+
+        assert result == (str(svg.resolve()), "image/svg+xml")
+
+    def test_resolve_rejects_html_with_svg_filename(self, tmp_path):
+        # If an admin accidentally mounts an HTML page at UI_LOGO_PATH, the
+        # helper must still reject it instead of serving it as image/svg+xml.
+        fake = tmp_path / "company.svg"
+        fake.write_bytes(b"<!DOCTYPE html><html></html>")
+
+        result = resolve_validated_local_image_path(str(fake))
+
+        assert result is None
+
+
+class TestSvgDetectionTightened:
+    """Greptile P2 follow-ups for LIT-2150: an XML element whose name starts
+    with ``svg`` (``<svgIcon>``) and HTML wrapped in an XML comment that
+    embeds an inline ``<svg>`` must both be rejected."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Element name shares the ``svg`` prefix but is not the SVG root.
+            b'<svgIcon xmlns="http://example.com"></svgIcon>',
+            b'<?xml version="1.0"?><svgIcon></svgIcon>',
+            # XML comment prologue wrapping HTML that embeds an inline SVG.
+            b"<!-- attribution --><!DOCTYPE html><html><body><svg></svg></body></html>",
+            # XML comment prologue followed by HTML (no inline SVG).
+            b"<!-- attribution --><html><body></body></html>",
+            # ``<?xml ?>`` prologue introducing HTML must still be rejected.
+            b'<?xml version="1.0"?><html><body><svg></svg></body></html>',
+        ],
+    )
+    def test_rejects_tightened_edge_cases(self, body):
+        assert detect_local_image_media_type(body) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # Comment prologue followed by the real SVG root.
+            b'<!-- (c) 2026 Acme --><svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            # Whitespace between <svg and attributes / >.
+            b'<svg\n  xmlns="http://www.w3.org/2000/svg"\n></svg>',
+            # Self-closing svg.
+            b"<svg/>",
+        ],
+    )
+    def test_still_accepts_valid_svg_after_tightening(self, body):
+        assert detect_local_image_media_type(body) == "image/svg+xml"
