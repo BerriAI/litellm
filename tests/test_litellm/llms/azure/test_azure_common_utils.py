@@ -1821,7 +1821,7 @@ def test_azure_v1_api_explicit_api_key_beats_token_provider():
             api_version="v1",
             _is_async=False,
         )
-        assert type(client).__name__ == "OpenAI"
+        assert isinstance(client, OpenAI)
         assert client.api_key == "primary-static-key"
 
 
