@@ -2058,9 +2058,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if explicit_max_tokens is None:
                     smallest_tpm_limit: Optional[int] = None
                     for d in descriptors:
-                        tpu = (d.get("rate_limit") or {}).get(
-                            "tokens_per_unit"
-                        )
+                        tpu = (d.get("rate_limit") or {}).get("tokens_per_unit")
                         if tpu is None or tpu <= 0:
                             continue
                         smallest_tpm_limit = (
@@ -2069,9 +2067,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             else min(smallest_tpm_limit, tpu)
                         )
                     if smallest_tpm_limit is not None:
-                        estimated_tokens = min(
-                            estimated_tokens, smallest_tpm_limit
-                        )
+                        estimated_tokens = min(estimated_tokens, smallest_tpm_limit)
 
                 tpm_response = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
