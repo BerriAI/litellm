@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
+    REDIS_ASYNC_CLIENT_CACHE_TTL,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
@@ -345,7 +346,16 @@ class RedisCache(BaseCache):
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
             in_memory_llm_clients_cache.set_cache(
-                key=cache_key, value=redis_async_client
+                key=cache_key,
+                value=redis_async_client,
+                # Pin the cached async client (and its underlying
+                # BlockingConnectionPool) to a long TTL so the pool is not
+                # recycled every InMemoryCache.default_ttl (10 min). Without
+                # this, sustained high-TPS deployments hit a cold pool every
+                # 10 minutes, triggering the pool-wait timeout that surfaces
+                # as "Timeout connecting to server" from
+                # async_increment_pipeline (LIT-3263).
+                ttl=REDIS_ASYNC_CLIENT_CACHE_TTL,
             )
 
         self.redis_async_client = redis_async_client  # type: ignore
