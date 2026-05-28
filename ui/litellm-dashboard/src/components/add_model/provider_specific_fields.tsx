@@ -10,6 +10,24 @@ const { Link } = Typography;
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
   uploadProps?: UploadProps;
+  /**
+   * Form rendering mode:
+   * - "create" (default): standard create flow — `required` fields validate and
+   *   the field metadata's placeholder/defaultValue are honored.
+   * - "rotate": edit/rotate flow — all fields are optional, the placeholder is
+   *   overridden to instruct the user to leave blank to keep the current value,
+   *   and field-level defaults are suppressed so empty submissions stay empty
+   *   (and are interpreted by the caller as "keep current").
+   */
+  mode?: "create" | "rotate";
+  /**
+   * Optional list of field keys to skip. Used by callers that already own a
+   * dedicated form item for those keys elsewhere in the same Form (e.g. the
+   * model edit view has dedicated `api_base` / `organization` inputs above
+   * its rotate-mode Authentication section, so it skips them here to avoid
+   * binding two Form.Items to the same name).
+   */
+  skipKeys?: string[];
 }
 
 interface ProviderCredentialField {
@@ -92,7 +110,16 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+const ROTATE_PLACEHOLDER = "Leave blank to keep current value";
+
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  uploadProps,
+  mode = "create",
+  skipKeys,
+}) => {
+  const isRotateMode = mode === "rotate";
+  const skipSet = React.useMemo(() => new Set(skipKeys ?? []), [skipKeys]);
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -214,17 +241,28 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           </Col>
         </Row>
       )}
-      {allFields.map((field) => (
+      {allFields
+        .filter((field) => !skipSet.has(field.key))
+        .map((field) => (
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
+            rules={
+              isRotateMode
+                ? undefined
+                : field.required
+                  ? [{ required: true, message: "Required" }]
+                  : undefined
+            }
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
             {field.type === "select" ? (
-              <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
+              <Select
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
+              >
                 {field.options?.map((option) => (
                   <Select.Option key={option} value={option}>
                     {option}
@@ -251,16 +289,16 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               </Upload>
             ) : field.type === "textarea" ? (
               <Input.TextArea
-                placeholder={field.placeholder}
-                defaultValue={field.defaultValue}
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
                 rows={6}
                 style={{ fontFamily: "monospace", fontSize: "12px" }}
               />
             ) : (
               <TextInput
-                placeholder={field.placeholder}
+                placeholder={isRotateMode ? ROTATE_PLACEHOLDER : field.placeholder}
                 type={field.type === "password" ? "password" : "text"}
-                defaultValue={field.defaultValue}
+                defaultValue={isRotateMode ? undefined : field.defaultValue}
               />
             )}
           </Form.Item>

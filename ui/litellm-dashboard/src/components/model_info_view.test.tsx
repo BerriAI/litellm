@@ -40,6 +40,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useModelHub: (...args: any[]) => mockUseModelHub(...args),
 }));
 
+const mockUseProviderFields = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
+  useProviderFields: (...args: any[]) => mockUseProviderFields(...args),
+}));
+
 const mockUseModelCostMap = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
@@ -109,6 +114,51 @@ describe("ModelInfoView", () => {
       data: {
         data: [],
       },
+      isLoading: false,
+      error: null,
+    });
+
+    mockUseProviderFields.mockReturnValue({
+      data: [
+        {
+          provider: "openai",
+          provider_display_name: "OpenAI",
+          litellm_provider: "openai",
+          credential_fields: [
+            {
+              key: "api_key",
+              label: "OpenAI API Key",
+              field_type: "password",
+              required: true,
+            },
+            {
+              key: "organization",
+              label: "OpenAI Organization",
+              field_type: "text",
+              required: false,
+            },
+          ],
+        },
+        {
+          provider: "bedrock",
+          provider_display_name: "Amazon Bedrock",
+          litellm_provider: "bedrock",
+          credential_fields: [
+            {
+              key: "aws_access_key_id",
+              label: "AWS Access Key ID",
+              field_type: "text",
+              required: true,
+            },
+            {
+              key: "aws_secret_access_key",
+              label: "AWS Secret Access Key",
+              field_type: "password",
+              required: true,
+            },
+          ],
+        },
+      ],
       isLoading: false,
       error: null,
     });
@@ -716,6 +766,190 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
+    });
+  });
+
+  describe("Authentication section (LIT-3169)", () => {
+    const manualCredentialModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        // Seed BOTH credential fields so the "blank preserves existing" test
+        // can prove that leaving the form field empty does not wipe the
+        // already-stored upstream value.
+        api_key: "sk-EXISTING-KEY",
+        organization: "org-EXISTING",
+        litellm_credential_name: undefined,
+      },
+    };
+
+    const mountWithManualCredentialModel = () => {
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [manualCredentialModelData] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({
+        data: [manualCredentialModelData],
+      });
+      mockCredentialListCall.mockResolvedValue({ credentials: [] });
+    };
+
+    const mountWithSharedCredentialModel = () => {
+      const shared = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          litellm_credential_name: "shared-openai-creds",
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [shared] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [shared] });
+    };
+
+    const startEditing = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.getByText("Model Settings")).toBeInTheDocument();
+      });
+      const editButton = screen.getByRole("button", { name: /edit settings/i });
+      await user.click(editButton);
+    };
+
+    it("shows the Authentication heading", async () => {
+      mountWithManualCredentialModel();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await waitFor(() => {
+        expect(screen.getByText("Authentication")).toBeInTheDocument();
+      });
+    });
+
+    it("shows a shared-credential pointer when the deployment uses a named credential", async () => {
+      mountWithSharedCredentialModel();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await waitFor(() => {
+        expect(screen.getByTestId("auth-section-shared")).toBeInTheDocument();
+      });
+      const sharedSection = screen.getByTestId("auth-section-shared");
+      expect(sharedSection.textContent).toMatch(/uses the shared credential/i);
+      expect(sharedSection.textContent).toMatch(/shared-openai-creds/);
+      expect(screen.queryByPlaceholderText(/leave blank to keep current/i)).not.toBeInTheDocument();
+    });
+
+    it("renders rotate-mode provider auth fields with the leave-blank placeholder when editing a manual-credential deployment", async () => {
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI API Key")).toBeInTheDocument();
+      });
+      const placeholders = screen.getAllByPlaceholderText(/leave blank to keep current/i);
+      expect(placeholders.length).toBeGreaterThan(0);
+    });
+
+    it("PATCHes only non-empty Authentication values; blanks preserve existing credentials", async () => {
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI API Key")).toBeInTheDocument();
+      });
+
+      const apiKeyInput = screen
+        .getAllByPlaceholderText(/leave blank to keep current/i)
+        .find((el) => (el as HTMLInputElement).type === "password");
+      // Defensive: surface a meaningful failure if the password rotate input
+      // isn't rendered, rather than a cryptic TypeError on the next line.
+      expect(apiKeyInput).toBeDefined();
+      await user.type(apiKeyInput as HTMLInputElement, "sk-ROTATED-KEY");
+
+      const saveButton = screen.getByRole("button", { name: /save changes/i });
+      await user.click(saveButton);
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+      const lastCall = mockModelPatchUpdateCall.mock.calls.at(-1)!;
+      const updateData = lastCall[1] as any;
+      // The filled rotate field wins over the existing api_key merged from
+      // parsedExtraParams above.
+      expect(updateData.litellm_params.api_key).toBe("sk-ROTATED-KEY");
+      // The blank rotate field must NOT clobber the existing organization
+      // value that came through parsedExtraParams — the seeded
+      // "org-EXISTING" should flow through unchanged.
+      expect(updateData.litellm_params.organization).toBe("org-EXISTING");
+    });
+
+    it("does not render api_base or organization inputs inside the Authentication section (LIT-3169 P1 regression)", async () => {
+      // Greptile P1 (PR #29172): when the provider metadata declares api_base
+      // or organization as credential fields, the Authentication section used
+      // to render them, which (a) created a duplicate Form.Item bound to the
+      // same key and (b) let a blank input in the rotate section wipe the
+      // existing stored value via the explicit `organization: values.organization`
+      // spread in handleModelUpdate. The fix filters those keys out of
+      // providerCredentialFields entirely.
+      mountWithManualCredentialModel();
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText("OpenAI API Key")).toBeInTheDocument();
+      });
+
+      // Both the dedicated top-level inputs and the Authentication section are
+      // mounted; we should still only see exactly ONE "Organization" label
+      // (the dedicated one above the Authentication section), not two.
+      const orgInputs = screen.queryAllByText("OpenAI Organization");
+      expect(orgInputs.length).toBe(0);
+      // And there should be no second API Base input under Authentication.
+      const apiBaseLabels = screen.queryAllByLabelText(/^API Base$/i);
+      expect(apiBaseLabels.length).toBeLessThanOrEqual(1);
+
+      // Now confirm the save path: blank rotate-mode submit does NOT include
+      // organization in the credential overrides, even though the provider
+      // metadata declared organization as a credential field.
+      const saveButton = screen.getByRole("button", { name: /save changes/i });
+      await user.click(saveButton);
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+      const lastCall = mockModelPatchUpdateCall.mock.calls.at(-1)!;
+      const updateData = lastCall[1] as any;
+      // api_key was untouched and there is no Authentication-section input
+      // for organization, so neither should appear as user-typed overrides.
+      // (organization may still be in the payload via the dedicated top-level
+      // spread `organization: values.organization` — that's the pre-existing
+      // behavior unrelated to LIT-3169.)
+      expect(updateData.litellm_params.api_key).toBe("sk-EXISTING-KEY");
+    });
+
+    it("falls back to a no-fields message when the provider has no credential metadata", async () => {
+      const unknownProviderModel = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          custom_llm_provider: "unknown-fake-provider",
+          litellm_credential_name: undefined,
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [unknownProviderModel] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [unknownProviderModel] });
+
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await startEditing(user);
+      await waitFor(() => {
+        expect(screen.getByText(/No provider-specific authentication fields/i)).toBeInTheDocument();
+      });
     });
   });
 });

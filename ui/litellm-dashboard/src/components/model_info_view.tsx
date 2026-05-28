@@ -20,6 +20,9 @@ import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
+import ProviderSpecificFields from "./add_model/provider_specific_fields";
+import { provider_map, Providers } from "./provider_info_helpers";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import CacheControlSettings from "./add_model/cache_control_settings";
@@ -78,6 +81,7 @@ export default function ModelInfoView({
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+  const { data: providerMetadataList } = useProviderFields();
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -225,6 +229,52 @@ export default function ModelInfoView({
     NotificationsManager.success("Credential stored successfully");
   };
 
+  const providerSlug: string = (localModelData?.litellm_params?.custom_llm_provider as string | undefined) ?? "";
+  const providerMetadata = useMemo(() => {
+    if (!providerMetadataList || !providerSlug) return undefined;
+    const slugLower = providerSlug.toLowerCase();
+    return providerMetadataList.find(
+      (p) =>
+        p.provider?.toLowerCase() === slugLower ||
+        p.litellm_provider?.toLowerCase() === slugLower ||
+        p.provider_display_name?.toLowerCase() === slugLower,
+    );
+  }, [providerMetadataList, providerSlug]);
+  // Skip fields that are already rendered by the dedicated form items above
+  // (`api_base`, `organization`). Re-rendering them inside the Authentication
+  // section would create a duplicate Form.Item bound to the same key — Ant
+  // Design would silently overwrite the value from the existing top-level
+  // input with the rotate-mode blank, wiping the stored value on save.
+  const PROVIDER_FIELDS_OWNED_BY_MAIN_FORM = ["api_base", "organization"];
+  const providerCredentialFields = useMemo(
+    () =>
+      (providerMetadata?.credential_fields ?? []).filter(
+        (f) => !PROVIDER_FIELDS_OWNED_BY_MAIN_FORM.includes(f.key),
+      ),
+    [providerMetadata],
+  );
+  const providerCredentialFieldKeys = useMemo(
+    () => providerCredentialFields.map((f) => f.key),
+    [providerCredentialFields],
+  );
+  // Map the raw provider slug back to the display-name enum understood by
+  // ProviderSpecificFields. Falls back to the raw slug if we cannot resolve
+  // it; ProviderSpecificFields already supports raw-slug lookups via its
+  // internal cache.
+  const providerEnumName = useMemo<Providers>(() => {
+    if (!providerSlug) return providerSlug as unknown as Providers;
+    const enumKey = Object.keys(provider_map).find(
+      (key) => provider_map[key].toLowerCase() === providerSlug.toLowerCase(),
+    );
+    if (enumKey) {
+      return Providers[enumKey as keyof typeof Providers];
+    }
+    return providerSlug as unknown as Providers;
+  }, [providerSlug]);
+  const usingNamedCredential: boolean = Boolean(
+    localModelData?.litellm_params?.litellm_credential_name,
+  );
+
   const handleModelUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
@@ -313,6 +363,23 @@ export default function ModelInfoView({
         updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
+      }
+
+      // Apply provider Authentication field overrides. Only non-empty values
+      // are written, so leaving the form fields blank preserves the existing
+      // upstream credentials (the existing values are already merged from
+      // parsedExtraParams above). For deployments using a shared named
+      // credential the Authentication section is not rendered, so no overrides
+      // will be present in `values`.
+      for (const fieldKey of providerCredentialFieldKeys) {
+        const newValue = values[fieldKey];
+        if (
+          newValue !== undefined &&
+          newValue !== null &&
+          newValue !== ""
+        ) {
+          updatedLitellmParams[fieldKey] = newValue;
+        }
       }
 
       // Parse the model_info from the form values
@@ -1188,6 +1255,48 @@ export default function ModelInfoView({
                           )}
                         </div>
                       )}
+
+                      {/* Authentication Section: rotate provider credentials in-place */}
+                      <div data-testid="auth-section">
+                        <Text className="font-medium">Authentication</Text>
+                        {usingNamedCredential ? (
+                          <div
+                            className="mt-1 p-3 bg-gray-50 rounded text-sm text-gray-700"
+                            data-testid="auth-section-shared"
+                          >
+                            This deployment uses the shared credential{" "}
+                            <span className="font-mono">
+                              {localModelData.litellm_params.litellm_credential_name}
+                            </span>
+                            . Rotate the credential on the <strong>Credentials</strong>{" "}
+                            tab.
+                          </div>
+                        ) : isEditing ? (
+                          providerCredentialFields.length > 0 ? (
+                            <>
+                              <Text className="text-xs text-gray-500 mb-2 block">
+                                Leave any field blank to keep the current value. Only
+                                values you enter will be sent in the update.
+                              </Text>
+                              <ProviderSpecificFields
+                                selectedProvider={providerEnumName}
+                                mode="rotate"
+                                skipKeys={PROVIDER_FIELDS_OWNED_BY_MAIN_FORM}
+                              />
+                            </>
+                          ) : (
+                            <div className="mt-1 p-2 bg-gray-50 rounded text-gray-500 text-sm">
+                              No provider-specific authentication fields for{" "}
+                              <span className="font-mono">{providerSlug || "this provider"}</span>
+                              .
+                            </div>
+                          )
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded text-gray-500 text-sm">
+                            Authentication configured. Switch to edit to rotate.
+                          </div>
+                        )}
+                      </div>
 
                       {/* Cache Control Section */}
                       {isEditing ? (
