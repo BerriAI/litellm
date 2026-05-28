@@ -2893,3 +2893,186 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     ):
         leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
         assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# LIT-3408: keys with tpm_limit smaller than the
+# DEFAULT_MAX_TOKENS_ESTIMATE // 4 (~1024) output-budget floor used to fail
+# the very first request with 429 OVER_LIMIT -- counter started at 0 but the
+# unconditional reservation floor instantly exhausted any low TPM budget.
+# The cap only fires when the client did NOT set max_tokens explicitly;
+# when the client declares a budget the original limit enforcement holds.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tpm_limit", [1, 50, 100, 500, 1023, 1024, 5000])
+async def test_lit3408_first_request_passes_under_small_tpm_limit(tpm_limit):
+    """First chat without max_tokens must pass on a fresh small-tpm key."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-lit3408-{tpm_limit}"),
+        tpm_limit=tpm_limit,
+    )
+    data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+
+@pytest.mark.asyncio
+async def test_lit3408_backpressure_still_holds_on_small_tpm_limit():
+    """After the first request fills the cap, second is rejected with 429."""
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-burst"),
+        tpm_limit=100,
+    )
+
+    def fresh_data():
+        return {
+            "model": "azure-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=fresh_data(),
+        call_type="completion",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=fresh_data(),
+            call_type="completion",
+        )
+    assert excinfo.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_lit3408_cap_uses_smallest_tpm_across_multi_scope_descriptors():
+    """Cap must respect the smallest TPM bucket across ALL descriptors."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-multi"),
+        tpm_limit=10_000,
+        user_id="u-tight",
+        user_tpm_limit=50,
+    )
+    data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+
+@pytest.mark.asyncio
+async def test_lit3408_cap_inert_when_no_tpm_descriptors():
+    """RPM-only keys (no TPM descriptors) keep working."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-rpm-only"),
+        rpm_limit=5,
+        tpm_limit=None,
+    )
+    data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=data,
+        call_type="completion",
+    )
+
+
+@pytest.mark.asyncio
+async def test_lit3408_cap_does_not_apply_when_explicit_max_tokens_set():
+    """When client sets max_tokens exceeding TPM, the original reject path holds."""
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-lit3408-explicit"),
+        tpm_limit=10,
+    )
+    data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "x" * 200}],
+        "max_tokens": 200,
+    }
+    with pytest.raises(HTTPException) as excinfo:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+    assert excinfo.value.status_code == 429
