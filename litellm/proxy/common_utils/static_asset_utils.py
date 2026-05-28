@@ -50,7 +50,7 @@ def _is_svg_header(header: bytes) -> bool:
             idx = lowered.find(b"<svg", idx)
             if idx == -1:
                 return False
-            if lowered[idx + 4: idx + 5] in _SVG_TAG_BOUNDARY:
+            if lowered[idx + 4 : idx + 5] in _SVG_TAG_BOUNDARY:
                 return True
             idx += 4
     return False
