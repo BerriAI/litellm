@@ -377,11 +377,25 @@ async def responses_input_tokens(
                 detail={"error": "model parameter is required"},
             )
 
+        raw_input = body.get("input")
+        if raw_input is None or (
+            isinstance(raw_input, (str, list, dict)) and len(raw_input) == 0
+        ):
+            # Validate "input" against the raw body, not against the normalized
+            # message list. Otherwise a request with only "instructions" would
+            # produce a non-empty message list and silently bypass this check.
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "input parameter is required"},
+            )
+
         messages = _normalize_responses_input_to_messages(
             instructions=body.get("instructions"),
-            input_value=body.get("input"),
+            input_value=raw_input,
         )
         if not messages:
+            # Defence in depth: e.g. an input list that contains only items
+            # with no extractable text.
             raise HTTPException(
                 status_code=400,
                 detail={"error": "input parameter is required"},
