@@ -2825,3 +2825,57 @@ def test_lit3222_build_text_only_chunk_carries_template_ids():
     assert out.created == 42
     assert out.choices[0].delta.content == "Hello"
     assert out.choices[0].index == 0
+
+
+@pytest.mark.asyncio
+async def test_lit3222_apply_to_output_passthrough_after_unknown_event(
+    mock_user_api_key,
+):
+    """
+    Greptile P1 (PR #29134): once an unknown stream event arrives, the
+    "switched to transparent passthrough" warning must be truthful — i.e.,
+    any subsequent ModelResponseStream chunks must be forwarded UNMASKED
+    (no further Presidio calls).
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    mask_calls = []
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        mask_calls.append(text)
+        return text.replace("secret", "[REDACTED]")
+
+    guardrail.check_pii = mock_check_pii
+
+    class FakeResponsesEvent:
+        type = "response.completed"
+
+    pre_text_chunk = _lit3222_make_text_chunk(0, "Hello ")
+    post_text_chunk = _lit3222_make_text_chunk(
+        0, "tell me a secret.", finish_reason="stop"
+    )
+
+    async def mock_stream():
+        yield pre_text_chunk
+        yield FakeResponsesEvent()
+        yield post_text_chunk  # must pass through UNMASKED
+
+    received = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
+
+    # The post-event ModelResponseStream chunk was yielded verbatim
+    assert post_text_chunk in received
+
+    # check_pii must not have been invoked on the post-event text
+    for t in mask_calls:
+        assert (
+            "tell me a secret" not in t
+        ), f"check_pii unexpectedly masked post-event text: {t!r}"
