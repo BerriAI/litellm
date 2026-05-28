@@ -84,31 +84,49 @@ def _read_summary_max_tokens_setting() -> int:
     return COMPACT_SUMMARY_MAX_TOKENS
 
 
-def _check_summary_model_access(
+async def _check_summary_model_access(  # noqa: PLR0915
     user_api_key_auth: Any,
     summary_model: str,
     llm_router: Any,
 ) -> bool:
-    """Return True when the parent key/team is authorized to call ``summary_model``.
+    """Return True when every model-allowlist scope on the parent request is
+    satisfied for ``summary_model``.
 
     The summary subrequest does not pass through ``user_api_key_auth`` again,
-    so without this gate a caller whose key/team is not allowed to use
-    ``context_management_summary_model`` could still get the proxy to invoke
-    that model and return its ``<summary>`` output as a compaction block.
+    so without this gate a caller whose configured scope at any of these
+    levels excludes ``context_management_summary_model`` could still get the
+    proxy to invoke that model and return its ``<summary>`` output as a
+    compaction block. Mirrors the model-scope enforcement that
+    ``litellm.proxy.auth.common_checks`` runs for the client-requested model:
+    key, team, user (personal), project, and team-member allowlists.
 
     Returns True (allow) when ``user_api_key_auth`` is not present — SDK
     callers and tests run outside the proxy, where no key/team policy exists.
-    Returns False when either the key-level or team-level allowlist denies
-    the summary model (``ProxyException`` from ``_can_object_call_model``).
-    Unexpected errors during the check (e.g. router internals raising) fail
-    closed but are logged separately so operators can distinguish them from
-    a real access-denied response.
+    Returns False when any of the active allowlists denies the summary model
+    (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
+    Unexpected errors during an access check fail closed but are logged
+    separately so operators can distinguish them from a real access-denied
+    response. DB-lookup failures (object missing from cache or DB) skip the
+    corresponding scope — matching ``common_checks``, which only enforces a
+    scope when its backing object can be loaded.
     """
     if user_api_key_auth is None:
         return True
     try:
         from litellm.proxy._types import ProxyException
-        from litellm.proxy.auth.auth_checks import _can_object_call_model
+        from litellm.proxy.auth.auth_checks import (
+            _can_object_call_model,
+            can_project_access_model,
+            can_user_call_model,
+            get_project_object,
+            get_team_membership,
+            get_user_object,
+        )
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
     except Exception:
         return True
 
@@ -116,6 +134,8 @@ def _check_summary_model_access(
     team_id = getattr(user_api_key_auth, "team_id", None)
     team_model_aliases = getattr(user_api_key_auth, "team_model_aliases", None)
     team_models = list(getattr(user_api_key_auth, "team_models", None) or [])
+    user_id = getattr(user_api_key_auth, "user_id", None)
+    project_id = getattr(user_api_key_auth, "project_id", None)
 
     checks: Tuple[Tuple[Literal["key", "team"], List[str]], ...] = (
         ("key", key_models),
@@ -144,6 +164,119 @@ def _check_summary_model_access(
                 e,
             )
             return False
+
+    if user_id is not None and prisma_client is not None:
+        try:
+            user_obj = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "compact_20260112: user object lookup failed for "
+                "summary_model=%s access check; skipping user-level scope: %s",
+                summary_model,
+                e,
+            )
+            user_obj = None
+        if user_obj is not None:
+            try:
+                await can_user_call_model(
+                    model=summary_model,
+                    llm_router=llm_router,
+                    user_object=user_obj,
+                )
+            except ProxyException:
+                return False
+            except Exception as e:
+                verbose_logger.warning(
+                    "compact_20260112: unexpected error during user-level "
+                    "access check for summary_model=%s; denying access: %s",
+                    summary_model,
+                    e,
+                )
+                return False
+
+    if project_id is not None and prisma_client is not None:
+        try:
+            project_obj = await get_project_object(
+                project_id=project_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "compact_20260112: project object lookup failed for "
+                "summary_model=%s access check; skipping project-level scope: %s",
+                summary_model,
+                e,
+            )
+            project_obj = None
+        if project_obj is not None and project_obj.models:
+            try:
+                can_project_access_model(
+                    model=summary_model,
+                    project_object=project_obj,
+                    llm_router=llm_router,
+                )
+            except ProxyException:
+                return False
+            except Exception as e:
+                verbose_logger.warning(
+                    "compact_20260112: unexpected error during project-level "
+                    "access check for summary_model=%s; denying access: %s",
+                    summary_model,
+                    e,
+                )
+                return False
+
+    if user_id is not None and team_id is not None and prisma_client is not None:
+        try:
+            team_membership = await get_team_membership(
+                user_id=user_id,
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "compact_20260112: team membership lookup failed for "
+                "summary_model=%s access check; skipping member-level scope: %s",
+                summary_model,
+                e,
+            )
+            team_membership = None
+        member_allowed_models = (
+            team_membership.litellm_budget_table.allowed_models
+            if team_membership is not None
+            and team_membership.litellm_budget_table is not None
+            else None
+        )
+        if member_allowed_models:
+            try:
+                _can_object_call_model(
+                    model=summary_model,
+                    llm_router=llm_router,
+                    models=list(member_allowed_models),
+                    team_model_aliases=team_model_aliases,
+                    team_id=team_id,
+                    object_type="team",
+                )
+            except ProxyException:
+                return False
+            except Exception as e:
+                verbose_logger.warning(
+                    "compact_20260112: unexpected error during member-level "
+                    "access check for summary_model=%s; denying access: %s",
+                    summary_model,
+                    e,
+                )
+                return False
 
     return True
 
@@ -774,7 +907,7 @@ async def apply_compact_20260112(  # noqa: PLR0915
     # Phase C: summarize. ``augmented_system`` carries any prior compaction
     # summary so multi-round compaction does not lose accumulated history —
     # ``effective_messages`` only contains turns since the last compaction.
-    if not _check_summary_model_access(
+    if not await _check_summary_model_access(
         user_api_key_auth=user_api_key_auth,
         summary_model=summary_model,
         llm_router=llm_router,
