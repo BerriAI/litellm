@@ -4664,6 +4664,24 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             otel._emit_once(kwargs, "guardrail", "block-code", 1.0, "pre_call")
         )
 
+    def test_emit_once_handles_list_scope_parts(self):
+        """Valid guardrail metadata can include list-valued modes; dedupe
+        must normalize those values instead of using raw unhashable lists."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        guardrail_mode = ["pre_call", "post_call"]
+
+        self.assertTrue(
+            otel._emit_once(
+                kwargs, "guardrail", "custom-guardrail", 1.0, guardrail_mode
+            )
+        )
+        self.assertFalse(
+            otel._emit_once(
+                kwargs, "guardrail", "custom-guardrail", 1.0, guardrail_mode
+            )
+        )
+
     def test_emit_once_separate_handlers_each_emit(self):
         """Two distinct handler instances must each emit exactly once for the
         same scope."""
@@ -4917,6 +4935,43 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             len(guardrail_spans),
             1,
             f"Exactly one guardrail span expected per logical invocation, got {len(guardrail_spans)}",
+        )
+
+    def test_create_guardrail_span_handles_list_guardrail_mode(self):
+        """List-valued guardrail modes are valid config and must not crash
+        the OpenTelemetry dedupe key."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = self._build_kwargs()
+        kwargs["standard_logging_object"]["guardrail_information"] = [
+            {
+                "guardrail_name": "custom-guardrail",
+                "guardrail_mode": ["pre_call", "post_call"],
+                "guardrail_response": "allow",
+                "start_time": 1.0,
+                "end_time": 2.0,
+            }
+        ]
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            f"Exactly one guardrail span expected per logical invocation, got {len(guardrail_spans)}",
+        )
+        self.assertEqual(
+            guardrail_spans[0].attributes["guardrail_mode"],
+            "['pre_call', 'post_call']",
         )
 
     def test_create_guardrail_span_emits_distinct_entries(self):
