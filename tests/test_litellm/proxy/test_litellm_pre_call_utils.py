@@ -4182,6 +4182,253 @@ class TestApplyClientTagPolicyPreAuth:
             assert exc_info.value.max_budget == 0.10
 
 
+    @pytest.mark.asyncio
+    async def test_header_tags_enforced_via_common_checks(self):
+        """Defense-in-depth regression test for the
+        ``apply_client_tag_policy_pre_auth`` -> ``common_checks`` ->
+        ``_tag_max_budget_check`` wiring.
+
+        ``test_header_tags_visible_to_tag_max_budget_check`` covers the helper
+        and ``_tag_max_budget_check`` directly. Production code in
+        ``user_api_key_auth`` calls the helper and then ``common_checks``,
+        which in turn dispatches ``_tag_max_budget_check`` only when
+        ``skip_budget_checks=False``. This test exercises that wrapper path
+        so a refactor that drops the per-tag enforcement out of
+        ``common_checks`` cannot silently bypass header-tagged budget checks.
+        """
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:over-budget"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Sanity check: the helper merged the header tag into metadata so
+        # ``_tag_max_budget_check`` can see it via ``get_tags_from_request_body``.
+        assert data["metadata"]["tags"] == ["tenant:over-budget"]
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:over-budget",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:tenant:over-budget":
+                return 1.00
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:over-budget": tag_object},
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await common_checks(
+                    request_body=data,
+                    team_object=None,
+                    user_object=None,
+                    end_user_object=None,
+                    global_proxy_spend=None,
+                    general_settings={},
+                    route="/v1/chat/completions",
+                    llm_router=None,
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                    request=request_mock,
+                    skip_budget_checks=False,
+                )
+
+        assert exc_info.value.current_cost == 1.00
+        assert exc_info.value.max_budget == 0.10
+        assert "tenant:over-budget" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_header_tags_below_budget_pass_via_common_checks(self):
+        """Companion to the test above: header-tagged requests whose tag
+        spend is under budget must pass ``common_checks`` cleanly. Catches
+        the inverse regression where a refactor wires the helper or
+        ``_tag_max_budget_check`` to raise unconditionally on any header tag.
+        """
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:under-budget"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:under-budget",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.00),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:tenant:under-budget":
+                return 0.05
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:under-budget": tag_object},
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ),
+        ):
+            # Must not raise.
+            await common_checks(
+                request_body=data,
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+                request=request_mock,
+                skip_budget_checks=False,
+            )
+
+    @pytest.mark.asyncio
+    async def test_header_tags_skipped_when_budget_checks_disabled(self):
+        """When ``skip_budget_checks=True`` (e.g. free models / certain
+        routes), even an over-budget header tag must not raise. Guards
+        against accidentally promoting the per-tag check above the
+        ``skip_budget_checks`` gate.
+        """
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:over-budget"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:over-budget",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:tenant:over-budget":
+                return 1.00
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:over-budget": tag_object},
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+                return_value=True,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ),
+        ):
+            # Must not raise when budget checks are explicitly skipped.
+            await common_checks(
+                request_body=data,
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+                request=request_mock,
+                skip_budget_checks=True,
+            )
+
+
 # ============================================================================
 # Tests for #27516: provider hint resolution from deployment when the
 # user-facing model name has no provider prefix.
