@@ -4977,7 +4977,16 @@ class BedrockConverseMessagesProcessor:
         """Convert a document content block to a Bedrock DocumentBlock.
 
         Handles the Anthropic-style document format:
-        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}}
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": "..."},
+            # optional — propagated to Bedrock Converse DocumentBlock so citations
+            # work via the OpenAI / `/v1/chat/completions` contract, not only via
+            # the Bedrock passthrough endpoint.
+            "title": "human-readable doc title",
+            "context": "free-form context the model should see for this document",
+            "citations": {"enabled": true},
+        }
         """
         source = element["source"]
         source_type = source.get("type")
@@ -4992,23 +5001,56 @@ class BedrockConverseMessagesProcessor:
             mime_type=media_type, image_format=media_type.split("/")[1]
         )
 
-        # Deterministic name using the same hashing pattern as _create_bedrock_block
-        HASH_SAMPLE_BYTES = 64 * 1024
-        normalized = "".join(data.split()).encode("utf-8")
-        sample = normalized[:HASH_SAMPLE_BYTES]
-        hasher = hashlib.sha256()
-        hasher.update(sample)
-        hasher.update(str(len(normalized)).encode("utf-8"))
-        content_hash = hasher.hexdigest()[:16]
-        document_name = f"Document_{content_hash}_{doc_format}"
+        # Bedrock DocumentBlock.name has a strict allowlist:
+        #   [a-zA-Z0-9 ()\[\]-]  (no more than one consecutive whitespace), max 200 chars.
+        # Per https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+        # If the caller passes a title, sanitize it down to the allowlist so common
+        # punctuation (`.`, `,`, `:`, `_`, `'`, etc.) does not trigger a 400 from
+        # Bedrock. If the sanitized result is empty, fall back to the deterministic
+        # hash-based name (the previous default behavior).
+        def _sanitize_bedrock_document_name(raw: str) -> str:
+            # 1) keep only Bedrock-allowed characters; replace the rest with a single space
+            cleaned = re.sub(r"[^A-Za-z0-9 \-()\[\]]", " ", raw)
+            # 2) collapse consecutive whitespace down to one space
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            # 3) clamp to Bedrock's 200-char hard limit
+            return cleaned[:200]
 
-        return BedrockContentBlock(
-            document=BedrockDocumentBlock(
-                source=BedrockSourceBlock(bytes=data),
-                format=doc_format,
-                name=document_name,
-            )
+        title = element.get("title")
+        document_name: Optional[str] = None
+        if isinstance(title, str) and title.strip():
+            sanitized = _sanitize_bedrock_document_name(title)
+            if sanitized:
+                document_name = sanitized
+        if document_name is None:
+            # Deterministic name using the same hashing pattern as _create_bedrock_block
+            HASH_SAMPLE_BYTES = 64 * 1024
+            normalized = "".join(data.split()).encode("utf-8")
+            sample = normalized[:HASH_SAMPLE_BYTES]
+            hasher = hashlib.sha256()
+            hasher.update(sample)
+            hasher.update(str(len(normalized)).encode("utf-8"))
+            content_hash = hasher.hexdigest()[:16]
+            document_name = f"Document_{content_hash}_{doc_format}"
+
+        document_block: BedrockDocumentBlock = BedrockDocumentBlock(
+            source=BedrockSourceBlock(bytes=data),
+            format=doc_format,
+            name=document_name,
         )
+
+        # Forward Bedrock-Converse-native fields when the caller provided them.
+        # These power Claude/Nova citation grounding (`citationsContent` in the
+        # response) and per-document context for retrieval-style prompts.
+        citations = element.get("citations")
+        if isinstance(citations, dict) and "enabled" in citations:
+            document_block["citations"] = {"enabled": bool(citations["enabled"])}
+
+        context = element.get("context")
+        if isinstance(context, str) and context:
+            document_block["context"] = context
+
+        return BedrockContentBlock(document=document_block)
 
     @staticmethod
     def add_thinking_blocks_to_assistant_content(

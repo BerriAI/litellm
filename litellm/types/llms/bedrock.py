@@ -43,10 +43,24 @@ BedrockDocumentTypes = Literal[
 ]
 
 
-class DocumentBlock(TypedDict):
-    format: Union[BedrockDocumentTypes, str]
-    source: SourceBlock
-    name: str
+class CitationsConfigBlock(TypedDict, total=False):
+    """Bedrock Converse DocumentBlock `citations` config.
+
+    Setting `enabled=True` instructs the model to emit `citationsContent`
+    blocks in the response that reference this document.
+    See: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+    """
+
+    enabled: bool
+
+
+class DocumentBlock(TypedDict, total=False):
+    format: Required[Union[BedrockDocumentTypes, str]]
+    source: Required[SourceBlock]
+    name: Required[str]
+    # Optional Bedrock Converse fields that drive citation grounding.
+    citations: CitationsConfigBlock
+    context: str
 
 
 class ToolResultContentBlock(TypedDict, total=False):
