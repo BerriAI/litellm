@@ -2680,3 +2680,156 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def test_bedrock_converse_messages_pt_document_forwards_citations_context_title():
+    """LIT-3401: an OpenAI-contract document block with `citations`, `context`,
+    and `title` must surface those fields on the Bedrock Converse DocumentBlock.
+
+    Without this, Bedrock will not emit `citationsContent` in the response when
+    callers go through `/v1/chat/completions`, even though the passthrough path
+    already supports it natively.
+    """
+    pdf_b64 = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoK"
+        "dHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                    "title": "My Research Paper",
+                    "context": "Authored by Jane Doe in 2024.",
+                    "citations": {"enabled": True},
+                },
+                {"type": "text", "text": "Summarize with citations."},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    document = result[0]["content"][0]["document"]
+    # Caller-supplied title overrides the hashed default and is forwarded.
+    assert document["name"] == "My Research Paper"
+    assert document["format"] == "pdf"
+    # Citation grounding now reaches Bedrock.
+    assert document["citations"] == {"enabled": True}
+    assert document["context"] == "Authored by Jane Doe in 2024."
+
+
+def test_bedrock_converse_messages_pt_document_citations_disabled_is_forwarded():
+    """`citations: {enabled: False}` must be forwarded explicitly so callers can
+    opt out (the Bedrock default is False, but being explicit is allowed and
+    safer for tooling that diffs payloads)."""
+    pdf_b64 = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoK"
+        "dHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                    "citations": {"enabled": False},
+                },
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    document = result[0]["content"][0]["document"]
+    assert document["citations"] == {"enabled": False}
+    # No `context` provided → not present.
+    assert "context" not in document
+    # No `title` provided → fall back to hashed name.
+    assert document["name"].startswith("Document_")
+
+
+def test_bedrock_converse_messages_pt_document_no_citations_omits_field():
+    """Backwards-compat: when the caller does not include `citations`/`context`/
+    `title`, the produced DocumentBlock must not contain those keys (it must be
+    byte-for-byte the same shape as before LIT-3401)."""
+    pdf_b64 = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoK"
+        "dHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                },
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    document = result[0]["content"][0]["document"]
+    assert "citations" not in document
+    assert "context" not in document
+    assert document["name"].startswith("Document_")
+
+
+def test_bedrock_converse_messages_pt_document_ignores_malformed_citations():
+    """`citations` without an `enabled` key (or non-dict citations) must not
+    crash and must not be forwarded — the Bedrock API would 400 on an empty
+    citations object."""
+    pdf_b64 = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoK"
+        "dHJhaWxlcgo8PC9Sb290IDEgMCBSPj4KJSVFT0Y="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": pdf_b64,
+                    },
+                    "citations": {"unrelated": "field"},
+                    "context": "",  # empty string - should be ignored
+                    "title": "   ",  # whitespace-only - should be ignored
+                },
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    document = result[0]["content"][0]["document"]
+    assert "citations" not in document
+    assert "context" not in document
+    assert document["name"].startswith("Document_")
