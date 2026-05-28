@@ -339,7 +339,24 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      // guardrails follows the same source-of-truth rule as the keys in
+      // FORM_FIELDS_FOR_LITELLM_PARAMS: the JSON textarea wins unless the user
+      // explicitly edited the dedicated multi-select (LIT-2971).
+      if (form.isFieldTouched("guardrails")) {
+        if (
+          values.guardrails &&
+          Array.isArray(values.guardrails) &&
+          values.guardrails.length > 0
+        ) {
+          updatedLitellmParams.guardrails = values.guardrails;
+        } else {
+          delete updatedLitellmParams.guardrails;
+        }
+      } else if (
+        !("guardrails" in parsedExtraParams) &&
+        Array.isArray(values.guardrails) &&
+        values.guardrails.length > 0
+      ) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
       if (values.vector_store_ids?.length > 0) {

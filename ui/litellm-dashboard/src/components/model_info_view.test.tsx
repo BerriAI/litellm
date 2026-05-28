@@ -815,6 +815,43 @@ describe("ModelInfoView", () => {
       });
     });
 
+    it("persists guardrails change made only via the JSON textarea (Greptile P1 follow-up)", async () => {
+      const user = userEvent.setup();
+      const modelWithGuardrails = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          guardrails: ["content_filter"],
+        },
+      };
+      renderWithModel(modelWithGuardrails);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      const textarea = findLitellmParamsTextarea();
+      expect(textarea).toBeDefined();
+      if (!textarea) return;
+      const parsed = JSON.parse(textarea.value);
+      // User swaps guardrails via the JSON textarea WITHOUT touching the
+      // dedicated guardrails multi-select.
+      parsed.guardrails = ["toxicity_filter"];
+      const next = JSON.stringify(parsed, null, 2);
+      await user.clear(textarea);
+      await user.paste(next);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+      });
+
+      const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+      expect(updatePayload.litellm_params.guardrails).toEqual(["toxicity_filter"]);
+    });
+
     it("prefers the form input value when the user explicitly edits a form field", async () => {
       const user = userEvent.setup();
       renderWithModel(modelWithTpmRpm);
