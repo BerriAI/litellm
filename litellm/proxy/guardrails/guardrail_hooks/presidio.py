@@ -1149,7 +1149,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     @staticmethod
     def _is_streaming_chunk_with_content(chunk: Any) -> bool:
-        """Return True if chunk is a ModelResponseStream whose first choice carries text content."""
+        """Return True if chunk is a ModelResponseStream whose first choice carries text content.
+
+        IMPORTANT: a chunk that carries BOTH `delta.content` and `finish_reason`
+        (some Bedrock Converse / OpenAI-compatible providers emit a combined final
+        chunk) still returns True here, so the text portion goes through the
+        masking / unmasking pipeline. Callers must subsequently emit a separate
+        finish-only chunk for the `finish_reason` payload via
+        `_clone_chunk_finish_only`.
+        """
         if not isinstance(chunk, ModelResponseStream):
             return False
         choices = getattr(chunk, "choices", None) or []
@@ -1165,7 +1173,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         tool_calls = getattr(delta, "tool_calls", None) or []
         if tool_calls:
             return False
-        return getattr(first, "finish_reason", None) is None
+        return True
+
+    @staticmethod
+    def _clone_chunk_finish_only(
+        chunk: "ModelResponseStream",
+    ) -> Optional["ModelResponseStream"]:
+        """Build a finish-reason-only mirror of `chunk` (content stripped, tool_calls stripped).
+
+        Returns None if the source chunk has no `finish_reason` to convey.
+        """
+        from litellm.types.utils import Delta, StreamingChoices
+
+        if not chunk.choices:
+            return None
+        src_choice = chunk.choices[0]
+        finish_reason = getattr(src_choice, "finish_reason", None)
+        if finish_reason is None:
+            return None
+        return ModelResponseStream(
+            id=getattr(chunk, "id", None),
+            object="chat.completion.chunk",
+            created=getattr(chunk, "created", None),
+            model=getattr(chunk, "model", None),
+            system_fingerprint=getattr(chunk, "system_fingerprint", None),
+            choices=[
+                StreamingChoices(
+                    index=getattr(src_choice, "index", 0),
+                    delta=Delta(content=None),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
 
     @staticmethod
     def _build_streaming_text_chunk(
@@ -1353,13 +1392,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 if self._is_streaming_chunk_with_content(chunk):
                     buffer += chunk.choices[0].delta.content
-                    if self._mask_flush_due(buffer):
+                    has_finish = (
+                        getattr(chunk.choices[0], "finish_reason", None) is not None
+                    )
+                    if has_finish or self._mask_flush_due(buffer):
                         flushed = await self._mask_buffer_to_chunk(
                             buffer, template, presidio_config, request_data
                         )
                         buffer = ""
                         if flushed is not None:
                             yield flushed
+                    if has_finish:
+                        finish_chunk = self._clone_chunk_finish_only(chunk)
+                        if finish_chunk is not None:
+                            yield finish_chunk
                     continue
 
                 # Non-text MRS chunk — flush pending masked text first, then pass through.
@@ -1446,6 +1492,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 template = chunk
                 if self._is_streaming_chunk_with_content(chunk):
                     buffer += chunk.choices[0].delta.content
+                    has_finish = (
+                        getattr(chunk.choices[0], "finish_reason", None) is not None
+                    )
+                    if has_finish:
+                        # End-of-stream — flush ALL pending text through unmasking
+                        # then emit a finish-only chunk, so an unclosed token
+                        # in the tail doesn't get lost.
+                        flushed = self._unmask_buffer_to_chunk(
+                            buffer, template, pii_tokens
+                        )
+                        buffer = ""
+                        if flushed is not None:
+                            yield flushed
+                        finish_chunk = self._clone_chunk_finish_only(chunk)
+                        if finish_chunk is not None:
+                            yield finish_chunk
+                        continue
                     safe, tail = self._split_unmask_safe_prefix(buffer, pii_tokens)
                     if safe:
                         flushed = self._unmask_buffer_to_chunk(
