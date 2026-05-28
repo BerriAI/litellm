@@ -2100,7 +2100,17 @@ async def _process_single_key_update(
     # callers that passed a key_alias (rather than a raw/hashed token) write
     # against the correct row instead of a string that doesn't exist in the
     # `token` column.
-    resolved_token = existing_key_row.token
+    if existing_key_row.token is None:
+        # Defensive: every row returned by `_get_and_validate_existing_key`
+        # is matched by either a `token`-column find or a `key_alias` lookup
+        # — both of which select rows whose `token` is populated. Surface a
+        # clean 500 if that invariant is ever violated, rather than crashing
+        # later with a misleading TypeError inside the hash/cache helpers.
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Resolved key row has no token column."},
+        )
+    resolved_token: str = existing_key_row.token
     _data = {**non_default_values, "token": resolved_token}
     response = await prisma_client.update_data(token=resolved_token, data=_data)
 
@@ -2554,7 +2564,12 @@ async def update_key_fn(  # noqa: PLR0915
         # cache invalidation; the alias string never enters the `token`
         # column. Echo the original input back in the response so the caller
         # sees the same identifier they sent.
-        resolved_token = existing_key_row.token
+        if existing_key_row.token is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Resolved key row has no token column."},
+            )
+        resolved_token: str = existing_key_row.token
         _data = {**non_default_values, "token": resolved_token}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
