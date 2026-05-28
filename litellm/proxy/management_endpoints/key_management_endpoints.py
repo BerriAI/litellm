@@ -1920,15 +1920,26 @@ async def _get_and_validate_existing_key(
     """
     Get existing key from database and validate it exists.
 
+    Accepts either a raw/hashed token value (``sk-...`` or its sha256 hash)
+    or a human-readable ``key_alias`` so that callers can rotate or update
+    a key without holding the original secret material.
+
+    Lookup order:
+    1. Hash the incoming string (no-op unless it starts with ``sk-``) and
+       query the ``token`` column via ``find_unique``.
+    2. If that returns ``None``, fall back to a ``key_alias`` lookup via
+       ``find_first``. The alias is matched verbatim — we never pass a
+       hashed value into the alias query.
+
     Args:
-        token: The key token to look up
-        prisma_client: Prisma client instance
+        token: A token or a key_alias to resolve to a verification-token row.
+        prisma_client: Prisma client instance.
 
     Returns:
-        LiteLLM_VerificationToken: The existing key row
+        LiteLLM_VerificationToken: The existing key row.
 
     Raises:
-        ProxyException: 404 if key is not found
+        ProxyException: 404 if no row matched either lookup.
     """
     if prisma_client is None:
         raise HTTPException(
@@ -1941,6 +1952,17 @@ async def _get_and_validate_existing_key(
     existing_key_row = await prisma_client.db.litellm_verificationtoken.find_unique(
         where={"token": hashed_token}
     )
+
+    if existing_key_row is None:
+        # Fall back to key_alias lookup so callers can update/rotate a key
+        # by its alias without exposing the underlying token. Mirrors the
+        # alias-based affordance already provided by /key/delete via
+        # `key_aliases`.
+        existing_key_row = (
+            await prisma_client.db.litellm_verificationtoken.find_first(
+                where={"key_alias": token}
+            )
+        )
 
     if existing_key_row is None:
         raise ProxyException(
@@ -2070,12 +2092,17 @@ async def _process_single_key_update(
             detail={"error": "Database not connected"},
         )
 
-    _data = {**non_default_values, "token": update_key_request.key}
-    response = await prisma_client.update_data(token=update_key_request.key, data=_data)
+    # Use the resolved DB token for all downstream DB writes / cache work so
+    # callers that passed a key_alias (rather than a raw/hashed token) write
+    # against the correct row instead of a string that doesn't exist in the
+    # `token` column.
+    resolved_token = existing_key_row.token
+    _data = {**non_default_values, "token": resolved_token}
+    response = await prisma_client.update_data(token=resolved_token, data=_data)
 
     # Delete cache
     await _delete_cache_key_object(
-        hashed_token=_hash_token_if_needed(update_key_request.key),
+        hashed_token=resolved_token,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -2376,7 +2403,7 @@ async def update_key_fn(  # noqa: PLR0915
     Update an existing API key's parameters.
 
     Parameters:
-    - key: str - The key to update
+    - key: str - The key to update. Accepts either the raw/hashed token (``sk-...`` or its sha256 hash) **or** the ``key_alias`` of an existing key, so callers can rotate or update a key by alias without needing the original secret.
     - key_alias: Optional[str] - User-friendly key alias
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
@@ -2517,15 +2544,22 @@ async def update_key_fn(  # noqa: PLR0915
             existing_key_alias=existing_key_row.key_alias,
         )
 
-        _data = {**non_default_values, "token": key}
+        # If the caller passed a key_alias instead of the raw token, the row was
+        # resolved via the alias fallback in `_get_and_validate_existing_key`.
+        # Use `existing_key_row.token` (already hashed) for the DB write and
+        # cache invalidation; the alias string never enters the `token`
+        # column. Echo the original input back in the response so the caller
+        # sees the same identifier they sent.
+        resolved_token = existing_key_row.token
+        _data = {**non_default_values, "token": resolved_token}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
-        response = await prisma_client.update_data(token=key, data=_data)
+        response = await prisma_client.update_data(token=resolved_token, data=_data)
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
         await _delete_cache_key_object(
-            hashed_token=_hash_token_if_needed(key),
+            hashed_token=resolved_token,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
