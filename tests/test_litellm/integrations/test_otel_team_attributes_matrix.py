@@ -401,6 +401,39 @@ class TestServiceSpanCells(unittest.TestCase):
             span.attributes.get(TEAM_ALIAS_ATTR) is None
         ), "blank team_alias leaked as canonical attr"
 
+    def test_none_team_id_does_not_stamp_attrs(self):
+        """Auth path stamps ``valid_token_dict.get("team_id")`` which returns
+        ``None`` (not ``""``) for master-key / team-less callers. The call
+        site filters ``None`` values out of ``event_metadata`` so the bare
+        ``user_api_key_team_id`` attribute does not get stamped as the
+        literal string ``"None"`` (regression guard for the Greptile P2
+        nit on PR #29157)."""
+        from litellm.types.services import ServiceTypes
+
+        otel, exporter = _make_otel()
+        parent = _server_span(otel)
+        payload = self._make_payload(ServiceTypes.AUTH)
+        now = datetime.now()
+        # Simulate the call shape produced by the auth path after the
+        # call-site filters out None values: empty dict -> None.
+        asyncio.run(
+            otel.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent,
+                start_time=now,
+                end_time=now,
+                event_metadata=None,
+            )
+        )
+        parent.end()
+        span = _spans_by_name(exporter)["auth"]
+        assert span.attributes.get(TEAM_ID_ATTR) is None
+        assert span.attributes.get(TEAM_ALIAS_ATTR) is None
+        # The bare attribute names must not appear at all (no "None"
+        # string leakage).
+        assert span.attributes.get("user_api_key_team_id") is None
+        assert span.attributes.get("user_api_key_team_alias") is None
+
 
 # ---------------------------------------------------------------------------
 # Management endpoint span cells (LIT-3195): /key/generate, /team/info, etc
