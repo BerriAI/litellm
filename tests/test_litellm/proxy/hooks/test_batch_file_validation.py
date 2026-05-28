@@ -261,6 +261,112 @@ async def test_pre_call_allows_authorized_model_in_batch_file():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_skips_file_fetch_when_disabled_in_general_settings():
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["gpt-4o"])
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_batch_input_file_rate_limiting": True},
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=user,
+            cache=MagicMock(),
+            data={"input_file_id": "file-abc123"},
+            call_type="acreate_batch",
+        )
+
+    assert result == {"input_file_id": "file-abc123"}
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_skips_file_fetch_for_configured_provider():
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["gpt-4o"])
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=user,
+            cache=MagicMock(),
+            data={
+                "input_file_id": "file-abc123",
+                "custom_llm_provider": "hosted_vllm",
+            },
+            call_type="acreate_batch",
+        )
+
+    assert result["custom_llm_provider"] == "hosted_vllm"
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_decodes_model_embedded_file_id():
+    import base64
+
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    original_file_id = "file-provider-xyz"
+    encoded_payload = (
+        base64.urlsafe_b64encode(
+            f"litellm:{original_file_id};model,my-vllm-batch".encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    encoded_file_id = f"file-{encoded_payload}"
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    mock_content = MagicMock()
+    mock_content.content = b'{"custom_id": "1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "my-vllm-batch", "messages": [{"role": "user", "content": "hi"}]}}\n'
+
+    with (
+        patch(
+            "litellm.afile_content",
+            new=AsyncMock(return_value=mock_content),
+        ) as mock_afile_content,
+        patch(
+            "litellm.proxy.proxy_server.llm_router",
+            MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={
+                "api_key": "test-key",
+                "api_base": "http://vllm:8000/v1",
+                "custom_llm_provider": "hosted_vllm",
+            },
+        ),
+    ):
+        await rate_limiter.count_input_file_usage(
+            file_id=encoded_file_id,
+            custom_llm_provider="openai",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-ok", user_id="alice"),
+            data={},
+        )
+
+    mock_afile_content.assert_awaited_once()
+    assert mock_afile_content.await_args.kwargs["file_id"] == original_file_id
+    assert mock_afile_content.await_args.kwargs["custom_llm_provider"] == "hosted_vllm"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_skips_check_when_no_models_present():
     """Files without any `body.model` (corrupt or empty) must not 500;
     the rate limiter logs a warning elsewhere and proceeds."""
