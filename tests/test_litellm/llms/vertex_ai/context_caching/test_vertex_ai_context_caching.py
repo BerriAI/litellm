@@ -821,7 +821,7 @@ class TestContextCachingEndpoints:
             mock_separate.return_value = (cached_messages, non_cached_messages)
 
             optional_params = self.sample_optional_params.copy()
-            optional_params["tool_choice"] = "required"
+            optional_params["tool_choice"] = {"functionCallingConfig": {"mode": "ANY"}}
 
             with patch.object(
                 self.context_caching, "check_cache", return_value="existing_cache"
@@ -855,8 +855,9 @@ class TestContextCachingEndpoints:
         ) as mock_separate:
             mock_separate.return_value = ([], self.sample_messages)
 
+            tool_choice = {"functionCallingConfig": {"mode": "AUTO"}}
             optional_params = self.sample_optional_params.copy()
-            optional_params["tool_choice"] = "auto"
+            optional_params["tool_choice"] = tool_choice
 
             self.context_caching.check_and_create_cache(
                 messages=self.sample_messages,
@@ -873,7 +874,7 @@ class TestContextCachingEndpoints:
                 vertex_auth_header="vertext_test_token",
             )
 
-            assert optional_params.get("tool_choice") == "auto"
+            assert optional_params.get("tool_choice") == tool_choice
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -891,7 +892,7 @@ class TestContextCachingEndpoints:
             mock_separate.return_value = (cached_messages, non_cached_messages)
 
             optional_params = self.sample_optional_params.copy()
-            optional_params["tool_choice"] = "required"
+            optional_params["tool_choice"] = {"functionCallingConfig": {"mode": "ANY"}}
 
             with patch.object(
                 self.context_caching, "async_check_cache", return_value="existing_cache"
@@ -926,8 +927,9 @@ class TestContextCachingEndpoints:
         ) as mock_separate:
             mock_separate.return_value = ([], self.sample_messages)
 
+            tool_choice = {"functionCallingConfig": {"mode": "AUTO"}}
             optional_params = self.sample_optional_params.copy()
-            optional_params["tool_choice"] = "auto"
+            optional_params["tool_choice"] = tool_choice
 
             await self.context_caching.async_check_and_create_cache(
                 messages=self.sample_messages,
@@ -944,7 +946,7 @@ class TestContextCachingEndpoints:
                 vertex_auth_header="vertext_test_token",
             )
 
-            assert optional_params.get("tool_choice") == "auto"
+            assert optional_params.get("tool_choice") == tool_choice
 
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
@@ -985,8 +987,9 @@ class TestContextCachingEndpoints:
         }
         self.mock_client.post.return_value = mock_response
 
+        tool_choice = {"functionCallingConfig": {"mode": "ANY"}}
         optional_params = self.sample_optional_params.copy()
-        optional_params["tool_choice"] = "required"
+        optional_params["tool_choice"] = tool_choice
 
         self.context_caching.check_and_create_cache(
             messages=self.sample_messages,
@@ -1006,11 +1009,11 @@ class TestContextCachingEndpoints:
         self.mock_client.post.assert_called_once()
         call_args = self.mock_client.post.call_args
         assert call_args.kwargs["json"]["tools"] == self.sample_tools
-        assert call_args.kwargs["json"]["toolConfig"] == "required"
+        assert call_args.kwargs["json"]["toolConfig"] == tool_choice
         mock_cache_obj.get_cache_key.assert_called_once_with(
             messages=cached_messages,
             tools=self.sample_tools,
-            tool_choice="required",
+            tool_choice=tool_choice,
             model="gemini-1.5-pro",
         )
 
@@ -1054,8 +1057,9 @@ class TestContextCachingEndpoints:
         }
         self.mock_async_client.post = AsyncMock(return_value=mock_response)
 
+        tool_choice = {"functionCallingConfig": {"mode": "ANY"}}
         optional_params = self.sample_optional_params.copy()
-        optional_params["tool_choice"] = "required"
+        optional_params["tool_choice"] = tool_choice
 
         await self.context_caching.async_check_and_create_cache(
             messages=self.sample_messages,
@@ -1074,11 +1078,11 @@ class TestContextCachingEndpoints:
 
         call_args = self.mock_async_client.post.call_args
         assert call_args.kwargs["json"]["tools"] == self.sample_tools
-        assert call_args.kwargs["json"]["toolConfig"] == "required"
+        assert call_args.kwargs["json"]["toolConfig"] == tool_choice
         mock_cache_obj.get_cache_key.assert_called_once_with(
             messages=cached_messages,
             tools=self.sample_tools,
-            tool_choice="required",
+            tool_choice=tool_choice,
             model="gemini-1.5-pro",
         )
 
@@ -1181,7 +1185,12 @@ class TestContextCachingEndpoints:
         }
         self.mock_client.post.return_value = mock_response
 
-        function_pin = {"type": "function", "function": {"name": "get_current_weather"}}
+        function_pin = {
+            "functionCallingConfig": {
+                "mode": "ANY",
+                "allowed_function_names": ["get_current_weather"],
+            }
+        }
         optional_params = self.sample_optional_params.copy()
         optional_params["tool_choice"] = function_pin
 
@@ -1209,25 +1218,27 @@ class TestContextCachingEndpoints:
     @patch(
         "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
     )
-    @patch(
-        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
-    )
     @patch.object(ContextCachingEndpoints, "check_cache")
     def test_check_and_create_cache_distinct_tool_choices_use_distinct_keys(
         self,
         mock_check_cache,
-        mock_cache_obj,
         mock_separate,
         custom_llm_provider,
     ):
-        """Two requests with different tool_choice values must produce different cache keys."""
+        """Two requests with different tool_choice values must produce different cache keys.
+
+        Runs the real local_cache_obj.get_cache_key to verify the hashed
+        output actually differs — mocking it would only prove that distinct
+        arguments are forwarded, not that they produce distinct keys.
+        """
         cached_messages = [self.sample_messages[0]]
         non_cached_messages = [self.sample_messages[1]]
         mock_separate.return_value = (cached_messages, non_cached_messages)
-        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
         mock_check_cache.return_value = "existing_cache"
 
-        for choice in ("auto", "required"):
+        auto_tool_choice = {"functionCallingConfig": {"mode": "AUTO"}}
+        any_tool_choice = {"functionCallingConfig": {"mode": "ANY"}}
+        for choice in (auto_tool_choice, any_tool_choice):
             optional_params = self.sample_optional_params.copy()
             optional_params["tool_choice"] = choice
             self.context_caching.check_and_create_cache(
@@ -1245,13 +1256,11 @@ class TestContextCachingEndpoints:
                 vertex_auth_header="vertext_test_token",
             )
 
-        call_arg_lists = mock_cache_obj.get_cache_key.call_args_list
-        assert len(call_arg_lists) == 2
-        first_tool_choice = call_arg_lists[0].kwargs["tool_choice"]
-        second_tool_choice = call_arg_lists[1].kwargs["tool_choice"]
-        assert first_tool_choice == "auto"
-        assert second_tool_choice == "required"
-        assert first_tool_choice != second_tool_choice
+        check_cache_calls = mock_check_cache.call_args_list
+        assert len(check_cache_calls) == 2
+        first_cache_key = check_cache_calls[0].kwargs["cache_key"]
+        second_cache_key = check_cache_calls[1].kwargs["cache_key"]
+        assert first_cache_key != second_cache_key
 
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
