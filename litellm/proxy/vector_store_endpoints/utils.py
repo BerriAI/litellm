@@ -14,7 +14,6 @@ from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
-
 _DESTRUCTIVE_VECTOR_STORE_METHODS = frozenset({"DELETE", "PUT", "POST", "PATCH"})
 
 
@@ -363,7 +362,7 @@ def is_allowed_to_call_vector_store_endpoint(
                 status_code=403,
                 detail=(
                     f"Destructive {request.method.upper()} requests on "
-                    f"litellm-managed vector store \"{index_name}\" are "
+                    f'litellm-managed vector store "{index_name}" are '
                     "restricted to proxy admins. Ask your administrator to "
                     "perform this operation, or use the managed "
                     "/v1/indexes API which enforces admin-only access."
