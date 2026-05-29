@@ -195,6 +195,7 @@ class AnthropicAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        litellm_call_id: Optional[str] = None,
     ) -> Optional[AnthropicMessagesResponse]:
         """
         Translate OpenAI response to Anthropic format.
@@ -204,10 +205,13 @@ class AnthropicAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            litellm_call_id: Optional LiteLLM call ID to use as the Anthropic response ID
+                             for spend log correlation.
         """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
+            litellm_call_id=litellm_call_id,
         )
 
     def translate_completion_output_params_streaming(
@@ -215,6 +219,7 @@ class AnthropicAdapter:
         completion_stream: Any,
         model: str,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        litellm_call_id: Optional[str] = None,
     ) -> Union[AsyncIterator[bytes], None]:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -223,11 +228,14 @@ class AnthropicAdapter:
             completion_stream: The OpenAI streaming response
             model: The model name
             tool_name_mapping: Optional mapping of truncated tool names to original names.
+            litellm_call_id: Optional LiteLLM call ID to use as the Anthropic message ID
+                             for spend log correlation.
         """
         anthropic_wrapper = AnthropicStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             tool_name_mapping=tool_name_mapping,
+            litellm_call_id=litellm_call_id,
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
@@ -1342,6 +1350,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         response: ModelResponse,
         tool_name_mapping: Optional[Dict[str, str]] = None,
+        litellm_call_id: Optional[str] = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate OpenAI response to Anthropic format.
@@ -1351,6 +1360,8 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping: Optional mapping of truncated tool names to original names.
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
+            litellm_call_id: Optional LiteLLM call ID to use as the Anthropic response ID
+                             for spend log correlation.
         """
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(
@@ -1386,7 +1397,7 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
         translated_obj = AnthropicMessagesResponse(
-            id=response.id,
+            id=litellm_call_id or response.id,
             type="message",
             role="assistant",
             model=response.model or "unknown-model",
