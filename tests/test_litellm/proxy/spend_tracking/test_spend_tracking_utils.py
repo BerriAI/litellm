@@ -2147,3 +2147,85 @@ def test_get_logging_payload_reads_api_base_from_litellm_params_for_embeddings()
     )
     assert payload["call_type"] == "aembedding"
     assert payload["model_group"] == "text-embedding-3-large"
+
+
+def test_azure_embedding_handler_end_to_end_populates_api_base():
+    """
+    End-to-end regression test for https://github.com/BerriAI/litellm/issues/23768.
+
+    Calls the actual ``AzureChatCompletion.embedding`` method with a mocked
+    azure client (no real HTTP) and asserts that after the call,
+    ``logging_obj.model_call_details["litellm_params"]["api_base"]`` is
+    populated. This guards against the same regression path described in
+    PR #23770 — a future refactor dropping ``"api_base"`` from the
+    ``additional_args`` dict inside the provider handler.
+
+    The isolation-level tests above exercise ``Logging.pre_call`` directly;
+    this test additionally pins the contract on the Azure handler itself.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.azure.azure import AzureChatCompletion
+    from litellm.types.utils import EmbeddingResponse
+
+    test_api_base = "https://my-azure-endpoint.openai.azure.com/"
+
+    logging_obj = Logging(
+        model="azure/text-embedding-3-large",
+        messages=[],
+        stream=False,
+        call_type="embedding",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="test-call-id-e2e",
+        function_id="test-function-id-e2e",
+    )
+    assert logging_obj.model_call_details["litellm_params"].get("api_base", "") == ""
+
+    # Build a fake azure client with a chain of mocks that mimics
+    # azure_client.embeddings.with_raw_response.create(...).parse() ->
+    # response with .model_dump() returning a valid embedding payload.
+    fake_response = MagicMock()
+    fake_response.model_dump.return_value = {
+        "object": "list",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+        "model": "text-embedding-3-large",
+        "usage": {"prompt_tokens": 3, "total_tokens": 3},
+    }
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.parse.return_value = fake_response
+    raw_response.status_code = 200
+    fake_client = MagicMock()
+    fake_client.embeddings.with_raw_response.create.return_value = raw_response
+
+    # get_azure_openai_client validates the type of its return with
+    # isinstance(... AzureOpenAI, OpenAI), so patch it to bypass that
+    # check and return our fake client directly.
+    from openai import AzureOpenAI
+
+    fake_client.__class__ = AzureOpenAI
+
+    handler = AzureChatCompletion()
+    with patch.object(handler, "get_azure_openai_client", return_value=fake_client):
+        handler.embedding(
+            model="text-embedding-3-large",
+            input=["hello world"],
+            api_base=test_api_base,
+            api_version="2024-02-01",
+            timeout=60.0,
+            logging_obj=logging_obj,
+            model_response=EmbeddingResponse(),
+            optional_params={},
+            api_key="fake-key",
+            client=fake_client,
+            litellm_params={},
+        )
+
+    # The actual contract: after the handler runs pre_call, the api_base
+    # must have landed in litellm_params (which is what SpendLogs reads).
+    actual_api_base = logging_obj.model_call_details["litellm_params"]["api_base"]
+    assert actual_api_base == test_api_base, (
+        f"BUG: After AzureChatCompletion.embedding() ran, "
+        f"litellm_params['api_base']='{actual_api_base}' but expected "
+        f"'{test_api_base}'. The handler must pass api_base in pre_call "
+        "additional_args for SpendLogs to record the endpoint."
+    )
