@@ -395,28 +395,22 @@ async def _mint_or_reuse_object(
     if prisma_client is None:
         return raw_id
 
-    # Dedup: model_object_id is @unique so find_first by raw provider ID.
-    # Provider check happens BEFORE the access check so that a cross-provider
-    # collision (OpenAI and Azure independently issue the same raw batch ID)
-    # always falls through to minting a new row rather than raising a spurious
-    # 404 against the wrong owner.
+    # Namespace raw_id with provider so two providers that happen to issue
+    # the same raw batch/response ID get distinct rows.  The @unique constraint
+    # on model_object_id would otherwise cause a UniqueConstraintViolation when
+    # the second provider tries to insert, silently losing the persisted mapping
+    # and causing every subsequent _resolve_one for that ID to return 404.
+    # This mirrors the pattern in container_endpoints/ownership.py which uses
+    # f"{purpose}:{provider}:{raw_id}" for the same reason.
+    namespaced_model_object_id = f"passthrough:{provider}:{raw_id}"
+
+    # Dedup: look up by the namespaced key — guaranteed unique per provider.
     try:
         existing = await prisma_client.db.litellm_managedobjecttable.find_first(
-            where={"model_object_id": raw_id}
+            where={"model_object_id": namespaced_model_object_id}
         )
         if existing is not None:
-            if not _managed_id_matches_provider(existing.unified_object_id, provider):
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: object dedup hit wrong provider for "
-                    "raw prefix=%s expected=%s — minting new row",
-                    raw_id.split("_", 1)[0],
-                    provider,
-                )
-                # Cross-provider collision: fall through to mint a separate row.
-                # model_object_id is @unique so we can't insert; treat this
-                # raw ID as provider-namespaced by incorporating provider into
-                # the new managed ID (new_managed_id already does this).
-            elif not can_access_resource(
+            if not can_access_resource(
                 user_api_key_dict, existing.created_by, existing.team_id
             ):
                 # Cross-tenant collision: treat as 404 to avoid leaking
@@ -425,12 +419,11 @@ async def _mint_or_reuse_object(
                     status_code=404,
                     detail="Managed resource not found.",
                 )
-            else:
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
-                    raw_id.split("_", 1)[0],
-                )
-                return existing.unified_object_id
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
+                raw_id.split("_", 1)[0],
+            )
+            return existing.unified_object_id
     except HTTPException:
         raise
     except Exception:
@@ -451,7 +444,7 @@ async def _mint_or_reuse_object(
                 "create": {
                     "unified_object_id": managed_id,
                     "file_object": json.dumps(body_snapshot),
-                    "model_object_id": raw_id,
+                    "model_object_id": namespaced_model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
                     "team_id": user_api_key_dict.team_id,

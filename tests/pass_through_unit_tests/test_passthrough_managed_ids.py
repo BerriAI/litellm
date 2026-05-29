@@ -419,19 +419,13 @@ class TestRewriteResponseIds:
     async def test_cross_provider_batch_collision_mints_new_id(self):
         """
         If OpenAI and Azure independently issue the same raw batch ID, the
-        Azure call must NOT hit a 404 from the OpenAI row — it must mint
-        a new managed ID scoped to azure.
+        Azure call must mint its own row keyed by 'passthrough:azure:batch_shared'
+        and must NOT raise 404.  The namespaced model_object_id prevents a
+        UniqueConstraintViolation on the @unique column.
         """
-        openai_managed_id = new_managed_id("openai", "batch_shared")
-        existing_row = MagicMock()
-        existing_row.unified_object_id = openai_managed_id
-        existing_row.created_by = "user-other"
-        existing_row.team_id = "team-other"
-
         pc = _prisma_client()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            return_value=existing_row
-        )
+        # Both providers return no existing row (different namespaced keys)
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
         pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
 
         body = {"id": "batch_shared", "object": "batch", "input_file_id": None}
@@ -444,12 +438,47 @@ class TestRewriteResponseIds:
             prisma_client=pc,
             managed_files_hook=None,
         )
-        # Must mint a fresh azure-scoped ID, not raise 404
+        # Must mint a fresh azure-scoped managed ID
         assert decode(result["id"]) is not None
         assert decode(result["id"]).provider == "azure"
         assert decode(result["id"]).raw_provider_id == "batch_shared"
-        assert result["id"] != openai_managed_id
-        pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+
+        # Verify the upsert stored the namespaced model_object_id
+        call_data = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]
+        assert (
+            call_data["create"]["model_object_id"] == "passthrough:azure:batch_shared"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_provider_batch_collision_dedup_uses_namespaced_key(self):
+        """
+        When OpenAI already has a row for batch_shared, an Azure request must
+        look up 'passthrough:azure:batch_shared' (not 'batch_shared'), find
+        nothing, and mint a new row — not raise 404 or reuse the OpenAI row.
+        """
+        pc = _prisma_client()
+        # Simulate: OpenAI row exists under 'passthrough:openai:batch_shared',
+        # but Azure lookup for 'passthrough:azure:batch_shared' returns None.
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+
+        body = {"id": "batch_shared", "object": "batch", "input_file_id": None}
+        result = await rewrite_response_ids(
+            provider="azure",
+            method="POST",
+            route="/azure/openai/batches",
+            body=body,
+            user_api_key_dict=_user("user-azure", "team-azure"),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+        # The dedup lookup must use the namespaced key
+        lookup_where = pc.db.litellm_managedobjecttable.find_first.call_args.kwargs[
+            "where"
+        ]
+        assert lookup_where["model_object_id"] == "passthrough:azure:batch_shared"
+        # Result is a valid azure-scoped managed ID
+        assert decode(result["id"]).provider == "azure"
 
     @pytest.mark.asyncio
     async def test_batch_retrieve_swaps_output_file_id(self):
