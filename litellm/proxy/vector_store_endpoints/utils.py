@@ -357,7 +357,9 @@ def is_allowed_to_call_vector_store_endpoint(
         # /azure_ai/indexes/<name> on an admin-created Azure AI Search index).
         # Default-deny destructive verbs for non-admin callers on a registered
         # litellm-managed vector store index. Admin role is bypassed above.
-        if request.method.upper() in _DESTRUCTIVE_VECTOR_STORE_METHODS:
+        if request.method.upper() in _DESTRUCTIVE_VECTOR_STORE_METHODS and not getattr(
+            litellm, "vector_store_allow_destructive_passthrough", False
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -365,7 +367,11 @@ def is_allowed_to_call_vector_store_endpoint(
                     f'litellm-managed vector store "{index_name}" are '
                     "restricted to proxy admins. Ask your administrator to "
                     "perform this operation, or use the managed "
-                    "/v1/indexes API which enforces admin-only access."
+                    "/v1/indexes API which enforces admin-only access. To "
+                    "preserve the legacy silent-allow behaviour during "
+                    "migration, set litellm.vector_store_allow_destructive_"
+                    "passthrough = True (or env var "
+                    "LITELLM_VECTOR_STORE_ALLOW_DESTRUCTIVE_PASSTHROUGH=true)."
                 ),
             )
         return None
