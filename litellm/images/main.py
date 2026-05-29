@@ -452,7 +452,6 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 extra_headers=extra_headers,
-                extra_body=extra_body,
                 client=client,
                 aimg_generation=aimg_generation,
             )
@@ -1000,7 +999,6 @@ def image_edit(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
                 extra_headers=extra_headers,
-                extra_body=extra_body,
                 client=kwargs.get("client"),
                 aimage_edit=_is_async,
             )

@@ -26,7 +26,11 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageResponse
 
-from ..image_generation.transformation import HUNYUAN_BASE_URL, HUNYUAN_QUERY_ENDPOINT
+from ..image_generation.transformation import (
+    HUNYUAN_BASE_URL,
+    HUNYUAN_QUERY_ENDPOINT,
+    extract_hunyuan_extra_params,
+)
 from .transformation import HunyuanImageEditConfig
 
 HUNYUAN_EDIT_POLLING_INTERVAL = 1.5
@@ -54,7 +58,6 @@ class HunyuanImageEdit:
         logging_obj: LiteLLMLoggingObj,
         timeout: Optional[Union[float, httpx.Timeout]],
         extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         aimage_edit: bool = False,
     ) -> Union[ImageResponse, Any]:
@@ -68,7 +71,6 @@ class HunyuanImageEdit:
                 logging_obj=logging_obj,
                 timeout=timeout,
                 extra_headers=extra_headers,
-                extra_body=extra_body,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
             )
 
@@ -107,11 +109,9 @@ class HunyuanImageEdit:
             headers=headers,
         )
         data.setdefault("logo_add", 0)
-        litellm_params_extra_body = litellm_params_dict.get("extra_body")
-        if litellm_params_extra_body:
-            data.update(litellm_params_extra_body)
-        if extra_body:
-            data.update(extra_body)
+        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
+        if extra_params:
+            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,
@@ -161,7 +161,6 @@ class HunyuanImageEdit:
         logging_obj: LiteLLMLoggingObj,
         timeout: Optional[Union[float, httpx.Timeout]],
         extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         litellm_params_dict = (
@@ -199,11 +198,9 @@ class HunyuanImageEdit:
             headers=headers,
         )
         data.setdefault("logo_add", 0)
-        litellm_params_extra_body = litellm_params_dict.get("extra_body")
-        if litellm_params_extra_body:
-            data.update(litellm_params_extra_body)
-        if extra_body:
-            data.update(extra_body)
+        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
+        if extra_params:
+            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,

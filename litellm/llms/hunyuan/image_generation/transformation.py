@@ -13,6 +13,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
@@ -25,6 +26,18 @@ else:
 HUNYUAN_BASE_URL = "https://api.cloudai.tencent.com"
 HUNYUAN_SUBMIT_ENDPOINT = "v1/aiart/openai/image/submit"
 HUNYUAN_QUERY_ENDPOINT = "v1/aiart/openai/image/query"
+
+# Keys owned by litellm that must NOT be forwarded to the Hunyuan API.
+_LITELLM_RESERVED_PARAM_KEYS: frozenset = frozenset(
+    GenericLiteLLMParams.model_fields.keys()
+) | {"model", "extra_body", "extra_headers", "drop_params"}
+
+
+def extract_hunyuan_extra_params(litellm_params: Dict) -> Dict:
+    """Return provider-specific params from litellm_params (non-litellm reserved keys)."""
+    return {
+        k: v for k, v in litellm_params.items() if k not in _LITELLM_RESERVED_PARAM_KEYS
+    }
 
 
 class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
