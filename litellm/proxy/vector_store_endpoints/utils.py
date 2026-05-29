@@ -370,8 +370,9 @@ def is_allowed_to_call_vector_store_endpoint(
                     "/v1/indexes API which enforces admin-only access. To "
                     "preserve the legacy silent-allow behaviour during "
                     "migration, set litellm.vector_store_allow_destructive_"
-                    "passthrough = True (or env var "
-                    "LITELLM_VECTOR_STORE_ALLOW_DESTRUCTIVE_PASSTHROUGH=true)."
+                    "passthrough = True (or "
+                    "litellm_settings.vector_store_allow_destructive_passthrough: "
+                    "true in proxy config)."
                 ),
             )
         return None
