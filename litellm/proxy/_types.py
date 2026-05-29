@@ -60,6 +60,14 @@ from litellm.types.videos.main import VideoObject
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
+
+# LIT-3411 shared key. Setting request_data[LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY]=True
+# opts a streaming response out of the OpenAI-style "data: [DONE]" SSE terminator.
+# Producer: litellm/proxy/google_endpoints/endpoints.py::google_stream_generate_content.
+# Consumer: litellm/proxy/proxy_server.py::async_data_generator. Defined here
+# (a leaf-import module) so both sides reference a single source of truth.
+LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY = "_litellm_skip_sse_done_terminator"
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
