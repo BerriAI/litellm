@@ -2,12 +2,12 @@
 Unit tests for BaseResponsesAPIStreamingIterator
 
 Tests core functionality including:
-1. Processing chunks and handling ResponseCompletedEvent 
+1. Processing chunks and handling ResponseCompletedEvent
 2. Ensuring _update_responses_api_response_id_with_model_id is called for final chunk
 3. Verifying ID update is NOT called for non-final chunks (delta events)
 4. Edge case handling for invalid JSON, empty chunks, and [DONE] markers
 
-These tests ensure the streaming iterator correctly processes response chunks 
+These tests ensure the streaming iterator correctly processes response chunks
 and applies model ID updates only to completed responses, as required for proper
 response tracking and logging.
 """
@@ -19,16 +19,20 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    ErrorEvent,
+    ErrorEventError,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -573,6 +577,181 @@ class TestBaseResponsesAPIStreamingIterator:
             mock_executor.submit.assert_called_once()
             submit_args = mock_executor.submit.call_args
             assert submit_args[0][0] == mock_logging_obj.failure_handler
+
+    @pytest.mark.asyncio
+    async def test_streaming_error_event_raises_litellm_exception(self):
+        """
+        OpenAI can send a top-level `error` event before response.failed. The
+        iterator should raise that as a LiteLLM exception instead of yielding it
+        as a normal stream chunk.
+        """
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        error_chunk = {
+            "type": "error",
+            "sequence_number": 2,
+            "error": {
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+                "message": "Input exceeds the model context window.",
+                "param": "input",
+            },
+        }
+
+        async def mock_aiter_bytes():
+            yield f"data: {json.dumps(error_chunk)}\n\n".encode("utf-8")
+
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_bytes = mock_aiter_bytes
+
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_failure_handler = Mock()
+        mock_logging_obj.failure_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        mock_config.transform_streaming_response.return_value = ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=2,
+            error=ErrorEventError(
+                type="invalid_request_error",
+                code="context_length_exceeded",
+                message="Input exceeds the model context window.",
+                param="input",
+            ),
+        )
+
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.4-mini",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+        )
+
+        with (
+            pytest.raises(litellm.ContextWindowExceededError) as exc_info,
+            patch(
+                "litellm.responses.streaming_iterator.run_async_function"
+            ) as mock_run_async,
+            patch("litellm.responses.streaming_iterator.executor") as mock_executor,
+        ):
+            await iterator.__anext__()
+
+        assert "context window" in str(exc_info.value)
+        assert iterator.finished is True
+        mock_run_async.assert_called_once()
+        assert (
+            mock_run_async.call_args.kwargs["async_function"]
+            == mock_logging_obj.async_failure_handler
+        )
+        mock_executor.submit.assert_called_once()
+
+    def test_sync_streaming_error_event_raises_litellm_exception(self):
+        """
+        Sync Responses API streams should raise top-level `error` events too.
+        """
+        from litellm.responses.streaming_iterator import (
+            SyncResponsesAPIStreamingIterator,
+        )
+
+        error_chunk = {
+            "type": "error",
+            "sequence_number": 2,
+            "error": {
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+                "message": "Too many requests.",
+                "param": None,
+            },
+        }
+
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.iter_bytes.return_value = [
+            f"data: {json.dumps(error_chunk)}\n\n".encode("utf-8")
+        ]
+
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_failure_handler = Mock()
+        mock_logging_obj.failure_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        mock_config.transform_streaming_response.return_value = ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=2,
+            error=ErrorEventError(
+                type="rate_limit_error",
+                code="rate_limit_exceeded",
+                message="Too many requests.",
+                param=None,
+            ),
+        )
+
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.4-mini",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+        )
+
+        with (
+            pytest.raises(litellm.RateLimitError),
+            patch(
+                "litellm.responses.streaming_iterator.run_async_function"
+            ) as mock_run_async,
+            patch("litellm.responses.streaming_iterator.executor") as mock_executor,
+        ):
+            next(iterator)
+
+        assert iterator.finished is True
+        mock_run_async.assert_called_once()
+        mock_executor.submit.assert_called_once()
+
+    def test_error_event_exception_mapping(self):
+        """Provider error metadata should keep useful LiteLLM exception types."""
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=httpx.Response(
+                400, request=httpx.Request("POST", "https://api.example.test")
+            ),
+            model="gpt-5.4-mini",
+            responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+        )
+
+        auth_event = ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=1,
+            error=ErrorEventError(
+                type="authentication_error",
+                code="invalid_api_key",
+                message="Invalid API key.",
+                param=None,
+            ),
+        )
+        default_event = ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=2,
+            error=ErrorEventError(
+                type="invalid_request_error",
+                code="bad_request",
+                message="Bad request.",
+                param="input",
+            ),
+        )
+
+        assert isinstance(
+            iterator._exception_from_error_event(auth_event),
+            litellm.AuthenticationError,
+        )
+        assert isinstance(
+            iterator._exception_from_error_event(default_event),
+            litellm.BadRequestError,
+        )
 
     def test_process_chunk_response_incomplete_calls_success_handler(self):
         """
