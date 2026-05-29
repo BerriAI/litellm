@@ -433,7 +433,11 @@ describe("FilterComponent", () => {
     });
   });
 
-  it("should not render filters that are not in orderedFilters list", async () => {
+  it("renders caller-defined filter options that are not in PRIORITY_FILTER_ORDER (LIT-3151)", async () => {
+    // Before LIT-3151, FilterComponent silently dropped any option whose name/label
+    // was not in the hardcoded whitelist (e.g. "Unknown Filter" below), which made
+    // the Filters panel on Tool Policies open to an empty grid because none of its
+    // option names matched. The new contract: every caller-supplied option renders.
     const user = userEvent.setup({ delay: null });
     const options: FilterOption[] = [
       {
@@ -454,7 +458,8 @@ describe("FilterComponent", () => {
     await user.click(filterButton);
 
     await waitFor(() => {
-      expect(screen.queryByText("Unknown Filter")).not.toBeInTheDocument();
+      expect(screen.getByText("Unknown Filter")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Enter Unknown Filter...")).toBeInTheDocument();
     });
   });
 
@@ -522,6 +527,113 @@ describe("FilterComponent", () => {
     await waitFor(() => {
       const userIdInput = screen.getByPlaceholderText("Enter User ID...") as HTMLInputElement;
       expect(userIdInput.value).toBe("");
+    });
+  });
+  it("renders filter options whose name is not in PRIORITY_FILTER_ORDER (LIT-3151)", async () => {
+    // Bug reproducer for LIT-3151. ToolPolicies passes filter names that are not
+    // on the legacy whitelist; before the fix the Filters panel opened to an
+    // empty grid because every option silently rendered as null.
+    const user = userEvent.setup({ delay: null });
+    const toolPoliciesOptions: FilterOption[] = [
+      {
+        name: "Input Policy",
+        label: "Input Policy",
+        options: [
+          { label: "Allowed", value: "allowed" },
+          { label: "Blocked", value: "blocked" },
+        ],
+      },
+      {
+        name: "Output Policy",
+        label: "Output Policy",
+        options: [
+          { label: "Allowed", value: "allowed" },
+          { label: "Redacted", value: "redacted" },
+        ],
+      },
+      {
+        name: "Team Name",
+        label: "Team Name",
+        options: [{ label: "team-a", value: "team-a" }],
+      },
+      {
+        name: "Key Name",
+        label: "Key Name",
+        options: [{ label: "key-alias-1", value: "key-alias-1" }],
+      },
+    ];
+
+    renderWithProviders(
+      <FilterComponent
+        options={toolPoliciesOptions}
+        onApplyFilters={mockOnApplyFilters}
+        onResetFilters={mockOnResetFilters}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Input Policy")).toBeInTheDocument();
+      expect(screen.getByText("Output Policy")).toBeInTheDocument();
+      expect(screen.getByText("Team Name")).toBeInTheDocument();
+      expect(screen.getByText("Key Name")).toBeInTheDocument();
+    });
+  });
+
+  it("preserves PRIORITY_FILTER_ORDER ordering when mixed with non-priority options", async () => {
+    // Whitelisted filters still come first (so view_logs / VirtualKeysTable etc.
+    // keep their existing visual ordering), with caller-defined extras rendered
+    // after in input order.
+    const user = userEvent.setup({ delay: null });
+    const mixedOptions: FilterOption[] = [
+      { name: "customExtra", label: "Custom Extra" },
+      { name: "status", label: "Status" },
+      { name: "anotherExtra", label: "Another Extra" },
+      { name: "teamId", label: "Team ID" },
+    ];
+
+    renderWithProviders(
+      <FilterComponent
+        options={mixedOptions}
+        onApplyFilters={mockOnApplyFilters}
+        onResetFilters={mockOnResetFilters}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    await waitFor(() => {
+      const labels = screen
+        .getAllByText(/^(Team ID|Status|Custom Extra|Another Extra)$/)
+        .map((el) => el.textContent);
+      // Team ID + Status come first (priority order), then caller-defined extras.
+      expect(labels).toEqual(["Team ID", "Status", "Custom Extra", "Another Extra"]);
+    });
+  });
+
+  it("handles a non-empty options array with zero priority matches (LIT-3151)", async () => {
+    // Direct regression for the Tool Policies scenario: every option is outside
+    // the whitelist. Filters panel must still render all of them.
+    const user = userEvent.setup({ delay: null });
+    const options: FilterOption[] = [
+      { name: "Project Tier", label: "Project Tier" },
+      { name: "Region", label: "Region" },
+    ];
+
+    renderWithProviders(
+      <FilterComponent
+        options={options}
+        onApplyFilters={mockOnApplyFilters}
+        onResetFilters={mockOnResetFilters}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Enter Project Tier...")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Enter Region...")).toBeInTheDocument();
     });
   });
 });

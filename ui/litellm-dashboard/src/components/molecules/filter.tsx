@@ -129,8 +129,13 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     }
   };
 
-  // Define the order of filters
-  const orderedFilters = [
+  // Render whitelisted filter names first (preserves prior ordering for view_logs,
+  // VirtualKeysTable, TeamVirtualKeysTable, etc.), then any remaining options the
+  // caller passed (e.g. "Input Policy" / "Output Policy" / "Team Name" / "Key Name"
+  // on the Tool Policies page) in input order. Before this change, options whose
+  // name/label was not in PRIORITY_FILTER_ORDER were silently dropped, so the Filters
+  // panel on Tool Policies opened to a blank/empty area (LIT-3151).
+  const PRIORITY_FILTER_ORDER = [
     "Team ID",
     "Status",
     "Organization ID",
@@ -143,6 +148,27 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Model",
     "Public model / search tool",
   ];
+
+  const orderedOptions: FilterOption[] = (() => {
+    const seen = new Set<string>();
+    const ordered: FilterOption[] = [];
+    for (const filterName of PRIORITY_FILTER_ORDER) {
+      const option = options.find(
+        (opt) => opt.label === filterName || opt.name === filterName,
+      );
+      if (option && !seen.has(option.name)) {
+        ordered.push(option);
+        seen.add(option.name);
+      }
+    }
+    for (const option of options) {
+      if (!seen.has(option.name)) {
+        ordered.push(option);
+        seen.add(option.name);
+      }
+    }
+    return ordered;
+  })();
 
   return (
     <div className="w-full">
@@ -159,10 +185,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
-          {orderedFilters.map((filterName) => {
-            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
-            if (!option) return null;
-
+          {orderedOptions.map((option) => {
             return (
               <div key={option.name} className="flex flex-col gap-2">
                 <label className="text-sm text-gray-600">{option.label || option.name}</label>
