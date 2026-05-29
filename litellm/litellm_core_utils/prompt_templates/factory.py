@@ -1233,6 +1233,7 @@ def infer_protocol_value(
 
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
+    tool_call_id: Optional[str] = None,
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
@@ -1248,6 +1249,10 @@ def _gemini_tool_call_invoke_helper(
         name=name,
         args=arguments_dict,
     )
+    if tool_call_id:
+        clean_id = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if clean_id:
+            function_call["id"] = clean_id
     return function_call
 
 
@@ -1339,6 +1344,7 @@ def _get_dummy_thought_signature() -> str:
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: Optional[str] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1384,12 +1390,26 @@ def convert_to_gemini_tool_call_invoke(
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
 
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        forward_tool_call_id = bool(
+            model
+            and VertexGeminiConfig._forward_gemini_function_call_id(
+                model, custom_llm_provider
+            )
+        )
+
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
                     gemini_function_call: Optional[VertexFunctionCall] = (
                         _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
+                            function_call_params=tool["function"],
+                            tool_call_id=(
+                                tool.get("id") if forward_tool_call_id else None
+                            ),
                         )
                     )
                     if gemini_function_call is not None:
@@ -1429,10 +1449,6 @@ def convert_to_gemini_tool_call_invoke(
                     thought_signature = provider_fields.get("thought_signature")
 
                 # If no signature found and model is gemini-3, use dummy signature
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                    VertexGeminiConfig,
-                )
-
                 if (
                     not thought_signature
                     and model
@@ -1462,6 +1478,8 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
+    model: Optional[str] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> Union[VertexPartType, List[VertexPartType]]:
     """
     OpenAI message with a tool result looks like:
@@ -1602,6 +1620,23 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
             ):
                 name = tool.get("function", {}).get("name", "")
 
+    # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).
+    # Only Google AI Studio Gemini 3+ accepts `id` on function_response parts.
+    # Vertex AI and older Gemini models reject the field with HTTP 400.
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    gemini_call_id: Optional[str] = None
+    if model and VertexGeminiConfig._forward_gemini_function_call_id(
+        model, custom_llm_provider
+    ):
+        raw_tool_call_id = message.get("tool_call_id")
+        if raw_tool_call_id and isinstance(raw_tool_call_id, str):
+            stripped_id = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+            if stripped_id:
+                gemini_call_id = stripped_id
+
     if not name:
         raise Exception(
             "Missing corresponding tool call for tool response message. Received - message={}, last_message_with_tool_calls={}".format(
@@ -1632,6 +1667,8 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
         name=name,
         response=response_data,  # type: ignore
     )
+    if gemini_call_id:
+        _function_response["id"] = gemini_call_id
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
@@ -2057,9 +2094,16 @@ def anthropic_process_openai_file_message(
     AnthropicMessagesContainerUploadParam,
 ]:
     file_message = cast(ChatCompletionFileObject, message)
-    file_data = file_message["file"].get("file_data")
-    file_id = file_message["file"].get("file_id")
-    format = file_message["file"].get("format")
+    file_sub = file_message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider="anthropic",
+        )
+    file_data = file_sub.get("file_data")
+    file_id = file_sub.get("file_id")
+    format = file_sub.get("format")
     if file_data:
         image_chunk = convert_to_anthropic_image_obj(
             openai_image_url=file_data,
@@ -3953,7 +3997,7 @@ def _convert_to_bedrock_tool_call_invoke(
         for tool in tool_calls:
             if "function" in tool:
                 tool_id = tool["id"]
-                name = tool["function"].get("name", "")
+                name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
                 arguments = tool["function"].get("arguments", "")
 
                 if not arguments or not arguments.strip():
@@ -4879,7 +4923,13 @@ class BedrockConverseMessagesProcessor:
 
     @staticmethod
     def _process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
-        file_message = message["file"]
+        file_message = message.get("file")
+        if file_message is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="bedrock",
+            )
         file_data = file_message.get("file_data")
         file_id = file_message.get("file_id")
 
@@ -4900,7 +4950,13 @@ class BedrockConverseMessagesProcessor:
     async def _async_process_file_message(
         message: ChatCompletionFileObject,
     ) -> BedrockContentBlock:
-        file_message = message["file"]
+        file_message = message.get("file")
+        if file_message is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="bedrock",
+            )
         file_data = file_message.get("file_data")
         file_id = file_message.get("file_id")
         format = file_message.get("format")
@@ -5267,16 +5323,10 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
-    """
-    Replaces any invalid characters in the input tool name with underscores
-    and ensures the resulting string is a valid identifier for Bedrock tools
-    """
+    """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
     def replace_invalid(char):
-        """
-        Bedrock tool names only supports alpha-numeric characters and underscores
-        """
-        if char.isalnum() or char == "_":
+        if char.isalnum() or char in ("_", "-"):
             return char
         return "_"
 
@@ -5436,7 +5486,7 @@ def _bedrock_tools_pt(
             raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
-        # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+        # Bedrock tool names must satisfy pattern: [a-zA-Z][a-zA-Z0-9_-]*
         name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
@@ -5534,9 +5584,7 @@ def default_response_schema_prompt(response_schema: dict) -> str:
     prompt_str = """Use this JSON schema: 
     ```json 
     {}
-    ```""".format(
-        response_schema
-    )
+    ```""".format(response_schema)
     return prompt_str
 
 

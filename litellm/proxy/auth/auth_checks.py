@@ -619,6 +619,9 @@ async def common_checks(  # noqa: PLR0915
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
         # 3. If team is in budget
@@ -658,6 +661,14 @@ async def common_checks(  # noqa: PLR0915
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+            )
+
+        if valid_token is not None:
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+                request_data=request_body,
+                user_api_key_dict=valid_token,
             )
 
         with tracer.trace("litellm.proxy.auth.common_checks.tag_max_budget_check"):
@@ -709,7 +720,6 @@ async def common_checks(  # noqa: PLR0915
             await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     _enforce_user_param_check(general_settings, request, request_body, route)
-    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
     _guardrail_modification_check(request_body, team_object)
 
@@ -1187,6 +1197,127 @@ async def get_end_user_object(
         return None
 
 
+_END_USER_VALIDATION_NEGATIVE_TTL = 60
+_END_USER_VALIDATION_POSITIVE_TTL = 300
+
+
+async def resolve_and_validate_end_user_id(
+    raw_end_user_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    route: str = "",
+) -> Optional[str]:
+    """Optionally drop end-user ids that don't resolve to a known DB row.
+
+    Default: pass-through. LiteLLM's documented pattern is that the `user`
+    field is an arbitrary caller-supplied identifier, so validation is
+    opt-in behind ``litellm.validate_end_user_id_in_db`` to preserve
+    backwards compatibility.
+
+    When the flag is set: accept the id when it matches any of
+      - LiteLLM_EndUserTable.user_id
+      - LiteLLM_UserTable.user_id
+      - LiteLLM_UserTable.user_email (case-insensitive)
+
+    If the id doesn't match but ``litellm.max_end_user_budget_id`` is set,
+    we still preserve the id so the default end-user budget is applied
+    downstream; otherwise we return None.
+
+    DB lookups reuse ``get_end_user_object`` / ``get_user_object`` so they
+    share the same cache as the rest of the auth path instead of adding new
+    raw Prisma queries.
+    """
+    if raw_end_user_id is None:
+        return None
+    if not litellm.validate_end_user_id_in_db:
+        return raw_end_user_id
+    if prisma_client is None:
+        return raw_end_user_id
+
+    cache_key = f"end_user_validation:{raw_end_user_id}"
+    cached = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached == "valid":
+        return raw_end_user_id
+    if cached == "invalid":
+        return raw_end_user_id if litellm.max_end_user_budget_id else None
+
+    is_valid = await _end_user_id_exists_in_db(
+        end_user_id=raw_end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+        route=route,
+    )
+
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value="valid" if is_valid else "invalid",
+        ttl=(
+            _END_USER_VALIDATION_POSITIVE_TTL
+            if is_valid
+            else _END_USER_VALIDATION_NEGATIVE_TTL
+        ),
+    )
+
+    if is_valid:
+        return raw_end_user_id
+    # Preserve id so the caller can still apply litellm.max_end_user_budget_id.
+    if litellm.max_end_user_budget_id:
+        return raw_end_user_id
+    return None
+
+
+async def _end_user_id_exists_in_db(
+    end_user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    route: str = "",
+) -> bool:
+    """True when the id matches an EndUser, User, or user_email row."""
+    try:
+        end_user_obj = await get_end_user_object(
+            end_user_id=end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
+        if end_user_obj is not None:
+            return True
+    except litellm.BudgetExceededError:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"end_user validation: get_end_user_object lookup failed: {e}"
+        )
+
+    try:
+        user_obj = await get_user_object(
+            user_id=end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=False,
+            user_email=end_user_id if "@" in end_user_id else None,
+        )
+        if user_obj is not None:
+            return True
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"end_user validation: get_user_object lookup failed: {e}"
+        )
+
+    return False
+
+
 @log_db_metrics
 async def get_tag_objects_batch(
     tag_names: List[str],
@@ -1644,18 +1775,38 @@ async def _cache_team_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    key = "team_id:{}".format(team_id)
-
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key=key,
+        key="team_id:{}".format(team_id),
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=LiteLLM_TeamTableCachedObj,
     )
+
+    # Invalidate the alias-keyed cache so the JWT auth path with
+    # `team_alias_jwt_field` (which reads via `get_team_object_by_alias`)
+    # doesn't keep serving the pre-mutation team after every team-write
+    # endpoint (team_model_add, team_model_delete, update_team, etc.).
+    #
+    # Why DELETE and not WRITE: `team_alias` has no UNIQUE constraint in
+    # schema.prisma. Writing this cache from the generic refresh path
+    # would let a team admin who renamed their team to collide with
+    # another team's alias silently overwrite the cached team for
+    # JWT-by-alias auth (veria-ai review on #28739). Deleting forces the
+    # next reader through `get_team_object_by_alias`, which DOES enforce
+    # uniqueness (len(teams) > 1 raises HTTPException) before populating
+    # the cache from a verified single row.
+    if team_table.team_alias:
+        alias_key = "team_alias:{}".format(team_table.team_alias)
+        user_api_key_cache.delete_cache(key=alias_key)
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+                key=alias_key
+            )
 
 
 async def _cache_key_object(
@@ -2232,7 +2383,9 @@ class ExperimentalUIJWTToken:
 
     @staticmethod
     def get_cli_jwt_auth_token(
-        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
+        user_info: LiteLLM_UserTable,
+        team_id: Optional[str] = None,
+        team_alias: Optional[str] = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2243,6 +2396,7 @@ class ExperimentalUIJWTToken:
         Args:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
+            team_alias: Team alias for the selected team, if available
 
         Returns:
             Encrypted JWT token string
@@ -2276,6 +2430,7 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id=_team_id,
+            team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
@@ -3018,44 +3173,40 @@ async def can_team_access_model(
         raise
 
 
-async def _key_access_group_grants_model(
-    model: Union[str, List[str]],
+async def get_authorized_resources_from_key_access_groups(
     valid_token: Optional[UserAPIKeyAuth],
     team_object: Optional[LiteLLM_TeamTable],
-    llm_router: Optional[Router],
-) -> bool:
+    resource_field: Literal[
+        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
+    ],
+) -> List[str]:
     """
-    Returns True if the key's `access_group_ids` expand to models that grant
-    access to `model`. Used to let a key's access group override a team's
-    model restriction in `common_checks`.
-
-    A key's access group only counts if the access group itself authorizes the
-    caller as an owner — that is, the group's `assigned_team_ids` includes the
-    key's `team_id`, or the group's `assigned_key_ids` includes the key's
-    token. This preserves the team-as-owner boundary (a team member cannot
-    escalate by naming a group assigned to a different team) while still
-    letting a group reach the key without first being added to the team's
-    `access_group_ids` list.
+    For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
+    and contribute its `resource_field` only if the group authorizes the caller
+    as an owner — that is, the group's `assigned_team_ids` includes the key's
+    `team_id`, or the group's `assigned_key_ids` includes the key's token. This
+    preserves the team-as-owner boundary while still letting a group reach the
+    key without first being added to the team's `access_group_ids` list.
     """
     if valid_token is None:
-        return False
+        return []
     key_access_group_ids = list(valid_token.access_group_ids or [])
     if not key_access_group_ids:
-        return False
+        return []
 
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
     from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
     from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
     if _prisma_client is None or _user_api_key_cache is None:
-        return False
+        return []
 
     key_team_id = valid_token.team_id or (
         team_object.team_id if team_object is not None else None
     )
     key_token = valid_token.token
 
-    authorized_models: List[str] = []
+    authorized_resources: List[str] = []
     for ag_id in key_access_group_ids:
         try:
             ag = await get_access_object(
@@ -3071,17 +3222,36 @@ async def _key_access_group_grants_model(
         )
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
         if team_authorized or key_authorized:
-            authorized_models.extend(ag.access_model_names or [])
+            authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
+    return list(set(authorized_resources))
+
+
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+) -> bool:
+    """
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+    """
+    authorized_models = await get_authorized_resources_from_key_access_groups(
+        valid_token=valid_token,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
     if not authorized_models:
         return False
     try:
         _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=list(set(authorized_models)),
-            team_model_aliases=valid_token.team_model_aliases,
-            team_id=valid_token.team_id,
+            models=authorized_models,
+            team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+            team_id=valid_token.team_id if valid_token else None,
             object_type="key",
         )
         return True

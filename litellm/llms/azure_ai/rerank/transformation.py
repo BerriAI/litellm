@@ -1,5 +1,5 @@
 """
-Translate between Cohere's `/rerank` format and Azure AI's `/rerank` format. 
+Translate between Cohere's `/rerank` format and Azure AI's `/rerank` format.
 """
 
 from typing import Optional
