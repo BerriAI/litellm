@@ -966,9 +966,12 @@ async def pass_through_request(  # noqa: PLR0915
                 prisma_client as _list_prisma,
             )
 
-            if is_passthrough_list_route(
-                _managed_id_provider, request.method, get_request_route(request)
-            ) and _list_prisma is not None:
+            if (
+                is_passthrough_list_route(
+                    _managed_id_provider, request.method, get_request_route(request)
+                )
+                and _list_prisma is not None
+            ):
                 _list_result = await list_passthrough_ids_from_db(
                     provider=_managed_id_provider,
                     route=get_request_route(request),

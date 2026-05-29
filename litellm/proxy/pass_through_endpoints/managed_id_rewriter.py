@@ -573,7 +573,13 @@ async def list_passthrough_ids_from_db(
         verbose_proxy_logger.warning(
             "managed_id_rewriter: list denied — caller has no user_id or team_id"
         )
-        return {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
+        return {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False,
+        }
 
     params = query_params or {}
     try:
@@ -636,11 +642,15 @@ async def list_passthrough_ids_from_db(
             item: Dict[str, Any] = {
                 "id": row.unified_file_id,
                 "object": "file",
-                "created_at": int(row.created_at.timestamp()) if row.created_at else None,
+                "created_at": (
+                    int(row.created_at.timestamp()) if row.created_at else None
+                ),
             }
             if isinstance(row.file_object, dict):
                 item.update(row.file_object)
-            item["id"] = row.unified_file_id  # managed ID always wins over stored raw id
+            item["id"] = (
+                row.unified_file_id
+            )  # managed ID always wins over stored raw id
             data.append(item)
     else:
         data = []
@@ -655,8 +665,16 @@ async def list_passthrough_ids_from_db(
     first_id: Optional[str]
     last_id: Optional[str]
     if rows:
-        first_id = rows[0].unified_file_id if resource_kind == "files" else rows[0].unified_object_id
-        last_id = rows[-1].unified_file_id if resource_kind == "files" else rows[-1].unified_object_id
+        first_id = (
+            rows[0].unified_file_id
+            if resource_kind == "files"
+            else rows[0].unified_object_id
+        )
+        last_id = (
+            rows[-1].unified_file_id
+            if resource_kind == "files"
+            else rows[-1].unified_object_id
+        )
     else:
         first_id = None
         last_id = None
