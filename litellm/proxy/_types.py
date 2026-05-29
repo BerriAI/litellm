@@ -1065,6 +1065,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
+    disable_global_guardrails: Optional[bool] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
@@ -4284,6 +4285,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
+    "disable_global_guardrails",
     "policies",
     "tags",
     "team_member_key_duration",
