@@ -297,6 +297,90 @@ def mock_chat_streaming_response_chunks() -> List[str]:
     ]
 
 
+def mock_chat_streaming_response_chunks_with_done_in_args() -> List[str]:
+    """Streaming chunks where a tool-call argument value contains '[DONE]'."""
+    return [
+        json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "prefix"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "Write", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        # This chunk's argument value contains "[DONE]" — must NOT terminate stream.
+        json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": "[DONE]`,"}}
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": " more args}"}}
+                            ]
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        ),
+    ]
+
+
 def mock_chat_streaming_response_chunks_bytes() -> List[bytes]:
     string_chunks = mock_chat_streaming_response_chunks()
     bytes_chunks = [chunk.encode("utf-8") + b"\n" for chunk in string_chunks]
@@ -631,6 +715,57 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
             "extraparam": "testpassingextraparam",
         }
         assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+def test_completions_streaming_tool_call_with_done_in_arguments(monkeypatch):
+    """
+    Regression: a streaming chunk whose tool-call arguments value contains
+    the string '[DONE]' must not be mistaken for the SSE termination signal.
+
+    Before the fix, BaseModelResponseIterator._handle_string_chunk used
+    `if "[DONE]" in str_line` (substring check), which caused any chunk
+    containing '[DONE]' anywhere in the line to be treated as the end-of-stream
+    sentinel, silently dropping subsequent chunks.
+    """
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    mock_chunks = mock_chat_streaming_response_chunks_with_done_in_args()
+
+    def mock_iter_lines():
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_response = MagicMock()
+    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.status_code = 200
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response):
+        response_stream: CustomStreamWrapper = litellm.completion(
+            model="databricks/dbrx-instruct-071224",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+        )
+        chunks = list(response_stream)
+
+    # Collect all tool-call argument fragments emitted by the stream.
+    all_args = "".join(
+        tc.function.arguments or ""
+        for c in chunks
+        if c.choices[0].delta.tool_calls
+        for tc in c.choices[0].delta.tool_calls
+        if tc.function and tc.function.arguments
+    )
+    # The "[DONE]" fragment must have been forwarded as content, not dropped.
+    assert (
+        "[DONE]" in all_args
+    ), f"Tool call arg '[DONE]' was dropped (regression). all_args={all_args!r}"
+    # The chunk that follows "[DONE]" must also be present.
+    assert (
+        "more args" in all_args
+    ), f"Subsequent args after '[DONE]' were dropped. all_args={all_args!r}"
 
 
 @pytest.mark.skipif(not databricks_sdk_installed, reason="Databricks SDK not installed")
