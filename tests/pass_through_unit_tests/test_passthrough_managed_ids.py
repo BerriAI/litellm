@@ -302,6 +302,29 @@ class TestRewriteResponseIds:
         assert decode(result["id"]).raw_provider_id == "resp_abc"  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
+    async def test_azure_response_create_mints_id(self):
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {
+            "id": "resp_0dce2668af072bdc006a195db1f96c8194b6217f8e0d0b3ccd",
+            "object": "response",
+            "status": "completed",
+        }
+        result = await rewrite_response_ids(
+            provider="azure",
+            method="POST",
+            route="/azure/openai/v1/responses",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert (
+            decode(result["id"]).raw_provider_id  # type: ignore[union-attr]
+            == "resp_0dce2668af072bdc006a195db1f96c8194b6217f8e0d0b3ccd"
+        )
+
+    @pytest.mark.asyncio
     async def test_no_map_entry_returns_body_unchanged(self):
         pc = _prisma_client()
         hook = _managed_files_hook()

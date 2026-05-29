@@ -128,6 +128,16 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
         ("output_file_id", "file-"),
         ("error_file_id", "file-"),
     ],
+    # --------------------------------------------------------------- responses
+    ("azure", "POST", "/v1/responses"): [
+        ("id", "resp_"),
+    ],
+    ("azure", "GET", "/v1/responses/{response_id}"): [
+        ("id", "resp_"),
+    ],
+    ("azure", "DELETE", "/v1/responses/{response_id}"): [
+        ("id", "resp_"),
+    ],
 }
 
 # Prefixes that live in the *file* table rather than the object table.
