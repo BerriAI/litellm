@@ -13,6 +13,7 @@ export interface Team {
   organization_id: string;
   created_at: string;
   keys: KeyResponse[];
+  keys_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
