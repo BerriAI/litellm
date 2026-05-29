@@ -761,6 +761,7 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
+            "proxy/passthrough_managed_ids",
             {
               type: "category",
               label: "Vertex AI",
