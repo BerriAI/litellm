@@ -1,7 +1,7 @@
 import { FilterIcon } from "@heroicons/react/outline";
 import { Button, Input, Select } from "antd";
 import debounce from "lodash/debounce";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 export interface FilterOptionCustomComponentProps {
   value?: string;
@@ -30,6 +30,25 @@ interface FilterComponentProps {
   buttonLabel?: string;
   onResetFilters: () => void;
 }
+
+// Whitelist of filter names that have an established visual order across the
+// app (view_logs, VirtualKeysTable, TeamVirtualKeysTable, FilterTeamDropdown).
+// Caller-supplied options whose name/label is NOT on this list are still rendered,
+// appended in input order (fix for LIT-3151). Module-scoped so the array is
+// allocated once at module load, not on every render.
+const PRIORITY_FILTER_ORDER: readonly string[] = [
+  "Team ID",
+  "Status",
+  "Organization ID",
+  "Key Alias",
+  "User ID",
+  "End User",
+  "Error Code",
+  "Error Message",
+  "Key Hash",
+  "Model",
+  "Public model / search tool",
+];
 
 const FilterComponent: React.FC<FilterComponentProps> = ({
   options,
@@ -135,21 +154,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   // on the Tool Policies page) in input order. Before this change, options whose
   // name/label was not in PRIORITY_FILTER_ORDER were silently dropped, so the Filters
   // panel on Tool Policies opened to a blank/empty area (LIT-3151).
-  const PRIORITY_FILTER_ORDER = [
-    "Team ID",
-    "Status",
-    "Organization ID",
-    "Key Alias",
-    "User ID",
-    "End User",
-    "Error Code",
-    "Error Message",
-    "Key Hash",
-    "Model",
-    "Public model / search tool",
-  ];
-
-  const orderedOptions: FilterOption[] = (() => {
+  const orderedOptions: FilterOption[] = useMemo(() => {
     const seen = new Set<string>();
     const ordered: FilterOption[] = [];
     for (const filterName of PRIORITY_FILTER_ORDER) {
@@ -168,7 +173,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       }
     }
     return ordered;
-  })();
+  }, [options]);
 
   return (
     <div className="w-full">
