@@ -1428,6 +1428,144 @@ async def test_prepare_key_update_data_duration_none_never_expires():
     assert result["expires"] is None
 
 
+# ---------------------------------------------------------------------------
+# LIT-3416: disable_global_guardrails toggle persists on /key/update and
+# /key/generate. Before the fix, the toggle was sent at the top level by the
+# UI; Pydantic silently dropped it because KeyRequestBase had no such field,
+# so key.metadata never received it and runtime kept running global guardrails.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lit3416_update_persists_disable_global_guardrails_true(monkeypatch):
+    """Top-level `disable_global_guardrails=true` lands in metadata."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=True)
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed", team_id="IJ", metadata={"unrelated": "kept"}
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is True
+    # Unrelated existing metadata must not be wiped
+    assert result["metadata"]["unrelated"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_lit3416_update_persists_disable_global_guardrails_false(monkeypatch):
+    """Setting the toggle back to False is also persisted (turn-off path)."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    data = UpdateKeyRequest(key="sk-1", disable_global_guardrails=False)
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed",
+        team_id="IJ",
+        metadata={"disable_global_guardrails": True},
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is False
+
+
+@pytest.mark.asyncio
+async def test_lit3416_update_omit_preserves_existing_disable_global_guardrails(
+    monkeypatch,
+):
+    """Unrelated update (e.g. just renaming the key) must not clear the toggle."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    data = UpdateKeyRequest(key="sk-1", key_alias="renamed")
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed",
+        team_id="IJ",
+        metadata={"disable_global_guardrails": True, "other": "v"},
+    )
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is True
+    assert result["metadata"]["other"] == "v"
+
+
+def test_lit3416_field_on_schema():
+    """Pydantic schema must declare the field, otherwise Pydantic v2 drops it."""
+    from litellm.proxy._types import GenerateKeyRequest, UpdateKeyRequest
+
+    assert "disable_global_guardrails" in GenerateKeyRequest.model_fields
+    assert "disable_global_guardrails" in UpdateKeyRequest.model_fields
+
+
+def test_lit3416_field_in_premium_metadata_fields():
+    """Premium-list membership is what causes prepare_metadata_fields to
+    fold the top-level value into key.metadata. Lock that in."""
+    from litellm.proxy._types import (
+        LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    )
+
+    assert (
+        "disable_global_guardrails" in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+    )
+
+
+def test_lit3416_generate_path_merges_into_metadata(monkeypatch):
+    """Mirror the metadata sweep _common_key_generation_helper runs at key
+    creation: top-level disable_global_guardrails -> data.metadata."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    from litellm.proxy._types import (
+        LiteLLM_ManagementEndpoint_MetadataFields,
+        LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    )
+    from litellm.proxy.management_endpoints.common_utils import (
+        _set_object_metadata_field,
+    )
+
+    req = GenerateKeyRequest(disable_global_guardrails=True, key_alias="lit3416")
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(req, field, None) is not None:
+            _set_object_metadata_field(req, field, getattr(req, field))
+            delattr(req, field)
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(req, field, None) is not None:
+            _set_object_metadata_field(req, field, getattr(req, field))
+            delattr(req, field)
+
+    assert req.metadata["disable_global_guardrails"] is True
+
+
+@pytest.mark.asyncio
+async def test_lit3416_update_field_alongside_existing_metadata(monkeypatch):
+    """A caller may submit metadata={...} AND top-level toggle in the same
+    request; the toggle must be merged into the same final dict (not lost
+    because the request-supplied metadata clobbered it)."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    data = UpdateKeyRequest(
+        key="sk-1",
+        metadata={"caller_field": "x"},
+        disable_global_guardrails=True,
+    )
+    existing_key = LiteLLM_VerificationToken(token="hashed", team_id="IJ")
+
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert result["metadata"]["disable_global_guardrails"] is True
+    assert result["metadata"]["caller_field"] == "x"
+
+
 @pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
