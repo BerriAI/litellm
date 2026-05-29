@@ -80,6 +80,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
+    _is_explicitly_disabled_factory,
     _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
@@ -443,6 +444,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             llm_provider=llm_provider,
         )
 
+    @staticmethod
+    def _param_explicitly_unsupported(model: str, param: str) -> bool:
+        """Whether the upstream API rejects ``param`` for ``model``.
+
+        Primary signal is the model map: ``supports_{param}: false`` flips
+        this to True via the same ``_is_explicitly_disabled_factory``
+        chain other capability gates use, so a missing flag is treated
+        as "supported".
+
+        Falls back to a model-family check for the Opus 4.7 sampling
+        deprecation (``temperature`` / ``top_p`` / ``top_k`` return 400
+        on the Anthropic Messages API per the Opus 4.7 migration guide).
+        This keeps unreleased dated 4.7 snapshots and any
+        provider-prefixed alias that isn't yet in the JSON covered.
+        """
+        try:
+            if _is_explicitly_disabled_factory(
+                model=model,
+                custom_llm_provider=None,
+                key=f"supports_{param}",
+            ):
+                return True
+        except Exception:
+            pass
+        if param in ("temperature", "top_p", "top_k"):
+            return AnthropicConfig._is_claude_4_7_model(model)
+        return False
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -474,6 +503,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             params.append("thinking")
             params.append("reasoning_effort")
+
+        # Strip sampling params the upstream API rejects for this model.
+        # Anthropic returns a 400 for ``temperature`` / ``top_p`` / ``top_k``
+        # on Claude Opus 4.7; the model map encodes this via
+        # ``supports_temperature: false`` / ``supports_top_p: false``.
+        params = [
+            p
+            for p in params
+            if not AnthropicConfig._param_explicitly_unsupported(model, p)
+        ]
 
         return params
 
@@ -1464,8 +1503,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
             elif param == "temperature":
+                if AnthropicConfig._param_explicitly_unsupported(model, "temperature"):
+                    # Anthropic Messages API rejects ``temperature`` for
+                    # Opus 4.7; silently drop rather than forwarding the
+                    # value to a guaranteed 400.
+                    continue
                 optional_params["temperature"] = value
             elif param == "top_p":
+                if AnthropicConfig._param_explicitly_unsupported(model, "top_p"):
+                    continue
                 optional_params["top_p"] = value
             elif param == "response_format" and isinstance(value, dict):
                 if any(

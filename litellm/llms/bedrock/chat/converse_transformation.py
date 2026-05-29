@@ -585,6 +585,18 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+
+        # Strip sampling params the upstream API rejects for this model.
+        # Anthropic's Messages API (surfaced via Bedrock Converse for
+        # claude-opus-4-7) returns 400 for ``temperature`` / ``top_p``;
+        # the model map encodes this via ``supports_temperature: false``
+        # / ``supports_top_p: false`` so ``drop_params=True`` strips
+        # them before the request leaves litellm.
+        supported_params = [
+            p
+            for p in supported_params
+            if not AnthropicConfig._param_explicitly_unsupported(model, p)
+        ]
         return supported_params
 
     def map_tool_choice_values(

@@ -4705,3 +4705,69 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+# --- Opus 4.7 ``temperature`` / ``top_p`` deprecation (issue #26444) ---
+#
+# Bedrock Converse surfaces the Anthropic Messages API for ``anthropic.claude-*``
+# models, so the same 400 (``temperature is deprecated for this model``) hits
+# Opus 4.7 on Bedrock. ``AmazonConverseConfig.get_supported_openai_params``
+# reads the ``supports_temperature`` / ``supports_top_p`` flags off the model
+# registry via ``AnthropicConfig._param_explicitly_unsupported`` so
+# ``drop_params=True`` strips them before the call leaves litellm.
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/eu.anthropic.claude-opus-4-7",
+        "bedrock/converse/global.anthropic.claude-opus-4-7",
+    ],
+)
+def test_bedrock_converse_opus_4_7_drops_temperature_and_top_p(monkeypatch, model):
+    """Bedrock-routed Opus 4.7 must not advertise ``temperature`` / ``top_p``."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import importlib
+
+    import litellm as _litellm
+
+    importlib.reload(_litellm)
+
+    config = AmazonConverseConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" not in params, (
+        f"temperature should be filtered for {model}; got {params!r}"
+    )
+    assert "top_p" not in params, (
+        f"top_p should be filtered for {model}; got {params!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/anthropic.claude-sonnet-4-6",
+        "bedrock/converse/us.anthropic.claude-opus-4-6",
+        "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    ],
+)
+def test_bedrock_converse_non_opus_4_7_models_keep_temperature_and_top_p(
+    monkeypatch, model
+):
+    """Regression guard: same-generation Sonnet 4.6 / Haiku 4.5 / older 3.5
+    models on Bedrock Converse must continue to advertise ``temperature``
+    and ``top_p``."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AmazonConverseConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" in params, (
+        f"temperature should remain supported for {model}; got {params!r}"
+    )
+    assert "top_p" in params, (
+        f"top_p should remain supported for {model}; got {params!r}"
+    )

@@ -2373,6 +2373,154 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
     assert "reasoning_effort" in params
 
 
+# --- Opus 4.7 ``temperature`` / ``top_p`` deprecation (issue #26444) ---
+#
+# Anthropic's Messages API returns 400 (``temperature is deprecated for this
+# model``) when ``temperature`` or ``top_p`` is sent to Claude Opus 4.7 with a
+# non-default value. The model registry encodes this as
+# ``supports_temperature: false`` / ``supports_top_p: false`` on every Opus 4.7
+# entry (Anthropic, Bedrock Converse, Vertex, Azure AI), and
+# ``AnthropicConfig`` reads those flags via ``_is_explicitly_disabled_factory``
+# to filter the supported-params list and drop the values inside
+# ``map_openai_params``. A static fallback on ``_is_claude_4_7_model`` covers
+# unreleased dated snapshots that aren't in the registry yet.
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-7",
+        "claude-opus-4-7-20260416",
+        "anthropic/claude-opus-4-7",
+    ],
+)
+def test_opus_4_7_drops_temperature_and_top_p_from_supported_params(
+    monkeypatch, model
+):
+    """Opus 4.7 must not advertise ``temperature`` / ``top_p`` so ``drop_params=True`` strips them."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    # Force a clean reload so the local JSON is honoured for the assertion.
+    import importlib
+
+    import litellm as _litellm
+
+    importlib.reload(_litellm)
+
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" not in params, (
+        f"temperature should be filtered from Opus 4.7 supported params; got {params!r}"
+    )
+    assert "top_p" not in params, (
+        f"top_p should be filtered from Opus 4.7 supported params; got {params!r}"
+    )
+
+
+def test_opus_4_7_unknown_dated_variant_falls_back_to_family_check(monkeypatch):
+    """Dated Opus 4.7 snapshots not yet in the model registry are still covered
+    by the ``_is_claude_4_7_model`` family fallback."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AnthropicConfig()
+
+    # Plausible future snapshot id not present in model_prices_and_context_window.json.
+    params = config.get_supported_openai_params(model="claude-opus-4-7-20991231")
+
+    assert "temperature" not in params
+    assert "top_p" not in params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20260219",
+        "claude-haiku-4-5",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-7-sonnet-20250219",
+        "claude-opus-4-6",
+    ],
+)
+def test_non_opus_4_7_models_still_support_temperature_and_top_p(
+    monkeypatch, model
+):
+    """Regression guard: only Opus 4.7 deprecated temperature; older models
+    (including same-generation 4.6 and reasoning-family 3.7-sonnet) must keep
+    advertising ``temperature`` and ``top_p`` so existing call sites keep working."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model=model)
+
+    assert "temperature" in params, (
+        f"temperature should remain supported for {model}; got {params!r}"
+    )
+    assert "top_p" in params, (
+        f"top_p should remain supported for {model}; got {params!r}"
+    )
+
+
+def test_opus_4_7_map_openai_params_drops_temperature_and_top_p(monkeypatch):
+    """``map_openai_params`` must not leak ``temperature`` / ``top_p`` into the
+    Anthropic request body for Opus 4.7, even when callers pass them
+    explicitly without ``drop_params=True`` (defense in depth)."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AnthropicConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9},
+        optional_params={},
+        model="claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert "temperature" not in optional_params
+    assert "top_p" not in optional_params
+
+
+def test_opus_4_6_map_openai_params_preserves_temperature_and_top_p(monkeypatch):
+    """Regression guard on the mapping site: Opus 4.6 still receives both
+    sampling params verbatim."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AnthropicConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9},
+        optional_params={},
+        model="claude-opus-4-6",
+        drop_params=False,
+    )
+
+    assert optional_params["temperature"] == 0.3
+    assert optional_params["top_p"] == 0.9
+
+
+def test_opus_4_7_drop_params_true_strips_temperature_before_transform(monkeypatch):
+    """End-to-end-shape check that mirrors issue #26444's reproduction: a
+    ``drop_params=True`` call with ``temperature`` set must produce a
+    transformed Anthropic request body that does not contain ``temperature``."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"temperature": 0.1},
+        optional_params={},
+        model="claude-opus-4-7",
+        drop_params=True,
+    )
+    body = config.transform_request(
+        model="claude-opus-4-7",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "temperature" not in body, (
+        f"temperature leaked into the Anthropic request body: {body!r}"
+    )
+
+
 def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     """
     Sonnet 4.6 should convert reasoning_effort to adaptive thinking in final request payload.
