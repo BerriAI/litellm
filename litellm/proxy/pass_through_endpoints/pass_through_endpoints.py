@@ -344,7 +344,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if litellm_call_id:
             return_headers["x-litellm-call-id"] = litellm_call_id
         if custom_headers:
-            return_headers.update(custom_headers)
+            return_headers.update(
+                {k: v for k, v in custom_headers.items() if k.lower() not in excluded_headers}
+            )
 
         return return_headers
 
