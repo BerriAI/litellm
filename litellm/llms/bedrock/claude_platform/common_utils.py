@@ -9,6 +9,19 @@ CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
 )
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 
+# workspace_id is auth metadata for the AWS gateway: it is always sent via the
+# ``anthropic-workspace-id`` HTTP header (see validate_environment /
+# validate_anthropic_messages_environment), never as a request-body field.
+# Anthropic's /v1/messages rejects unknown top-level fields, so every accepted
+# alias must be stripped from the serialized body on both the chat and the
+# /v1/messages routes.
+WORKSPACE_ID_BODY_KEYS: Tuple[str, ...] = (
+    "workspace_id",
+    "aws_workspace_id",
+    "anthropic-workspace-id",
+    "anthropic_workspace_id",
+)
+
 
 def strip_claude_platform_route(model: str) -> str:
     if model.startswith(CLAUDE_PLATFORM_BEDROCK_ROUTE):

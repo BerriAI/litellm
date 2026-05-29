@@ -8,7 +8,11 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_route
+from .common_utils import (
+    WORKSPACE_ID_BODY_KEYS,
+    BedrockClaudePlatformMixin,
+    strip_claude_platform_route,
+)
 
 
 class BedrockClaudePlatformMessagesConfig(
@@ -62,10 +66,18 @@ class BedrockClaudePlatformMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        return super().transform_anthropic_messages_request(
+        data = super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        # The /v1/messages route delegates the body build to AnthropicMessagesConfig,
+        # which spreads the optional params into AnthropicMessagesRequest. Any
+        # workspace_id alias that arrives in optional_params therefore leaks as a
+        # top-level body field unless stripped here -- mirroring the chat route in
+        # BedrockClaudePlatformConfig.transform_request.
+        for key in WORKSPACE_ID_BODY_KEYS:
+            data.pop(key, None)
+        return data

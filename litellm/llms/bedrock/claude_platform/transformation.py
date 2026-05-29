@@ -5,7 +5,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
-from .common_utils import BedrockClaudePlatformMixin
+from .common_utils import WORKSPACE_ID_BODY_KEYS, BedrockClaudePlatformMixin
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -94,16 +94,11 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        # workspace_id is auth metadata for the AWS gateway: it is sent via the
-        # ``anthropic-workspace-id`` header (see validate_environment), never as
-        # a body field. Anthropic's /v1/messages rejects unknown top-level
-        # fields, so strip every accepted alias from the serialized body.
-        for key in (
-            "workspace_id",
-            "aws_workspace_id",
-            "anthropic-workspace-id",
-            "anthropic_workspace_id",
-        ):
+        # workspace_id is auth metadata sent via the anthropic-workspace-id
+        # header (see validate_environment), never as a body field. Strip every
+        # accepted alias from the serialized body (shared with the /v1/messages
+        # route in messages_transformation.py).
+        for key in WORKSPACE_ID_BODY_KEYS:
             data.pop(key, None)
         return data
 
