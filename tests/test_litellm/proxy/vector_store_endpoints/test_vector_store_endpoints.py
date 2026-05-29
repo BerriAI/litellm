@@ -652,10 +652,10 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         assert result is None
 
     def test_endpoint_not_recognized(self):
-        """Test when endpoint doesn't match any read or write patterns."""
+        """Test that a non-destructive (GET) request on an unenumerated path still falls through silently (returns None) so the caller can run the downstream ownership check. Destructive verbs on unenumerated paths are covered separately by test_unrecognized_destructive_verbs_*."""
         # Mock request with unrecognized path
         mock_request = MagicMock(spec=Request)
-        mock_request.method = "DELETE"
+        mock_request.method = "GET"
         mock_request.url.path = "/v1/vector_stores/my-index/unknown"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
@@ -2324,3 +2324,155 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         params = response["vector_store"]["litellm_params"]
         assert params["api_key"] == REDACTED_BY_LITELM_STRING
         assert params["api_base"] == "https://api.openai.com/v1"
+
+
+class TestLit2384DestructiveVerbDefaultDeny:
+    """LIT-2384 regression: non-admin keys must not be able to DELETE/PUT/POST
+    against unenumerated paths on a registered litellm-managed vector store
+    index (e.g. DELETE /azure_ai/indexes/<name>). Previously these
+    silently returned None and fell through to the broader ownership check,
+    which let any caller with general access mutate the underlying provider
+    index. Default-deny applies to non-admins; admin role still bypasses.
+    """
+
+    @pytest.fixture
+    def mock_azure_ai_provider_config(self):
+        cfg = MagicMock()
+        cfg.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+        return cfg
+
+    @pytest.fixture
+    def non_admin_with_read_perm(self):
+        from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+        return UserAPIKeyAuth(
+            token="sk-non-admin",
+            key_name="sk-...nadm",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            metadata={"allowed_vector_store_indexes": [
+                {"index_name": "admin-created-index", "index_permissions": ["read"]}
+            ]},
+        )
+
+    @pytest.fixture
+    def proxy_admin(self):
+        from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+        return UserAPIKeyAuth(
+            token="sk-admin",
+            key_name="sk-...adm",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    @pytest.mark.parametrize("method", ["DELETE", "PUT", "POST", "PATCH"])
+    def test_unrecognized_destructive_verbs_blocked_for_non_admin(
+        self, method, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = method
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index"
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_azure_ai_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="admin-created-index",
+                    request=mock_request,
+                    user_api_key_dict=non_admin_with_read_perm,
+                )
+        assert exc.value.status_code == 403
+        # Error message references the method, index name, and the managed API
+        assert method in exc.value.detail
+        assert "admin-created-index" in exc.value.detail
+        assert "/v1/indexes" in exc.value.detail
+
+    def test_unrecognized_destructive_verbs_allowed_for_admin(
+        self, mock_azure_ai_provider_config, proxy_admin
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index"
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_azure_ai_provider_config,
+        ):
+            result = is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name="admin-created-index",
+                request=mock_request,
+                user_api_key_dict=proxy_admin,
+            )
+        # Admin bypass: returns True without consulting the endpoint table
+        assert result is True
+
+    def test_non_admin_get_on_enumerated_read_path_still_allowed(
+        self, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        """Regression guard: legitimate non-admin reads on enumerated paths
+        must NOT be blocked by the LIT-2384 default-deny."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index/docs/search"
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_azure_ai_provider_config,
+        ):
+            result = is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name="admin-created-index",
+                request=mock_request,
+                user_api_key_dict=non_admin_with_read_perm,
+            )
+        assert result is True
+
+    def test_non_admin_unrecognized_get_still_falls_through(
+        self, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        """Regression guard: non-destructive GET on an unenumerated path
+        still returns None (legacy behaviour) so the broader ownership
+        check can run downstream. Default-deny is limited to destructive
+        verbs."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index/something/else"
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_azure_ai_provider_config,
+        ):
+            result = is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name="admin-created-index",
+                request=mock_request,
+                user_api_key_dict=non_admin_with_read_perm,
+            )
+        assert result is None
+
+    def test_method_lowercase_is_handled(
+        self, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        """Defensive: lowercase request.method (some test frameworks /
+        proxies may not uppercase it) still triggers the destructive guard."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "delete"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index"
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_azure_ai_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="admin-created-index",
+                    request=mock_request,
+                    user_api_key_dict=non_admin_with_read_perm,
+                )
+        assert exc.value.status_code == 403
+
