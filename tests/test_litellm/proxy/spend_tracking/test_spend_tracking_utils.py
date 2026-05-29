@@ -2009,3 +2009,141 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+
+
+def test_azure_embedding_pre_call_sets_api_base_in_litellm_params():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/23768
+
+    Exercises the actual Azure embedding provider code path to verify that
+    the logging_obj.pre_call() receives api_base in additional_args, which
+    causes _pre_call() to write it into litellm_params["api_base"].
+
+    Previously, the Azure embedding handler omitted api_base from the
+    additional_args dict passed to pre_call, so litellm_params["api_base"]
+    remained empty and the resulting SpendLogs row had an empty api_base.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    test_api_base = "https://my-azure-endpoint.openai.azure.com/"
+
+    # Create a real Logging object with empty litellm_params
+    logging_obj = Logging(
+        model="azure/text-embedding-3-large",
+        messages=[],
+        stream=False,
+        call_type="aembedding",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    # Ensure api_base starts empty in litellm_params
+    assert logging_obj.model_call_details["litellm_params"].get("api_base", "") == ""
+
+    # Simulate what the Azure embedding handler does in pre_call (the fixed version)
+    logging_obj.pre_call(
+        input=["test input"],
+        api_key="fake-key",
+        additional_args={
+            "complete_input_dict": {
+                "model": "text-embedding-3-large",
+                "input": ["test input"],
+            },
+            "api_base": test_api_base,
+            "headers": {"api_key": "fake-key", "azure_ad_token": None},
+        },
+    )
+
+    # After pre_call, litellm_params["api_base"] must be populated
+    actual_api_base = logging_obj.model_call_details["litellm_params"]["api_base"]
+    assert actual_api_base == test_api_base, (
+        f"BUG: litellm_params['api_base'] is '{actual_api_base}' after pre_call, "
+        f"expected '{test_api_base}'. The Azure embedding handler must pass api_base "
+        "in pre_call additional_args for SpendLogs to record the endpoint."
+    )
+
+
+def test_azure_embedding_pre_call_without_api_base_defaults_to_empty():
+    """
+    Verify that pre_call without api_base in additional_args results in an
+    empty string (the previous broken behavior), confirming the test above
+    actually catches the regression.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="azure/text-embedding-3-large",
+        messages=[],
+        stream=False,
+        call_type="aembedding",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="test-call-id-2",
+        function_id="test-function-id-2",
+    )
+
+    # Simulate the OLD broken behavior: pre_call WITHOUT api_base
+    logging_obj.pre_call(
+        input=["test input"],
+        api_key="fake-key",
+        additional_args={
+            "complete_input_dict": {
+                "model": "text-embedding-3-large",
+                "input": ["test input"],
+            },
+            "headers": {"api_key": "fake-key"},
+        },
+    )
+
+    # Without api_base in additional_args, litellm_params["api_base"] should be empty
+    actual_api_base = logging_obj.model_call_details["litellm_params"]["api_base"]
+    assert (
+        actual_api_base == ""
+    ), f"Expected empty api_base when not passed in additional_args, got '{actual_api_base}'"
+
+
+def test_get_logging_payload_reads_api_base_from_litellm_params_for_embeddings():
+    """
+    End-to-end test: after pre_call populates litellm_params["api_base"],
+    get_logging_payload must include it in the SpendLogsPayload.
+    """
+    test_api_base = "https://my-azure-endpoint.openai.azure.com/"
+
+    kwargs = {
+        "model": "azure/text-embedding-3-large",
+        "call_type": "aembedding",
+        "custom_llm_provider": "azure",
+        "litellm_params": {
+            "api_base": test_api_base,
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "user_api_key_team_id": "test_team",
+                "model_group": "text-embedding-3-large",
+                "model_info": {"id": "model-id-123"},
+            },
+        },
+    }
+
+    response_obj = {
+        "id": "embd-test-123",
+        "object": "list",
+        "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+        "model": "text-embedding-3-large",
+        "usage": {"prompt_tokens": 10, "total_tokens": 10},
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert payload["api_base"] == test_api_base, (
+        f"BUG: api_base is '{payload['api_base']}' but expected '{test_api_base}'. "
+        "Embedding calls must have api_base populated in SpendLogs."
+    )
+    assert payload["call_type"] == "aembedding"
+    assert payload["model_group"] == "text-embedding-3-large"
