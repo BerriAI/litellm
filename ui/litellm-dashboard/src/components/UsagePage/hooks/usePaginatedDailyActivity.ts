@@ -165,9 +165,13 @@ export function usePaginatedDailyActivity({
 
         if (isStale()) return;
 
+        // Dedupe paginated rows once; reuse for both the early render and the
+        // multi-page accumulator to avoid redundant iteration on large payloads.
+        const mergedFirstResults = mergeDailyResults(firstPage.results);
+
         setData({
           ...firstPage,
-          results: mergeDailyResults(firstPage.results),
+          results: mergedFirstResults,
         });
 
         const totalPages = firstPage.metadata?.total_pages || 1;
@@ -183,7 +187,7 @@ export function usePaginatedDailyActivity({
         setLoading(false);
         setIsFetchingMore(true);
 
-        let accumulatedResults: DailyData[] = mergeDailyResults(firstPage.results);
+        let accumulatedResults: DailyData[] = mergedFirstResults;
         let accumulatedMetadata = { ...firstPage.metadata };
 
         for (let page = 2; page <= totalPages; page++) {
