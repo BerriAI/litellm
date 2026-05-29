@@ -174,6 +174,15 @@ export default function KeyInfoView({
         }
       }
 
+      // disable_global_guardrails is premium-gated server-side; only send it when it
+      // changed so a non-premium edit of unrelated fields isn't blocked by that gate.
+      const previousDisableGlobalGuardrails = Boolean(
+        (currentKeyData.metadata as Record<string, unknown> | undefined)?.disable_global_guardrails,
+      );
+      if (Boolean(formValues.disable_global_guardrails) === previousDisableGlobalGuardrails) {
+        delete formValues.disable_global_guardrails;
+      }
+
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
