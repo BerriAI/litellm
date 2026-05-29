@@ -28,6 +28,7 @@ Install::
 Rules and documentation: https://github.com/Agent-Threat-Rule/agent-threat-rules
 """
 
+import json
 import os
 from typing import (
     TYPE_CHECKING,
@@ -286,6 +287,68 @@ class ATRGuardrail(CustomGuardrail):
                 if isinstance(p, str):
                     parts.append(p)
 
+        # Responses API (/v1/responses): data["input"] is str or content-part list.
+        # OpenAI Responses API uses `input` instead of `messages` and the same
+        # part-list shape applies (per veria-ai #28050 review medium 2026-05-27).
+        responses_input = data.get("input")
+        if isinstance(responses_input, str):
+            parts.append(responses_input)
+        elif isinstance(responses_input, list):
+            for item in responses_input:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+                    # Responses API also nests content parts under "content"
+                    nested_content = item.get("content")
+                    if isinstance(nested_content, str):
+                        parts.append(nested_content)
+                    elif isinstance(nested_content, list):
+                        for chunk in nested_content:
+                            if isinstance(chunk, dict):
+                                ctext = chunk.get("text")
+                                if isinstance(ctext, str):
+                                    parts.append(ctext)
+
+        # Tool / function definitions can carry prompt injection in
+        # function.description or function.parameters (per veria-ai #28050
+        # review medium 2026-05-27). A malicious client can inject hidden
+        # instructions in the tool catalog that the LLM treats as system text.
+        for tool in data.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            # OpenAI tool function shape: tool.type == "function" with tool.function
+            if tool.get("type") == "function":
+                fn = tool.get("function") or {}
+                if isinstance(fn, dict):
+                    for key in ("name", "description"):
+                        val = fn.get(key)
+                        if isinstance(val, str):
+                            parts.append(val)
+                    params = fn.get("parameters")
+                    if params is not None:
+                        try:
+                            parts.append(json.dumps(params, ensure_ascii=False))
+                        except (TypeError, ValueError):
+                            pass
+            # Anthropic / Claude tool shape: tool.name + tool.description direct
+            for key in ("name", "description"):
+                val = tool.get(key)
+                if isinstance(val, str):
+                    parts.append(val)
+
+        # tool_choice can carry a function definition when the client wants to
+        # force a specific tool. Scan its description too.
+        tool_choice = data.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            fn = tool_choice.get("function") or {}
+            if isinstance(fn, dict):
+                desc = fn.get("description")
+                if isinstance(desc, str):
+                    parts.append(desc)
+
         return "\n".join(p for p in parts if p)
 
     def _extract_response_content(self, response: Any) -> str:
@@ -312,6 +375,43 @@ class ATRGuardrail(CustomGuardrail):
                 text = choice.get("text")
             if isinstance(text, str) and text:
                 parts.append(text)
+
+        # Responses API (/v1/responses): response.output is a list of message
+        # objects each with content parts (per veria-ai #28050 review medium
+        # 2026-05-27). Shape: response.output[i].content[j].text
+        output = getattr(response, "output", None)
+        if output is None and isinstance(response, dict):
+            output = response.get("output")
+        if isinstance(output, list):
+            for item in output:
+                # message objects with nested content parts
+                content = getattr(item, "content", None)
+                if content is None and isinstance(item, dict):
+                    content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for chunk in content:
+                        if isinstance(chunk, dict):
+                            t = chunk.get("text")
+                            if isinstance(t, str):
+                                parts.append(t)
+                        else:
+                            t = getattr(chunk, "text", None)
+                            if isinstance(t, str):
+                                parts.append(t)
+                # Some Responses API shapes put text directly on the item
+                if isinstance(item, dict):
+                    direct = item.get("text")
+                    if isinstance(direct, str):
+                        parts.append(direct)
+
+        # Responses API top-level output_text convenience field
+        output_text = getattr(response, "output_text", None)
+        if output_text is None and isinstance(response, dict):
+            output_text = response.get("output_text")
+        if isinstance(output_text, str) and output_text:
+            parts.append(output_text)
 
         return "\n".join(parts)
 
