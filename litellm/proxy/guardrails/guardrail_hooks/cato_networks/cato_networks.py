@@ -207,9 +207,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         if action_type and action_type == "anonymize_action" and redacted_chat:
             all_redacted = redacted_chat.get("all_redacted_messages") or []
             if all_redacted:
-                return {
-                    "redacted_output": all_redacted[-1]["content"]
-                }
+                return {"redacted_output": all_redacted[-1]["content"]}
         return {"redacted_output": output}
 
     def _handle_block_action_on_output(
