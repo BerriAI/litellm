@@ -1,3 +1,4 @@
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
@@ -70,8 +71,6 @@ def _is_azure_claude_model(model: str) -> bool:
     except Exception:
         return False
 
-
-import re
 
 _CLAUDE_PATTERN = re.compile(
     r"^claude-(?:opus|sonnet|haiku)-\d+-\d+(?:-\d{8})?$", re.IGNORECASE
