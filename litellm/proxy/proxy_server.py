@@ -825,6 +825,37 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
+    ## V2 OTEL: now that config (and therefore the callbacks) is loaded, publish
+    ## the chosen V2 logger's TracerProvider as the OTel global. The FastAPI
+    ## instrumentation mounted at app-creation binds to the global provider, so
+    ## this is what makes server spans and gen-ai spans share one provider and
+    ## land in the same trace. Prefer an already-registered preset logger
+    ## (arize, langfuse, …) so server spans export to that backend too; otherwise
+    ## build a generic one from OTEL_* envs. ``set_tracer_provider`` only takes
+    ## effect once, so the first configured logger wins.
+    try:
+        from litellm.integrations.otel.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            from opentelemetry import trace as _otel_trace
+
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            _otel_v2_logger = (
+                next(
+                    (
+                        cb
+                        for cb in litellm.service_callback
+                        if isinstance(cb, OpenTelemetryV2)
+                    ),
+                    None,
+                )
+                or OpenTelemetryV2()
+            )
+            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
+    except Exception as e:
+        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
+
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -1061,6 +1092,56 @@ def ensure_unique_openapi_operation_ids(
     return openapi_schema
 
 
+# Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
+# default OTel server-span name "{method} {route}" collapses every upstream
+# endpoint into "POST /openai/{endpoint:path}". Rename those spans to the real
+# request path so each endpoint is distinguishable. Non-catch-all routes keep
+# their low-cardinality template name.
+_OTEL_V2_PASSTHROUGH_PREFIXES = frozenset(
+    {
+        "openai",
+        "openai_passthrough",
+        "anthropic",
+        "azure",
+        "azure_ai",
+        "bedrock",
+        "cohere",
+        "cursor",
+        "gemini",
+        "mistral",
+        "vllm",
+        "vertex_ai",
+        "vertex-ai",
+        "assemblyai",
+        "eu.assemblyai",
+        "milvus",
+    }
+)
+
+
+def _otel_v2_passthrough_span_name_hook(span: Any, scope: dict) -> None:
+    """FastAPI ``server_request_hook``: give passthrough server spans a useful name.
+
+    The instrumentation matches the route at span creation, so both the span name
+    and ``http.route`` are set to the catch-all template (``/openai/{endpoint:path}``)
+    before this hook runs. Rewrite both to the real request path so each upstream
+    endpoint is distinguishable. (The ASGI ``http receive``/``http send`` sub-spans
+    can't be renamed from here — their name is captured at creation — so they are
+    dropped via ``exclude_spans`` at instrumentation time.)
+    """
+    try:
+        if span is None or not span.is_recording():
+            return
+        path = scope.get("path") or ""
+        method = scope.get("method") or ""
+        first_segment = path.lstrip("/").split("/", 1)[0]
+        if first_segment in _OTEL_V2_PASSTHROUGH_PREFIXES:
+            span.update_name(f"{method} {path}".strip())
+            span.set_attribute("http.route", path)
+    except Exception:
+        pass
+
+
 app = FastAPI(
     docs_url=_get_docs_url(),
     redoc_url=_get_redoc_url(),
@@ -1073,6 +1154,41 @@ app = FastAPI(
     generate_unique_id_function=_generate_stable_operation_id,
     strict_content_type=False,
 )
+
+## V2 OTEL: instrument the FastAPI app for server spans (gated by
+## LITELLM_OTEL_V2; lazy imports keep the package optional). This MUST run at
+## app-creation time — once the lifespan runs, the middleware stack is frozen
+## and ``instrument_app`` raises "Cannot add middleware after an application has
+## started". No TracerProvider is passed, so the instrumentation binds to the
+## OTel global ``ProxyTracerProvider``; ``proxy_startup_event`` sets the real
+## provider as the global after config load, and the proxy delegates to it. That
+## way server spans and gen-ai spans share one provider and the same trace.
+try:
+    from litellm.integrations.otel.config import is_otel_v2_enabled
+
+    if is_otel_v2_enabled():
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        # Drop health-check spans by default — load balancers poll
+        # /health/readiness and /health/liveness constantly, which floods traces
+        # with noise. Honor the standard OTel env var so operators can override
+        # (e.g. set it to "" to trace everything, or add their own paths).
+        _otel_excluded_urls = (
+            os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
+            if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
+            else "/health"
+        )
+        FastAPIInstrumentor.instrument_app(
+            app,
+            excluded_urls=_otel_excluded_urls,
+            server_request_hook=_otel_v2_passthrough_span_name_hook,
+            # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
+            # are low-value noise and (for passthrough) carry the catch-all route
+            # template in their name, which can't be rewritten from a hook.
+            exclude_spans=["receive", "send"],
+        )
+except Exception as e:
+    verbose_proxy_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)
 
 vertex_live_passthrough_vertex_base = VertexBase()
 
@@ -1238,6 +1354,17 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
         return
     if open_telemetry_logger is None:
         return
+    # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
+    # is that same span), and it records the error + ends it itself. Ending it here
+    # would end it early — losing the http.* attributes the instrumentor stamps on
+    # completion — and double-end it. Leave it to the instrumentor.
+    try:
+        from litellm.integrations.otel.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            return
+    except Exception:
+        pass
     try:
         from opentelemetry.trace import Status, StatusCode
 

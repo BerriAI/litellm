@@ -1,0 +1,150 @@
+"""The span engine: dedup, start, run the mapper chain, set status, end."""
+
+from collections import OrderedDict
+from typing import Callable, Sequence
+
+from opentelemetry.context import Context
+from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace.status import Status, StatusCode
+
+from litellm.integrations.otel.config import OpenTelemetryV2Config
+from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.payloads import (
+    GuardrailSpanData,
+    LLMCallSpanData,
+    ServiceSpanData,
+)
+from litellm.integrations.otel.providers import to_otel_span_kind
+from litellm.integrations.otel.semconv import Error
+from litellm.integrations.otel.spans import (
+    SPAN_REGISTRY,
+    SpanRole,
+    guardrail_span_name,
+    llm_call_span_name,
+    service_span_name,
+)
+
+# Roles emit() knows how to name and emit. PROXY_REQUEST and the management
+# routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
+# have no builder here.
+_NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
+    SpanRole.LLM_CALL: llm_call_span_name,
+    SpanRole.GUARDRAIL: guardrail_span_name,
+    SpanRole.SERVICE: service_span_name,
+}
+
+# Cap on the dedup cache. It only needs to coalesce the sync+async firing window
+# of a single in-flight request, so a bounded LRU keeps memory flat on a
+# long-running proxy while still covering every concurrently-open call.
+_DEDUP_CACHE_MAX = 10_000
+
+
+class SpanEmitter:
+    def __init__(
+        self,
+        tracer: Tracer,
+        config: OpenTelemetryV2Config,
+        mappers: Sequence[AttributeMapper] | None = None,
+    ) -> None:
+        self._tracer = tracer
+        self._config = config
+        # The mapper chain is the sole source of span attributes. When not
+        # passed in, resolve it from the config so there's one source of truth.
+        self._mappers: list[AttributeMapper] = (
+            list(mappers)
+            if mappers is not None
+            else resolve_mappers(config.mapper_names)
+        )
+        # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
+        # only — the value is unused — so it behaves like a capped set.
+        self._emitted: "OrderedDict[tuple[str, SpanRole], None]" = OrderedDict()
+
+    # -- low-level helpers --------------------------------------------------- #
+
+    def start_span(
+        self,
+        role: SpanRole,
+        name: str,
+        parent_context: Context | None = None,
+        start_time_ns: int | None = None,
+        *,
+        tracer: Tracer | None = None,
+    ) -> Span:
+        """Start a span for ``role`` without dedup or attribute mapping.
+
+        For callers that own and manage their own span lifecycle. ``tracer``
+        overrides the bound tracer for this span only, used for per-request
+        multi-tenant credential routing.
+        """
+        return (tracer or self._tracer).start_span(
+            name,
+            context=parent_context,
+            kind=to_otel_span_kind(SPAN_REGISTRY[role].kind),
+            start_time=start_time_ns,
+        )
+
+    def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
+        """Return True once a ``(dedup_key, role)`` pair has been emitted.
+
+        Guards against emitting the same span twice when a streaming call
+        fires both a sync and an async logging callback.
+        """
+        if not dedup_key:
+            return False
+        marker = (dedup_key, role)
+        if marker in self._emitted:
+            self._emitted.move_to_end(marker)
+            return True
+        self._emitted[marker] = None
+        if len(self._emitted) > _DEDUP_CACHE_MAX:
+            self._emitted.popitem(last=False)  # evict least-recently-used
+        return False
+
+    # -- the engine ---------------------------------------------------------- #
+
+    def emit(
+        self,
+        role: SpanRole,
+        data: SpanData,
+        parent_context: Context | None = None,
+        *,
+        start_time_ns: int | None = None,
+        end_time_ns: int | None = None,
+        tracer: Tracer | None = None,
+    ) -> Span | None:
+        """Emit one complete span: dedup, start, map attributes, status, end.
+
+        Return the span, or ``None`` if it was deduplicated away. ``tracer``
+        overrides the bound tracer for this span, used for per-request routing.
+        """
+        # Only LLM-call spans carry a dedup key; LLM-call and service spans
+        # carry an ``error`` field. ``isinstance`` narrows the type for mypy and
+        # keeps the engine free of duck-typed attribute reads.
+        dedup_key = data.identity.call_id if isinstance(data, LLMCallSpanData) else None
+        if self._seen(dedup_key, role):
+            return None
+        span = self.start_span(
+            role,
+            _NAME_BUILDERS[role](data),
+            parent_context=parent_context,
+            start_time_ns=start_time_ns,
+            tracer=tracer,
+        )
+        for mapper in self._mappers:
+            for key, value in mapper.map(data).items():
+                span.set_attribute(key, value)
+        error = (
+            data.error
+            if isinstance(data, (LLMCallSpanData, ServiceSpanData, GuardrailSpanData))
+            else None
+        )
+        if error and (error.error_type or error.message):
+            span.set_attribute(Error.TYPE, error.error_type or "error")
+            span.set_status(
+                Status(StatusCode.ERROR, error.message or error.error_type or "error")
+            )
+        else:
+            span.set_status(Status(StatusCode.OK))
+        span.end(end_time=end_time_ns)
+        return span
