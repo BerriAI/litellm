@@ -4118,9 +4118,7 @@ def _append_bedrock_tool_result_file_block(
     file_id = file_obj.get("file_id")
     if file_data is None and file_id is None:
         raise litellm.BadRequestError(
-            message="file_data and file_id cannot both be None. Got={}".format(
-                content
-            ),
+            message="file_data and file_id cannot both be None. Got={}".format(content),
             model="",
             llm_provider="bedrock",
         )
@@ -4147,9 +4145,7 @@ def _parse_bedrock_tool_result_content_list(
                 tool_result_content_blocks, content
             )
         elif content["type"] == "file":
-            _append_bedrock_tool_result_file_block(
-                tool_result_content_blocks, content
-            )
+            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
     return tool_result_content_blocks
 
 

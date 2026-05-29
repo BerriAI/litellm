@@ -1854,7 +1854,9 @@ def test_extract_search_results_text_counts_hidden_tool_payload():
         ],
     }
 
-    assert extract_search_results_text(message["search_results"]) == hidden
+    extracted = extract_search_results_text(message["search_results"])
+    assert hidden in extracted
+    assert "st" in extracted
     assert len(convert_content_list_to_str(message)) > len("small")
 
     tokens_with_search = token_counter(
@@ -1866,6 +1868,21 @@ def test_extract_search_results_text_counts_hidden_tool_payload():
         messages=[{"role": "tool", "content": "small"}],
     )
     assert tokens_with_search > tokens_without_search
+
+    huge_title = "y" * 500
+    title_only_message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {"source": "s", "title": huge_title, "content": []},
+        ],
+    }
+    assert len(extract_search_results_text(title_only_message["search_results"])) >= 500
+    tokens_title_bypass = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[title_only_message],
+    )
+    assert tokens_title_bypass > tokens_without_search
 
 
 @pytest.mark.asyncio
