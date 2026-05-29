@@ -5,7 +5,7 @@ import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.files import TwoStepFileUploadConfig
+from litellm.types.files import StreamingFileUploadBody, TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -78,7 +78,7 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
+    ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig", StreamingFileUploadBody]:
         """
         Transform OpenAI-style file creation request into provider-specific format.
 
@@ -86,6 +86,7 @@ class BaseFilesConfig(BaseConfig):
             - dict: For pre-signed single-step uploads (e.g., Bedrock S3)
             - str/bytes: For traditional file uploads
             - TwoStepFileUploadConfig: For two-step upload process (e.g., Manus, GCS)
+            - StreamingFileUploadBody: For large uploads streamed from a temp file
         """
         pass
 

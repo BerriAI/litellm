@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Dict, List, Literal, Mapping, Set, Union
@@ -321,3 +322,31 @@ class TwoStepFileUploadConfig(TypedDict, total=False):
     upload_request: Required[TwoStepFileUploadRequest]
     upload_url_location: Required[Literal["headers", "body"]]
     upload_url_key: str
+
+
+"""
+Streaming File Upload Types
+"""
+
+
+@dataclass
+class StreamingFileUploadBody:
+    """A transformed upload payload spooled to a local temp file.
+
+    Returned by a provider's ``transform_create_file_request`` to signal that
+    the upload body should be streamed from disk in chunks rather than buffered
+    in memory. This keeps peak memory flat for multi-GB uploads. The HTTP
+    handler streams ``path`` to the provider and is responsible for deleting it
+    afterwards.
+
+    Properties:
+        path: Absolute path to the temp file holding the upload body.
+        size: Size of the temp file in bytes.
+        content_type: Content-Type to send with the upload.
+        headers: Extra headers to merge into the upload request.
+    """
+
+    path: str
+    size: int
+    content_type: str = "application/octet-stream"
+    headers: Dict[str, str] = field(default_factory=dict)

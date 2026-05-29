@@ -7,6 +7,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -78,7 +79,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
-from litellm.types.files import TwoStepFileUploadConfig
+from litellm.types.files import StreamingFileUploadBody, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -3194,6 +3195,17 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, StreamingFileUploadBody):
+            # Stream the upload body from disk in chunks instead of buffering
+            # the whole (multi-GB) payload in memory.
+            upload_response = self._stream_file_upload_sync(
+                streaming_body=transformed_request,
+                sync_httpx_client=sync_httpx_client,
+                api_base=api_base,
+                headers=headers,
+                provider_config=provider_config,
+                timeout=timeout,
+            )
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3249,7 +3261,9 @@ class BaseLLMHTTPHandler:
 
     async def async_create_file(
         self,
-        transformed_request: Union[bytes, str, dict, "TwoStepFileUploadConfig"],
+        transformed_request: Union[
+            bytes, str, dict, "TwoStepFileUploadConfig", StreamingFileUploadBody
+        ],
         litellm_params: dict,
         provider_config: BaseFilesConfig,
         headers: dict,
@@ -3352,6 +3366,17 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, StreamingFileUploadBody):
+            # Stream the upload body from disk in chunks instead of buffering
+            # the whole (multi-GB) payload in memory.
+            upload_response = await self._stream_file_upload_async(
+                streaming_body=transformed_request,
+                async_httpx_client=async_httpx_client,
+                api_base=api_base,
+                headers=headers,
+                provider_config=provider_config,
+                timeout=timeout,
+            )
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3394,6 +3419,128 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    def _build_streaming_upload_headers(
+        self, streaming_body: StreamingFileUploadBody, headers: dict
+    ) -> dict:
+        upload_headers = {**headers}
+        if streaming_body.content_type:
+            upload_headers.setdefault("Content-Type", streaming_body.content_type)
+        if streaming_body.headers:
+            upload_headers.update(streaming_body.headers)
+        return upload_headers
+
+    async def _stream_file_upload_async(
+        self,
+        streaming_body: StreamingFileUploadBody,
+        async_httpx_client: AsyncHTTPHandler,
+        api_base: str,
+        headers: dict,
+        provider_config: BaseFilesConfig,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        """
+        Stream a temp-file upload body to the provider in chunks.
+
+        Reads the file in 1MB chunks off the event loop and sends them with
+        httpx's streaming request body (chunked transfer-encoding), so peak
+        memory stays flat regardless of file size. The temp file is always
+        deleted, and a single retry is attempted on a dropped connection
+        (re-reading the file from the start).
+        """
+        import asyncio
+        import os as _os
+
+        upload_headers = self._build_streaming_upload_headers(streaming_body, headers)
+        http_method = provider_config.file_upload_http_method.upper()
+        raw_client = async_httpx_client.client
+
+        async def _aiter_chunks() -> AsyncIterator[bytes]:
+            chunk_size = 1024 * 1024
+            with open(streaming_body.path, "rb") as f:
+                while True:
+                    chunk = await asyncio.to_thread(f.read, chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        async def _do_upload() -> httpx.Response:
+            request = raw_client.build_request(
+                http_method,
+                api_base,
+                headers=upload_headers,
+                content=_aiter_chunks(),
+                timeout=timeout,
+            )
+            response = await raw_client.send(request)
+            response.raise_for_status()
+            return response
+
+        try:
+            try:
+                return await _do_upload()
+            except (httpx.RemoteProtocolError, httpx.ConnectError):
+                # Connection dropped mid-stream; retry once with a fresh body.
+                return await _do_upload()
+        except Exception as e:
+            verbose_logger.exception(f"Error streaming file upload: {e}")
+            raise self._handle_error(e=e, provider_config=provider_config)
+        finally:
+            try:
+                _os.remove(streaming_body.path)
+            except OSError:
+                pass
+
+    def _stream_file_upload_sync(
+        self,
+        streaming_body: StreamingFileUploadBody,
+        sync_httpx_client: HTTPHandler,
+        api_base: str,
+        headers: dict,
+        provider_config: BaseFilesConfig,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        """Sync counterpart of ``_stream_file_upload_async``."""
+        import os as _os
+
+        upload_headers = self._build_streaming_upload_headers(streaming_body, headers)
+        http_method = provider_config.file_upload_http_method.upper()
+        raw_client = sync_httpx_client.client
+
+        def _iter_chunks() -> Iterator[bytes]:
+            chunk_size = 1024 * 1024
+            with open(streaming_body.path, "rb") as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        def _do_upload() -> httpx.Response:
+            request = raw_client.build_request(
+                http_method,
+                api_base,
+                headers=upload_headers,
+                content=_iter_chunks(),
+                timeout=timeout,
+            )
+            response = raw_client.send(request)
+            response.raise_for_status()
+            return response
+
+        try:
+            try:
+                return _do_upload()
+            except (httpx.RemoteProtocolError, httpx.ConnectError):
+                return _do_upload()
+        except Exception as e:
+            verbose_logger.exception(f"Error streaming file upload: {e}")
+            raise self._handle_error(e=e, provider_config=provider_config)
+        finally:
+            try:
+                _os.remove(streaming_body.path)
+            except OSError:
+                pass
 
     def create_batch(
         self,

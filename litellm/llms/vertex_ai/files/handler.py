@@ -64,8 +64,9 @@ class VertexAIFilesHandler(GCSBucketBase):
         (
             logging_payload,
             object_name,
-        ) = vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
-            openai_file_content=create_file_data.get("file")
+        ) = await asyncio.to_thread(
+            vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content,
+            create_file_data.get("file"),
         )
         gcs_upload_response = await self._log_json_data_on_gcs(
             headers=headers,

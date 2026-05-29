@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
-from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+from litellm.llms.vertex_ai.files.transformation import (
+    VertexAIFilesConfig,
+    _safe_remove_file,
+)
+from litellm.types.files import StreamingFileUploadBody
 from litellm.types.llms.openai import CreateFileRequest
 
 
@@ -137,9 +141,10 @@ class TestVertexAIBinaryFileUpload:
         ), "Binary file data should remain as bytes"
 
     @pytest.mark.asyncio
-    async def test_jsonl_file_upload_returns_string(self):
+    async def test_jsonl_file_upload_returns_streaming_body(self):
         """
-        Test that JSONL files (text) are correctly transformed to strings.
+        Test that JSONL batch files are transformed and spooled to a temp file
+        so the upload can be streamed (instead of buffering the whole payload).
 
         This ensures we handle both binary and text files correctly.
         """
@@ -164,10 +169,18 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
 
-        # JSONL files should be transformed to string
+        # JSONL batch files are streamed from a temp file on disk
         assert isinstance(
-            transformed_request, str
-        ), f"Expected string for JSONL file, got {type(transformed_request)}"
+            transformed_request, StreamingFileUploadBody
+        ), f"Expected StreamingFileUploadBody for JSONL file, got {type(transformed_request)}"
+        try:
+            with open(transformed_request.path, "rb") as f:
+                on_disk = f.read()
+            assert len(on_disk) == transformed_request.size
+            # The spooled payload is valid transformed Vertex JSONL (text)
+            assert '"request"' in on_disk.decode("utf-8")
+        finally:
+            _safe_remove_file(transformed_request.path)
 
     @pytest.mark.asyncio
     async def test_mixed_file_types_in_sequence(self):
@@ -208,7 +221,8 @@ class TestVertexAIBinaryFileUpload:
             optional_params={},
             litellm_params={},
         )
-        assert isinstance(result2, str)
+        assert isinstance(result2, StreamingFileUploadBody)
+        _safe_remove_file(result2.path)
 
         # Test 3: Upload another binary file
         binary_content2 = b"\xc4\xe5\xf2\xe5\xeb"
@@ -234,7 +248,8 @@ class TestVertexAIBinaryFileUpload:
 
         This test documents the expected behavior:
         - Binary files (PDF, images, etc.) should remain as bytes
-        - Text files (JSONL) should be strings
+        - JSONL batch files are spooled to a temp file (StreamingFileUploadBody)
+          and streamed to the provider
         - httpx accepts both bytes and strings in the 'data' parameter
         - bytes should NEVER be decoded to UTF-8 for binary files
         """
@@ -251,7 +266,7 @@ class TestVertexAIBinaryFileUpload:
             },
             "text_files": {
                 "input_type": "str or bytes",
-                "output_type": "str",
+                "output_type": "StreamingFileUploadBody (temp file, streamed)",
                 "examples": ["JSONL", "CSV", "TXT"],
                 "http_method": "POST",
                 "encoding": "UTF-8",
