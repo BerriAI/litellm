@@ -27,7 +27,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
     litellm.s3_callback_params = {
-        "s3_bucket_name": "load-testing-oct",
+        "s3_bucket_name": "load-testing-oct-941277531214",
         "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
         "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         "s3_region_name": "us-west-2",
@@ -64,14 +64,14 @@ async def test_basic_s3_logging(sync_mode, streaming):
         await asyncio.sleep(2)
     print(f"response: {response}")
 
-    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct-941277531214")
 
     # assert that atlest one key has response.id in it
     assert any(response_id in key for key in all_s3_keys)
     s3 = boto3.client("s3")
     # delete all objects
     for key in all_s3_keys:
-        s3.delete_object(Bucket="load-testing-oct", Key=key)
+        s3.delete_object(Bucket="load-testing-oct-941277531214", Key=key)
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_basic_s3_v2_logging(streaming):
     from litellm.integrations.s3_v2 import S3Logger
 
     litellm.s3_callback_params = {
-        "s3_bucket_name": "load-testing-oct",
+        "s3_bucket_name": "load-testing-oct-941277531214",
         "s3_aws_secret_access_key": "test-secret",
         "s3_aws_access_key_id": "test-key",
         "s3_region_name": "us-west-2",

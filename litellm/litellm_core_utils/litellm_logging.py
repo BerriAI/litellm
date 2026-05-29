@@ -1546,6 +1546,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     if self.optional_params
                     else None
                 ),
+                "data_residency": (
+                    self.litellm_params.get("data_residency")
+                    if hasattr(self, "litellm_params") and self.litellm_params
+                    else None
+                ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -3905,31 +3910,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 endpoint=arize_phoenix_config.endpoint,
                 headers=arize_phoenix_config.otlp_auth_headers,
             )
-            if arize_phoenix_config.project_name:
-                existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
-                # Add openinference.project.name attribute
-                if existing_attrs:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
-                        f"{existing_attrs},openinference.project.name={arize_phoenix_config.project_name}"
-                    )
-                else:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
-                        f"openinference.project.name={arize_phoenix_config.project_name}"
-                    )
-
-            # Set Phoenix project name from environment variable
-            phoenix_project_name = os.environ.get("PHOENIX_PROJECT_NAME", None)
-            if phoenix_project_name:
-                existing_attrs = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "")
-                # Add openinference.project.name attribute
-                if existing_attrs:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
-                        f"{existing_attrs},openinference.project.name={phoenix_project_name}"
-                    )
-                else:
-                    os.environ["OTEL_RESOURCE_ATTRIBUTES"] = (
-                        f"openinference.project.name={phoenix_project_name}"
-                    )
 
             # auth can be disabled on local deployments of arize phoenix
             if arize_phoenix_config.otlp_auth_headers is not None:

@@ -13,10 +13,12 @@ import os
 import re
 import socket
 import sys
+import threading
 from collections import defaultdict
 from typing import Iterable
 
 import pytest
+import vcr.matchers as _vcr_matchers
 
 from tests._vcr_redis_persister import (
     MAX_EPISODES_PER_CASSETTE,
@@ -29,11 +31,28 @@ from tests._vcr_redis_persister import (
     patch_vcrpy_aiohttp_record_path,
 )
 
+# Force litellm to use its bundled model-cost-map backup instead of fetching it
+# from raw.githubusercontent.com on import. Several VCR conftests reload litellm
+# in an autouse fixture (``importlib.reload(litellm)``); ``litellm.__init__``
+# calls ``get_model_cost_map()`` which issues a live ``httpx.get`` unless this is
+# set. While a cassette is active that fetch gets *recorded* as an extra episode
+# (it was present in ~710 of ~1900 cached cassettes). For tests that then skip,
+# it is the only recorded episode, so the persister refuses to save it (skipped
+# tests don't persist) and the test re-records it live and is classified
+# MISS:NOT_PERSISTED on every run. Pinning to the local backup removes the
+# network call entirely, so skip tests record nothing (NOOP) and passing tests
+# stop carrying a volatile github episode. This matches the established idiom in
+# the unit-test suite, which sets the same flag (see e.g.
+# tests/test_litellm/test_cost_calculator.py). ``setdefault`` so an explicit
+# override still wins.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 CASSETTE_CACHE_HIGH_WATER_FRACTION = 0.85
 
 
 SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
+TOLERANT_QUERY_MATCHER_NAME = "tolerant_query"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
 VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
@@ -73,6 +92,17 @@ def reset_vcr_diag_dir() -> None:
                 pass
 
 
+# CircleCI truncates a step's retrievable output to the last ~400 KB. The
+# diagnostic log is emitted right *before* the final pytest summary line but
+# *after* the VCR CLASSIFICATION SUMMARY, so an unbounded dump (the body/key
+# matchers log one block per *episode comparison*, even on an eventual HIT)
+# pushes the classification summary out of the retrievable window and makes
+# misses impossible to read in CI. Dedupe identical blocks (the same mismatch
+# is logged against every non-matching episode) and cap the total emitted size
+# so the summary always survives.
+VCR_DIAG_EMIT_MAX_LINES = 400
+
+
 def emit_vcr_diagnostic_log(terminalreporter) -> None:
     directory = _vcr_diag_dir()
     if not os.path.isdir(directory):
@@ -83,25 +113,56 @@ def emit_vcr_diagnostic_log(terminalreporter) -> None:
         return
     if not files:
         return
-    terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
-    terminalreporter.write_line(
-        f"  source dir: {directory}  (also archived as a CI artifact)"
-    )
+
+    # Collect every line, tagged by source file, deduplicating identical lines
+    # (with an occurrence count) so the repeated per-episode mismatch blocks
+    # collapse to one representative each.
+    seen_counts: dict[str, int] = defaultdict(int)
+    ordered: list[tuple[str, str]] = []  # (source_file, line)
+    read_errors: list[str] = []
     for name in files:
         path = os.path.join(directory, name)
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 content = fh.read()
         except OSError as exc:
-            terminalreporter.write_line(
+            read_errors.append(
                 f"  [failed to read {name}: {type(exc).__name__}: {exc}]"
             )
             continue
-        if not content.strip():
-            continue
-        terminalreporter.write_sep("-", name, bold=False)
         for line in content.splitlines():
-            terminalreporter.write_line(line)
+            if not line.strip():
+                continue
+            seen_counts[line] += 1
+            if seen_counts[line] == 1:
+                ordered.append((name, line))
+
+    if not ordered and not read_errors:
+        return
+
+    terminalreporter.write_sep("=", "VCR DIAGNOSTIC LOG", bold=True)
+    terminalreporter.write_line(
+        f"  source dir: {directory}  (deduplicated; full log archived as a CI artifact)"
+    )
+    for line in read_errors:
+        terminalreporter.write_line(line)
+
+    emitted = 0
+    last_source = None
+    for name, line in ordered:
+        if emitted >= VCR_DIAG_EMIT_MAX_LINES:
+            terminalreporter.write_line(
+                f"  ... {len(ordered) - emitted} more unique diagnostic line(s) "
+                "suppressed to keep the classification summary retrievable in CI."
+            )
+            break
+        if name != last_source:
+            terminalreporter.write_sep("-", name, bold=False)
+            last_source = name
+        count = seen_counts.get(line, 1)
+        suffix = f"  (x{count})" if count > 1 else ""
+        terminalreporter.write_line(line + suffix)
+        emitted += 1
     terminalreporter.write_sep("=", bold=True)
 
 
@@ -326,6 +387,302 @@ def _canonical_body(request) -> tuple[bytes, str]:
     return b"", pre_type
 
 
+# ---------------------------------------------------------------------------
+# Volatile-token body normalization (compare-time only).
+#
+# Many tests append a cache-buster to the request body so the *live* call
+# isn't served from an upstream prompt/response cache during recording:
+# ``f"...{time.time()}"``, ``f"...{uuid.uuid4()}"``. LiteLLM's own
+# observability payloads (langfuse/otel) likewise carry per-call UUIDs and
+# ISO-8601 timestamps. None of that affects what the test asserts (response
+# shape, cost, caching behaviour), but it makes the request body differ on
+# every run, so vcrpy never matches and the cassette keeps appending episodes
+# until it overflows ``MAX_EPISODES_PER_CASSETTE`` and re-records live forever.
+#
+# We canonicalize these volatile substrings to fixed placeholders *only for
+# matching* (in ``_safe_body_matcher``), never in what we store — so the
+# cassette on disk keeps the real bytes for debuggability, and the
+# normalization is applied symmetrically to both the incoming and the stored
+# request. Because it's symmetric and compare-time, it can never mask a
+# response-level discrepancy; it only changes which recorded episode is
+# selected. This mirrors the existing SigV4 / multipart-boundary / b64-image
+# normalizations already in this module, and means the already-bloated
+# cassettes start replaying immediately without a flush + re-record.
+_VCR_UUID_RE = re.compile(
+    rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+# ISO-8601 timestamps, e.g. ``2026-05-25T03:40:37.262045Z`` /
+# ``2026-05-25T03:40:37+00:00``.
+_VCR_ISO_TS_RE = re.compile(
+    rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+)
+# Unix epoch as 13-digit milliseconds, then 10-digit ``time.time()`` float,
+# then 10-digit integer seconds. Anchored to ``1`` + 9/12 digits, which keeps
+# them inside the 2001-2033 / 2001-2033 epoch windows and avoids matching
+# ordinary identifiers. Order matters: the longer/float forms are substituted
+# before the bare-integer form so the integer rule can't bite off a prefix.
+_VCR_UNIX_MS_RE = re.compile(rb"(?<![\d.])1[0-9]{12}(?![\d.])")
+_VCR_UNIX_FLOAT_RE = re.compile(rb"(?<![\d.])1[0-9]{9}\.[0-9]+")
+_VCR_UNIX_INT_RE = re.compile(rb"(?<![\d.])1[0-9]{9}(?![\d.])")
+
+
+def _normalize_volatile_tokens(body: bytes) -> bytes:
+    """Replace per-run cache-busters (UUIDs / timestamps) with placeholders.
+
+    Compare-time only — see the module note above. Returns ``body`` unchanged
+    when it contains none of these patterns, so deterministic requests are
+    unaffected.
+    """
+    if not body:
+        return body
+    body = _VCR_UUID_RE.sub(b"<vcr-uuid>", body)
+    body = _VCR_ISO_TS_RE.sub(b"<vcr-iso-ts>", body)
+    body = _VCR_UNIX_MS_RE.sub(b"<vcr-unix-ms>", body)
+    body = _VCR_UNIX_FLOAT_RE.sub(b"<vcr-unix-float>", body)
+    body = _VCR_UNIX_INT_RE.sub(b"<vcr-unix-int>", body)
+    return body
+
+
+# Hosts whose request body is a rotating credential exchange (a freshly signed
+# JWT ``assertion=...`` or refresh-token grant). The body changes on every run
+# and carries no information the test asserts on, so matching on
+# method+scheme+host+port+path+query is sufficient — skip the body comparison.
+_CREDENTIAL_EXCHANGE_HOSTS = (
+    "oauth2.googleapis.com",
+    "sts.googleapis.com",
+    "accounts.google.com",
+    "metadata.google.internal",
+    "169.254.169.254",
+)
+
+
+def _request_host(request) -> str:
+    uri = getattr(request, "uri", None) or getattr(request, "url", "") or ""
+    uri = str(uri)
+    if "//" not in uri:
+        return ""
+    rest = uri.split("//", 1)[1]
+    return rest.split("/", 1)[0].split("@")[-1].split(":")[0].lower()
+
+
+def _is_credential_exchange_request(request) -> bool:
+    return _request_host(request) in _CREDENTIAL_EXCHANGE_HOSTS
+
+
+# Observability / telemetry backends LiteLLM logs to. A telemetry export is a
+# snapshot of the *whole* call — fresh span/trace UUIDs, ISO-8601 timestamps,
+# durations, token costs, the LiteLLM build SHA (``release``), and the recorded
+# LLM response content — and tests often round-trip a fresh ``trace_id`` back
+# through the backend's query API to verify logging happened. None of that is
+# reproducible under deterministic replay, and none of it is what the test
+# asserts on (it checks redaction / presence, or a locally-computed trace id).
+# So for these hosts we match on method+scheme+host+port+path only: the
+# expensive LLM call still matches normally and stays cached, while the cheap
+# telemetry POST/GET replays from the recorded response. This is why the body
+# and query matchers below both short-circuit for telemetry hosts.
+_TELEMETRY_HOST_SUFFIXES = (
+    "langfuse.com",
+    "arize.com",
+    "phoenix.arize.com",
+    "traceloop.com",
+    "braintrust.dev",
+    "comet.com",
+    "wandb.ai",
+    "honeycomb.io",
+    "signoz.io",
+)
+
+
+def _is_telemetry_request(request) -> bool:
+    host = _request_host(request)
+    if not host:
+        return False
+    return any(host == s or host.endswith("." + s) for s in _TELEMETRY_HOST_SUFFIXES)
+
+
+# Nodeid of the test currently executing, set per-test by
+# ``install_live_call_probe`` (runs in the autouse gate at setup). Used to
+# decide whether an incidental telemetry POST should be recorded — see
+# ``_should_drop_telemetry_record``. xdist workers are separate processes and
+# tests run sequentially within a worker, so a plain module global is safe.
+_current_test_nodeid: str = ""
+
+# Test files/dirs that legitimately record & replay telemetry HTTP (they assert
+# on the outgoing observability payload or query the backend back). Identified
+# by a substring of the test path. Everything else is treated as a non-telemetry
+# test for which a telemetry call is incidental leakage (see below).
+_TELEMETRY_TEST_PATH_MARKERS = (
+    "langfuse",
+    "arize",
+    "phoenix",
+    "traceloop",
+    "braintrust",
+    "comet",
+    "wandb",
+    "honeycomb",
+    "signoz",
+    "otel",
+    "opentelemetry",
+    "telemetry",
+    "observability",
+    "logging",  # tests/logging_callback_tests, logging_testing dirs
+)
+
+
+def _current_test_records_telemetry() -> bool:
+    nodeid = _current_test_nodeid.lower()
+    return any(marker in nodeid for marker in _TELEMETRY_TEST_PATH_MARKERS)
+
+
+# Test paths that legitimately RECORD AND REPLAY a telemetry *export* POST and
+# assert on its response. Only the pass-through proxy test does this: it
+# forwards a client POST to Langfuse's ``/api/public/ingestion`` and asserts the
+# upstream multi-status (207) it replays from the cassette. Every other
+# telemetry test either mocks the export client and asserts on the mock (the
+# langfuse e2e suite) or asserts on a read-back GET / an in-memory span exporter
+# — for those the export POST is fire-and-forget and must not be recorded (see
+# ``_should_drop_telemetry_record``).
+_TELEMETRY_EXPORT_REPLAY_TEST_MARKERS = ("pass_through",)
+
+
+def _current_test_replays_telemetry_export() -> bool:
+    nodeid = _current_test_nodeid.lower()
+    return any(m in nodeid for m in _TELEMETRY_EXPORT_REPLAY_TEST_MARKERS)
+
+
+def _is_telemetry_export_request(request) -> bool:
+    """A telemetry *export* — a span/trace/event ingestion call, always a POST
+    to an observability host. Read-backs (verifying a trace landed) are GETs."""
+    if not _is_telemetry_request(request):
+        return False
+    return str(getattr(request, "method", "") or "").upper() == "POST"
+
+
+# Thread-local "we are inside Cassette._load" flag. vcrpy's ``Cassette._load``
+# replays each *stored* interaction through ``Cassette.append``, which runs
+# ``before_record_request`` on it; a ``None`` return there silently drops the
+# stored episode. ``_should_drop_telemetry_record`` must therefore NOT fire
+# during load, or it would delete already-recorded telemetry episodes the
+# instant a non-telemetry-named test (or the very first test in a worker, whose
+# ``_current_test_nodeid`` is still empty) loads them — forcing an endless live
+# re-record (a phantom MISS:RECORDED on a cassette that was present in Redis).
+# The drop is only ever meant to stop *new* incidental telemetry from being
+# recorded, never to filter the existing cassette on read. ``_load`` and its
+# ``append`` calls run synchronously in one thread, so a thread-local correctly
+# scopes the guard and never masks a concurrent background-flush record.
+_vcr_load_guard = threading.local()
+
+
+def _vcr_load_in_progress() -> bool:
+    return getattr(_vcr_load_guard, "active", False)
+
+
+def patch_vcrpy_cassette_load_guard() -> None:
+    """Wrap ``Cassette._load`` so ``_should_drop_telemetry_record`` is inert
+    while stored episodes are being replayed into the in-memory cassette."""
+    import vcr.cassette as _cassette_mod
+
+    if getattr(_cassette_mod.Cassette._load, "_litellm_load_guarded", False):
+        return
+    _orig_load = _cassette_mod.Cassette._load
+
+    def _guarded_load(self):
+        _vcr_load_guard.active = True
+        try:
+            return _orig_load(self)
+        finally:
+            _vcr_load_guard.active = False
+
+    _guarded_load._litellm_load_guarded = True
+    _cassette_mod.Cassette._load = _guarded_load
+
+
+def _should_drop_telemetry_record(request) -> bool:
+    """Whether to refuse to record this request into the active cassette.
+
+    Several test modules set ``litellm.success_callback = ["langfuse"]`` (and
+    similar) at *import* time, which globally enables observability logging for
+    the whole worker. Unrelated tests then emit telemetry whose async flush
+    (litellm's background logging worker) lands in a *later* test's VCR window
+    and gets saved as a spurious episode — a non-deterministic MISS:RECORDED on
+    whichever test happened to be active (observed on
+    ``test_lowest_latency_routing_buffer`` carrying a Langfuse batch from an
+    unrelated completion). Refusing to record telemetry for non-telemetry tests
+    makes the leak a harmless live fire-and-forget call instead (telemetry hosts
+    are not in ``_LIVE_CALL_HOST_SUFFIXES``, so the probe doesn't flag it, and
+    vcrpy treats a ``None`` from ``before_record_request`` as "don't record" and
+    "can't replay" → the request passes through live and is never stored).
+    Tests that actually assert on telemetry keep recording it.
+
+    Crucially, this never fires while ``Cassette._load`` is replaying stored
+    interactions (see ``_vcr_load_in_progress``): dropping there would delete an
+    already-recorded telemetry episode on read and force a live re-record.
+
+    The async-flush leak also rotates *within* the telemetry test set: litellm's
+    observability loggers flush on a background thread, so an export POST
+    scheduled by one telemetry test fires mid-way through a *later*
+    telemetry-named test (after that test's own ``httpx`` mock has exited) and
+    is recorded as a phantom episode — a non-deterministic MISS:RECORDED /
+    PARTIAL that lands on a different telemetry test from run to run. Telemetry
+    *export* POSTs are fire-and-forget; no test asserts on a recorded export
+    response except the pass-through proxy test (which forwards to Langfuse
+    ingestion and replays its 207). So drop incidental export POSTs everywhere
+    else too — dropping returns ``None`` (live fire-and-forget, never stored),
+    which can only turn a phantom miss into a harmless live call, never the
+    reverse. Recorded read-back GETs that telemetry tests assert on are matched
+    by method and so are left untouched.
+    """
+    if _vcr_load_in_progress():
+        return False
+    if not _is_telemetry_request(request):
+        return False
+    if (
+        _is_telemetry_export_request(request)
+        and not _current_test_replays_telemetry_export()
+    ):
+        return True
+    return not _current_test_records_telemetry()
+
+
+def _should_passthrough_credential_exchange(request) -> bool:
+    """Force the Google OAuth2/STS token mint to run live, never from cassette.
+
+    The mint returns a short-lived ``ya29.*`` access token. Recording it lets a
+    *stale* token replay on a later run; litellm caches it (the recorded
+    ``expires_in`` keeps ``credentials.expired`` False, so it is never
+    refreshed) and sends it to a live Vertex/Gemini endpoint, which rejects it
+    with ``ACCESS_TOKEN_EXPIRED``. The token body carries nothing a test asserts
+    on, so always mint it live: returning ``None`` from ``before_record_request``
+    makes vcrpy neither store nor replay the call. Inert during
+    ``Cassette._load`` for the same reason as ``_should_drop_telemetry_record``.
+    """
+    if _vcr_load_in_progress():
+        return False
+    return _is_credential_exchange_request(request)
+
+
+# Google APIs (Vertex AI, Gemini, OAuth2/STS). Auth is a ``ya29.*`` OAuth2
+# access token minted fresh on every run, so the per-request key fingerprint
+# rotates and never matches a recording. The logical credential — the GCP
+# project — is part of the matched URL path (``/projects/<project>/...``), so
+# skipping the fingerprint comparison for these hosts keeps cache isolation by
+# project while letting the existing recordings replay without a re-record.
+# (We also collapse ``ya29.*`` tokens to one marker in ``_stable_key_value`` so
+# *new* recordings store a stable fingerprint; this matcher relaxation is what
+# rescues the cassettes already recorded under the old per-token fingerprints.)
+_GOOGLE_HOST_SUFFIXES = (
+    "googleapis.com",
+    "google.internal",
+)
+
+
+def _is_google_host_request(request) -> bool:
+    host = _request_host(request)
+    if not host:
+        return False
+    return any(host == s or host.endswith("." + s) for s in _GOOGLE_HOST_SUFFIXES)
+
+
 def _safe_body_matcher(r1, r2) -> None:
     """Compare request bodies as bytes; never invokes ``json.loads``.
 
@@ -334,10 +691,23 @@ def _safe_body_matcher(r1, r2) -> None:
     (e.g. the Bedrock batch S3 PUT) before it can return "no match".
     This matcher is strictly more conservative — the only equivalence
     it gives up vs. the default is "JSON key order doesn't matter".
+
+    Two compare-time relaxations layer on top, both symmetric so they can
+    never hide a response-level discrepancy:
+
+    * Requests to a rotating-credential-exchange host (Google OAuth2/STS
+      token endpoints) skip the body comparison — the signed-JWT body
+      changes every run. The host matcher still gates the overall match.
+    * Volatile cache-buster tokens (UUIDs / epoch timestamps) are
+      canonicalized away via ``_normalize_volatile_tokens``.
     """
+    if _is_credential_exchange_request(r1) or _is_telemetry_request(r1):
+        return
     body1, pre1 = _canonical_body(r1)
     body2, pre2 = _canonical_body(r2)
     if body1 == body2:
+        return
+    if _normalize_volatile_tokens(body1) == _normalize_volatile_tokens(body2):
         return
     _emit_body_mismatch_diagnostic(r1, r2, body1, body2, pre1, pre2)
     raise AssertionError("request bodies differ")
@@ -398,6 +768,10 @@ _AWS_SIGV4_CREDENTIAL_RE = re.compile(
     r"AWS4-HMAC-SHA256\s+Credential=([^/\s,]+)/", re.IGNORECASE
 )
 
+# Google OAuth2 access tokens always start with ``ya29.`` regardless of how
+# they were minted (service account, metadata server, impersonation).
+_GOOGLE_OAUTH_BEARER_RE = re.compile(r"^Bearer\s+ya29\.", re.IGNORECASE)
+
 
 def _stable_key_value(header_name: str, raw: str) -> str:
     """Return a *stable* identifier for a credential header.
@@ -414,6 +788,14 @@ def _stable_key_value(header_name: str, raw: str) -> str:
     match = _AWS_SIGV4_CREDENTIAL_RE.search(raw)
     if match:
         return f"aws-sigv4:{match.group(1)}"
+    # Google OAuth2 access tokens (``ya29.*``) are minted fresh from the
+    # service-account credentials on every run, so hashing the raw token
+    # would push every Vertex/Gemini request into a new cassette episode —
+    # exactly the SigV4 failure mode above. The logical credential (the GCP
+    # project) is already part of the matched URL path, so collapse all such
+    # tokens to one stable marker.
+    if _GOOGLE_OAUTH_BEARER_RE.match(raw):
+        return "google-oauth2"
     return raw
 
 
@@ -560,6 +942,14 @@ def _before_record_request(request):
        this hook is idempotent. The boundary normalizer is also
        idempotent for the same reason.
     """
+    # Refuse to record incidental telemetry leaked from a globally-enabled
+    # observability callback into a non-telemetry test (see
+    # ``_should_drop_telemetry_record``). Returning ``None`` tells vcrpy not to
+    # store the interaction; the request passes through live (fire-and-forget).
+    if _should_drop_telemetry_record(request):
+        return None
+    if _should_passthrough_credential_exchange(request):
+        return None
     headers = getattr(request, "headers", None)
     if headers is None:
         return request
@@ -626,6 +1016,12 @@ def _coalesce_chunks_to_bytes(chunks):
 
 
 def _key_fingerprint_matcher(r1, r2) -> None:
+    # Google OAuth2 access tokens rotate every run; the project in the URL
+    # path (matched separately) is the stable credential identity, so skip the
+    # fingerprint comparison for Google hosts. See ``_is_google_host_request``.
+    if _is_google_host_request(r1):
+        return
+
     def _fp(req):
         for value in _iter_header_values(
             getattr(req, "headers", None), KEY_FINGERPRINT_HEADER
@@ -649,6 +1045,20 @@ def _key_fingerprint_matcher(r1, r2) -> None:
         raise AssertionError("API key fingerprints differ")
 
 
+def _tolerant_query_matcher(r1, r2) -> None:
+    """vcrpy's ``query`` matcher, but tolerant of telemetry round-trips.
+
+    Observability backends are queried back with a freshly-generated
+    ``trace_id`` (e.g. ``GET /observations?traceId=litellm-test-<uuid>``).
+    Comparing the query string would miss on every run. For telemetry hosts
+    we skip the query comparison entirely (the host+path matchers still gate
+    the match); every other host uses vcrpy's stock query matcher unchanged.
+    """
+    if _is_telemetry_request(r1):
+        return
+    _vcr_matchers.query(r1, r2)
+
+
 def vcr_config_dict() -> dict:
     return {
         "decode_compressed_response": True,
@@ -660,7 +1070,7 @@ def vcr_config_dict() -> dict:
             "host",
             "port",
             "path",
-            "query",
+            TOLERANT_QUERY_MATCHER_NAME,
             KEY_FINGERPRINT_MATCHER_NAME,
             SAFE_BODY_MATCHER_NAME,
         ),
@@ -725,7 +1135,9 @@ def register_persister_if_enabled(vcr) -> None:
     vcr.register_persister(make_redis_persister())
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
+    vcr.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
     patch_vcrpy_aiohttp_record_path()
+    patch_vcrpy_cassette_load_guard()
     global _atexit_banner_registered
     if not _atexit_banner_registered:
         atexit.register(_print_atexit_banner)
@@ -1386,6 +1798,12 @@ def install_live_call_probe(request, vcr) -> None:
     intercepts above the socket layer, so any "outbound" socket would be
     a recording cycle, not real spend.
     """
+    # Track the current test for telemetry-leak suppression (applies to every
+    # test, VCR-marked or not). See ``_should_drop_telemetry_record``.
+    global _current_test_nodeid
+    _current_test_nodeid = str(
+        getattr(getattr(request, "node", None), "nodeid", "") or ""
+    )
     if vcr is not None or vcr_disabled():
         return None
     probe = _LiveCallProbe()

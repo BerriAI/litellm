@@ -148,6 +148,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -219,6 +222,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    regional_processing_uplift_multiplier_eu: Optional[
+        float
+    ]  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_processing_uplift_multiplier_us: Optional[
+        float
+    ]  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -3599,6 +3608,20 @@ class ServiceTier(Enum):
 
     FLEX = "flex"
     PRIORITY = "priority"
+
+
+class DataResidency(Enum):
+    """
+    OpenAI data-residency / regional-processing regions.
+
+    Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
+    us.api.openai.com -> US). Used to apply the regional-processing
+    cost uplift (see ``regional_processing_uplift_multiplier_<region>``
+    on ModelInfo).
+    """
+
+    US = "us"
+    EU = "eu"
 
 
 LLMResponseTypes = Union[

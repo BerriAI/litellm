@@ -86,6 +86,12 @@ class RealTimeStreaming:
         # When a text message is blocked, hold the guardrail reason so the next
         # response.create can be rewritten to include the failure context.
         self._pending_guardrail_message: Optional[str] = None
+        # Track whether session.created has already been sent to the client
+        # (e.g. synthetic event in deferred setup mode).
+        self._session_created_sent_to_client: bool = False
+        # Track whether we have already sent the guardrail turn-detection update
+        # that disables provider auto-response for transcription guardrails.
+        self._guardrail_turn_detection_update_sent: bool = False
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
@@ -248,39 +254,81 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
-    async def _send_to_backend(self, message: str) -> None:
+    async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
         If a provider_config is set the message is first passed through
         transform_realtime_request so that provider-specific translation
         (e.g. dropping session.update for Vertex AI) is applied even for
         guardrail-injected messages.
+
+        Returns True if at least one message was actually delivered to the
+        backend, False if the provider transformation produced no output and
+        the message was effectively dropped.
         """
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
             )
+            sent = False
             for msg in transformed:
+                # Send first; only cache the setup payload once the backend
+                # has actually accepted it. Caching before send would leave
+                # ``session_configuration_request`` populated after a failed
+                # send, causing subsequent client session.update messages to
+                # be treated as "subsequent" and dropped even though the
+                # backend never received the original setup.
                 await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
-        else:
-            await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+                self._cache_session_configuration_request(msg)
+                sent = True
+            return sent
+        await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
+        return True
+
+    def _cache_session_configuration_request(self, transformed_message: str) -> None:
+        """Store setup payload once sent to backend.
+
+        Updates the cached setup on every successful setup send so follow-up
+        ``session.update`` messages (which produce a merged setup with new
+        ``generationConfig`` / ``systemInstruction`` / etc.) are reflected in
+        the cache used by downstream readers (``transform_session_created_event``,
+        ``return_new_content_delta_events`` modality lookup, ...).
+        """
+        try:
+            message_obj = json.loads(transformed_message)
+            if "setup" in message_obj:
+                self.session_configuration_request = transformed_message
+        except (json.JSONDecodeError, TypeError):
+            return
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
+        turn_detection: Dict[str, Any] = {
+            "type": "server_vad",
+            "create_response": False,
+        }
         if self._backend_uses_beta_protocol:
-            session: Dict[str, Any] = {
-                "turn_detection": {"create_response": False},
-            }
+            session: Dict[str, Any] = {"turn_detection": turn_detection}
         else:
             session = {
                 "type": "realtime",
-                "audio": {
-                    "input": {
-                        "turn_detection": {"create_response": False},
-                    }
-                },
+                "audio": {"input": {"turn_detection": turn_detection}},
             }
         return json.dumps({"type": "session.update", "session": session})
+
+    async def _maybe_send_guardrail_turn_detection_update(self) -> None:
+        """Disable provider auto-response once when transcription guardrails are enabled."""
+        if self._guardrail_turn_detection_update_sent:
+            return
+        if not self._has_audio_transcription_guardrails():
+            return
+        sent = await self._send_to_backend(self._make_disable_auto_response_message())
+        # Only mark as sent when the provider transformation actually delivered
+        # the update to the backend. Otherwise (e.g. Gemini drops session.update
+        # after the initial setup), leave the flag unset so future opportunities
+        # — such as a duplicate session.created — can retry.
+        if sent:
+            self._guardrail_turn_detection_update_sent = True
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -320,12 +368,20 @@ class RealTimeStreaming:
         self,
         transcript: str,
         item_id: Optional[str] = None,
+        pre_block_backend_message: Optional[str] = None,
     ) -> bool:
         """
         Run registered guardrails on a completed speech transcription.
 
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
+
+        ``pre_block_backend_message`` (if provided) is sent to the backend
+        BEFORE any of the guardrail's own backend messages when a block is
+        triggered. This is needed for protocol contracts that require a
+        specific message to be sent first — e.g. Gemini Live requires a
+        matching ``toolResponse`` immediately after a ``toolCall`` before any
+        other client messages can be accepted.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
@@ -385,6 +441,13 @@ class RealTimeStreaming:
                     getattr(callback, "realtime_violation_message", None) or safe_msg
                 )
 
+                # Deliver any caller-supplied backend message FIRST so that
+                # protocol contracts requiring a specific ordering (e.g.
+                # Gemini Live's mandatory ``toolResponse`` after a
+                # ``toolCall``) are honored before the guardrail's own
+                # clientContent / cancel messages are sent.
+                if pre_block_backend_message is not None:
+                    await self._send_to_backend(pre_block_backend_message)
                 # Cancel any in-progress LLM response (e.g. VAD auto-response).
                 await self._send_to_backend(json.dumps({"type": "response.cancel"}))
                 # Send the policy violation hint (shows as small gray status text in UI).
@@ -480,16 +543,34 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
+            is_session_created_event = (
+                isinstance(event, dict) and event.get("type") == "session.created"
+            )
+            if is_session_created_event:
+                if self._session_created_sent_to_client:
+                    # A synthetic session.created (with placeholder defaults) was
+                    # already forwarded to the client when we connected.  The
+                    # provider's real session.created (e.g. emitted from Gemini
+                    # `setupComplete`) carries the authoritative modalities/model
+                    # from the client's session.update.  Re-emit it as
+                    # `session.updated` so the client learns the corrected
+                    # configuration without seeing two `session.created` events.
+                    event = {**event, "type": "session.updated"}
+                else:
+                    self._session_created_sent_to_client = True
             event_str = json.dumps(event)
-            ## For audio/VAD guardrail path: forward session.created first, then inject.
-            if (
-                isinstance(event, dict)
-                and event.get("type") == "session.created"
-                and self._has_audio_transcription_guardrails()
-            ):
+            ## For audio/VAD guardrail path: forward the (possibly retyped)
+            ## session.created first, then invoke the one-time guardrail
+            ## turn-detection update.  ``_maybe_send_guardrail_turn_detection_update``
+            ## is idempotent (gated by ``_guardrail_turn_detection_update_sent``),
+            ## so duplicate session.created events — including those emitted
+            ## after a synthetic session.created from ``llm_http_handler`` in
+            ## deferred-setup mode — still get a single chance to inject the
+            ## update if a prior attempt was dropped by the provider transform.
+            if is_session_created_event and self._has_audio_transcription_guardrails():
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
-                await self._send_to_backend(self._make_disable_auto_response_message())
+                await self._maybe_send_guardrail_turn_detection_update()
                 continue
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
@@ -564,9 +645,18 @@ class RealTimeStreaming:
                 try:
                     raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
                         decode=False
-                    )  # improves performance
+                    )
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
+
+                if isinstance(raw_response, bytes):
+                    try:
+                        raw_response = raw_response.decode("utf-8")
+                    except UnicodeDecodeError:
+                        verbose_logger.warning(
+                            "Received non-UTF-8 binary frame from backend, skipping."
+                        )
+                        continue
 
                 if self.provider_config:
                     try:
@@ -783,12 +873,13 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):
+    async def client_ack_messages(self):  # noqa: PLR0915
         try:
             while True:
                 message = await self.websocket.receive_text()
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
+                guardrail_turn_detection_injected = False
                 try:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
@@ -796,7 +887,68 @@ class RealTimeStreaming:
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
                         item = msg_obj.get("item", {})
-                        if item.get("role") == "user":
+                        # Check function_call_output first so a client cannot
+                        # bypass the tool-result guardrail by also setting
+                        # role="user" on a function_call_output item.
+                        if item.get("type") == "function_call_output":
+                            # Tool results are client-controlled and fed to the
+                            # model; check them with the same guardrail used for
+                            # user text so an attacker cannot smuggle blocked
+                            # content into a function_call_output.
+                            output = item.get("output", "")
+                            output_text = (
+                                output
+                                if isinstance(output, str)
+                                else json.dumps(output)
+                            )
+                            if output_text:
+                                # Build the sanitized function_call_output up
+                                # front so we can hand it to the guardrail
+                                # runner as the pre-block message. Providers
+                                # that pair every toolCall with a toolResponse
+                                # (e.g. Gemini/Vertex Live) require the
+                                # toolResponse to arrive BEFORE any other
+                                # client message — otherwise the guardrail's
+                                # own clientContent would violate the
+                                # pending-tool-call protocol contract and the
+                                # backend could close the connection before
+                                # the sanitized response ever lands. Dropping
+                                # the blocked item outright would similarly
+                                # leave such providers waiting indefinitely.
+                                # The sanitized payload carries no blocked
+                                # content — only a generic policy marker.
+                                sanitized_msg = json.dumps(
+                                    {
+                                        **msg_obj,
+                                        "item": {
+                                            **item,
+                                            "output": json.dumps(
+                                                {
+                                                    "error": "Tool output blocked by content policy",
+                                                }
+                                            ),
+                                        },
+                                    }
+                                )
+                                blocked = await self.run_realtime_guardrails(
+                                    output_text,
+                                    pre_block_backend_message=sanitized_msg,
+                                )
+                                if blocked:
+                                    # ``_pending_guardrail_message`` is
+                                    # intentionally NOT set here. That flag
+                                    # exists to swallow the reflexive
+                                    # ``response.create`` an OpenAI client
+                                    # sends immediately after a user text
+                                    # message. In a tool-calling flow the
+                                    # client may not send a ``response.create``
+                                    # at all (e.g. Gemini SDKs auto-respond),
+                                    # so leaving the flag set would
+                                    # incorrectly drop an unrelated
+                                    # ``response.create`` from a later
+                                    # interaction turn.
+                                    continue
+                        elif item.get("role") == "user":
                             content_list = item.get("content", [])
                             texts = [
                                 c.get("text", "")
@@ -824,6 +976,89 @@ class RealTimeStreaming:
                         self._pending_guardrail_message = None
                         continue
 
+                    ## GUARDRAIL: Inject turn_detection into first session.update
+                    # if needed. Done BEFORE the GA remap so the injected
+                    # ``create_response`` rides along with any client-provided
+                    # turn_detection fields (e.g. silence_duration_ms) into the
+                    # nested ``audio.input.turn_detection`` path produced by the
+                    # remap. Doing this after the remap would create a separate
+                    # minimal root-level ``turn_detection`` and silently drop
+                    # the client's nested settings.
+                    if (
+                        msg_type == "session.update"
+                        and self.session_configuration_request is None
+                        and not self._guardrail_turn_detection_update_sent
+                        and self._has_audio_transcription_guardrails()
+                    ):
+                        session = msg_obj.setdefault("session", {})
+                        if isinstance(session, dict):
+                            existing_td = session.get("turn_detection")
+                            if not isinstance(existing_td, dict):
+                                existing_td = {}
+                            existing_td["create_response"] = False
+                            session["turn_detection"] = existing_td
+                            message = json.dumps(msg_obj)
+                            guardrail_turn_detection_injected = True
+                            verbose_logger.debug(
+                                "Injected turn_detection into first session.update for audio transcription guardrails"
+                            )
+
+                    ## GUARDRAIL: Force ``create_response`` to False in any
+                    # client-provided ``turn_detection`` so a later
+                    # ``session.update`` cannot re-enable VAD auto-response
+                    # and bypass the transcription guardrail after the
+                    # initial disable. Covers both the flat beta key and the
+                    # nested GA ``audio.input.turn_detection`` shape, since
+                    # the GA remap below also accepts either form. Skipped
+                    # when the injection block above already ran for this
+                    # message, to avoid redundant double-serialization.
+                    if (
+                        msg_type == "session.update"
+                        and not guardrail_turn_detection_injected
+                        and self._has_audio_transcription_guardrails()
+                    ):
+                        session = msg_obj.get("session")
+                        if isinstance(session, dict):
+                            td_overridden = False
+                            flat_td = session.get("turn_detection")
+                            flat_td_present = flat_td is not None
+                            if flat_td_present:
+                                if not isinstance(flat_td, dict):
+                                    flat_td = {}
+                                if flat_td.get("create_response") is not False:
+                                    flat_td["create_response"] = False
+                                    session["turn_detection"] = flat_td
+                                    td_overridden = True
+                            nested_td_present = False
+                            audio = session.get("audio")
+                            if isinstance(audio, dict):
+                                audio_input = audio.get("input")
+                                if isinstance(audio_input, dict):
+                                    nested_td = audio_input.get("turn_detection")
+                                    if nested_td is not None:
+                                        nested_td_present = True
+                                        if not isinstance(nested_td, dict):
+                                            nested_td = {}
+                                        if (
+                                            nested_td.get("create_response")
+                                            is not False
+                                        ):
+                                            nested_td["create_response"] = False
+                                            audio_input["turn_detection"] = nested_td
+                                            td_overridden = True
+                            # Symmetric with the first-update injection block:
+                            # if the client omitted turn_detection entirely on
+                            # a subsequent session.update, still inject the
+                            # ``create_response: False`` override so the
+                            # transcription guardrail cannot be re-enabled by
+                            # any downstream merge that drops the original
+                            # disable.
+                            if not flat_td_present and not nested_td_present:
+                                session["turn_detection"] = {"create_response": False}
+                                td_overridden = True
+                            if td_overridden:
+                                message = json.dumps(msg_obj)
+
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
@@ -841,17 +1076,20 @@ class RealTimeStreaming:
                     pass
 
                 ## LOGGING
+                # Log after any in-place modifications (GA remap, guardrail
+                # turn_detection injection) so audit logs reflect what we
+                # actually forward to the backend.
                 self.store_input(message=message)
-                ## FORWARD TO BACKEND
-                if self.provider_config:
-                    message = self.provider_config.transform_realtime_request(
-                        message, self.model
-                    )
 
-                    for msg in message:
-                        await self.backend_ws.send(msg)  # type: ignore[union-attr]
-                else:
-                    await self.backend_ws.send(message)  # type: ignore[union-attr]
+                ## FORWARD TO BACKEND
+                # Only mark the guardrail turn_detection update as sent after the
+                # backend actually accepted the message. Setting the flag earlier
+                # would permanently disable the injection if ``_send_to_backend``
+                # raised — neither this loop nor
+                # ``_maybe_send_guardrail_turn_detection_update`` would retry.
+                sent = await self._send_to_backend(message)
+                if guardrail_turn_detection_injected and sent:
+                    self._guardrail_turn_detection_update_sent = True
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")

@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -435,6 +435,85 @@ async def send_management_endpoint_alert(
             )
 
 
+async def _emit_management_endpoint_otel_span(
+    func: Callable,
+    kwargs: dict,
+    parent_otel_span: Any,
+    start_time: datetime,
+    end_time: datetime,
+    result: Any = None,
+    exception: Optional[Exception] = None,
+) -> None:
+    """Stamp + end the parent OTEL SERVER span for a management endpoint.
+
+    Routes the request/response (or exception) through the OTEL success/failure
+    hook. Falls back to ``func.__name__`` for the route when the handler has no
+    ``http_request`` param — endpoints like ``/key/generate`` never receive one,
+    and gating the hook on it leaked their SERVER span (created in auth, never
+    ended → never exported). Always emitting keeps both success and failure
+    paths consistent.
+    """
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
+    if open_telemetry_logger is None:
+        return
+
+    http_request: Optional[Request] = kwargs.get("http_request")
+    if http_request is not None:
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        route = get_request_route(http_request)
+        request_body: dict = await _read_request_body(request=http_request)
+    else:
+        route = func.__name__
+        request_body = {}
+
+    _CREDENTIAL_FIELDS = frozenset(
+        {
+            "key",
+            "token",
+            "api_key",
+            "secret",
+            "password",
+            "access_token",
+            "refresh_token",
+            "private_key",
+            "service_account_key",
+        }
+    )
+
+    _response: Optional[dict] = None
+    if exception is None and result is not None:
+        try:
+            raw = dict(result)
+            _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+        except Exception:
+            _response = None
+
+    logging_payload = ManagementEndpointLoggingPayload(
+        route=route,
+        request_data=request_body,
+        response=_response,
+        start_time=start_time,
+        end_time=end_time,
+        exception=exception,
+    )
+
+    if exception is None:
+        await open_telemetry_logger.async_management_endpoint_success_hook(
+            logging_payload=logging_payload,
+            parent_otel_span=parent_otel_span,
+        )
+    else:
+        await open_telemetry_logger.async_management_endpoint_failure_hook(
+            logging_payload=logging_payload,
+            parent_otel_span=parent_otel_span,
+        )
+
+
 def management_endpoint_wrapper(func):
     """
     This wrapper does the following:
@@ -446,13 +525,10 @@ def management_endpoint_wrapper(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
-        _http_request: Optional[Request] = None
         try:
             result = await func(*args, **kwargs)
             end_time = datetime.now()
             try:
-                if kwargs is None:
-                    kwargs = {}
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
@@ -462,31 +538,16 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-                _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
-                    from litellm.proxy.proxy_server import open_telemetry_logger
-
-                    if open_telemetry_logger is not None:
-                        if _http_request:
-                            _route = _http_request.url.path
-                            _request_body: dict = await _read_request_body(
-                                request=_http_request
-                            )
-                            _response = dict(result) if result is not None else None
-
-                            logging_payload = ManagementEndpointLoggingPayload(
-                                route=_route,
-                                request_data=_request_body,
-                                response=_response,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
-
-                            await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
-                                logging_payload=logging_payload,
-                                parent_otel_span=parent_otel_span,
-                            )
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        result=result,
+                    )
 
                 # Delete updated/deleted info from cache
                 _delete_api_key_from_cache(kwargs=kwargs)
@@ -502,38 +563,26 @@ def management_endpoint_wrapper(func):
         except Exception as e:
             end_time = datetime.now()
 
-            if kwargs is None:
-                kwargs = {}
             user_api_key_dict: UserAPIKeyAuth = (
                 kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             )
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
-                from litellm.proxy.proxy_server import open_telemetry_logger
-
-                if open_telemetry_logger is not None:
-                    _http_request = kwargs.get("http_request")
-                    if _http_request:
-                        _route = _http_request.url.path
-                        _request_body: dict = await _read_request_body(
-                            request=_http_request
-                        )
-                    else:
-                        _route = func.__name__
-                        _request_body = {}
-
-                    logging_payload = ManagementEndpointLoggingPayload(
-                        route=_route,
-                        request_data=_request_body,
-                        response=None,
+                try:
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
                         exception=e,
                     )
-
-                    await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
-                        logging_payload=logging_payload,
-                        parent_otel_span=parent_otel_span,
+                except Exception as otel_exc:
+                    # Non-Blocking Exception - never let OTEL failures swallow
+                    # the original management-endpoint exception.
+                    verbose_logger.debug(
+                        "Error emitting OTEL span in management endpoint wrapper failure path: %s",
+                        str(otel_exc),
                     )
 
             raise e

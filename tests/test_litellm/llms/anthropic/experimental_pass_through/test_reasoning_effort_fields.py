@@ -63,7 +63,13 @@ class TestGetModelInfoReasoningEffortFields:
 
 class TestModelRegistryReasoningEffortFields:
     """Verify specific models have the expected reasoning effort capability
-    values in the JSON registry file."""
+    values in the JSON registry file.
+
+    Claude models intentionally OMIT ``supports_minimal_reasoning_effort``:
+    ``minimal`` is not a real Anthropic effort level (the API accepts only
+    low/medium/high/xhigh/max), so LiteLLM degrades ``minimal`` to ``low``
+    regardless of the flag. These tests guard against the flag being
+    re-added to the Claude fleet."""
 
     @pytest.fixture(autouse=True)
     def _load_registry(self):
@@ -77,41 +83,41 @@ class TestModelRegistryReasoningEffortFields:
         entry = self.registry["claude-opus-4-6"]
         assert entry.get("supports_max_reasoning_effort") is True
 
-    def test_opus_4_7_supports_minimal(self):
+    def test_opus_4_7_omits_minimal(self):
         entry = self.registry["claude-opus-4-7"]
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
-    def test_opus_4_6_supports_minimal(self):
+    def test_opus_4_6_omits_minimal(self):
         entry = self.registry["claude-opus-4-6"]
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
-    def test_sonnet_4_6_supports_minimal(self):
+    def test_sonnet_4_6_omits_minimal(self):
         entry = self.registry["anthropic.claude-sonnet-4-6"]
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
     def test_bedrock_opus_4_7_supports_max(self):
         entry = self.registry["anthropic.claude-opus-4-7"]
         assert entry.get("supports_max_reasoning_effort") is True
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
     def test_vertex_opus_4_7_supports_max(self):
         entry = self.registry["vertex_ai/claude-opus-4-7"]
         assert entry.get("supports_max_reasoning_effort") is True
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
     def test_vertex_opus_4_6_supports_max(self):
         entry = self.registry["vertex_ai/claude-opus-4-6"]
         assert entry.get("supports_max_reasoning_effort") is True
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
-    def test_azure_ai_opus_4_6_supports_minimal(self):
+    def test_azure_ai_opus_4_6_omits_minimal(self):
         entry = self.registry["azure_ai/claude-opus-4-6"]
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
     def test_azure_ai_opus_4_7_supports_max(self):
         entry = self.registry["azure_ai/claude-opus-4-7"]
         assert entry.get("supports_max_reasoning_effort") is True
-        assert entry.get("supports_minimal_reasoning_effort") is True
+        assert "supports_minimal_reasoning_effort" not in entry
 
 
 # ---------------------------------------------------------------------------

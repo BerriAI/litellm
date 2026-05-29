@@ -839,6 +839,7 @@ class ProxyBaseLLMRequestProcessing:
             "aget_run",
             "acancel_run",
             "adelete_run",
+            "apply_guardrail",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -1368,6 +1369,21 @@ class ProxyBaseLLMRequestProcessing:
                         user_api_key_dict=user_api_key_dict,
                         request_data=self.data,
                     )
+                    if route_type == "aresponses":
+                        # Streaming /v1/responses returns here without
+                        # reaching the non-streaming ownership tail below.
+                        # Wrap the SSE generator so container ownership is
+                        # written once the upstream iterator finishes
+                        # assembling ``completed_response`` — otherwise
+                        # code-interpreter containers created during the
+                        # stream stay unregistered and follow-up file API
+                        # calls 403. Covers the background-polling path
+                        # too, which loops ``body_iterator`` end-to-end.
+                        selected_data_generator = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                            original_stream_response=response,
+                            wrapped_generator=selected_data_generator,
+                            user_api_key_dict=user_api_key_dict,
+                        )
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
@@ -1483,7 +1499,92 @@ class ProxyBaseLLMRequestProcessing:
 
         await check_response_size_is_safe(response=response)
 
+        if route_type in {"aresponses", "aget_responses"}:
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         return response
+
+    @staticmethod
+    async def _record_container_owners_from_responses_if_needed(
+        response: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Register code-interpreter containers so follow-up file APIs pass ownership checks."""
+        from litellm.proxy.container_endpoints.ownership import (
+            record_container_owners_from_responses_response,
+        )
+
+        if response is None:
+            return
+
+        try:
+            await record_container_owners_from_responses_response(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Container ownership recording failed after responses call: %s",
+                e,
+            )
+
+    @staticmethod
+    def _extract_completed_responses_response(stream_response: Any) -> Any:
+        """Pull the assembled ``ResponsesAPIResponse`` off a streaming iterator.
+
+        ``ResponsesAPIStreamingIterator`` stores the terminal stream event
+        (``response.completed`` / ``response.incomplete`` / ``response.failed``)
+        in ``completed_response``; the actual response body hangs off
+        that event's ``.response`` attribute. Some iterators store the
+        ``ResponsesAPIResponse`` directly. Handle both shapes so the
+        container-ownership recording path can walk ``.output`` either way.
+        """
+        completed = getattr(stream_response, "completed_response", None)
+        if completed is None:
+            return None
+        response_obj = getattr(completed, "response", None)
+        if response_obj is not None:
+            return response_obj
+        return completed
+
+    @staticmethod
+    async def _wrap_responses_stream_for_container_ownership(
+        original_stream_response: Any,
+        wrapped_generator: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """Forward SSE chunks, then record container ownership at stream end.
+
+        Streaming ``/v1/responses`` short-circuits out of
+        ``base_process_llm_request`` before the non-streaming ownership
+        tail runs, so without this wrap the
+        ``LiteLLM_ManagedObjectTable`` row for any container created
+        during the stream is never written and follow-up file API calls
+        return 403.
+        """
+        try:
+            async for chunk in wrapped_generator:
+                yield chunk
+        finally:
+            try:
+                completed_obj = (
+                    ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                        original_stream_response
+                    )
+                )
+                if completed_obj is not None:
+                    await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                        response=completed_obj,
+                        user_api_key_dict=user_api_key_dict,
+                    )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "Container ownership recording failed after streaming responses call: %s",
+                    e,
+                )
 
     async def base_passthrough_process_llm_request(
         self,

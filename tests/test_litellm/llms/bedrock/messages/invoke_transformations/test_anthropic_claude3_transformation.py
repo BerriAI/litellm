@@ -767,6 +767,163 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
     assert "output_format" not in result
 
 
+def test_bedrock_messages_converts_output_config_format_to_inline_schema():
+    """``output_config.format`` is consumed so Bedrock does not see an unknown nested key."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "xhigh",
+            "format": {"type": "json_schema", "schema": schema},
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    assert "output_format" not in result
+    last_content = result["messages"][0]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "model,expected_effort",
+    [
+        ("anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("anthropic.claude-opus-4-6-v1", "max"),
+        ("anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_bedrock_messages_normalizes_output_config_effort_for_opus(
+    model, expected_effort
+):
+    """Bedrock /v1/messages accepts ``xhigh`` and forwards the provider-safe effort."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "output_config": {"effort": "xhigh"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema():
+    """Inline-schema embedding must not mutate the caller's ``messages`` list,
+    message dicts, or content list."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    caller_content = [{"type": "text", "text": "Hello"}]
+    caller_message = {"role": "user", "content": caller_content}
+    caller_messages = [caller_message]
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "xhigh",
+            "format": {"type": "json_schema", "schema": schema},
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=caller_messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert caller_messages == [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+    ]
+    assert caller_message == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Hello"}],
+    }
+    assert caller_content == [{"type": "text", "text": "Hello"}]
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_bedrock_messages_does_not_mutate_callers_output_config():
+    """`pop_bedrock_invoke_output_config_format` / effort normalization must not
+    leak into the caller's ``optional_params`` dict."""
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+    caller_output_config = {
+        "effort": "xhigh",
+        "format": {"type": "json_schema", "schema": schema},
+    }
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": caller_output_config,
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-5-20251101-v1:0",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert caller_output_config == {
+        "effort": "xhigh",
+        "format": {"type": "json_schema", "schema": schema},
+    }
+
+
 def test_bedrock_messages_strips_output_config_with_output_format():
     """
     When both output_config and output_format are present, output_format
@@ -1071,9 +1228,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
     optional_params = {
         "max_tokens": 4096,
-        "context_management": {
-            "edits": [{"type": "compact_20260112"}]
-        },
+        "context_management": {"edits": [{"type": "compact_20260112"}]},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -1084,9 +1239,7 @@ def test_bedrock_messages_preserves_compact_context_management_and_adds_beta():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
     assert result["max_tokens"] == 4096
 
@@ -1118,9 +1271,7 @@ def test_bedrock_messages_filters_unsupported_context_management_edits():
         headers={},
     )
 
-    assert result.get("context_management") == {
-        "edits": [{"type": "compact_20260112"}]
-    }
+    assert result.get("context_management") == {"edits": [{"type": "compact_20260112"}]}
     assert "compact-2026-01-12" in result.get("anthropic_beta", [])
 
 

@@ -5942,6 +5942,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_token_priority=_model_info.get(
                     "output_cost_per_token_priority", None
                 ),
+                regional_processing_uplift_multiplier_eu=_model_info.get(
+                    "regional_processing_uplift_multiplier_eu", None
+                ),
+                regional_processing_uplift_multiplier_us=_model_info.get(
+                    "regional_processing_uplift_multiplier_us", None
+                ),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),
@@ -6029,6 +6035,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_max_reasoning_effort=_model_info.get(
                     "supports_max_reasoning_effort", None
+                ),
+                bedrock_output_config_effort_ceiling=_model_info.get(
+                    "bedrock_output_config_effort_ceiling", None
                 ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(

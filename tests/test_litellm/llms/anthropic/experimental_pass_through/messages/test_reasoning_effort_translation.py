@@ -6,6 +6,9 @@ from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
 
 
 @pytest.mark.parametrize(
@@ -102,7 +105,6 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
     "model,bad_effort",
     [
         ("claude-opus-4-6", "xhigh"),
-        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh"),
         ("claude-sonnet-4-6", "xhigh"),
     ],
 )
@@ -113,6 +115,56 @@ def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort
     with pytest.raises(AnthropicError) as exc_info:
         config.transform_anthropic_messages_request(
             model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "not supported by this model" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+        ("invoke/us.anthropic.claude-opus-4-6-v1", "max", "max"),
+        ("invoke/us.anthropic.claude-opus-4-6-v1", "high", "high"),
+        ("invoke/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
+    ],
+)
+def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
+    model, effort, expected_effort
+):
+    """Bedrock Invoke /v1/messages degrades effort to the model's ceiling.
+
+    Claude Code "goal mode" sends ``xhigh``; Opus 4.6 must clamp to ``max``
+    instead of raising, while Opus 4.7 (ceiling ``xhigh``) keeps ``xhigh``.
+    """
+    config = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {"max_tokens": 1024, "reasoning_effort": effort}
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == expected_effort
+    assert result["thinking"]["type"] == "adaptive"
+
+
+def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling():
+    """Sonnet 4.6 on Bedrock has no effort ceiling, so xhigh is still rejected."""
+    config = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
+
+    with pytest.raises(AnthropicError) as exc_info:
+        config.transform_anthropic_messages_request(
+            model="invoke/us.anthropic.claude-sonnet-4-6",
             messages=[{"role": "user", "content": "Hello"}],
             anthropic_messages_optional_request_params=optional_params,
             litellm_params={},

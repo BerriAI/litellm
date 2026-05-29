@@ -2,6 +2,19 @@
 
 This document provides comprehensive instructions for AI agents working in the LiteLLM repository.
 
+## Confidentiality: Customer and Company Names in Code
+
+The codebase is public. Before writing **any** third-party organization name into this repository — in source code, file or directory names, docstrings, comments, tests, fixtures, mock payloads, error messages, log lines, commit messages, or PR descriptions — pause and check:
+
+**Already in the codebase** (OpenAI, Anthropic, Google, Azure, Bedrock, Fireworks, and other established LLM providers / integrations) — fine to use. Quick check: `git grep -i "<name>"` — if it returns hits in real code (not just your current diff), the name is established.
+
+**Anything else** — customers, prospects, partners, new vendor integrations, observability tools, infra vendors, or any organization name that does not already appear in the repo. STOP and surface it to the user. Ask for explicit consent before writing the name into any file, commit message, or PR description. Do not write it speculatively and clean up later. Do not substitute a placeholder and proceed. Do not assume it is safe because it "looks like" a public company. The user must approve first.
+
+**What to do instead of a customer-specific reference:**
+- If you find yourself reaching for a customer name — real or fake — step back. The code shouldn't be customer-specific in the first place. Generalize the feature, or capture the customer motivation in internal docs (Notion / Linear / the internal staging PR description), never in the repo.
+- Frame changes by the capability they add, not the customer who asked for it ("add per-team Bedrock guardrail routing", not "add routing for $CUSTOMER").
+- Standard "fake value" markers (`example.com`, `localhost`, `127.0.0.1`, `test@example.com`) and abstract identifiers (`team_a`, `user_1`, `tenant_x`) are fine — those are not customer stand-ins.
+
 ## OVERVIEW
 
 LiteLLM is a unified interface for 100+ LLMs that:

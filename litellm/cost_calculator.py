@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
+    _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
     calculate_cost_component,
@@ -132,6 +133,8 @@ _VIDEO_CALL_TYPES = frozenset(
     {
         CallTypes.create_video.value,
         CallTypes.acreate_video.value,
+        CallTypes.video_edit.value,
+        CallTypes.avideo_edit.value,
         CallTypes.video_remix.value,
         CallTypes.avideo_remix.value,
     }
@@ -312,6 +315,10 @@ def cost_per_token(  # noqa: PLR0915
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
     response: Optional[Any] = None,
     ### REQUEST MODEL ###
     request_model: Optional[str] = None,  # original request model for router detection
@@ -412,9 +419,36 @@ def cost_per_token(  # noqa: PLR0915
     prompt_tokens_cost_usd_dollar: float = 0
     completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref = litellm.model_cost
+    # Only callers that explicitly pass `custom_llm_provider` get the
+    # dedup/prefix-join treatment. When provider is omitted, preserve legacy
+    # behavior: `model_with_provider` stays equal to the raw `model` string
+    # (provider is detected below for downstream use only).
+    caller_supplied_provider = custom_llm_provider is not None
+
+    # `model` is normally a string, but callers that mock the transport can pass
+    # non-string objects. Only run the string-based dedup/prefix-join when it is
+    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
+    # its slices return new mocks, which would spin the dedup loop forever.
+    model_is_str = isinstance(model, str)
+
+    # Router/proxy deployments may repeat the provider segment (e.g. model_name
+    # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
+    if caller_supplied_provider and model_is_str:
+        _dup_prefix = f"{custom_llm_provider}/"
+        while model.startswith(_dup_prefix):
+            _remainder = model[len(_dup_prefix) :]
+            if _remainder.startswith(_dup_prefix):
+                model = _remainder
+            else:
+                break
+
     model_with_provider = model
-    if custom_llm_provider is not None:
-        model_with_provider = custom_llm_provider + "/" + model
+    if caller_supplied_provider:
+        _prov_prefix = f"{custom_llm_provider}/"
+        if model_is_str and model.startswith(_prov_prefix):
+            model_with_provider = model
+        else:
+            model_with_provider = f"{custom_llm_provider}/{model}"
         if region_name is not None:
             model_with_provider_and_region = (
                 f"{custom_llm_provider}/{region_name}/{model}"
@@ -425,6 +459,9 @@ def cost_per_token(  # noqa: PLR0915
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
+
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
@@ -493,6 +530,7 @@ def cost_per_token(  # noqa: PLR0915
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         return prompt_cost, completion_cost
@@ -521,7 +559,10 @@ def cost_per_token(  # noqa: PLR0915
         or call_type == CallTypes.retrieve_batch
     ):
         return batch_cost_calculator(
-            usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
+            usage=usage_block,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            data_residency=data_residency,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
@@ -529,6 +570,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 usage=usage_block,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         return openai_cost_per_second(
@@ -579,7 +621,10 @@ def cost_per_token(  # noqa: PLR0915
         )
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
-            model=model, usage=usage_block, service_tier=service_tier
+            model=model,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
@@ -631,6 +676,7 @@ def cost_per_token(  # noqa: PLR0915
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
 
         if (
@@ -1117,6 +1163,10 @@ def completion_cost(  # noqa: PLR0915
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -1516,6 +1566,7 @@ def completion_cost(  # noqa: PLR0915
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
+                        data_residency=data_residency,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -1600,6 +1651,7 @@ def completion_cost(  # noqa: PLR0915
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
+                    data_residency=data_residency,
                     response=completion_response,
                     request_model=request_model_for_cost,
                 )
@@ -1811,6 +1863,10 @@ def response_cost_calculator(
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    ### DATA RESIDENCY ###
+    data_residency: Optional[
+        str
+    ] = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
 ) -> float:
     """
     Returns
@@ -1844,6 +1900,7 @@ def response_cost_calculator(
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
                 service_tier=service_tier,
+                data_residency=data_residency,
             )
         return response_cost
     except Exception as e:
@@ -2202,6 +2259,7 @@ def batch_cost_calculator(
     model: str,
     custom_llm_provider: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
+    data_residency: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost of a batch job.
@@ -2285,6 +2343,11 @@ def batch_cost_calculator(
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
+
+    uplift = _get_regional_uplift_multiplier(model_info, data_residency)
+    if uplift != 1.0:
+        total_prompt_cost *= uplift
+        total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
 
@@ -2431,6 +2494,7 @@ def handle_realtime_stream_cost_calculation(
     combined_usage_object: Usage,
     custom_llm_provider: str,
     litellm_model_name: str,
+    data_residency: Optional[str] = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2461,6 +2525,7 @@ def handle_realtime_stream_cost_calculation(
                 model=model_name,
                 usage=combined_usage_object,
                 custom_llm_provider=custom_llm_provider,
+                data_residency=data_residency,
             )
         except Exception:
             continue

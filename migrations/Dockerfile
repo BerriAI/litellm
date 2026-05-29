@@ -31,12 +31,20 @@ USER root
 
 COPY --from=uvbin /uv /uvx /usr/local/bin/
 
-RUN apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile
+# nodejs/npm so `prisma generate` uses Wolfi's Node via PRISMA_USE_GLOBAL_NODE
+# instead of nodeenv downloading one whose dynamic deps may not be in Wolfi
+# (e.g. Node 26.2.0 needs libatomic). Retry for transient apk.cgr.dev flakes.
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash gcc python3 python3-dev openssl openssl-dev libsndfile nodejs npm && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
+    done
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=0 \
+    PRISMA_USE_GLOBAL_NODE=true \
     PATH="/app/.venv/bin:${PATH}"
 
 # Stage 1 — install third-party deps only (cached by pyproject.toml/uv.lock).
@@ -78,7 +86,11 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-RUN apk add --no-cache bash openssl tzdata python3 libsndfile libatomic
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash openssl tzdata python3 libsndfile libatomic && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
+    done
 
 # wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532). The
 # Prisma engine binaries are dynamically linked against libssl/libcrypto, so
