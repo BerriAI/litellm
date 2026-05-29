@@ -1613,7 +1613,7 @@ def _create_oauth2_server(
     )
 
 
-def test_server_scoped_openid_configuration_matches_oauth_metadata_route():
+def test_server_scoped_openid_configuration_uses_server_issuer():
     try:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
@@ -1643,10 +1643,19 @@ def test_server_scoped_openid_configuration_matches_oauth_metadata_route():
 
         assert oidc_response.status_code == 200
         assert oauth_response.status_code == 200
-        assert oidc_response.json() == oauth_response.json()
+        oidc_metadata = oidc_response.json()
+        oauth_metadata = oauth_response.json()
+
+        assert oidc_metadata["issuer"] == "http://testserver/test_oauth"
+        assert oauth_metadata["issuer"] == "http://testserver"
         assert (
-            oidc_response.json()["authorization_endpoint"]
-            == "http://testserver/test_oauth/authorize"
+            oidc_metadata["authorization_endpoint"]
+            == oauth_metadata["authorization_endpoint"]
+        )
+        assert oidc_metadata["token_endpoint"] == oauth_metadata["token_endpoint"]
+        assert (
+            oidc_metadata["registration_endpoint"]
+            == oauth_metadata["registration_endpoint"]
         )
     finally:
         global_mcp_server_manager.registry.clear()
