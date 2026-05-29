@@ -230,13 +230,14 @@ use_legacy_interactions_schema: bool = (
 )  # When True, sends Api-Revision: 2026-05-07 to Google so responses use the legacy `outputs`
 # schema instead of the new `steps` schema. Remove this flag after June 8, 2026.
 vector_store_allow_destructive_passthrough: bool = (
-    os.getenv("LITELLM_VECTOR_STORE_ALLOW_DESTRUCTIVE_PASSTHROUGH", "false").lower()
-    == "true"
-)  # LIT-2384 escape hatch: when True, restore the legacy silent-allow behaviour
-# for non-admin DELETE/PUT/POST/PATCH on unenumerated vector store passthrough
-# paths (e.g. DELETE /azure_ai/indexes/<name>). Default False keeps the secure
-# default-deny. Operators with legitimate non-admin destructive flows can set
-# this to True (or set the env var) until they migrate to admin-only callers.
+    False  # LIT-2384 escape hatch: when True, restore the legacy silent-allow
+)
+# behaviour for non-admin DELETE/PUT/POST/PATCH on unenumerated vector store
+# passthrough paths (e.g. DELETE /azure_ai/indexes/<name>). Default False keeps
+# the secure default-deny. Operators with legitimate non-admin destructive
+# flows can set this attribute to True (or set
+# litellm_settings.vector_store_allow_destructive_passthrough: true in the
+# proxy YAML config) until they migrate to admin-only callers.
 
 retry = True
 ### AUTH ###
