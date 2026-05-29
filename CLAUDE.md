@@ -24,7 +24,7 @@ Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We pref
 If you ever make public-facing PR descriptions, comments, issues, commit messages, etc., always follow these guidelines to sound less AI-y:
 - don't use emojis
 - don't use "—". Instead, reach for ";", ".", etc.
-- don't use the pattern "It's not X, it's Y"
+- don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 
 Don't hesitate to read .env to get needed API keys and other secrets
