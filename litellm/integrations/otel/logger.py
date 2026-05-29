@@ -17,7 +17,7 @@ in an out-of-context thread, where there is no parent span, so it is a no-op.
 """
 
 from datetime import datetime
-from typing import Any, Mapping, cast
+from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from opentelemetry.context import attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
@@ -46,6 +46,9 @@ from litellm.integrations.otel.routing import TenantTracerCache
 from litellm.integrations.otel.spans import SpanRole
 from litellm.integrations.otel.utils import to_ns
 
+if TYPE_CHECKING:
+    from litellm.types.utils import StandardLoggingGuardrailInformation
+
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 
@@ -55,6 +58,30 @@ _OTEL_MODULES = (
     "litellm.integrations.otel",
     "litellm.integrations.opentelemetry",
 )
+
+
+def _threaded_parent_span(kwargs: Mapping[str, Any]) -> Span | None:
+    """The proxy SERVER span threaded through request metadata, if any.
+
+    Normally the LLM-call span parents to the ambient OTel context (the active
+    server span). But pass-through logging runs in a detached
+    ``asyncio.create_task`` whose copied context may no longer carry that span,
+    so the proxy also threads it explicitly as ``litellm_parent_otel_span`` (see
+    ``litellm_pre_call_utils`` for proxy routes and the pass-through endpoint for
+    catch-all routes). This reads it back so the call span can fall back to it.
+    """
+    litellm_params = kwargs.get("litellm_params")
+    candidates: list[Any] = []
+    if isinstance(litellm_params, Mapping):
+        candidates.append(litellm_params.get("metadata"))
+        candidates.append(litellm_params.get("litellm_metadata"))
+    candidates.append(kwargs.get("metadata"))
+    for meta in candidates:
+        if isinstance(meta, Mapping):
+            span = meta.get("litellm_parent_otel_span")
+            if span is not None:
+                return cast("Span", span)
+    return None
 
 
 def _pre_call_guardrail_blocked(payload: Mapping[str, Any]) -> bool:
@@ -103,7 +130,11 @@ class OpenTelemetryV2(CustomLogger):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config()
+        # Build the config from any settings passed through ``kwargs`` so
+        # ``callback_settings.otel.*`` in config.yaml (e.g. ``baggage_promoted_keys``,
+        # ``capture_message_content``) configures the logger. ``OpenTelemetryV2Config``
+        # ignores extra keys, so unrelated kwargs are dropped harmlessly.
+        self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
             tracer_provider
@@ -187,8 +218,17 @@ class OpenTelemetryV2(CustomLogger):
             cast("Any", payload), capture_content=self.config.capture_span_content
         )
         # Parent is the ambient context (the instrumentor's server span,
-        # restored by the logging worker); no span is threaded through metadata.
+        # restored by the logging worker). When the ambient context has lost the
+        # server span — e.g. pass-through logging fired from a detached task —
+        # fall back to the server span the proxy threaded through metadata so the
+        # call span still nests under the request instead of being dropped.
         parent_ctx = get_current()
+        if not is_recordable_span(get_current_span(parent_ctx)):
+            threaded_parent = _threaded_parent_span(kwargs)
+            if is_recordable_span(threaded_parent):
+                parent_ctx = context_from_span(
+                    cast("Span", threaded_parent), context=parent_ctx
+                )
         # Write identity into Baggage so child spans (guardrails, services)
         # inherit it.
         bag = promoted_baggage(
@@ -361,7 +401,10 @@ class OpenTelemetryV2(CustomLogger):
             if not isinstance(entry, dict):
                 continue
             self._emitter.emit(
-                SpanRole.GUARDRAIL, GuardrailSpanData.from_logging_entry(entry)
+                SpanRole.GUARDRAIL,
+                GuardrailSpanData.from_logging_entry(
+                    cast("StandardLoggingGuardrailInformation", entry)
+                ),
             )
 
     # ====================================================================== #

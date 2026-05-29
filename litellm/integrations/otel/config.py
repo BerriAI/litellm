@@ -1,7 +1,10 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Any, List
+
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from typing_extensions import Annotated
 
 from litellm.integrations.otel.baggage import (
     BAGGAGE_PROMOTED_KEYS,
@@ -122,7 +125,7 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    mapper_names: list[str] = Field(
+    mapper_names: Annotated[List[str], NoDecode] = Field(
         default_factory=lambda: ["genai"],
         description=(
             "Ordered attribute vocabularies to emit. ``genai`` is the "
@@ -140,12 +143,51 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    baggage_promoted_keys: list[str] = Field(
-        default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS)
+    baggage_promoted_keys: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS),
+        validation_alias=AliasChoices(
+            "baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"
+        ),
+        description=(
+            "Identity attribute keys written into Baggage and stamped on every "
+            "child span (e.g. ``litellm.team.id``). Configure via the "
+            "``LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS`` env var (comma-separated) or "
+            "``callback_settings.otel.baggage_promoted_keys`` in config.yaml (a "
+            "YAML list)."
+        ),
     )
-    baggage_metadata_keys: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS)
+    baggage_metadata_keys: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS),
+        validation_alias=AliasChoices(
+            "baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
+        ),
+        description=(
+            "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
+            "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
+            "env var (comma-separated) or "
+            "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
+        ),
     )
+
+    @field_validator(
+        "baggage_promoted_keys",
+        "baggage_metadata_keys",
+        "mapper_names",
+        mode="before",
+    )
+    @classmethod
+    def _split_csv(cls, value: Any) -> Any:
+        """Accept a comma-separated string for list fields.
+
+        Env vars are strings, but these fields are lists. Pydantic-settings would
+        otherwise require JSON for a list env var; splitting on commas here lets
+        an operator write ``LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS=litellm.team.id,litellm.api_key.hash``.
+        YAML lists (from ``callback_settings.otel.*``) and real lists pass through
+        unchanged.
+        """
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":

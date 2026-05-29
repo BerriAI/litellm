@@ -551,6 +551,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             metadata=_metadata,
         )
 
+        # Thread the proxy SERVER span through so observability loggers can parent
+        # the LLM-call span under it. Pass-through logging runs in a detached
+        # ``asyncio.create_task`` where the ambient OTel context may no longer
+        # carry the server span, so the OTel adapter falls back to this explicit
+        # parent — without it the pass-through LLM-call span is dropped (or
+        # orphaned into its own trace).
+        _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
+
         kwargs = {
             "litellm_params": {
                 **litellm_params_in_body,  # type: ignore

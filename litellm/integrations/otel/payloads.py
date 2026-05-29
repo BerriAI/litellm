@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, ClassVar, Mapping, cast
 from urllib.parse import urlsplit
 
@@ -22,7 +23,10 @@ from litellm.integrations.otel.utils import (
 
 if TYPE_CHECKING:
     from litellm.types.services import ServiceLoggerPayload
-    from litellm.types.utils import StandardLoggingPayload
+    from litellm.types.utils import (
+        StandardLoggingGuardrailInformation,
+        StandardLoggingPayload,
+    )
 
 
 # --- typed sub-structures ---------------------------------------------------- #
@@ -162,6 +166,12 @@ class GuardrailSpanData:
     confidence_score: float | None = None
     risk_score: float | None = None
     duration: float | None = None
+    # Provider-agnostic configuration/detection metadata (see
+    # ``StandardLoggingGuardrailInformation``). Present for any guardrail that
+    # populates them, not just one provider's shape.
+    guardrail_id: str | None = None
+    policy_template: str | None = None
+    detection_method: str | None = None
     # Set when the guardrail intervened/blocked or failed, so the emitter marks
     # the span ERROR — a blocking guardrail is an error outcome for that span.
     error: SpanError | None = None
@@ -172,34 +182,39 @@ class GuardrailSpanData:
     )
 
     @classmethod
-    def from_logging_entry(cls, entry: Mapping[str, object]) -> "GuardrailSpanData":
-        """Build from one ``standard_logging_guardrail_information`` entry."""
-        name = (
-            as_str(entry.get("guardrail_name"))
-            or as_str(entry.get("name"))
-            or "guardrail"
-        )
-        status = as_str(entry.get("guardrail_status")) or as_str(entry.get("status"))
-        response = entry.get("guardrail_response")
+    def from_logging_entry(
+        cls, entry: "StandardLoggingGuardrailInformation"
+    ) -> "GuardrailSpanData":
+        """Build from one ``standard_logging_guardrail_information`` entry.
+
+        Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
+        keys only — no guessing at a single provider's field names. Values that are
+        typed as enums or lists (e.g. ``guardrail_mode``) are normalized to a
+        stable string rather than assumed to already be plain strings.
+        """
+        get = cast(Mapping[str, object], entry).get
+        status = as_str(get("guardrail_status"))
+        response = get("guardrail_response")
         error = (
-            SpanError(error_type=status, message=as_str(entry.get("guardrail_action")))
+            SpanError(error_type=status, message=as_str(get("guardrail_action")))
             if status in cls._ERROR_STATUSES
             else None
         )
         return cls(
-            guardrail_name=name,
-            mode=as_str(entry.get("guardrail_mode")) or as_str(entry.get("mode")),
+            guardrail_name=as_str(get("guardrail_name")) or "guardrail",
+            mode=_guardrail_mode_str(get("guardrail_mode")),
             status=status,
-            masked_entity_count=_total_masked_entities(
-                entry.get("masked_entity_count")
-            ),
-            provider=as_str(entry.get("guardrail_provider")),
-            action=as_str(entry.get("guardrail_action")),
+            masked_entity_count=_total_masked_entities(get("masked_entity_count")),
+            provider=as_str(get("guardrail_provider")),
+            action=as_str(get("guardrail_action")),
             response_json=_json_or_none(response) if response is not None else None,
-            violation_categories=as_str_tuple(entry.get("violation_categories")) or (),
-            confidence_score=as_float(entry.get("confidence_score")),
-            risk_score=as_float(entry.get("risk_score")),
-            duration=as_float(entry.get("duration")),
+            violation_categories=as_str_tuple(get("violation_categories")) or (),
+            confidence_score=as_float(get("confidence_score")),
+            risk_score=as_float(get("risk_score")),
+            duration=as_float(get("duration")),
+            guardrail_id=as_str(get("guardrail_id")),
+            policy_template=as_str(get("policy_template")),
+            detection_method=as_str(get("detection_method")),
             error=error,
         )
 
@@ -335,6 +350,25 @@ def _json_or_none(value: object) -> str | None:
         return json.dumps(value, default=str)
     except Exception:
         return None
+
+
+def _guardrail_mode_str(value: object) -> str | None:
+    """Normalize ``guardrail_mode`` to a stable string.
+
+    ``guardrail_mode`` is typed as a ``GuardrailEventHooks`` enum, a list of them,
+    or a ``GuardrailMode`` — not a plain string. Emit the enum *value* (e.g.
+    ``"pre_call"``) rather than ``str(enum)`` (``"GuardrailEventHooks.pre_call"``),
+    and join a list of modes so a guardrail that runs at multiple hooks is
+    represented faithfully.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        parts = [part for item in value if (part := _guardrail_mode_str(item))]
+        return ",".join(parts) or None
+    if isinstance(value, Enum):
+        return as_str(value.value)
+    return as_str(value)
 
 
 def _total_masked_entities(value: object) -> int | None:

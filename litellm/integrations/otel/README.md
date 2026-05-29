@@ -63,9 +63,19 @@ becomes the global, so server spans export to that backend too.
    `standard_logging_object` and hands it to the engine, which creates the LLM
    span as a child of the server span. Emission is **async-only**; the
    synchronous callback runs in a worker thread without the request context and
-   is a no-op.
+   is a no-op. **Pass-through** endpoints dispatch their logging from a detached
+   `asyncio.create_task` whose copied context may no longer carry the server
+   span, so the proxy also threads the span explicitly as
+   `litellm_parent_otel_span`; the adapter falls back to it when the ambient
+   context has no recordable span, so the pass-through LLM-call span still nests
+   under the request instead of becoming its own root trace.
 5. **Guardrails / services**: the post-call and service hooks emit guardrail and
-   service spans the same way — typed data → engine → span.
+   service spans the same way — typed data → engine → span. Service spans
+   (Redis/Postgres) are dispatched by `litellm/_service_logger.py`, which
+   recognizes the V2 `OpenTelemetryV2` logger (a plain `CustomLogger`, not a
+   subclass of the legacy `OpenTelemetry`). Guardrail span data is built from the
+   typed, provider-agnostic `StandardLoggingGuardrailInformation` — no single
+   provider's field shape is assumed.
 6. **Export**: each span ends and is handed to the provider's span processors,
    which export to the configured backends (OTLP, console, in-memory, …).
 
@@ -87,7 +97,12 @@ be imported anywhere:
 - [`config.py`](./config.py) — `OpenTelemetryV2Config`, a pydantic-settings
   model that reads `OTEL_*` / `LITELLM_OTEL_*` env vars, plus the feature gate.
   `capture_span_content` gates whether prompt/response bodies may be written as
-  span attributes; it defaults **off** (`no_content`).
+  span attributes; it defaults **off** (`no_content`). The Baggage allowlists are
+  configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
+  `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` (comma-separated) as env vars, or
+  `baggage_promoted_keys` / `baggage_metadata_keys` (YAML lists) under
+  `callback_settings.otel` in `config.yaml` — the latter reach the config through
+  the logger's constructor kwargs.
 
 ### Engine
 

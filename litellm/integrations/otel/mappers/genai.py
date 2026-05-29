@@ -73,6 +73,9 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_RISK_SCORE: lambda d: d.risk_score,
         LiteLLM.GUARDRAIL_MASKED_ENTITY_COUNT: lambda d: d.masked_entity_count,
         LiteLLM.GUARDRAIL_DURATION: lambda d: d.duration,
+        LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
+        LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
+        LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
     }
 
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {

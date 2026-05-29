@@ -6,10 +6,12 @@ is called without call_type in kwargs (e.g. from batch polling callbacks).
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
+import litellm
 from litellm._service_logger import ServiceLogging
+from litellm.types.services import ServiceTypes
 
 
 @pytest.mark.asyncio
@@ -95,3 +97,79 @@ async def test_async_log_success_event_should_handle_float_duration():
         mock_hook.assert_called_once()
         call_kwargs = mock_hook.call_args
         assert call_kwargs.kwargs["duration"] == 1.5
+
+
+# --------------------------------------------------------------------------- #
+#  V2 OpenTelemetry service-span dispatch (regression: service spans were always
+#  dropped because the dispatch only recognized the legacy OpenTelemetry class).
+# --------------------------------------------------------------------------- #
+
+
+def _make_otel_v2_logger():
+    pytest.importorskip("opentelemetry")
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from litellm.integrations.otel import OpenTelemetryV2Config, providers
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
+
+
+def test_resolve_otel_service_logger_recognizes_v2_instance():
+    """The V2 logger is a plain CustomLogger, not a subclass of the legacy
+    OpenTelemetry. The resolver must still recognize it (else service spans are
+    silently dropped)."""
+    service_logger = ServiceLogging()
+    v2_logger, _ = _make_otel_v2_logger()
+    assert service_logger._resolve_otel_service_logger(v2_logger) is v2_logger
+
+
+def test_resolve_otel_service_logger_recognizes_otel_string(monkeypatch):
+    # The "otel" string path resolves through the proxy's registered logger, so
+    # it needs the proxy server module importable.
+    try:
+        import litellm.proxy.proxy_server as proxy_server
+    except ImportError:
+        pytest.skip("proxy server dependencies not installed")
+    service_logger = ServiceLogging()
+    v2_logger, _ = _make_otel_v2_logger()
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", v2_logger, raising=False)
+    assert service_logger._resolve_otel_service_logger("otel") is v2_logger
+
+
+def test_resolve_otel_service_logger_ignores_unrelated_callback():
+    service_logger = ServiceLogging()
+    assert service_logger._resolve_otel_service_logger("prometheus_system") is None
+    assert service_logger._resolve_otel_service_logger(object()) is None
+
+
+@pytest.mark.asyncio
+async def test_service_span_emitted_for_v2_logger_in_service_callback(monkeypatch):
+    """End-to-end: a V2 logger registered in ``litellm.service_callback`` produces
+    a service span when ``async_service_success_hook`` fires with a parent span."""
+    from litellm.integrations.otel.spans import SpanRole
+
+    v2_logger, exporter = _make_otel_v2_logger()
+    parent = v2_logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, "POST /chat/completions"
+    )
+
+    monkeypatch.setattr(litellm, "service_callback", [v2_logger])
+    service_logger = ServiceLogging()
+
+    await service_logger.async_service_success_hook(
+        service=ServiceTypes.REDIS,
+        call_type="async_set_cache",
+        duration=0.01,
+        parent_otel_span=parent,
+    )
+    parent.end()
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "redis" in names
