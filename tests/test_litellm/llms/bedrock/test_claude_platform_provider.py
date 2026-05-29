@@ -342,17 +342,20 @@ def test_claude_platform_transform_request_strips_workspace_id_from_body():
     assert data["max_tokens"] == 16
 
 
-def test_claude_platform_messages_request_strips_workspace_id_from_body():
-    import litellm
-    from litellm.types.utils import LlmProviders
+def test_claude_platform_messages_transform_request_strips_workspace_id_from_body():
+    """Mirror of the chat-path stripping test for the /v1/messages route.
 
-    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="claude_platform/claude-sonnet-4-6",
-        provider=LlmProviders.BEDROCK,
+    BedrockClaudePlatformMessagesConfig.transform_anthropic_messages_request delegates
+    to AnthropicMessagesConfig, which spreads ``anthropic_messages_optional_request_params``
+    directly into the request body. If workspace_id aliases survive into that dict,
+    they leak as top-level body fields and Anthropic returns 400 invalid_request_error.
+    """
+    from litellm.llms.bedrock.claude_platform.messages_transformation import (
+        BedrockClaudePlatformMessagesConfig,
     )
 
-    assert config is not None
-    data = config.transform_anthropic_messages_request(
+    config = BedrockClaudePlatformMessagesConfig()
+    body = config.transform_anthropic_messages_request(
         model="claude_platform/claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         anthropic_messages_optional_request_params={
@@ -366,13 +369,9 @@ def test_claude_platform_messages_request_strips_workspace_id_from_body():
         headers={},
     )
 
-    # The /v1/messages route delegates the body build to AnthropicMessagesConfig,
-    # which spreads optional params into the request body. workspace_id is auth
-    # metadata sent via the anthropic-workspace-id header, so no accepted alias
-    # may leak into the body on this route either.
-    assert "workspace_id" not in data
-    assert "aws_workspace_id" not in data
-    assert "anthropic-workspace-id" not in data
-    assert "anthropic_workspace_id" not in data
-    assert data["model"] == "claude-sonnet-4-6"
-    assert data["max_tokens"] == 16
+    assert "workspace_id" not in body
+    assert "aws_workspace_id" not in body
+    assert "anthropic-workspace-id" not in body
+    assert "anthropic_workspace_id" not in body
+    assert body["model"] == "claude-sonnet-4-6"
+    assert body["max_tokens"] == 16
