@@ -15,6 +15,9 @@ from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
 
+_DESTRUCTIVE_VECTOR_STORE_METHODS = frozenset({"DELETE", "PUT", "POST", "PATCH"})
+
+
 def _normalize_litellm_params(
     vector_store: LiteLLM_ManagedVectorStore,
 ) -> LiteLLM_ManagedVectorStore:
@@ -348,6 +351,24 @@ def is_allowed_to_call_vector_store_endpoint(
                 break
 
     if permission_type is None:
+        # SECURITY (LIT-2384): a request method/path that is NOT enumerated in
+        # the provider read/write endpoint list previously fell through to a
+        # silent return None, which let any caller with general vector-store
+        # access mutate the underlying provider index (e.g. DELETE
+        # /azure_ai/indexes/<name> on an admin-created Azure AI Search index).
+        # Default-deny destructive verbs for non-admin callers on a registered
+        # litellm-managed vector store index. Admin role is bypassed above.
+        if request.method.upper() in _DESTRUCTIVE_VECTOR_STORE_METHODS:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Destructive {request.method.upper()} requests on "
+                    f"litellm-managed vector store \"{index_name}\" are "
+                    "restricted to proxy admins. Ask your administrator to "
+                    "perform this operation, or use the managed "
+                    "/v1/indexes API which enforces admin-only access."
+                ),
+            )
         return None
 
     # Check if key has specific permission for allowed_vector_store_indexes
