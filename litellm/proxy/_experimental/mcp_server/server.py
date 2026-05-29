@@ -6,6 +6,9 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import hashlib
+import json
+import re
 import time
 import types
 import traceback
@@ -257,13 +260,25 @@ if MCP_AVAILABLE:
         stateless=True,
     )
 
+    lazymcp_server: Server = Server(
+        name=f"{LITELLM_MCP_SERVER_NAME}-lazymcp",
+        version=LITELLM_MCP_SERVER_VERSION,
+    )
+    lazy_session_manager = StreamableHTTPSessionManager(
+        app=lazymcp_server,
+        event_store=None,
+        json_response=False,
+        stateless=True,
+    )
+
     # Context managers for proper lifecycle management
     _session_manager_cm = None
     _sse_session_manager_cm = None
+    _lazy_session_manager_cm = None
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm, _lazy_session_manager_cm
 
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
@@ -275,10 +290,12 @@ if MCP_AVAILABLE:
             # Start the session managers with context managers
             _session_manager_cm = session_manager.run()
             _sse_session_manager_cm = sse_session_manager.run()
+            _lazy_session_manager_cm = lazy_session_manager.run()
 
             # Enter the context managers
             await _session_manager_cm.__aenter__()
             await _sse_session_manager_cm.__aenter__()
+            await _lazy_session_manager_cm.__aenter__()
 
             _SESSION_MANAGERS_INITIALIZED = True
             verbose_logger.info(
@@ -287,7 +304,7 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm, _lazy_session_manager_cm
 
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
@@ -297,11 +314,14 @@ if MCP_AVAILABLE:
                     await _session_manager_cm.__aexit__(None, None, None)
                 if _sse_session_manager_cm:
                     await _sse_session_manager_cm.__aexit__(None, None, None)
+                if _lazy_session_manager_cm:
+                    await _lazy_session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
                 verbose_logger.exception(f"Error during session manager shutdown: {e}")
 
             _session_manager_cm = None
             _sse_session_manager_cm = None
+            _lazy_session_manager_cm = None
             _SESSION_MANAGERS_INITIALIZED = False
 
     @contextlib.asynccontextmanager
@@ -503,6 +523,70 @@ if MCP_AVAILABLE:
             )
 
         return response
+
+    @lazymcp_server.list_tools()
+    async def list_lazymcp_tools() -> List[MCPTool]:
+        try:
+            (
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_servers,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+                client_ip,
+            ) = get_auth_context()
+            catalog = await _get_lazymcp_catalog(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            )
+            return _get_lazymcp_gateway_tools(catalog.get("description"))
+        except Exception as e:
+            verbose_logger.exception("Error in LazyMCP list_tools endpoint: %s", e)
+            return _get_lazymcp_gateway_tools()
+
+    @lazymcp_server.call_tool()
+    async def lazymcp_tool_call(
+        name: str, arguments: Dict[str, Any] | None
+    ) -> CallToolResult:
+        arguments = arguments or {}
+        try:
+            if name == "mcp_describe":
+                return _make_lazymcp_text_result(await _lazymcp_describe(arguments))
+            if name == "mcp_status":
+                return _make_lazymcp_text_result(await _lazymcp_status())
+            if name == "mcp_call":
+                return await _lazymcp_call(arguments)
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=json.dumps({"error": "Unknown LazyMCP tool."}),
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
+        except Exception as e:
+            verbose_logger.exception("LazyMCP tool call failed: %s", e)
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=json.dumps(
+                            {
+                                "error": "Upstream MCP tool call failed.",
+                                "details": str(e),
+                            }
+                        ),
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
 
     @server.list_prompts()
     async def list_prompts() -> List[Prompt]:
@@ -721,6 +805,9 @@ if MCP_AVAILABLE:
                         match_list = [
                             s.lower() for s in iter_known_server_prefixes(server) if s
                         ]
+                        server_name = getattr(server, "name", None)
+                        if server_name:
+                            match_list.append(str(server_name).lower())
 
                         if server_or_group.lower() in match_list:
                             filtered_server[server.server_id] = server
@@ -743,6 +830,9 @@ if MCP_AVAILABLE:
                         verbose_logger.debug(
                             f"Could not resolve '{server_or_group}' as access group: {e}"
                         )
+
+        if mcp_servers is not None:
+            return list(filtered_server.values())
 
         if filtered_server:
             return list(filtered_server.values())
@@ -1237,6 +1327,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1328,6 +1419,7 @@ if MCP_AVAILABLE:
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_servers=mcp_servers,
+                client_ip=client_ip,
             )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
@@ -1800,6 +1892,587 @@ if MCP_AVAILABLE:
             # Continue with empty managed tools list instead of failing completely
 
         return managed_tools
+
+    LAZYMCP_TOOL_NAMES = ("mcp_describe", "mcp_call", "mcp_status")
+    LAZYMCP_CACHE_TTL_SECONDS = 300
+    LAZYMCP_UNAVAILABLE_SERVER_ERROR = {
+        "error": "MCP server is not available for this request."
+    }
+    LAZYMCP_UNAVAILABLE_TOOL_ERROR = {
+        "error": "Tool is not available for this request."
+    }
+
+    def _hash_lazymcp_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        encoded = json.dumps(value, sort_keys=True, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _safe_lazymcp_text(value: Optional[str], fallback: str) -> str:
+        text = re.sub(r"\s+", " ", value or "").strip() or fallback
+        text = re.sub(r"https?://\S+", "[url]", text)
+        if len(text) > 160:
+            text = text[:157].rstrip() + "..."
+        return text
+
+    def _get_lazymcp_server_label(mcp_server: MCPServer) -> str:
+        return str(
+            mcp_server.alias
+            or mcp_server.server_name
+            or mcp_server.name
+            or mcp_server.server_id
+        )
+
+    def _get_lazymcp_server_description(mcp_server: MCPServer) -> str:
+        mcp_info = mcp_server.mcp_info or {}
+        description = getattr(mcp_server, "description", None) or mcp_info.get(
+            "description"
+        )
+        return _safe_lazymcp_text(description, "No description configured.")
+
+    def _summarize_lazymcp_schema(schema: Any) -> Dict[str, Any]:
+        if not isinstance(schema, dict):
+            return {}
+        properties = schema.get("properties")
+        return {
+            "type": schema.get("type", "object"),
+            "required": schema.get("required", []),
+            "properties": (
+                sorted(properties.keys()) if isinstance(properties, dict) else []
+            ),
+        }
+
+    def _lazymcp_tool_to_summary(
+        tool: MCPTool, include_schema: bool = False
+    ) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "name": tool.name,
+            "description": _safe_lazymcp_text(
+                getattr(tool, "description", None), "No description configured."
+            ),
+        }
+        schema = getattr(tool, "inputSchema", None)
+        if include_schema:
+            summary["input_schema"] = schema or {}
+        else:
+            summary["input_schema_summary"] = _summarize_lazymcp_schema(schema)
+        return summary
+
+    def _lazymcp_cache_scope(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        client_ip: Optional[str],
+    ) -> str:
+        object_permission = getattr(user_api_key_auth, "object_permission", None)
+        normalized_raw_headers = {
+            str(key).lower(): value
+            for key, value in (raw_headers or {}).items()
+            if isinstance(key, str)
+        }
+        object_permission_payload = None
+        if object_permission is not None:
+            object_permission_payload = (
+                object_permission.model_dump(mode="json")
+                if hasattr(object_permission, "model_dump")
+                else str(object_permission)
+            )
+
+        scope_payload = {
+            "api_key_hash": _hash_lazymcp_value(
+                getattr(user_api_key_auth, "api_key", None)
+            ),
+            "user_id": getattr(user_api_key_auth, "user_id", None),
+            "team_id": getattr(user_api_key_auth, "team_id", None),
+            "mcp_servers": mcp_servers or [],
+            "active_toolset": _mcp_active_toolset_id.get(),
+            "client_ip": client_ip,
+            "mcp_auth_header_hash": _hash_lazymcp_value(mcp_auth_header),
+            "mcp_server_auth_headers_hash": _hash_lazymcp_value(
+                mcp_server_auth_headers
+            ),
+            "oauth2_headers_hash": _hash_lazymcp_value(oauth2_headers),
+            "header_mcp_servers": normalized_raw_headers.get("x-mcp-servers"),
+            "header_mcp_access_groups": normalized_raw_headers.get(
+                "x-mcp-access-groups"
+            ),
+            "raw_header_names": sorted(normalized_raw_headers.keys()),
+            "raw_header_values_hash": _hash_lazymcp_value(normalized_raw_headers),
+            "object_permission": object_permission_payload,
+        }
+        encoded = json.dumps(scope_payload, sort_keys=True, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    async def _lazymcp_cache_get(key: str) -> Optional[Any]:
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            return await user_api_key_cache.async_get_cache(key=key)
+        except Exception as e:
+            verbose_logger.debug("LazyMCP cache get failed for %s: %s", key, e)
+            return None
+
+    async def _lazymcp_cache_set(key: str, value: Any) -> None:
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await user_api_key_cache.async_set_cache(
+                key=key,
+                value=value,
+                ttl=LAZYMCP_CACHE_TTL_SECONDS,
+            )
+        except Exception as e:
+            verbose_logger.debug("LazyMCP cache set failed for %s: %s", key, e)
+
+    def invalidate_lazymcp_cache() -> None:
+        """Evict LazyMCP entries from the in-memory DualCache layer only."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            # DualCache does not expose prefix invalidation, so this intentionally
+            # mirrors existing targeted invalidation paths and only touches the
+            # process-local dict. Redis entries expire quickly via the cache TTL.
+            in_mem = getattr(user_api_key_cache, "in_memory_cache", None)
+            cache_dict = getattr(in_mem, "cache_dict", {}) if in_mem else {}
+            for key in [k for k in cache_dict if str(k).startswith("lazymcp:")]:
+                cache_dict.pop(key, None)
+        except Exception as e:
+            verbose_logger.warning("invalidate_lazymcp_cache failed: %s", e)
+
+    async def _get_lazymcp_allowed_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+    ) -> List[MCPServer]:
+        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
+        return await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+
+    async def _get_lazymcp_server_tools(
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> List[MCPTool]:
+        server_auth_header, extra_headers = _prepare_mcp_server_headers(
+            server=server,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+        if extra_headers is None and server.auth_type == MCPAuth.oauth2:
+            extra_headers = await _get_user_oauth_extra_headers_from_db(
+                server=server,
+                user_api_key_auth=user_api_key_auth,
+            )
+        tools = await global_mcp_server_manager._get_tools_from_server(
+            server=server,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=True,
+            raw_headers=raw_headers,
+        )
+        tools = filter_tools_by_allowed_tools(tools, server)
+        tools = await filter_tools_by_key_team_permissions(
+            tools=tools,
+            server_id=server.server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+        return apply_tool_overrides(tools, server)
+
+    def _build_lazymcp_catalog_description(servers: List[Dict[str, Any]]) -> str:
+        description_lines = [
+            "Describe MCP servers and tools available through the LiteLLM LazyMCP gateway.",
+            "",
+            "Available MCP servers:",
+        ]
+        if servers:
+            description_lines.extend(
+                f"- {item['name']}: {item['description']}" for item in servers
+            )
+        else:
+            description_lines.append("- No MCP servers are available for this request.")
+        description_lines.extend(
+            [
+                "",
+                'Call mcp_describe with {"server":"<name>"} to list tools for one server with input schemas.',
+                'Call mcp_describe with {"server":"<name>","tool":"<tool_name>"} to get details for one tool with its input schema.',
+                'Call mcp_call with {"server":"<name>","tool":"<tool_name>","arguments":{...}} to execute a tool.',
+            ]
+        )
+        return "\n".join(description_lines)
+
+    async def _get_lazymcp_catalog(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        client_ip: Optional[str],
+    ) -> Dict[str, Any]:
+        scope_hash = _lazymcp_cache_scope(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        cache_key = f"lazymcp:catalog:{scope_hash}"
+        cached = await _lazymcp_cache_get(cache_key)
+        if isinstance(cached, dict):
+            allowed_servers = await _get_lazymcp_allowed_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=client_ip,
+            )
+            allowed_names = {
+                _get_lazymcp_server_label(server).lower() for server in allowed_servers
+            }
+            filtered_servers = [
+                server
+                for server in cached.get("servers", [])
+                if str(server.get("name", "")).lower() in allowed_names
+            ]
+            return {
+                **cached,
+                "servers": filtered_servers,
+                "description": _build_lazymcp_catalog_description(filtered_servers),
+                "server_count": len(filtered_servers),
+                "tool_count": sum(
+                    server.get("tool_count", 0) for server in filtered_servers
+                ),
+            }
+
+        allowed_servers = await _get_lazymcp_allowed_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        servers: List[Dict[str, Any]] = []
+        for server_item in allowed_servers:
+            try:
+                tools = await _get_lazymcp_server_tools(
+                    server=server_item,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "LazyMCP failed to list tools for server %s: %s",
+                    _get_lazymcp_server_label(server_item),
+                    e,
+                )
+                tools = []
+            servers.append(
+                {
+                    "server_id": server_item.server_id,
+                    "name": _get_lazymcp_server_label(server_item),
+                    "description": _get_lazymcp_server_description(server_item),
+                    "tool_count": len(tools),
+                    "tools": [_lazymcp_tool_to_summary(tool) for tool in tools],
+                }
+            )
+
+        catalog = {
+            "servers": servers,
+            "description": _build_lazymcp_catalog_description(servers),
+            "server_count": len(servers),
+            "tool_count": sum(item["tool_count"] for item in servers),
+        }
+        await _lazymcp_cache_set(cache_key, catalog)
+        return catalog
+
+    def _find_lazymcp_server(
+        catalog: Dict[str, Any], server_name: str
+    ) -> Optional[Dict[str, Any]]:
+        requested = server_name.lower()
+        for item in catalog.get("servers", []):
+            if str(item.get("name", "")).lower() == requested:
+                return item
+        return None
+
+    async def _lazymcp_describe(arguments: Dict[str, Any]) -> Dict[str, Any]:
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            client_ip,
+        ) = get_auth_context()
+        catalog = await _get_lazymcp_catalog(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        server_name = arguments.get("server")
+        tool_name = arguments.get("tool")
+        if not server_name:
+            return {
+                "servers": [
+                    {
+                        "name": item["name"],
+                        "description": item["description"],
+                        "tool_count": item["tool_count"],
+                    }
+                    for item in catalog.get("servers", [])
+                ]
+            }
+
+        server_item = _find_lazymcp_server(catalog, str(server_name))
+        if server_item is None:
+            return LAZYMCP_UNAVAILABLE_SERVER_ERROR
+
+        allowed_servers = await _get_lazymcp_allowed_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        selected_server = next(
+            (
+                server
+                for server in allowed_servers
+                if _get_lazymcp_server_label(server).lower() == str(server_name).lower()
+            ),
+            None,
+        )
+        if selected_server:
+            tools = await _get_lazymcp_server_tools(
+                selected_server,
+                user_api_key_auth,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            )
+            if tool_name:
+                for tool in tools:
+                    if tool.name == tool_name:
+                        return {
+                            "server": _get_lazymcp_server_label(selected_server),
+                            "tool": _lazymcp_tool_to_summary(tool, include_schema=True),
+                        }
+                return LAZYMCP_UNAVAILABLE_TOOL_ERROR
+            return {
+                "server": _get_lazymcp_server_label(selected_server),
+                "description": server_item["description"],
+                "tools": [
+                    _lazymcp_tool_to_summary(tool, include_schema=True)
+                    for tool in tools
+                ],
+            }
+
+        # The catalog can be served from a short-lived cache, so re-check the
+        # current permission/IP-filter result before returning server/tool
+        # details. If access was revoked after the catalog was cached, do not
+        # leak stale cached tool metadata.
+        return LAZYMCP_UNAVAILABLE_SERVER_ERROR
+
+    async def _lazymcp_status() -> Dict[str, Any]:
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            client_ip,
+        ) = get_auth_context()
+        catalog = await _get_lazymcp_catalog(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        return {
+            "enabled": True,
+            "mode": "lazymcp",
+            "visible_server_count": catalog.get("server_count", 0),
+            "visible_tool_count": catalog.get("tool_count", 0),
+            "route_restricted": bool(mcp_servers),
+            "requested_server_count": len(mcp_servers or []),
+            "toolset_scoped": _mcp_active_toolset_id.get() is not None,
+        }
+
+    async def _lazymcp_call(arguments: Dict[str, Any]) -> CallToolResult:
+        server_name = arguments.get("server")
+        tool_name = arguments.get("tool")
+        tool_arguments = arguments.get("arguments")
+        if (
+            not isinstance(server_name, str)
+            or not isinstance(tool_name, str)
+            or not isinstance(tool_arguments, dict)
+        ):
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=json.dumps(
+                            {
+                                "error": "Invalid LazyMCP arguments.",
+                                "details": "mcp_call requires server, tool, and arguments.",
+                            }
+                        ),
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
+
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            client_ip,
+        ) = get_auth_context()
+        allowed_servers = await _get_lazymcp_allowed_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        selected_server = next(
+            (
+                server
+                for server in allowed_servers
+                if _get_lazymcp_server_label(server).lower() == server_name.lower()
+            ),
+            None,
+        )
+        if selected_server is None:
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=json.dumps(LAZYMCP_UNAVAILABLE_SERVER_ERROR), type="text"
+                    )
+                ],
+                isError=True,
+            )
+        visible_tools = await _get_lazymcp_server_tools(
+            selected_server,
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+        )
+        selected_tool = next(
+            (tool for tool in visible_tools if tool.name == tool_name), None
+        )
+        if selected_tool is None:
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=json.dumps(LAZYMCP_UNAVAILABLE_TOOL_ERROR), type="text"
+                    )
+                ],
+                isError=True,
+            )
+        return await call_mcp_tool(
+            name=selected_tool.name,
+            arguments=tool_arguments,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=[_get_lazymcp_server_label(selected_server)],
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            metadata={
+                "source": "lazymcp",
+                "lazy_mcp": True,
+                "lazy_mcp_gateway_tool": "mcp_call",
+                "lazy_mcp_server": server_name,
+                "lazy_mcp_tool": tool_name,
+                "delegated_tool_name": tool_name,
+                "server_name": server_name,
+            },
+        )
+
+    def _make_lazymcp_text_result(payload: Dict[str, Any]) -> CallToolResult:
+        return CallToolResult(
+            content=[TextContent(text=json.dumps(payload, default=str), type="text")],
+            isError=bool(payload.get("error")),
+        )
+
+    def _get_lazymcp_gateway_tools(description: Optional[str] = None) -> List[MCPTool]:
+        describe_description = description or (
+            "Describe MCP servers and tools available through the LiteLLM LazyMCP gateway."
+        )
+        return [
+            MCPTool(
+                name="mcp_describe",
+                description=describe_description,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "string",
+                            "description": "Optional MCP server name or alias to inspect.",
+                        },
+                        "tool": {
+                            "type": "string",
+                            "description": "Optional tool name within the selected MCP server.",
+                        },
+                    },
+                },
+            ),
+            MCPTool(
+                name="mcp_call",
+                description="Execute a tool from an MCP server available through the LiteLLM LazyMCP gateway. Use mcp_describe first to inspect available servers, tools, and schemas.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "string",
+                            "description": "MCP server name or alias.",
+                        },
+                        "tool": {
+                            "type": "string",
+                            "description": "Tool name to execute on the selected MCP server.",
+                        },
+                        "arguments": {
+                            "type": "object",
+                            "description": "Arguments to pass to the selected MCP tool.",
+                        },
+                    },
+                    "required": ["server", "tool", "arguments"],
+                    "additionalProperties": False,
+                },
+            ),
+            MCPTool(
+                name="mcp_status",
+                description="Report safe diagnostics for the current LiteLLM LazyMCP view.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+        ]
 
     async def _list_mcp_prompts(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -2785,6 +3458,86 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    async def _prepare_mcp_request_context(
+        scope: Scope,
+        path: str,
+    ) -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+        ) = await extract_mcp_auth_context(scope, path)
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+
+        for server_name in mcp_servers or []:
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                server_name, client_ip=client_ip
+            )
+            if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                if server.needs_user_oauth_token:
+                    stored_oauth_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_oauth_headers:
+                        continue
+
+                request = StarletteRequest(scope)
+                base_url = get_request_base_url(request)
+                authorization_uri = (
+                    f"Bearer authorization_uri="
+                    f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                )
+
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": authorization_uri},
+                )
+
+        scope["headers"] = [
+            (k, v)
+            for k, v in scope.get("headers", [])
+            if k.lower() != b"x-mcp-toolset-id"
+        ]
+
+        active_toolset_id = _mcp_active_toolset_id.get()
+        if active_toolset_id and user_api_key_auth is not None:
+            user_api_key_auth = await _apply_toolset_scope(
+                user_api_key_auth, active_toolset_id
+            )
+
+        set_auth_context(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+        return (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            client_ip,
+        )
+
     async def _apply_toolset_scope(
         user_api_key_auth: UserAPIKeyAuth,
         toolset_id: str,
@@ -3006,10 +3759,8 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
-            ) = await extract_mcp_auth_context(scope, path)
-
-            # Extract client IP for MCP access control
-            _client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+                _client_ip,
+            ) = await _prepare_mcp_request_context(scope, path)
 
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
@@ -3017,40 +3768,6 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-            for server_name in mcp_servers or []:
-                server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name, client_ip=_client_ip
-                )
-                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For per-user OAuth servers, only skip the pre-emptive 401 when
-                    # a stored token actually exists for this user+server pair.
-                    # If no stored token exists, fail fast with 401 so clients can
-                    # kick off PKCE/interactive OAuth flow immediately.
-                    if server.needs_user_oauth_token:
-                        stored_oauth_headers = (
-                            await _get_user_oauth_extra_headers_from_db(
-                                server=server,
-                                user_api_key_auth=user_api_key_auth,
-                            )
-                        )
-                        if stored_oauth_headers:
-                            continue
-
-                    request = StarletteRequest(scope)
-                    base_url = get_request_base_url(request)
-
-                    authorization_uri = (
-                        f"Bearer authorization_uri="
-                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                    )
-
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Unauthorized",
-                        headers={"www-authenticate": authorization_uri},
-                    )
-
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
             scope["headers"] = [
                 (k, v)
@@ -3085,17 +3802,6 @@ if MCP_AVAILABLE:
             )
             if _debug_headers:
                 send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
-
-            # Set the auth context variable for easy access in MCP functions
-            set_auth_context(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_client_ip,
-            )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -3138,6 +3844,48 @@ if MCP_AVAILABLE:
                     f"Failed to send error response: {response_error}"
                 )
                 # If we can't send a proper response, re-raise the original error
+                raise e
+
+    async def handle_streamable_http_lazymcp(
+        scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Handle LazyMCP requests through StreamableHTTP."""
+        try:
+            path = scope.get("path", "")
+            if path.startswith("/lazymcp/"):
+                scope["path"] = "/mcp/" + path[len("/lazymcp/") :]
+            elif path.startswith("/lazymcp"):
+                scope["path"] = "/mcp" + path[len("/lazymcp") :]
+            path = scope.get("path", "")
+            await _prepare_mcp_request_context(scope, path)
+
+            if not _SESSION_MANAGERS_INITIALIZED:
+                await initialize_session_managers()
+                await asyncio.sleep(0.1)
+
+            handled = await _handle_stale_mcp_session(
+                scope, receive, send, lazy_session_manager
+            )
+            if handled:
+                return
+            await lazy_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_logger.exception(f"Error handling LazyMCP request: {e}")
+            try:
+                from starlette.responses import JSONResponse
+                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
+
+                error_response = JSONResponse(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "LazyMCP request failed", "details": str(e)},
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(
+                    f"Failed to send LazyMCP error response: {response_error}"
+                )
                 raise e
 
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
@@ -3223,6 +3971,8 @@ if MCP_AVAILABLE:
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/mcp", handle_streamable_http_mcp)
+    app.mount("/lazymcp", handle_streamable_http_lazymcp)
+    app.mount("/lazymcp/{mcp_server_name}", handle_streamable_http_lazymcp)
     app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
     app.add_middleware(AuthContextMiddleware)

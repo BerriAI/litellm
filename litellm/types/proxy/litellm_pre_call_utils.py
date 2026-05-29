@@ -1,4 +1,6 @@
-from typing_extensions import TypedDict
+from typing import Optional
+
+from typing_extensions import NotRequired, TypedDict
 
 
 class RedactedDict(dict):
@@ -22,3 +24,4 @@ class SecretFields(TypedDict):
     """
 
     raw_headers: dict
+    mcp_client_ip: NotRequired[Optional[str]]

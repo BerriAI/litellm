@@ -1163,6 +1163,17 @@ class MCPServerManager:
                 ]
             for k in keys_to_remove:
                 cache_dict.pop(k, None)
+            try:
+                from litellm.proxy._experimental.mcp_server.server import (
+                    invalidate_lazymcp_cache,
+                )
+
+                invalidate_lazymcp_cache()
+            except Exception as lazy_exc:
+                verbose_logger.debug(
+                    "invalidate_toolset_cache: failed to evict LazyMCP entries: %s",
+                    lazy_exc,
+                )
         except Exception as e:
             verbose_logger.warning(
                 f"invalidate_toolset_cache: failed to evict in-memory entries: {e}"

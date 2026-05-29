@@ -30,6 +30,7 @@ async def create_mcp_list_tools_events(
     user_api_key_auth: Any,
     base_item_id: str,
     pre_processed_mcp_tools: List[Any],
+    client_ip: Optional[str] = None,
 ) -> List[ResponsesAPIStreamingResponse]:
     """Create MCP discovery events using pre-processed tools from the parent"""
 
@@ -325,6 +326,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         secret_fields = self.original_request_params.get("secret_fields")
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        self.client_ip = ResponsesAPIRequestUtils.get_verified_mcp_client_ip(
+            secret_fields
+        )
 
         # Extract MCP-specific headers
         self.mcp_auth_header: Optional[str] = None
@@ -666,6 +672,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 mcp_server_auth_headers=self.mcp_server_auth_headers,
                 oauth2_headers=self.oauth2_headers,
                 raw_headers=self.raw_headers,
+                client_ip=getattr(self, "client_ip", None),
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
             )

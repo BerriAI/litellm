@@ -1,9 +1,12 @@
 import asyncio
+import json
+import types
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
     BlobResourceContents,
@@ -13,12 +16,59 @@ from mcp.types import (
 )
 
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
     LiteLLM_MCPServerTable,
     MCPTransport,
     UserAPIKeyAuth,
 )
+from litellm.responses.utils import (
+    INVALID_MCP_CLIENT_IP_SENTINEL,
+    ResponsesAPIRequestUtils,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _parse_mcp_text_result(result):
+    return json.loads(result.content[0].text)
+
+
+def test_lazymcp_root_trailing_slash_does_not_redirect(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_stream_response(handle_fn, scope, receive):
+        from starlette.responses import Response
+
+        assert scope["path"] == "/lazymcp"
+        return Response("ok", media_type="text/event-stream")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/lazymcp/", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "location" not in response.headers
+
+
+def test_lazymcp_root_without_trailing_slash_still_routes(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_stream_response(handle_fn, scope, receive):
+        from starlette.responses import Response
+
+        assert scope["path"] == "/lazymcp"
+        return Response("ok", media_type="text/event-stream")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "location" not in response.headers
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +157,1090 @@ async def test_mcp_server_tool_call_body_contains_request_data():
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
     assert body["arguments"] == tool_arguments
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_lists_only_gateway_tools_and_describes_visible_servers():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_lazymcp_gateway_tools,
+            _lazymcp_describe,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    visible_server = MCPServer(
+        server_id="visible-server",
+        name="memory",
+        alias="memory",
+        server_name="memory",
+        transport=MCPTransport.http,
+        mcp_info={"description": "Long-term memory search and storage."},
+    )
+    hidden_server = MCPServer(
+        server_id="hidden-server",
+        name="hidden",
+        alias="hidden",
+        server_name="hidden",
+        transport=MCPTransport.http,
+        mcp_info={"description": "Should not leak."},
+    )
+    tool = MCPTool(
+        name="memory-search",
+        description="Search memory",
+        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
+    )
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"))
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[visible_server]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[tool]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_get",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_set",
+            AsyncMock(),
+        ),
+    ):
+        gateway_tools = _get_lazymcp_gateway_tools("catalog")
+        catalog = await _lazymcp_describe({})
+        server_detail = await _lazymcp_describe({"server": "memory"})
+        tool_detail = await _lazymcp_describe(
+            {"server": "memory", "tool": "memory-search"}
+        )
+        legacy_tool_detail = await _lazymcp_describe(
+            {
+                "server": "memory",
+                "tool": "memory-search",
+                "include_schemas": True,
+            }
+        )
+        hidden_detail = await _lazymcp_describe({"server": hidden_server.name})
+
+    assert [tool.name for tool in gateway_tools] == [
+        "mcp_describe",
+        "mcp_call",
+        "mcp_status",
+    ]
+    assert catalog["servers"] == [
+        {
+            "name": "memory",
+            "description": "Long-term memory search and storage.",
+            "tool_count": 1,
+        }
+    ]
+    assert server_detail["tools"][0]["name"] == "memory-search"
+    assert server_detail["tools"][0]["input_schema"] == tool.inputSchema
+    assert "input_schema_summary" not in server_detail["tools"][0]
+    assert tool_detail["tool"]["input_schema"] == tool.inputSchema
+    assert legacy_tool_detail == tool_detail
+    assert "include_schemas" not in gateway_tools[0].inputSchema.get("properties", {})
+    assert hidden_detail == {"error": "MCP server is not available for this request."}
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_describe_denies_stale_cached_server_after_access_revoked():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_describe,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cached_catalog = {
+        "description": "cached catalog",
+        "server_count": 1,
+        "tool_count": 1,
+        "servers": [
+            {
+                "name": "revoked",
+                "description": "stale cached server",
+                "tool_count": 1,
+                "tools": [
+                    {
+                        "name": "revoked-tool",
+                        "description": "must not leak",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"))
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_get",
+            AsyncMock(return_value=cached_catalog),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(side_effect=AssertionError("stale server should not load tools")),
+        ),
+    ):
+        server_detail = await _lazymcp_describe({"server": "revoked"})
+        tool_detail = await _lazymcp_describe(
+            {"server": "revoked", "tool": "revoked-tool"}
+        )
+
+    assert server_detail == {"error": "MCP server is not available for this request."}
+    assert tool_detail == {"error": "MCP server is not available for this request."}
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_call_rechecks_permissions_and_delegates_to_mcp_call():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-id",
+        name="github",
+        alias="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    tool = MCPTool(
+        name="github-create_issue",
+        description="Create issue",
+        inputSchema={"type": "object"},
+    )
+    delegated_result = MagicMock()
+    delegated_result.content = []
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"))
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server]),
+        ) as allowed_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[tool]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            AsyncMock(return_value=delegated_result),
+        ) as call_mock,
+    ):
+        result = await _lazymcp_call(
+            {
+                "server": "github",
+                "tool": "github-create_issue",
+                "arguments": {"title": "Bug"},
+            }
+        )
+
+    assert result is delegated_result
+    assert allowed_mock.await_count >= 1
+    call_mock.assert_awaited_once()
+    assert call_mock.await_args.kwargs["name"] == "github-create_issue"
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_call_uses_unavailable_server_error_when_server_missing():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _lazymcp_call
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server._get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[]),
+    ):
+        result = await _lazymcp_call(
+            {"server": "missing", "tool": "tool", "arguments": {}}
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "MCP server is not available for this request."
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_call_empty_scope_cannot_execute_allowed_server():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_call,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    allowed_server = MCPServer(
+        server_id="allowed-server",
+        name="github",
+        alias="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    visible_tool = MCPTool(
+        name="github-search",
+        description="Search GitHub",
+        inputSchema={"type": "object"},
+    )
+
+    set_auth_context(UserAPIKeyAuth(api_key="sk-test", user_id="user"), mcp_servers=[])
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            AsyncMock(return_value=["allowed-server"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            MagicMock(return_value=allowed_server),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[visible_tool]),
+        ) as tools_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            AsyncMock(),
+        ) as call_mock,
+    ):
+        result = await _lazymcp_call(
+            {"server": "github", "tool": "github-search", "arguments": {}}
+        )
+
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "MCP server is not available for this request."
+    tools_mock.assert_not_awaited()
+    call_mock.assert_not_awaited()
+
+
+def test_lazymcp_cache_get_set_and_invalidate_paths(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cache_dict = {"lazymcp:catalog:abc": {"servers": []}, "other": "value"}
+    fake_cache = MagicMock(in_memory_cache=MagicMock(cache_dict=cache_dict))
+    fake_cache.async_get_cache = AsyncMock(return_value={"cached": True})
+    fake_cache.async_set_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        fake_cache,
+        raising=False,
+    )
+
+    assert asyncio.run(mcp_server_module._lazymcp_cache_get("lazymcp:catalog:abc")) == {
+        "cached": True
+    }
+    asyncio.run(mcp_server_module._lazymcp_cache_set("lazymcp:catalog:abc", {"x": 1}))
+    fake_cache.async_set_cache.assert_awaited_once_with(
+        key="lazymcp:catalog:abc",
+        value={"x": 1},
+        ttl=mcp_server_module.LAZYMCP_CACHE_TTL_SECONDS,
+    )
+
+    mcp_server_module.invalidate_lazymcp_cache()
+
+    assert "lazymcp:catalog:abc" not in cache_dict
+    assert cache_dict["other"] == "value"
+
+
+def test_lazymcp_cache_helpers_tolerate_cache_errors(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    fake_cache = MagicMock(in_memory_cache=MagicMock(cache_dict={}))
+    fake_cache.async_get_cache = AsyncMock(side_effect=RuntimeError("get failed"))
+    fake_cache.async_set_cache = AsyncMock(side_effect=RuntimeError("set failed"))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        fake_cache,
+        raising=False,
+    )
+
+    assert asyncio.run(mcp_server_module._lazymcp_cache_get("lazymcp:broken")) is None
+    asyncio.run(mcp_server_module._lazymcp_cache_set("lazymcp:broken", {}))
+    fake_cache.async_set_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_cached_catalog_rechecks_current_visibility(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cached_catalog = {
+        "description": "cached catalog",
+        "server_count": 2,
+        "tool_count": 3,
+        "servers": [
+            {"name": "visible", "description": "ok", "tool_count": 1, "tools": []},
+            {
+                "name": "revoked",
+                "description": "must not leak",
+                "tool_count": 2,
+                "tools": [],
+            },
+        ],
+    }
+    allowed_server = types.SimpleNamespace(
+        server_id="visible-id", alias="visible", server_name=None, name="visible"
+    )
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_cache_get",
+        AsyncMock(return_value=cached_catalog),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[allowed_server]),
+    )
+
+    catalog = await mcp_server_module._get_lazymcp_catalog(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        client_ip="10.0.0.1",
+    )
+
+    assert catalog["server_count"] == 1
+    assert catalog["tool_count"] == 1
+    assert [server["name"] for server in catalog["servers"]] == ["visible"]
+    assert "visible" in catalog["description"]
+    assert "revoked" not in catalog["description"]
+    assert "must not leak" not in catalog["description"]
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_cached_catalog_hides_all_revoked_servers(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_cache_get",
+        AsyncMock(
+            return_value={
+                "description": "cached catalog",
+                "server_count": 1,
+                "tool_count": 1,
+                "servers": [
+                    {"name": "revoked", "description": "must not leak", "tools": []}
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_allowed_servers",
+        AsyncMock(return_value=[]),
+    )
+
+    catalog = await mcp_server_module._get_lazymcp_catalog(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        client_ip="10.0.0.1",
+    )
+
+    assert catalog["server_count"] == 0
+    assert catalog["tool_count"] == 0
+    assert catalog["servers"] == []
+    assert "revoked" not in catalog["description"]
+    assert "No MCP servers are available" in catalog["description"]
+
+
+def test_invalidating_toolset_cache_tolerates_lazymcp_invalidation_error():
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    with (
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            MagicMock(in_memory_cache=MagicMock(cache_dict={})),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.invalidate_lazymcp_cache",
+            MagicMock(side_effect=RuntimeError("lazy failed")),
+        ),
+    ):
+        manager.invalidate_toolset_cache(toolset_id="abc")
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_session_manager_shutdown_resets_lazy_manager(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    class _AsyncExit:
+        def __init__(self):
+            self.closed = False
+
+        async def __aexit__(self, *_args):
+            self.closed = True
+
+    lazy_manager = _AsyncExit()
+    monkeypatch.setattr(mcp_server_module, "_SESSION_MANAGERS_INITIALIZED", True)
+    monkeypatch.setattr(mcp_server_module, "_session_manager_cm", None)
+    monkeypatch.setattr(mcp_server_module, "_sse_session_manager_cm", None)
+    monkeypatch.setattr(mcp_server_module, "_lazy_session_manager_cm", lazy_manager)
+
+    await mcp_server_module.shutdown_session_managers()
+
+    assert lazy_manager.closed is True
+    assert mcp_server_module._lazy_session_manager_cm is None
+    assert mcp_server_module._SESSION_MANAGERS_INITIALIZED is False
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_lifespan_initializes_and_shuts_down(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    events = []
+
+    async def fake_initialize():
+        events.append("initialize")
+
+    async def fake_shutdown():
+        events.append("shutdown")
+
+    monkeypatch.setattr(
+        mcp_server_module, "initialize_session_managers", fake_initialize
+    )
+    monkeypatch.setattr(mcp_server_module, "shutdown_session_managers", fake_shutdown)
+
+    async with mcp_server_module.lifespan(object()):
+        events.append("inside")
+
+    assert events == ["initialize", "inside", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_list_tools_endpoint_returns_gateway_tools_and_fallback(
+    monkeypatch,
+):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "get_auth_context",
+        MagicMock(return_value=(None, None, None, None, None, None, "127.0.0.1")),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_catalog",
+        AsyncMock(return_value={"description": "custom catalog"}),
+    )
+
+    tools = await mcp_server_module.list_lazymcp_tools()
+
+    assert tools[0].name == "mcp_describe"
+    assert tools[0].description == "custom catalog"
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_get_lazymcp_catalog",
+        AsyncMock(side_effect=RuntimeError("catalog failed")),
+    )
+
+    fallback_tools = await mcp_server_module.list_lazymcp_tools()
+
+    assert fallback_tools[0].name == "mcp_describe"
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_tool_call_dispatches_and_handles_errors(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_describe",
+        AsyncMock(return_value={"ok": "describe"}),
+    )
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_status",
+        AsyncMock(return_value={"ok": "status"}),
+    )
+    delegated_result = MagicMock()
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_call",
+        AsyncMock(return_value=delegated_result),
+    )
+
+    describe_result = await mcp_server_module.lazymcp_tool_call("mcp_describe", {})
+    status_result = await mcp_server_module.lazymcp_tool_call("mcp_status", {})
+    call_result = await mcp_server_module.lazymcp_tool_call("mcp_call", {})
+    unknown_result = await mcp_server_module.lazymcp_tool_call("unknown", {})
+
+    assert json.loads(describe_result.content[0].text) == {"ok": "describe"}
+    assert json.loads(status_result.content[0].text) == {"ok": "status"}
+    assert call_result is delegated_result
+    assert json.loads(unknown_result.content[0].text) == {
+        "error": "Unknown LazyMCP tool."
+    }
+
+    monkeypatch.setattr(
+        mcp_server_module,
+        "_lazymcp_status",
+        AsyncMock(side_effect=RuntimeError("status failed")),
+    )
+
+    error_result = await mcp_server_module.lazymcp_tool_call("mcp_status", {})
+
+    assert error_result.isError is True
+    assert "status failed" in json.loads(error_result.content[0].text)["details"]
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_toolset_route_sets_scope_and_streams(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_get_toolset(_prisma_client, toolset_name):
+        return types.SimpleNamespace(toolset_id=f"toolset-{toolset_name}")
+
+    async def fake_stream_response(_handle_fn, scope, _receive):
+        from litellm.proxy._experimental.mcp_server.server import _mcp_active_toolset_id
+        from starlette.responses import Response
+
+        assert scope["path"] == "/lazymcp"
+        assert _mcp_active_toolset_id.get() == "toolset-dev"
+        return Response("ok", media_type="text/event-stream")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_toolset_by_name_cached",
+        fake_get_toolset,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/toolset/dev/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 200
+
+
+def test_lazymcp_root_route_streams_without_redirect(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_stream_response(_handle_fn, scope, _receive):
+        from starlette.responses import Response
+
+        assert scope["path"] == "/lazymcp"
+        return Response("ok", media_type="text/event-stream")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 200
+
+
+def test_lazymcp_root_route_returns_500_on_unexpected_error(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_stream_response(_handle_fn, _scope, _receive):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 500
+    assert "boom" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_dynamic_route_handles_toolset_and_fallback(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_get_toolset(_prisma_client, toolset_name):
+        return types.SimpleNamespace(toolset_id=f"toolset-{toolset_name}")
+
+    async def fake_stream_response(_handle_fn, scope, _receive):
+        from litellm.proxy._experimental.mcp_server.server import _mcp_active_toolset_id
+        from starlette.responses import Response
+
+        assert scope["path"] == "/lazymcp"
+        assert _mcp_active_toolset_id.get() == "toolset-dev"
+        return Response("ok", media_type="text/event-stream")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr(
+        "litellm.proxy.auth.ip_address_utils.IPAddressUtils.get_mcp_client_ip",
+        MagicMock(return_value="127.0.0.1"),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+        MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_toolset_by_name_cached",
+        fake_get_toolset,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._stream_mcp_asgi_response", fake_stream_response
+    )
+
+    response = TestClient(app).get("/lazymcp/dev", follow_redirects=False)
+
+    assert response.status_code == 200
+
+
+def test_lazymcp_dynamic_route_falls_back_for_non_toolset(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_get_toolset(_prisma_client, _toolset_name):
+        return None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr(
+        "litellm.proxy.auth.ip_address_utils.IPAddressUtils.get_mcp_client_ip",
+        MagicMock(return_value="127.0.0.1"),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+        MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_toolset_by_name_cached",
+        fake_get_toolset,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._is_mcp_access_group_cached",
+        AsyncMock(return_value=False),
+    )
+
+    response = TestClient(app).get("/lazymcp/github", follow_redirects=False)
+
+    assert response.status_code == 404
+
+
+def test_lazymcp_toolset_route_returns_404_for_missing_toolset(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    async def fake_get_toolset(_prisma_client, _toolset_name):
+        return None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_toolset_by_name_cached",
+        fake_get_toolset,
+    )
+
+    response = TestClient(app).get("/toolset/missing/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 404
+
+
+def test_lazymcp_toolset_route_returns_503_without_database(monkeypatch):
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response = TestClient(app).get("/toolset/dev/lazymcp", follow_redirects=False)
+
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_invalidating_toolset_cache_clears_lazymcp_cache(monkeypatch):
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    cache_dict = {"toolset_perms:abc": 1, "lazymcp:catalog:xyz": 2, "other": 3}
+    invalidate_mock = MagicMock()
+    with (
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            MagicMock(in_memory_cache=MagicMock(cache_dict=cache_dict)),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.invalidate_lazymcp_cache",
+            invalidate_mock,
+        ),
+    ):
+        manager.invalidate_toolset_cache(toolset_id="abc")
+
+    assert "toolset_perms:abc" not in cache_dict
+    assert cache_dict["other"] == 3
+    invalidate_mock.assert_called_once()
+
+
+def test_lazymcp_cache_scope_hashes_auth_context_and_route_scope():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _lazymcp_cache_scope,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="sk-secret", user_id="user")
+    base_scope = _lazymcp_cache_scope(
+        user_api_key_auth=user_auth,
+        mcp_auth_header="Bearer upstream-one",
+        mcp_servers=["github"],
+        mcp_server_auth_headers={"github": {"authorization": "Bearer a"}},
+        oauth2_headers={"Authorization": "Bearer user-a"},
+        raw_headers={"x-mcp-servers": "github"},
+        client_ip="127.0.0.1",
+    )
+    changed_auth_scope = _lazymcp_cache_scope(
+        user_api_key_auth=user_auth,
+        mcp_auth_header="Bearer upstream-two",
+        mcp_servers=["github"],
+        mcp_server_auth_headers={"github": {"authorization": "Bearer a"}},
+        oauth2_headers={"Authorization": "Bearer user-a"},
+        raw_headers={"x-mcp-servers": "github"},
+        client_ip="127.0.0.1",
+    )
+    changed_route_scope = _lazymcp_cache_scope(
+        user_api_key_auth=user_auth,
+        mcp_auth_header="Bearer upstream-one",
+        mcp_servers=["slack"],
+        mcp_server_auth_headers={"github": {"authorization": "Bearer a"}},
+        oauth2_headers={"Authorization": "Bearer user-a"},
+        raw_headers={"x-mcp-servers": "github"},
+        client_ip="127.0.0.1",
+    )
+
+    assert base_scope != changed_auth_scope
+    assert base_scope != changed_route_scope
+    assert "sk-secret" not in base_scope
+    assert "upstream-one" not in base_scope
+
+
+def test_lazymcp_summary_helpers_sanitize_and_summarize():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_lazymcp_server_description,
+            _lazymcp_tool_to_summary,
+            _safe_lazymcp_text,
+            _summarize_lazymcp_schema,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    long_text = "See https://example.com/" + (" very long" * 30)
+    assert "[url]" in _safe_lazymcp_text(long_text, "fallback")
+    assert _safe_lazymcp_text(None, "fallback") == "fallback"
+    assert _summarize_lazymcp_schema(None) == {}
+
+    schema = {
+        "type": "object",
+        "required": ["query"],
+        "properties": {"query": {"type": "string"}},
+    }
+    assert _summarize_lazymcp_schema(schema) == {
+        "type": "object",
+        "required": ["query"],
+        "properties": ["query"],
+    }
+
+    tool = MCPTool(name="search", description=long_text, inputSchema=schema)
+    summary = _lazymcp_tool_to_summary(tool)
+    detailed_summary = _lazymcp_tool_to_summary(tool, include_schema=True)
+    assert summary["input_schema_summary"]["properties"] == ["query"]
+    assert detailed_summary["input_schema"] == schema
+
+    server = MCPServer(
+        server_id="server-id",
+        name="fallback-name",
+        alias=None,
+        server_name=None,
+        transport=MCPTransport.http,
+        mcp_info={"description": long_text},
+    )
+    assert "[url]" in _get_lazymcp_server_description(server)
+
+
+def test_verified_mcp_client_ip_returns_value_or_fail_closed():
+    assert (
+        ResponsesAPIRequestUtils.get_verified_mcp_client_ip(
+            {"mcp_client_ip": " 10.0.0.8 "}
+        )
+        == "10.0.0.8"
+    )
+    assert (
+        ResponsesAPIRequestUtils.get_verified_mcp_client_ip({})
+        == INVALID_MCP_CLIENT_IP_SENTINEL
+    )
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_listing_uses_stored_oauth_when_request_header_missing():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_lazymcp_server_tools,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="oauth-server",
+        name="oauth",
+        alias="oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+    )
+    tool = MCPTool(name="oauth-search", description="Search", inputSchema={})
+    user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            AsyncMock(return_value={"Authorization": "Bearer stored-user-token"}),
+        ) as oauth_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[tool]),
+        ) as list_tools_mock,
+    ):
+        tools = await _get_lazymcp_server_tools(
+            server=server,
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        )
+
+    assert tools == [tool]
+    oauth_mock.assert_awaited_once()
+    assert list_tools_mock.await_args.kwargs["extra_headers"] == {
+        "Authorization": "Bearer stored-user-token"
+    }
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_toolset_scope_applies_once_for_non_admin_key():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_lazymcp_allowed_servers,
+            _mcp_active_toolset_id,
+            _prepare_mcp_request_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-toolset",
+        mcp_toolsets=["toolset-123"],
+    )
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="user",
+        object_permission=object_permission,
+    )
+    scoped_auth_seen = {}
+    server = MCPServer(
+        server_id="server-id",
+        name="github",
+        alias="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+
+    async def fake_apply_toolset_scope(auth, toolset_id):
+        scoped_auth_seen["toolset_id"] = toolset_id
+        updated_op = auth.object_permission.model_copy(
+            update={
+                "mcp_servers": ["server-id"],
+                "mcp_tool_permissions": {"server-id": ["search"]},
+                "mcp_toolsets": [],
+            }
+        )
+        return auth.model_copy(update={"object_permission": updated_op})
+
+    async def fake_get_allowed_mcp_servers(user_api_key_auth):
+        scoped_auth_seen["mcp_toolsets_after_scope"] = (
+            user_api_key_auth.object_permission.mcp_toolsets
+        )
+        return ["server-id"]
+
+    token = _mcp_active_toolset_id.set("toolset-123")
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._apply_toolset_scope",
+                AsyncMock(side_effect=fake_apply_toolset_scope),
+            ) as apply_scope_mock,
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.process_mcp_request",
+                AsyncMock(
+                    return_value=(
+                        user_auth,
+                        None,
+                        None,
+                        None,
+                        None,
+                        {},
+                    )
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+                MagicMock(return_value="127.0.0.1"),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+                AsyncMock(side_effect=fake_get_allowed_mcp_servers),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+                MagicMock(return_value=server),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.filter_server_ids_by_ip_with_info",
+                MagicMock(return_value=(["server-id"], 0)),
+            ),
+        ):
+            scoped_auth, _, _, _, _, _, client_ip = await _prepare_mcp_request_context(
+                {"type": "http", "path": "/mcp", "headers": []}, "/mcp"
+            )
+            allowed_servers = await _get_lazymcp_allowed_servers(
+                user_api_key_auth=scoped_auth,
+                mcp_servers=None,
+                client_ip=client_ip,
+            )
+    finally:
+        _mcp_active_toolset_id.reset(token)
+
+    assert [server.server_id for server in allowed_servers] == ["server-id"]
+    apply_scope_mock.assert_awaited_once()
+    assert scoped_auth_seen == {
+        "toolset_id": "toolset-123",
+        "mcp_toolsets_after_scope": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_lazymcp_access_group_route_uses_existing_group_resolution():
+    try:
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_lazymcp_catalog,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = MCPServer(
+        server_id="server-group-id",
+        name="github",
+        alias="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        mcp_info={"description": "Group visible server."},
+    )
+    tool = MCPTool(name="github-search", description="Search", inputSchema={})
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            AsyncMock(return_value=["server-group-id"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            MagicMock(return_value=server),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.filter_server_ids_by_ip_with_info",
+            MagicMock(return_value=(["server-group-id"], 0)),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=["server-group-id"]),
+        ) as group_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager._get_tools_from_server",
+            AsyncMock(return_value=[tool]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_get",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._lazymcp_cache_set",
+            AsyncMock(),
+        ),
+    ):
+        catalog = await _get_lazymcp_catalog(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="user"),
+            mcp_auth_header=None,
+            mcp_servers=["devtools"],
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers=None,
+            client_ip="127.0.0.1",
+        )
+
+    group_mock.assert_awaited_once_with(["devtools"])
+    assert catalog["servers"][0]["name"] == "github"
 
 
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():

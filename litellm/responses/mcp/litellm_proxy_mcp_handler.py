@@ -1,3 +1,4 @@
+import json
 import re
 import traceback
 from datetime import datetime
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.utils import INVALID_MCP_CLIENT_IP_SENTINEL
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -43,6 +45,8 @@ ToolParam = Any
 
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
+LITELLM_PROXY_LAZYMCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/lazymcp/"
+LITELLM_PROXY_LAZYMCP_TOOL_SERVER_MAP_PREFIX = "lazymcp:"
 
 # Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
 # (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
@@ -50,6 +54,7 @@ LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 # in a "server not found" error from the internal gateway, not a silent failure or data leak,
 # so this broad pattern is intentional and preferred over anchoring to localhost only.
 _PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
+_PROXY_LAZYMCP_PATH_RE = re.compile(r"^https?://.+/lazymcp(?:/([^/]+))?$")
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -58,6 +63,36 @@ class LiteLLM_Proxy_MCP_Handler:
 
     This handles when a user passes mcp server_url="litellm_proxy" in their tools.
     """
+
+    @staticmethod
+    def _encode_lazymcp_tool_server_map_value(
+        mcp_servers: Optional[List[str]], toolset_id: Optional[str]
+    ) -> str:
+        payload = {"mcp_servers": mcp_servers, "toolset_id": toolset_id}
+        return f"{LITELLM_PROXY_LAZYMCP_TOOL_SERVER_MAP_PREFIX}{json.dumps(payload, sort_keys=True)}"
+
+    @staticmethod
+    def _decode_lazymcp_tool_server_map_value(
+        value: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(value, str) or not value.startswith(
+            LITELLM_PROXY_LAZYMCP_TOOL_SERVER_MAP_PREFIX
+        ):
+            return None
+        try:
+            decoded = json.loads(
+                value[len(LITELLM_PROXY_LAZYMCP_TOOL_SERVER_MAP_PREFIX) :]
+            )
+        except Exception:
+            return {"mcp_servers": [], "toolset_id": None}
+        if not isinstance(decoded, dict):
+            return {"mcp_servers": [], "toolset_id": None}
+        mcp_servers = decoded.get("mcp_servers")
+        if mcp_servers is None and "mcp_servers" in decoded:
+            return decoded
+        if not isinstance(mcp_servers, list):
+            decoded["mcp_servers"] = []
+        return decoded
 
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
@@ -74,6 +109,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     ):
                         return True
                     if isinstance(server_url, str) and _PROXY_MCP_PATH_RE.match(
+                        server_url
+                    ):
+                        return True
+                    if isinstance(server_url, str) and _PROXY_LAZYMCP_PATH_RE.match(
                         server_url
                     ):
                         return True
@@ -111,7 +150,17 @@ class LiteLLM_Proxy_MCP_Handler:
                             }
                             mcp_tools_with_litellm_proxy.append(rewritten)
                         else:
-                            other_tools.append(tool)
+                            lazy_match = _PROXY_LAZYMCP_PATH_RE.match(server_url)
+                            if lazy_match:
+                                rewritten_url = (
+                                    f"{LITELLM_PROXY_MCP_SERVER_URL}/lazymcp"
+                                )
+                                if lazy_match.group(1):
+                                    rewritten_url = f"{LITELLM_PROXY_LAZYMCP_SERVER_URL_PREFIX}{lazy_match.group(1)}"
+                                rewritten = {**tool, "server_url": rewritten_url}
+                                mcp_tools_with_litellm_proxy.append(rewritten)
+                            else:
+                                other_tools.append(tool)
                     else:
                         other_tools.append(tool)
                 else:
@@ -170,38 +219,13 @@ class LiteLLM_Proxy_MCP_Handler:
             return user_api_key_auth
 
     @staticmethod
-    async def _get_mcp_tools_from_manager(
-        user_api_key_auth: Any,
+    def _get_requested_mcp_servers(
         mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
-        litellm_trace_id: Optional[str] = None,
-        mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
-    ) -> tuple[List[MCPTool], List[str]]:
-        """
-        Get available tools from the MCP server manager.
-
-        Args:
-            user_api_key_auth: User authentication info for access control
-            mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
-            mcp_auth_header: Optional deprecated auth header for MCP servers
-            mcp_server_auth_headers: Optional server-specific auth headers (e.g. from x-mcp-{alias}-*)
-
-        Returns:
-            List of MCP tools
-            List names of allowed MCP servers
-        """
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-        from litellm.proxy._experimental.mcp_server.server import (
-            _get_allowed_mcp_servers_from_mcp_server_names,
-            _get_tools_from_mcp_servers,
-        )
-
+    ) -> tuple[List[str], bool]:
         mcp_servers: List[str] = []
+        use_lazymcp = False
         if mcp_tools_with_litellm_proxy:
             for _tool in mcp_tools_with_litellm_proxy:
-                # if user specifies servers as server_url: litellm_proxy/mcp/zapier,github then return zapier,github
                 server_url = (
                     _tool.get("server_url", "") if isinstance(_tool, dict) else ""
                 )
@@ -209,10 +233,114 @@ class LiteLLM_Proxy_MCP_Handler:
                     LITELLM_PROXY_MCP_SERVER_URL_PREFIX
                 ):
                     mcp_servers.append(server_url.split("/")[-1])
+                elif isinstance(server_url, str) and server_url.startswith(
+                    LITELLM_PROXY_LAZYMCP_SERVER_URL_PREFIX
+                ):
+                    use_lazymcp = True
+                    mcp_servers.append(server_url.split("/")[-1])
+                elif server_url == f"{LITELLM_PROXY_MCP_SERVER_URL}/lazymcp":
+                    use_lazymcp = True
+        return mcp_servers, use_lazymcp
 
-        # Resolve toolset names: collect all toolset IDs first, then apply their
-        # combined permissions in a single pass so multiple toolsets are unioned
-        # rather than the last one overwriting the others.
+    @staticmethod
+    async def _resolve_lazymcp_scope(
+        effective_filter: Optional[List[str]],
+        global_mcp_server_manager: Any,
+    ) -> tuple[Optional[List[str]], Optional[str]]:
+        active_toolset_id: Optional[str] = None
+        if effective_filter and len(effective_filter) == 1:
+            requested_scope = effective_filter[0]
+            if global_mcp_server_manager.get_mcp_server_by_name(requested_scope):
+                return effective_filter, active_toolset_id
+            try:
+                from litellm.proxy.proxy_server import _is_mcp_access_group_cached
+
+                if await _is_mcp_access_group_cached(requested_scope):
+                    return effective_filter, active_toolset_id
+            except Exception as _e:
+                verbose_logger.debug(
+                    f"Could not resolve LazyMCP scope '{requested_scope}' as access group: {_e}"
+                )
+            try:
+                from litellm.proxy.proxy_server import prisma_client
+
+                if prisma_client is not None:
+                    toolset = (
+                        await global_mcp_server_manager.get_toolset_by_name_cached(
+                            prisma_client, requested_scope
+                        )
+                    )
+                    if toolset is not None:
+                        active_toolset_id = toolset.toolset_id
+                        effective_filter = None
+                    else:
+                        effective_filter = []
+            except Exception as _e:
+                verbose_logger.debug(
+                    f"Could not resolve LazyMCP scope '{requested_scope}' as toolset: {_e}"
+                )
+                effective_filter = []
+        return effective_filter, active_toolset_id
+
+    @staticmethod
+    async def _get_lazymcp_gateway_tools(
+        user_api_key_auth: Any,
+        effective_filter: Optional[List[str]],
+        active_toolset_id: Optional[str],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        client_ip: Optional[str],
+    ) -> tuple[List[MCPTool], List[str]]:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_active_toolset_id,
+            _apply_toolset_scope,
+            _get_lazymcp_gateway_tools,
+            _get_lazymcp_catalog,
+        )
+
+        token = (
+            _mcp_active_toolset_id.set(active_toolset_id)
+            if active_toolset_id is not None
+            else None
+        )
+        try:
+            if active_toolset_id is not None and user_api_key_auth is not None:
+                user_api_key_auth = await _apply_toolset_scope(
+                    user_api_key_auth, active_toolset_id
+                )
+            catalog = await _get_lazymcp_catalog(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=effective_filter,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=None,
+                raw_headers=None,
+                client_ip=client_ip,
+            )
+        finally:
+            if token is not None:
+                _mcp_active_toolset_id.reset(token)
+        return _get_lazymcp_gateway_tools(catalog.get("description")), [
+            LiteLLM_Proxy_MCP_Handler._encode_lazymcp_tool_server_map_value(
+                effective_filter, active_toolset_id
+            )
+        ]
+
+    @staticmethod
+    async def _get_standard_mcp_tools(
+        user_api_key_auth: Any,
+        mcp_servers: List[str],
+        global_mcp_server_manager: Any,
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        litellm_trace_id: Optional[str],
+        client_ip: Optional[str] = None,
+    ) -> tuple[List[MCPTool], List[str]]:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+            _get_tools_from_mcp_servers,
+        )
+
         resolved_mcp_servers: List[str] = []
         resolved_toolset_ids: List[str] = []
         for name in mcp_servers:
@@ -227,7 +355,6 @@ class LiteLLM_Proxy_MCP_Handler:
                             )
                         )
                         if toolset is not None:
-                            # Access control: only allow if the key explicitly grants this toolset.
                             if user_api_key_auth is not None:
                                 from litellm.proxy.management_endpoints.common_utils import (
                                     _user_has_admin_view,
@@ -241,8 +368,6 @@ class LiteLLM_Proxy_MCP_Handler:
                                         if op
                                         else None
                                     )
-                                    # None means no grants configured → deny (consistent with
-                                    # fetch_mcp_toolsets which returns [] for unconfigured keys)
                                     if (
                                         granted is None
                                         or toolset.toolset_id not in granted
@@ -252,14 +377,11 @@ class LiteLLM_Proxy_MCP_Handler:
                                         )
                                         continue
                             resolved_toolset_ids.append(toolset.toolset_id)
-                            # Don't add to resolved_mcp_servers — toolset scope
-                            # restricts via object_permission, not server name filter.
                             continue
                 except Exception as _e:
                     verbose_logger.debug(f"Could not resolve '{name}' as toolset: {_e}")
             resolved_mcp_servers.append(name)
 
-        # Apply all resolved toolsets at once (union), avoiding permission overwrite.
         if resolved_toolset_ids and user_api_key_auth is not None:
             user_api_key_auth = (
                 await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
@@ -269,10 +391,6 @@ class LiteLLM_Proxy_MCP_Handler:
                 )
             )
 
-        # When toolsets were resolved we updated object_permission.mcp_servers to the
-        # full union (toolset server IDs + direct server names).  Passing a name-based
-        # filter here would exclude those toolset server IDs (which are UUIDs, not
-        # names), so use None and let the auth object's mcp_servers do the filtering.
         effective_server_filter = (
             None if resolved_toolset_ids else (resolved_mcp_servers or None)
         )
@@ -285,6 +403,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
+            client_ip=client_ip,
         )
 
         allowed_mcp_server_ids = (
@@ -293,7 +412,6 @@ class LiteLLM_Proxy_MCP_Handler:
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
             allowed_mcp_server_ids
         )
-
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=effective_server_filter,
             allowed_mcp_servers=allowed_mcp_servers,
@@ -312,6 +430,68 @@ class LiteLLM_Proxy_MCP_Handler:
                 server_names.append(server_name)
 
         return tools, server_names
+
+    @staticmethod
+    async def _get_mcp_tools_from_manager(
+        user_api_key_auth: Any,
+        mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
+        litellm_trace_id: Optional[str] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        client_ip: Optional[str] = None,
+    ) -> tuple[List[MCPTool], List[str]]:
+        """
+        Get available tools from the MCP server manager.
+
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+            mcp_auth_header: Optional deprecated auth header for MCP servers
+            mcp_server_auth_headers: Optional server-specific auth headers (e.g. from x-mcp-{alias}-*)
+
+        Returns:
+            List of MCP tools
+            List names of allowed MCP servers
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        mcp_servers, use_lazymcp = LiteLLM_Proxy_MCP_Handler._get_requested_mcp_servers(
+            mcp_tools_with_litellm_proxy
+        )
+
+        if use_lazymcp:
+            effective_filter = mcp_servers or None
+            active_toolset_id: Optional[str] = None
+            effective_filter, active_toolset_id = (
+                await LiteLLM_Proxy_MCP_Handler._resolve_lazymcp_scope(
+                    effective_filter, global_mcp_server_manager
+                )
+            )
+            return await LiteLLM_Proxy_MCP_Handler._get_lazymcp_gateway_tools(
+                user_api_key_auth=user_api_key_auth,
+                effective_filter=effective_filter,
+                active_toolset_id=active_toolset_id,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                client_ip=client_ip,
+            )
+
+        # LazyMCP keeps the sentinel so unresolved Responses/Chat client IPs
+        # remain fail-closed in the catalog/IP filter instead of broadening.
+        standard_client_ip = (
+            None if client_ip == INVALID_MCP_CLIENT_IP_SENTINEL else client_ip
+        )
+        return await LiteLLM_Proxy_MCP_Handler._get_standard_mcp_tools(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            global_mcp_server_manager=global_mcp_server_manager,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            litellm_trace_id=litellm_trace_id,
+            client_ip=standard_client_ip,
+        )
 
     @staticmethod
     def _deduplicate_mcp_tools(
@@ -427,6 +607,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        client_ip: Optional[str] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -454,6 +635,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            client_ip=client_ip,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -652,6 +834,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -688,6 +871,63 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 # Import here to avoid circular import
                 from litellm.proxy.proxy_server import proxy_logging_obj
+
+                lazymcp_scope = (
+                    LiteLLM_Proxy_MCP_Handler._decode_lazymcp_tool_server_map_value(
+                        tool_server_map.get(tool_name)
+                    )
+                )
+                if (
+                    tool_name in {"mcp_describe", "mcp_call", "mcp_status"}
+                    and lazymcp_scope is not None
+                ):
+                    from litellm.proxy._experimental.mcp_server.server import (
+                        _mcp_active_toolset_id,
+                        _apply_toolset_scope,
+                        lazymcp_tool_call,
+                        set_auth_context,
+                    )
+
+                    lazy_mcp_servers = lazymcp_scope.get("mcp_servers")
+                    if not isinstance(lazy_mcp_servers, list):
+                        lazy_mcp_servers = None
+                    lazy_toolset_id = lazymcp_scope.get("toolset_id")
+                    scoped_user_api_key_auth = user_api_key_auth
+                    if (
+                        isinstance(lazy_toolset_id, str)
+                        and user_api_key_auth is not None
+                    ):
+                        scoped_user_api_key_auth = await _apply_toolset_scope(
+                            user_api_key_auth, lazy_toolset_id
+                        )
+                    token = (
+                        _mcp_active_toolset_id.set(lazy_toolset_id)
+                        if isinstance(lazy_toolset_id, str)
+                        else None
+                    )
+                    try:
+                        set_auth_context(
+                            user_api_key_auth=scoped_user_api_key_auth,
+                            mcp_auth_header=mcp_auth_header,
+                            mcp_servers=lazy_mcp_servers,
+                            mcp_server_auth_headers=mcp_server_auth_headers,
+                            oauth2_headers=oauth2_headers,
+                            raw_headers=raw_headers,
+                            client_ip=client_ip,
+                        )
+                        result = await lazymcp_tool_call(tool_name, parsed_arguments)
+                    finally:
+                        if token is not None:
+                            _mcp_active_toolset_id.reset(token)
+                    result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+                    tool_results.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "result": result_text,
+                            "name": tool_name,
+                        }
+                    )
+                    continue
 
                 server_name = tool_server_map[tool_name]
 

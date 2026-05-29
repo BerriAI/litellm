@@ -353,6 +353,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>All Servers</Tab>
             <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
+            <Tab>LazyMCP Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
             {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
@@ -435,6 +436,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </TabPanel>
           <TabPanel>
             <MCPConnect />
+          </TabPanel>
+          <TabPanel>
+            <MCPConnect mode="lazymcp" />
           </TabPanel>
           <TabPanel>
             <MCPSemanticFilterSettings accessToken={accessToken} />

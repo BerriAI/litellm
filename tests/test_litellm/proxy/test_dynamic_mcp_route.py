@@ -37,6 +37,7 @@ _GET_ACCESS_GROUP_SERVERS = (
     "MCPRequestHandler._get_mcp_servers_from_access_groups"
 )
 _FORWARD = "litellm.proxy.proxy_server._mcp_forward_as_path"
+_LAZYMCP_FORWARD = "litellm.proxy.proxy_server._lazymcp_forward_as_path"
 _RESOLVE_CSV = "litellm.proxy.proxy_server._resolve_mcp_csv_tokens"
 
 
@@ -486,3 +487,50 @@ async def test_dynamic_mcp_route_empty_access_group_returns_404():
             await dynamic_mcp_route("empty_group", request)
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dynamic_lazymcp_route_unknown_name_returns_404():
+    from litellm.proxy.proxy_server import dynamic_lazymcp_route
+
+    request = _make_request("/lazymcp/does_not_exist")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=None)
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_PRISMA, new=MagicMock()),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await dynamic_lazymcp_route("does_not_exist", request)
+
+    assert exc_info.value.status_code == 404
+    assert "does_not_exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_lazymcp_route_resolves_access_group_without_broadening():
+    from starlette.responses import Response
+
+    from litellm.proxy.proxy_server import dynamic_lazymcp_route
+
+    request = _make_request("/lazymcp/dev_group")
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=None)
+    fake_forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_PRISMA, new=MagicMock()),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=True)),
+        patch(_LAZYMCP_FORWARD, new=fake_forward),
+    ):
+        response = await dynamic_lazymcp_route("dev_group", request)
+
+    assert response.status_code == 200
+    fake_forward.assert_awaited_once_with("dev_group", request)

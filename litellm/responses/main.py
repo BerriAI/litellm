@@ -193,6 +193,7 @@ async def aresponses_api_with_mcp(
     mcp_auth_header: Optional[str] = None
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
     secret_fields = kwargs.get("secret_fields")
+    client_ip = ResponsesAPIRequestUtils.get_verified_mcp_client_ip(secret_fields)
     if secret_fields and isinstance(secret_fields, dict):
         (
             mcp_auth_header,
@@ -213,6 +214,7 @@ async def aresponses_api_with_mcp(
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        client_ip=client_ip,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -261,6 +263,7 @@ async def aresponses_api_with_mcp(
             user_api_key_auth=user_api_key_auth,
             base_item_id=base_item_id,
             pre_processed_mcp_tools=original_mcp_tools,
+            client_ip=client_ip,
         )
 
         return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
@@ -336,6 +339,7 @@ async def aresponses_api_with_mcp(
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers_from_request,
+                client_ip=client_ip,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
             )
@@ -400,6 +404,7 @@ async def aresponses_api_with_mcp(
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
+                        client_ip=client_ip,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(

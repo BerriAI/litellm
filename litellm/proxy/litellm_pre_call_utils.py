@@ -30,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -1448,7 +1449,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
+    data["secret_fields"] = SecretFields(
+        raw_headers=_raw_headers,
+        mcp_client_ip=IPAddressUtils.get_mcp_client_ip(
+            request, general_settings=general_settings
+        ),
+    )
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:
