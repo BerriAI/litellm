@@ -13,11 +13,12 @@ import {
   Tabs,
   Tag,
   theme,
-  Typography
+  Typography,
 } from "antd";
 import {
   ArrowLeftIcon,
   BotIcon,
+  DatabaseIcon,
   EditIcon,
   KeyIcon,
   LayersIcon,
@@ -36,12 +37,8 @@ interface AccessGroupDetailProps {
   onBack: () => void;
 }
 
-export function AccessGroupDetail({
-  accessGroupId,
-  onBack,
-}: AccessGroupDetailProps) {
-  const { data: accessGroup, isLoading } =
-    useAccessGroupDetails(accessGroupId);
+export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const { token } = theme.useToken();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
@@ -72,12 +69,7 @@ export function AccessGroupDetail({
           paddingInline: token.paddingLG * 2,
         }}
       >
-        <Button
-          icon={<ArrowLeftIcon size={16} />}
-          onClick={onBack}
-          type="text"
-          style={{ marginBottom: 16 }}
-        />
+        <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" style={{ marginBottom: 16 }} />
         <Empty description="Access group not found" />
       </Content>
     );
@@ -86,13 +78,13 @@ export function AccessGroupDetail({
   const modelIds = accessGroup.access_model_names ?? [];
   const mcpServerIds = accessGroup.access_mcp_server_ids ?? [];
   const agentIds = accessGroup.access_agent_ids ?? [];
+  const passThroughRoutes = accessGroup.access_pass_through_routes ?? [];
+  const vectorStoreIds = accessGroup.access_vector_store_ids ?? [];
   const keyIds = accessGroup.assigned_key_ids ?? [];
   const teamIds = accessGroup.assigned_team_ids ?? [];
 
   const displayedKeys = showAllKeys ? keyIds : keyIds.slice(0, MAX_PREVIEW);
-  const displayedTeams = showAllTeams
-    ? teamIds
-    : teamIds.slice(0, MAX_PREVIEW);
+  const displayedTeams = showAllTeams ? teamIds : teamIds.slice(0, MAX_PREVIEW);
 
   const handleEdit = () => {
     setIsEditModalVisible(true);
@@ -177,12 +169,62 @@ export function AccessGroupDetail({
           <Empty description="No agents assigned to this group" />
         ),
     },
+    {
+      key: "pass-through",
+      label: (
+        <Flex align="center" gap={8}>
+          <ServerIcon size={16} />
+          Pass-through
+          <Tag>{passThroughRoutes.length}</Tag>
+        </Flex>
+      ),
+      children:
+        passThroughRoutes.length > 0 ? (
+          <List
+            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
+            dataSource={passThroughRoutes}
+            renderItem={(route) => (
+              <List.Item>
+                <Card size="small">
+                  <Text code>{route}</Text>
+                </Card>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="No pass-through routes assigned to this group" />
+        ),
+    },
+    {
+      key: "vector-stores",
+      label: (
+        <Flex align="center" gap={8}>
+          <DatabaseIcon size={16} />
+          Vector Stores
+          <Tag>{vectorStoreIds.length}</Tag>
+        </Flex>
+      ),
+      children:
+        vectorStoreIds.length > 0 ? (
+          <List
+            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
+            dataSource={vectorStoreIds}
+            renderItem={(id) => (
+              <List.Item>
+                <Card size="small">
+                  <Text code>{id}</Text>
+                </Card>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="No vector stores assigned to this group" />
+        ),
+    },
   ];
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
+    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
       {/* Header */}
       <div
         style={{
@@ -193,11 +235,7 @@ export function AccessGroupDetail({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Button
-            icon={<ArrowLeftIcon size={16} />}
-            onClick={onBack}
-            type="text"
-          />
+          <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" />
           <div>
             <Title level={2} style={{ margin: 0 }}>
               {accessGroup.access_group_name}
@@ -207,11 +245,7 @@ export function AccessGroupDetail({
             </Text>
           </div>
         </div>
-        <Button
-          type="primary"
-          icon={<EditIcon size={16} />}
-          onClick={handleEdit}
-        >
+        <Button type="primary" icon={<EditIcon size={16} />} onClick={handleEdit}>
           Edit Access Group
         </Button>
       </div>
@@ -220,9 +254,7 @@ export function AccessGroupDetail({
       <Row style={{ marginBottom: 24 }}>
         <Card>
           <Descriptions title="Group Details" column={1}>
-            <Descriptions.Item label="Description">
-              {accessGroup.description || "—"}
-            </Descriptions.Item>
+            <Descriptions.Item label="Description">{accessGroup.description || "—"}</Descriptions.Item>
             <Descriptions.Item label="Created">
               {new Date(accessGroup.created_at).toLocaleString()}
               {accessGroup.created_by && (
@@ -258,10 +290,7 @@ export function AccessGroupDetail({
             }
             extra={
               keyIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllKeys(!showAllKeys)}
-                >
+                <Button type="link" onClick={() => setShowAllKeys(!showAllKeys)}>
                   {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
                 </Button>
               ) : null
@@ -272,18 +301,13 @@ export function AccessGroupDetail({
                 {displayedKeys.map((id) => (
                   <Tag key={id}>
                     <Text code style={{ fontSize: 12 }}>
-                      {id.length > 20
-                        ? `${id.slice(0, 10)}...${id.slice(-6)}`
-                        : id}
+                      {id.length > 20 ? `${id.slice(0, 10)}...${id.slice(-6)}` : id}
                     </Text>
                   </Tag>
                 ))}
               </Flex>
             ) : (
-              <Empty
-                description="No keys attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+              <Empty description="No keys attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
           </Card>
         </Col>
@@ -298,13 +322,8 @@ export function AccessGroupDetail({
             }
             extra={
               teamIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllTeams(!showAllTeams)}
-                >
-                  {showAllTeams
-                    ? "Show Less"
-                    : `View All (${teamIds?.length})`}
+                <Button type="link" onClick={() => setShowAllTeams(!showAllTeams)}>
+                  {showAllTeams ? "Show Less" : `View All (${teamIds?.length})`}
                 </Button>
               ) : null
             }
@@ -320,10 +339,7 @@ export function AccessGroupDetail({
                 ))}
               </Flex>
             ) : (
-              <Empty
-                description="No teams attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+              <Empty description="No teams attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
           </Card>
         </Col>

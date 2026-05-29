@@ -1021,6 +1021,40 @@ def test_check_passthrough_route_access_multiple_routes():
     assert result4 is False
 
 
+def test_check_passthrough_route_access_allows_access_group_routes():
+    """Access groups can grant pass-through routes without metadata allowlists."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        access_group_passthrough_routes=["/shared-endpoint"],
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/shared-endpoint/v1/messages",
+            user_api_key_dict=valid_token,
+        )
+        is True
+    )
+
+
+def test_check_passthrough_route_access_group_routes_prevent_false_prefix_match():
+    """Access-group pass-through grants use the same safe prefix matching."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        access_group_passthrough_routes=["/shared-endpoint"],
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/shared-endpoint-2",
+            user_api_key_dict=valid_token,
+        )
+        is False
+    )
+
+
 def test_check_passthrough_route_access_prevents_false_prefix_match():
     """Test that prefix matching doesn't allow false matches like /endpoint vs /endpoint-2"""
 

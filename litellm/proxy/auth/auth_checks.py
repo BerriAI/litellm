@@ -2808,7 +2808,11 @@ async def get_org_object(
 async def _get_resources_from_access_groups(
     access_group_ids: List[str],
     resource_field: Literal[
-        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
+        "access_model_names",
+        "access_mcp_server_ids",
+        "access_agent_ids",
+        "access_pass_through_routes",
+        "access_vector_store_ids",
     ],
     prisma_client: Optional[PrismaClient] = None,
     user_api_key_cache: Optional[UserApiKeyCache] = None,
@@ -2824,6 +2828,8 @@ async def _get_resources_from_access_groups(
             - "access_model_names": model names (for model access checks)
             - "access_mcp_server_ids": MCP server IDs (for MCP access checks)
             - "access_agent_ids": agent IDs (for agent access checks)
+            - "access_pass_through_routes": pass-through route prefixes
+            - "access_vector_store_ids": vector store IDs
         prisma_client: Optional PrismaClient (lazy-imported from proxy_server if None)
         user_api_key_cache: Optional DualCache (lazy-imported from proxy_server if None)
         proxy_logging_obj: Optional ProxyLogging (lazy-imported from proxy_server if None)
@@ -2917,6 +2923,44 @@ async def _get_agent_ids_from_access_groups(
     return await _get_resources_from_access_groups(
         access_group_ids=access_group_ids,
         resource_field="access_agent_ids",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_pass_through_routes_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect pass-through route prefixes from unified access groups.
+    Pass-through endpoints are matched by route prefix.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_pass_through_routes",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_vector_store_ids_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect vector store IDs from unified access groups.
+    Vector stores are matched by vector_store_id.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_vector_store_ids",
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

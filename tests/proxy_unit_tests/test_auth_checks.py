@@ -1001,6 +1001,22 @@ async def test_delete_cache_access_object():
             ["agent-a", "agent-b"],
         ),
         (
+            "access_pass_through_routes",
+            {
+                "access_group_id": "ag-4",
+                "access_pass_through_routes": ["/shared-passthrough"],
+            },
+            ["/shared-passthrough"],
+        ),
+        (
+            "access_vector_store_ids",
+            {
+                "access_group_id": "ag-5",
+                "access_vector_store_ids": ["vs-shared"],
+            },
+            ["vs-shared"],
+        ),
+        (
             "access_model_names",
             {"access_group_id": "ag-3", "access_model_names": []},
             [],
@@ -1018,6 +1034,8 @@ async def test_get_resources_from_access_groups(
     from litellm.proxy.auth.auth_checks import (
         _get_agent_ids_from_access_groups,
         _get_models_from_access_groups,
+        _get_pass_through_routes_from_access_groups,
+        _get_vector_store_ids_from_access_groups,
     )
 
     ag_table = LiteLLM_AccessGroupTable(
@@ -1025,6 +1043,10 @@ async def test_get_resources_from_access_groups(
         access_group_name="test",
         access_model_names=access_group_data.get("access_model_names", []),
         access_agent_ids=access_group_data.get("access_agent_ids", []),
+        access_pass_through_routes=access_group_data.get(
+            "access_pass_through_routes", []
+        ),
+        access_vector_store_ids=access_group_data.get("access_vector_store_ids", []),
     )
 
     with patch(
@@ -1038,8 +1060,20 @@ async def test_get_resources_from_access_groups(
                 prisma_client=MagicMock(),
                 user_api_key_cache=DualCache(),
             )
-        else:
+        elif resource_field == "access_agent_ids":
             result = await _get_agent_ids_from_access_groups(
+                access_group_ids=[access_group_data["access_group_id"]],
+                prisma_client=MagicMock(),
+                user_api_key_cache=DualCache(),
+            )
+        elif resource_field == "access_pass_through_routes":
+            result = await _get_pass_through_routes_from_access_groups(
+                access_group_ids=[access_group_data["access_group_id"]],
+                prisma_client=MagicMock(),
+                user_api_key_cache=DualCache(),
+            )
+        else:
+            result = await _get_vector_store_ids_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
                 user_api_key_cache=DualCache(),

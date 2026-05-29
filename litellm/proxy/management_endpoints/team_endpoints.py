@@ -3390,15 +3390,25 @@ async def _resolve_team_access_group_resources(_team_info: Any) -> None:
     if not _team_info.access_group_ids:
         return
     ag_lookup = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
-    models, mcp_ids, agent_ids = set(), set(), set()
+    models, mcp_ids, agent_ids, pass_through_routes, vector_store_ids = (
+        set(),
+        set(),
+        set(),
+        set(),
+        set(),
+    )
     for ag_id in _team_info.access_group_ids:
         if ag_id in ag_lookup:
             models.update(ag_lookup[ag_id]["models"])
             mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
             agent_ids.update(ag_lookup[ag_id]["agent_ids"])
+            pass_through_routes.update(ag_lookup[ag_id]["pass_through_routes"])
+            vector_store_ids.update(ag_lookup[ag_id]["vector_store_ids"])
     _team_info.access_group_models = list(models)
     _team_info.access_group_mcp_server_ids = list(mcp_ids)
     _team_info.access_group_agent_ids = list(agent_ids)
+    _team_info.access_group_pass_through_routes = list(pass_through_routes)
+    _team_info.access_group_vector_store_ids = list(vector_store_ids)
 
 
 @router.get(
@@ -3952,7 +3962,8 @@ async def _batch_resolve_access_group_resources(
     Batch-fetch access groups in a single DB query and return a per-group
     resource map.
 
-    Returns {ag_id: {"models": [...], "mcp_server_ids": [...], "agent_ids": [...]}}.
+    Returns {ag_id: {"models": [...], "mcp_server_ids": [...], "agent_ids": [...],
+    "pass_through_routes": [...], "vector_store_ids": [...]}}.
     Missing/invalid groups are silently omitted.
     """
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
@@ -3971,6 +3982,8 @@ async def _batch_resolve_access_group_resources(
             "models": list(row.access_model_names or []),
             "mcp_server_ids": list(row.access_mcp_server_ids or []),
             "agent_ids": list(row.access_agent_ids or []),
+            "pass_through_routes": list(row.access_pass_through_routes or []),
+            "vector_store_ids": list(row.access_vector_store_ids or []),
         }
     return result
 

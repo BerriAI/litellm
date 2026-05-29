@@ -1,10 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { AccessGroupResponse, accessGroupKeys } from "./useAccessGroups";
 
@@ -16,6 +11,8 @@ export interface AccessGroupUpdateParams {
   access_model_names?: string[];
   access_mcp_server_ids?: string[];
   access_agent_ids?: string[];
+  access_pass_through_routes?: string[];
+  access_vector_store_ids?: string[];
   assigned_team_ids?: string[];
   assigned_key_ids?: string[];
 }

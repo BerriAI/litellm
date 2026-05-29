@@ -29,6 +29,7 @@ from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
     _delete_cache_key_object,
+    _get_pass_through_routes_from_access_groups,
     _get_user_role,
     _is_model_cost_zero,
     _is_user_proxy_admin,
@@ -1633,6 +1634,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _team_obj is not None:
                 valid_token.team_object_permission = _team_obj.object_permission
+                valid_token.team_access_group_ids = _team_obj.access_group_ids
                 # Keep team_metadata in sync with the freshly fetched team so that
                 # guardrails (or any other metadata) added after the key was cached
                 # are picked up on subsequent requests without a cache eviction.
@@ -2027,6 +2029,9 @@ async def _run_centralized_common_checks(  # noqa: PLR0915
         None if isinstance(global_spend_result, BaseException) else global_spend_result
     )
 
+    if team_object is not None:
+        user_api_key_auth_obj.team_access_group_ids = team_object.access_group_ids or []
+
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and
     # master_key tokens get admin from the token; the DB row for the
@@ -2138,6 +2143,67 @@ async def _reserve_budget_after_common_checks(
     )
 
 
+async def _hydrate_access_group_route_permissions(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    route: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Preload access-group resources needed before synchronous route checks run.
+
+    Pass-through route checks happen before centralized common_checks, so team
+    access group resources must be resolved here for registered pass-throughs.
+    """
+    try:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            route=route
+        ):
+            return
+    except Exception:
+        return
+
+    access_group_ids = list(user_api_key_auth_obj.access_group_ids or [])
+    if user_api_key_auth_obj.team_id is not None:
+        team_access_group_ids = user_api_key_auth_obj.team_access_group_ids
+        if team_access_group_ids is None:
+            try:
+                team_object = await get_team_object(
+                    team_id=user_api_key_auth_obj.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                team_access_group_ids = team_object.access_group_ids or []
+                user_api_key_auth_obj.team_access_group_ids = team_access_group_ids
+            except Exception:
+                team_access_group_ids = []
+        access_group_ids.extend(team_access_group_ids or [])
+
+    if not access_group_ids:
+        return
+
+    access_group_routes = await _get_pass_through_routes_from_access_groups(
+        access_group_ids=list(set(access_group_ids)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    user_api_key_auth_obj.access_group_passthrough_routes = list(
+        set(
+            (user_api_key_auth_obj.access_group_passthrough_routes or [])
+            + access_group_routes
+        )
+    )
+
+
 def _should_skip_budget_checks(
     request_data: dict,
     route: str,
@@ -2198,6 +2264,21 @@ async def user_api_key_auth(
         custom_litellm_key_header=custom_litellm_key_header,
     )
     user_api_key_auth_obj.budget_reservation = None
+
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    await _hydrate_access_group_route_permissions(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        route=route,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(

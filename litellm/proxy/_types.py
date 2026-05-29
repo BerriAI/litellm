@@ -2717,6 +2717,11 @@ class UserAPIKeyAuth(
     # Team object_permission preloaded in auth (e.g. get_team_object) to avoid
     # per-request object_permission fetches in downstream checks (vector stores, etc.)
     team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # Access-group resources preloaded during auth for synchronous route checks
+    # and downstream resource-specific authorization.
+    team_access_group_ids: Optional[List[str]] = None
+    access_group_passthrough_routes: Optional[List[str]] = None
+    access_group_vector_store_ids: Optional[List[str]] = None
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: Optional[Dict] = None
@@ -3174,6 +3179,8 @@ class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
     access_model_names: List[str] = []
     access_mcp_server_ids: List[str] = []
     access_agent_ids: List[str] = []
+    access_pass_through_routes: List[str] = []
+    access_vector_store_ids: List[str] = []
     assigned_team_ids: List[str] = []
     assigned_key_ids: List[str] = []
     created_at: Optional[datetime] = None
@@ -4100,6 +4107,8 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None
     access_group_agent_ids: Optional[List[str]] = None
+    access_group_pass_through_routes: Optional[List[str]] = None
+    access_group_vector_store_ids: Optional[List[str]] = None
 
 
 class TeamInfoResponseObject(TypedDict):

@@ -12,6 +12,8 @@ const mockAccessGroups: AccessGroupResponse[] = [
     access_model_names: ["m1", "m2"],
     access_mcp_server_ids: ["s1"],
     access_agent_ids: ["a1"],
+    access_pass_through_routes: ["/shared-analytics"],
+    access_vector_store_ids: ["vs-shared-kb"],
     assigned_team_ids: [],
     assigned_key_ids: [],
     created_at: "2024-01-15T10:00:00Z",
@@ -26,6 +28,8 @@ const mockAccessGroups: AccessGroupResponse[] = [
     access_model_names: ["m1"],
     access_mcp_server_ids: [],
     access_agent_ids: [],
+    access_pass_through_routes: [],
+    access_vector_store_ids: [],
     assigned_team_ids: [],
     assigned_key_ids: [],
     created_at: "2024-01-10T09:00:00Z",
@@ -48,13 +52,7 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup", () => ({
 }));
 
 vi.mock("./AccessGroupsDetailsPage", () => ({
-  AccessGroupDetail: ({
-    accessGroupId,
-    onBack,
-  }: {
-    accessGroupId: string;
-    onBack: () => void;
-  }) => (
+  AccessGroupDetail: ({ accessGroupId, onBack }: { accessGroupId: string; onBack: () => void }) => (
     <div data-testid="access-group-detail">
       <span>Detail for {accessGroupId}</span>
       <button onClick={onBack}>Back</button>
@@ -63,13 +61,7 @@ vi.mock("./AccessGroupsDetailsPage", () => ({
 }));
 
 vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
-  AccessGroupCreateModal: ({
-    visible,
-    onCancel,
-  }: {
-    visible: boolean;
-    onCancel: () => void;
-  }) =>
+  AccessGroupCreateModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
     visible ? (
       <div data-testid="create-access-group-modal">
         <button onClick={onCancel}>Cancel</button>
@@ -78,20 +70,8 @@ vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
 }));
 
 vi.mock("../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
-  default: ({
-    variant,
-    tooltipText,
-    onClick,
-  }: {
-    variant: string;
-    tooltipText: string;
-    onClick: () => void;
-  }) => (
-    <button
-      data-testid={`action-button-${variant.toLowerCase()}`}
-      aria-label={tooltipText}
-      onClick={onClick}
-    >
+  default: ({ variant, tooltipText, onClick }: { variant: string; tooltipText: string; onClick: () => void }) => (
+    <button data-testid={`action-button-${variant.toLowerCase()}`} aria-label={tooltipText} onClick={onClick}>
       {variant}
     </button>
   ),
@@ -118,23 +98,17 @@ describe("AccessGroupsPage", () => {
   it("should display page title and subtitle", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByRole("heading", { name: "Access Groups" })).toBeInTheDocument();
-    expect(
-      screen.getByText("Manage resource permissions for your organization"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Manage resource permissions for your organization")).toBeInTheDocument();
   });
 
   it("should display Create Access Group button", () => {
     renderWithProviders(<AccessGroupsPage />);
-    expect(
-      screen.getByRole("button", { name: /create access group/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create access group/i })).toBeInTheDocument();
   });
 
   it("should display search input with placeholder", () => {
     renderWithProviders(<AccessGroupsPage />);
-    expect(
-      screen.getByPlaceholderText("Search groups by name, ID, or description..."),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search groups by name, ID, or description...")).toBeInTheDocument();
   });
 
   it("should display access groups in table", () => {
@@ -155,9 +129,7 @@ describe("AccessGroupsPage", () => {
   it("should filter groups by search text matching name", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search groups by name, ID, or description...",
-    );
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
     await user.type(searchInput, "Admin");
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
     expect(screen.queryByText("Read Only")).not.toBeInTheDocument();
@@ -166,9 +138,7 @@ describe("AccessGroupsPage", () => {
   it("should filter groups by search text matching ID", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search groups by name, ID, or description...",
-    );
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
     await user.type(searchInput, "ag-2");
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
@@ -177,9 +147,7 @@ describe("AccessGroupsPage", () => {
   it("should filter groups by search text matching description", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search groups by name, ID, or description...",
-    );
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
     await user.type(searchInput, "read-only");
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
@@ -188,9 +156,7 @@ describe("AccessGroupsPage", () => {
   it("should reset to first page when search text changes", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search groups by name, ID, or description...",
-    );
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
     await user.type(searchInput, "Admin");
     const pagination = screen.getByText(/groups/);
     expect(pagination).toHaveTextContent("1 groups");
@@ -240,9 +206,7 @@ describe("AccessGroupsPage", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
     expect(dialog).toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "Are you sure you want to delete this access group? This action cannot be undone.",
-      ),
+      within(dialog).getByText("Are you sure you want to delete this access group? This action cannot be undone."),
     ).toBeInTheDocument();
     expect(within(dialog).getByText("Access Group Information")).toBeInTheDocument();
     expect(within(dialog).getByText("ag-1")).toBeInTheDocument();
@@ -303,9 +267,7 @@ describe("AccessGroupsPage", () => {
   it("should display empty state when no groups match search", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search groups by name, ID, or description...",
-    );
+    const searchInput = screen.getByPlaceholderText("Search groups by name, ID, or description...");
     await user.type(searchInput, "nonexistent-group-xyz");
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
