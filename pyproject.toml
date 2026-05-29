@@ -119,7 +119,7 @@ proxy-runtime = [
     "opentelemetry-api==1.28.0",
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
-    "ddtrace>=2.19.0,<3.0",
+    "ddtrace>=2.19.2,<3.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
