@@ -945,12 +945,16 @@ async def pass_through_request(  # noqa: PLR0915
         ## PASSTHROUGH MANAGED LIST (DB-only response) ##
         # For GET /v1/files and GET /v1/batches passthrough routes, serve the
         # listing entirely from our DB so each caller only sees their own IDs.
-        # Admins / master-key callers see all rows.  Runs only when
-        # passthrough_managed_object_ids is enabled and a prisma client exists.
+        # Admins / master-key callers see all rows.  Gated on the same
+        # conditions as INPUT/OUTPUT rewrite: feature flag, provider, AND
+        # the managed_files hook must be present.  Without the hook no managed
+        # IDs are ever minted or stored, so the DB is empty and intercepting
+        # the list would silently hide the caller's real upstream files/batches.
         if (
             proxy_general_settings.get("passthrough_managed_object_ids", False)
             and _is_managed_id_provider
             and request.method == "GET"
+            and proxy_logging_obj.get_proxy_hook("managed_files") is not None
         ):
             from litellm.proxy.auth.auth_utils import get_request_route
             from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
