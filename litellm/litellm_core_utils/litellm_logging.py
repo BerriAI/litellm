@@ -1624,10 +1624,17 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
-        """Final assembled stream export (not a per-chunk success call)."""
+        """Final assembled stream export (not a per-chunk success call).
+
+        Per-chunk callers pass a ``ModelResponseStream`` (or ``None``); the
+        final assembled response is any other non-``None`` value (typically a
+        ``ModelResponse``). Treating a chunk as the assembled response would
+        prematurely set the ``has_dispatched_final_stream_success`` dedup
+        guard and silently suppress the real final stream log.
+        """
         if self.stream is not True:
             return False
-        if result is not None:
+        if result is not None and not isinstance(result, ModelResponseStream):
             return True
         return (
             "async_complete_streaming_response" in self.model_call_details
