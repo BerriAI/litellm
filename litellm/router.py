@@ -8757,10 +8757,17 @@ class Router:
         )
 
     def _sync_deployment_budget_config(self, deployment: Deployment) -> None:
-        if not self._deployment_has_budget_limits(deployment=deployment):
+        model_id = deployment.model_info.id
+        if model_id is None:
             return
 
         _budget_limiter = self._get_router_deployment_budget_limiter()
+
+        if not self._deployment_has_budget_limits(deployment=deployment):
+            if _budget_limiter is not None:
+                _budget_limiter.unregister_deployment_budget(model_id=model_id)
+            return
+
         if _budget_limiter is None:
             self.add_optional_pre_call_checks(
                 optional_pre_call_checks=["router_budget_limiting"]
