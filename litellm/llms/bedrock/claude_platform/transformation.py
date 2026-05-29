@@ -79,6 +79,34 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        data = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        # workspace_id is auth metadata for the AWS gateway: it is sent via the
+        # ``anthropic-workspace-id`` header (see validate_environment), never as
+        # a body field. Anthropic's /v1/messages rejects unknown top-level
+        # fields, so strip every accepted alias from the serialized body.
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic-workspace-id",
+            "anthropic_workspace_id",
+        ):
+            data.pop(key, None)
+        return data
+
     def get_model_response_iterator(
         self,
         streaming_response: Any,

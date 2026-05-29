@@ -310,3 +310,33 @@ async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api
     assert requests[0]["body"]["messages"] == [{"role": "user", "content": "hello"}]
     assert requests[0]["body"]["max_tokens"] == 10
     assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+
+
+def test_claude_platform_transform_request_strips_workspace_id_from_body():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    data = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "workspace_id": "wrkspc_test",
+            "aws_workspace_id": "wrkspc_test",
+            "anthropic-workspace-id": "wrkspc_test",
+            "anthropic_workspace_id": "wrkspc_test",
+            "max_tokens": 16,
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    # workspace_id is auth metadata sent via the anthropic-workspace-id header,
+    # not a valid Anthropic Messages body field -- it must not leak into the body.
+    assert "workspace_id" not in data
+    assert "aws_workspace_id" not in data
+    assert "anthropic-workspace-id" not in data
+    assert "anthropic_workspace_id" not in data
+    assert data["model"] == "claude-sonnet-4-6"
+    assert data["max_tokens"] == 16
