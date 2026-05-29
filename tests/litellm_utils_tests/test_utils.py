@@ -2519,26 +2519,6 @@ def test_get_base_model_from_metadata():
 
 
 def test_model_list_models_by_provider_in_sync():
-    model_list_set = set(litellm.model_list)
-    all_provider_models: set = set()
-
-    missing_from_model_list = []
-    for provider, models in litellm.models_by_provider.items():
-        model_set = set(models) if isinstance(models, list) else models
-        all_provider_models |= model_set
-        for model in model_set:
-            if model not in model_list_set:
-                missing_from_model_list.append(f"{provider}: {model}")
-
-    assert not missing_from_model_list, (
-        f"{len(missing_from_model_list)} models in models_by_provider are missing from model_list:\n"
-        + "\n".join(missing_from_model_list[:20])
-    )
-
-    missing_from_providers = [
-        m for m in model_list_set if m not in all_provider_models
-    ]
-    assert not missing_from_providers, (
-        f"{len(missing_from_providers)} models in model_list are missing from models_by_provider:\n"
-        + "\n".join(missing_from_providers[:20])
-    )
+    assert set(litellm.model_list) == {
+        m for v in litellm.models_by_provider.values() for m in v
+    }
