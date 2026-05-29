@@ -214,16 +214,16 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         return
 
     if isinstance(content, str):
-        start, length = 0, len(content)
-        while start < length:
-            idx = content.find("\n", start)
-            if idx == -1:
-                chunk, start = content[start:], length
+        str_start, str_length = 0, len(content)
+        while str_start < str_length:
+            str_idx = content.find("\n", str_start)
+            if str_idx == -1:
+                str_chunk, str_start = content[str_start:], str_length
             else:
-                chunk, start = content[start:idx], idx + 1
-            line = chunk.strip()
-            if line:
-                yield line
+                str_chunk, str_start = content[str_start:str_idx], str_idx + 1
+            str_line = str_chunk.strip()
+            if str_line:
+                yield str_line
         return
 
     if hasattr(content, "read"):
