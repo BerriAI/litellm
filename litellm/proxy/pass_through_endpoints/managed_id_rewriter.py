@@ -396,31 +396,41 @@ async def _mint_or_reuse_object(
         return raw_id
 
     # Dedup: model_object_id is @unique so find_first by raw provider ID.
+    # Provider check happens BEFORE the access check so that a cross-provider
+    # collision (OpenAI and Azure independently issue the same raw batch ID)
+    # always falls through to minting a new row rather than raising a spurious
+    # 404 against the wrong owner.
     try:
         existing = await prisma_client.db.litellm_managedobjecttable.find_first(
             where={"model_object_id": raw_id}
         )
         if existing is not None:
-            # Cross-tenant collision check: treat as 404 to avoid leaking
-            # that the object exists under a different owner.
-            if not can_access_resource(
+            if not _managed_id_matches_provider(existing.unified_object_id, provider):
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: object dedup hit wrong provider for "
+                    "raw prefix=%s expected=%s — minting new row",
+                    raw_id.split("_", 1)[0],
+                    provider,
+                )
+                # Cross-provider collision: fall through to mint a separate row.
+                # model_object_id is @unique so we can't insert; treat this
+                # raw ID as provider-namespaced by incorporating provider into
+                # the new managed ID (new_managed_id already does this).
+            elif not can_access_resource(
                 user_api_key_dict, existing.created_by, existing.team_id
             ):
+                # Cross-tenant collision: treat as 404 to avoid leaking
+                # that the object exists under a different owner.
                 raise HTTPException(
                     status_code=404,
                     detail="Managed resource not found.",
                 )
-            if _managed_id_matches_provider(existing.unified_object_id, provider):
+            else:
                 verbose_proxy_logger.debug(
                     "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
                     raw_id.split("_", 1)[0],
                 )
                 return existing.unified_object_id
-            verbose_proxy_logger.debug(
-                "managed_id_rewriter: object dedup hit wrong provider for raw prefix=%s expected=%s",
-                raw_id.split("_", 1)[0],
-                provider,
-            )
     except HTTPException:
         raise
     except Exception:
@@ -664,8 +674,13 @@ async def _fetch_provider_scoped_list_rows(
     fetch_order: str,
     raw_limit: int,
     fetch_limit: int,
-) -> Optional[Tuple[List[Any], bool]]:
-    """Fetch list rows scoped to *provider* by decoding each managed ID."""
+) -> Tuple[List[Any], bool]:
+    """Fetch list rows scoped to *provider* by decoding each managed ID.
+
+    Always returns a (page, has_more) tuple — never ``None``.  A DB failure
+    returns the rows matched so far (fail-closed) rather than ``None``, which
+    would cause the caller to fall through to the upstream provider.
+    """
     matched: List[Any] = []
     scan_where = dict(where)
     id_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
@@ -676,7 +691,14 @@ async def _fetch_provider_scoped_list_rows(
             prisma_client, resource_kind, scan_where, fetch_order, fetch_limit
         )
         if batch is None:
-            return None
+            # DB error — fail closed: return the rows matched so far.
+            verbose_proxy_logger.warning(
+                "managed_id_rewriter: list DB error mid-scan provider=%s kind=%s "
+                "— returning partial results to fail closed",
+                provider,
+                resource_kind,
+            )
+            break
         if not batch:
             break
 
@@ -783,7 +805,7 @@ async def list_passthrough_ids_from_db(
     where, fetch_order = await _build_list_where_with_cursor(
         prisma_client, resource_kind, owner_filter, query_params
     )
-    scoped = await _fetch_provider_scoped_list_rows(
+    page, has_more = await _fetch_provider_scoped_list_rows(
         prisma_client,
         resource_kind,
         provider,
@@ -792,9 +814,6 @@ async def list_passthrough_ids_from_db(
         raw_limit,
         fetch_limit,
     )
-    if scoped is None:
-        return None
-    page, has_more = scoped
     if resource_kind == "files":
         data = [_serialize_file_list_item(row) for row in page]
     else:

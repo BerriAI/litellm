@@ -416,6 +416,42 @@ class TestRewriteResponseIds:
         assert decode(result["id"]).raw_provider_id == "file-abc"  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
+    async def test_cross_provider_batch_collision_mints_new_id(self):
+        """
+        If OpenAI and Azure independently issue the same raw batch ID, the
+        Azure call must NOT hit a 404 from the OpenAI row — it must mint
+        a new managed ID scoped to azure.
+        """
+        openai_managed_id = new_managed_id("openai", "batch_shared")
+        existing_row = MagicMock()
+        existing_row.unified_object_id = openai_managed_id
+        existing_row.created_by = "user-other"
+        existing_row.team_id = "team-other"
+
+        pc = _prisma_client()
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=existing_row
+        )
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+
+        body = {"id": "batch_shared", "object": "batch", "input_file_id": None}
+        result = await rewrite_response_ids(
+            provider="azure",
+            method="POST",
+            route="/azure/openai/batches",
+            body=body,
+            user_api_key_dict=_user("user-azure", "team-azure"),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+        # Must mint a fresh azure-scoped ID, not raise 404
+        assert decode(result["id"]) is not None
+        assert decode(result["id"]).provider == "azure"
+        assert decode(result["id"]).raw_provider_id == "batch_shared"
+        assert result["id"] != openai_managed_id
+        pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_batch_retrieve_swaps_output_file_id(self):
         pc = _prisma_client()
         hook = _managed_files_hook()
@@ -807,6 +843,27 @@ class TestListPassthroughIdsFromDb:
         )
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_list_db_error_returns_empty_not_none(self):
+        """DB failure must return an empty list, not None (which would fall through
+        to the upstream provider and leak the provider-wide listing)."""
+        pc = _prisma_with_list()
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            side_effect=Exception("db down")
+        )
+
+        result = await list_passthrough_ids_from_db(
+            provider="openai",
+            route="/openai/v1/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+        )
+
+        # Must not return None (which would fall through to upstream)
+        assert result is not None
+        assert result["data"] == []
+        assert result["has_more"] is False
 
     @pytest.mark.asyncio
     async def test_list_returns_empty_for_caller_without_identity(self):
