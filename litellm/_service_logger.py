@@ -99,10 +99,45 @@ class ServiceLogging(CustomLogger):
         self, service: ServiceTypes, duration: float, error: Exception, call_type: str
     ):
         """
-        [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
+        Handles both sync and async monitoring by checking for existing event loop.
         """
         if self.mock_testing:
             self.mock_testing_sync_failure_hook += 1
+
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_event_loop()
+            # Check if the loop is running
+            if loop.is_running():
+                # If we're in a running loop, create a task
+                loop.create_task(
+                    self.async_service_failure_hook(
+                        service=service,
+                        duration=duration,
+                        error=error,
+                        call_type=call_type,
+                    )
+                )
+            else:
+                # Loop exists but not running, we can use run_until_complete
+                loop.run_until_complete(
+                    self.async_service_failure_hook(
+                        service=service,
+                        duration=duration,
+                        error=error,
+                        call_type=call_type,
+                    )
+                )
+        except RuntimeError:
+            # No event loop exists, create a new one and run
+            asyncio.run(
+                self.async_service_failure_hook(
+                    service=service,
+                    duration=duration,
+                    error=error,
+                    call_type=call_type,
+                )
+            )
 
     async def async_service_success_hook(
         self,
