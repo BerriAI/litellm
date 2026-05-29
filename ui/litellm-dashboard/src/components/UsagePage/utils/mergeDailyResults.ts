@@ -120,11 +120,13 @@ function emptyBreakdown(): BreakdownMetrics {
 function mergeBreakdowns(a: BreakdownMetrics, b: BreakdownMetrics): BreakdownMetrics {
   const out: BreakdownMetrics = emptyBreakdown();
   for (const k of BREAKDOWN_MAP_KEYS) {
-    const leftMap = a?.[k];
-    const rightMap = b?.[k];
+    // Index across the BreakdownMetrics union of MetricWithMetadata-shaped and
+    // KeyMetricWithMetadata-shaped maps; the merger handles both shapes at runtime.
+    const leftMap = (a as unknown as Record<string, Record<string, MetricWithMetadata> | undefined>)?.[k as string];
+    const rightMap = (b as unknown as Record<string, Record<string, MetricWithMetadata> | undefined>)?.[k as string];
     if (leftMap === undefined && rightMap === undefined) continue;
     const merged = mergeMetricWithMetadataMap(leftMap, rightMap);
-    (out as any)[k] = merged;
+    (out as unknown as Record<string, unknown>)[k as string] = merged;
   }
   return out;
 }
