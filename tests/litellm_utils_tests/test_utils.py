@@ -2516,3 +2516,18 @@ def test_get_base_model_from_metadata():
     # Test 6: None input
     result = _get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"
+
+
+def test_model_list_models_by_provider_in_sync():
+    model_list_set = set(litellm.model_list)
+    missing_from_model_list = []
+    for provider, models in litellm.models_by_provider.items():
+        model_set = set(models) if isinstance(models, list) else models
+        for model in model_set:
+            if model not in model_list_set:
+                missing_from_model_list.append(f"{provider}: {model}")
+
+    assert not missing_from_model_list, (
+        f"{len(missing_from_model_list)} models in models_by_provider are missing from model_list:\n"
+        + "\n".join(missing_from_model_list[:20])
+    )

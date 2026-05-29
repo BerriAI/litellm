@@ -1031,6 +1031,31 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | set(clarifai_models)
+    | set(petals_models)
+    | bedrock_converse_models
+    | vertex_anthropic_models
+    | vertex_vision_models
+    | vertex_deepseek_models
+    | vertex_minimax_models
+    | vertex_moonshot_models
+    | vertex_zai_models
+    | fireworks_ai_models
+    | fireworks_ai_embedding_models
+    | mistral_chat_models
+    | sambanova_embedding_models
+    | nebius_models
+    | nebius_embedding_models
+    | aiml_models
+    | hyperbolic_models
+    | amazon_nova_models
+    | stability_models
+    | github_copilot_models
+    | chatgpt_models
+    | minimax_models
+    | aws_polly_models
+    | gigachat_models
+    | llamagate_models
+    | ovhcloud_embedding_models
 )
 
 model_list_set = set(model_list)
@@ -1060,7 +1085,7 @@ models_by_provider: dict = {
     | vertex_minimax_models
     | vertex_moonshot_models
     | vertex_zai_models,
-    "ai21": ai21_models,
+    "ai21": ai21_models | ai21_chat_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
@@ -1137,6 +1162,7 @@ models_by_provider: dict = {
     "llamagate": llamagate_models,
     "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
+    "docker_model_runner": docker_model_runner_models,
 }
 
 # mapping for those models which have larger equivalents
