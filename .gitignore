@@ -123,3 +123,4 @@ crash.*.log
 # .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
 # and should be committed.
 .vscode
+.pin_list.txt
