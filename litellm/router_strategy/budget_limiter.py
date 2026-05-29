@@ -97,7 +97,7 @@ class RouterBudgetLimiting(CustomLogger):
         dual_cache: DualCache,
         provider_budget_config: Optional[dict],
         model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
+            List[Union[DeploymentTypedDict, Dict[str, Any]]]
         ] = None,
     ):
         self.dual_cache = dual_cache
@@ -855,7 +855,7 @@ class RouterBudgetLimiting(CustomLogger):
     def _init_deployment_budgets(
         self,
         model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
+            List[Union[DeploymentTypedDict, Dict[str, Any]]]
         ] = None,
     ):
         if model_list is None:
