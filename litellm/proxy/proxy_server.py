@@ -98,6 +98,7 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UI_TEAM_ID,
     UserAPIKeyAuth,
+    LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
@@ -7016,7 +7017,7 @@ async def async_data_generator(  # noqa: PLR0915
         # on the literal token `DONE`).
         if error_message is not None:
             yield error_message
-        if not request_data.get("_litellm_skip_sse_done_terminator"):
+        if not request_data.get(LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY):
             done_message = "[DONE]"
             yield f"data: {done_message}\n\n"
     except Exception as e:
