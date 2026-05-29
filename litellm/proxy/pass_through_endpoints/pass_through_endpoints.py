@@ -947,6 +947,47 @@ async def pass_through_request(  # noqa: PLR0915
                     request.method,
                 )
 
+        ## PASSTHROUGH MANAGED LIST (DB-only response) ##
+        # For GET /v1/files and GET /v1/batches passthrough routes, serve the
+        # listing entirely from our DB so each caller only sees their own IDs.
+        # Admins / master-key callers see all rows.  Runs only when
+        # passthrough_managed_object_ids is enabled and a prisma client exists.
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _is_managed_id_provider
+            and request.method == "GET"
+        ):
+            from litellm.proxy.auth.auth_utils import get_request_route
+            from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                is_passthrough_list_route,
+                list_passthrough_ids_from_db,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client as _list_prisma,
+            )
+
+            if is_passthrough_list_route(
+                _managed_id_provider, request.method, get_request_route(request)
+            ) and _list_prisma is not None:
+                _list_result = await list_passthrough_ids_from_db(
+                    provider=_managed_id_provider,
+                    route=get_request_route(request),
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=_list_prisma,
+                    query_params=dict(request.query_params),
+                )
+                if _list_result is not None:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: list served from DB route=%s count=%d",
+                        request.url.path,
+                        len(_list_result.get("data", [])),
+                    )
+                    return Response(
+                        content=json.dumps(_list_result),
+                        status_code=200,
+                        media_type="application/json",
+                    )
+
         requested_query_params_str = None
         if requested_query_params:
             requested_query_params_str = "&".join(

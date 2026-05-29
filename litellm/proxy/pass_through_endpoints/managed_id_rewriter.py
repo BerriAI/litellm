@@ -143,6 +143,20 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
 # Prefixes that live in the *file* table rather than the object table.
 _FILE_PREFIXES: FrozenSet[str] = frozenset({"file-"})
 
+# ---------------------------------------------------------------------------
+# List routes — GET requests that return a paginated {object:"list", data:[…]}
+# These are intercepted and served entirely from the DB rather than forwarded
+# to the upstream provider, so each caller only sees IDs they own.
+# ---------------------------------------------------------------------------
+
+# Maps (provider, canonical_path) -> "files" | "batches"
+_LIST_ROUTE_TABLE: Dict[Tuple[str, str], str] = {
+    ("openai", "/v1/files"): "files",
+    ("openai", "/v1/batches"): "batches",
+    ("azure", "/v1/files"): "files",
+    ("azure", "/v1/batches"): "batches",
+}
+
 # Sentinel model_id written to model_mappings for passthrough-created rows.
 # Prevents the unified-endpoint deployment-resolution path from ever finding a
 # real deployment, so a passthrough ID replayed on a unified endpoint fails
@@ -506,6 +520,161 @@ async def rewrite_response_ids(
         canonical,
     )
     return mutated if changed else body
+
+
+# ---------------------------------------------------------------------------
+# List-route interception — serve listing entirely from DB
+# ---------------------------------------------------------------------------
+
+
+def is_passthrough_list_route(provider: str, method: str, route: str) -> bool:
+    """Return True when this is a GET list route whose results should be served
+    from the DB (user-scoped) rather than forwarded upstream."""
+    if method != "GET":
+        return False
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+
+    canonical = normalize_request_route(_canonical_path(route))
+    return (provider, canonical) in _LIST_ROUTE_TABLE
+
+
+async def list_passthrough_ids_from_db(
+    provider: str,
+    route: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+    query_params: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Query the DB for managed IDs the caller owns and return an OpenAI-style
+    paginated list response.
+
+    Returns ``None`` when ``prisma_client`` is unavailable or the route is not
+    a recognised list route (caller should fall through to upstream).
+
+    Pagination params ``after``, ``before``, and ``limit`` are read from
+    ``query_params`` to match the OpenAI Batches / Files list API.
+
+    Ownership scoping:
+    - Proxy admins / master key: see **all** rows.
+    - Regular users: only rows matching their ``user_id`` / ``team_id``.
+    """
+    if prisma_client is None:
+        return None
+
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+
+    canonical = normalize_request_route(_canonical_path(route))
+    resource_kind = _LIST_ROUTE_TABLE.get((provider, canonical))
+    if resource_kind is None:
+        return None
+
+    owner_filter = build_owner_filter(user_api_key_dict)
+    if owner_filter is None:
+        verbose_proxy_logger.warning(
+            "managed_id_rewriter: list denied — caller has no user_id or team_id"
+        )
+        return {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
+
+    params = query_params or {}
+    try:
+        raw_limit = int(params.get("limit", 20))
+    except (TypeError, ValueError):
+        raw_limit = 20
+    # Fetch one extra to cheaply detect has_more.
+    fetch_limit = min(raw_limit, 100) + 1
+
+    after_id: Optional[str] = params.get("after")
+    before_id: Optional[str] = params.get("before")
+
+    where: Dict[str, Any] = dict(owner_filter)
+
+    # Cursor-based pagination: locate the cursor row and add a created_at bound.
+    if after_id and resource_kind == "files":
+        try:
+            cursor_row = await prisma_client.db.litellm_managedfiletable.find_first(
+                where={"unified_file_id": after_id}
+            )
+            if cursor_row is not None:
+                where["created_at"] = {"lt": cursor_row.created_at}
+        except Exception:
+            pass
+    elif after_id and resource_kind == "batches":
+        try:
+            cursor_row = await prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": after_id}
+            )
+            if cursor_row is not None:
+                where["created_at"] = {"lt": cursor_row.created_at}
+        except Exception:
+            pass
+
+    try:
+        if resource_kind == "files":
+            rows = await prisma_client.db.litellm_managedfiletable.find_many(
+                where=where,
+                order={"created_at": "desc"},
+                take=fetch_limit,
+            )
+        else:
+            rows = await prisma_client.db.litellm_managedobjecttable.find_many(
+                where={**where, "file_purpose": "batch"},
+                order={"created_at": "desc"},
+                take=fetch_limit,
+            )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "managed_id_rewriter: list DB query failed", exc_info=True
+        )
+        return None
+
+    has_more = len(rows) == fetch_limit
+    rows = rows[:raw_limit]
+
+    if resource_kind == "files":
+        data = []
+        for row in rows:
+            item: Dict[str, Any] = {
+                "id": row.unified_file_id,
+                "object": "file",
+                "created_at": int(row.created_at.timestamp()) if row.created_at else None,
+            }
+            if isinstance(row.file_object, dict):
+                item.update(row.file_object)
+            item["id"] = row.unified_file_id  # managed ID always wins over stored raw id
+            data.append(item)
+    else:
+        data = []
+        for row in rows:
+            item = {}
+            if isinstance(row.file_object, dict):
+                item.update(row.file_object)
+            item["id"] = row.unified_object_id  # managed ID always wins
+            item["object"] = "batch"
+            data.append(item)
+
+    first_id: Optional[str]
+    last_id: Optional[str]
+    if rows:
+        first_id = rows[0].unified_file_id if resource_kind == "files" else rows[0].unified_object_id
+        last_id = rows[-1].unified_file_id if resource_kind == "files" else rows[-1].unified_object_id
+    else:
+        first_id = None
+        last_id = None
+
+    verbose_proxy_logger.debug(
+        "managed_id_rewriter: list served from DB provider=%s kind=%s count=%d admin=%s",
+        provider,
+        resource_kind,
+        len(data),
+        owner_filter == {},
+    )
+    return {
+        "object": "list",
+        "data": data,
+        "first_id": first_id,
+        "last_id": last_id,
+        "has_more": has_more,
+    }
 
 
 # ---------------------------------------------------------------------------
