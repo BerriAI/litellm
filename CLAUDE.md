@@ -27,7 +27,7 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 
-Don't hesitate to read .env to get needed API keys and other secrets
+Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
 Run tests, format your code, and lint your code before each commit
 
