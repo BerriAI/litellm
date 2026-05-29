@@ -96,9 +96,7 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         dual_cache: DualCache,
         provider_budget_config: Optional[dict],
-        model_list: Optional[
-            List[Union[DeploymentTypedDict, Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
@@ -854,9 +852,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _init_deployment_budgets(
         self,
-        model_list: Optional[
-            List[Union[DeploymentTypedDict, Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         if model_list is None:
             return
