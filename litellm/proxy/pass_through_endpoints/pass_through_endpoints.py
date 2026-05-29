@@ -867,12 +867,7 @@ async def pass_through_request(  # noqa: PLR0915
             general_settings as proxy_general_settings,
         )
 
-        verbose_proxy_logger.debug(f"endpoint_type: {endpoint_type}")
-        verbose_proxy_logger.debug(f"general_settings: {proxy_general_settings}")
-
         # Determine which provider label to use for managed-ID scoping.
-        # Azure passthrough can pass custom_llm_provider as either a string
-        # ("azure") or an enum value (LlmProviders.AZURE). Normalize both.
         _provider_value = getattr(custom_llm_provider, "value", custom_llm_provider)
         _provider_value_str = str(_provider_value).lower() if _provider_value else ""
         _is_azure_provider = _provider_value_str in ("azure", "azure_ai") or (
