@@ -1,25 +1,18 @@
 import { test, expect } from "@playwright/test";
 import {
+  E2E_INTERNAL_USER_KEY_ALIAS,
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
   INTERNAL_USER_STORAGE_PATH,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
-import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
-
-async function clickTeamId(page: import("@playwright/test").Page, teamId: string) {
-  const cell = page.locator("td").filter({ hasText: teamId }).first();
-  await expect(cell).toBeVisible({ timeout: 10_000 });
-  await cell.click();
-  await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
-}
+import { navigateToPage, clickTeamId } from "../../helpers/navigation";
 
 test.describe("Internal User", () => {
   test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
 
   test("Create Key modal shows the team dropdown populated with the user's teams", async ({ page }) => {
     await navigateToPage(page, Page.ApiKeys);
-    await dismissFeedbackPopup(page);
 
     await page.getByRole("button", { name: /Create New Key/i }).click();
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
@@ -36,7 +29,6 @@ test.describe("Internal User", () => {
 
   test("Team info page omits the Settings tab for non-admin members", async ({ page }) => {
     await navigateToPage(page, Page.Teams);
-    await dismissFeedbackPopup(page);
 
     await clickTeamId(page, E2E_TEAM_CRUD_ID);
 
@@ -49,11 +41,15 @@ test.describe("Internal User", () => {
 
   test("Virtual Keys page does not surface litellm-dashboard team keys", async ({ page }) => {
     await navigateToPage(page, Page.ApiKeys);
-    await dismissFeedbackPopup(page);
+
+    // Anchor on the user's own seeded key so the absence check below cannot
+    // pass vacuously against an empty table.
+    await expect(
+      page.locator("table tbody").getByText(E2E_INTERNAL_USER_KEY_ALIAS).first(),
+    ).toBeVisible({ timeout: 10_000 });
 
     // The litellm-dashboard team is the proxy's internal bookkeeping team —
     // its keys must never leak into an internal user's Virtual Keys table.
-    await expect(page.locator("table tbody")).toBeVisible({ timeout: 10_000 });
     await expect(page.locator("table tbody").getByText("litellm-dashboard")).toHaveCount(0);
   });
 });
