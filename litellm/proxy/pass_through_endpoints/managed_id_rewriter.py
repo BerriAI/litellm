@@ -538,6 +538,20 @@ def is_passthrough_list_route(provider: str, method: str, route: str) -> bool:
     return (provider, canonical) in _LIST_ROUTE_TABLE
 
 
+def _parse_file_object(file_object: Any) -> Any:
+    """Prisma may return ``Json`` columns as either a parsed dict or the raw
+    JSON string (depending on driver / row source). Mirror the handling used
+    elsewhere (see ``openai_files_endpoints/common_utils.py``) so callers can
+    treat the result uniformly.
+    """
+    if isinstance(file_object, str):
+        try:
+            return json.loads(file_object)
+        except (TypeError, ValueError):
+            return None
+    return file_object
+
+
 async def list_passthrough_ids_from_db(
     provider: str,
     route: str,
@@ -595,22 +609,29 @@ async def list_passthrough_ids_from_db(
     where: Dict[str, Any] = dict(owner_filter)
 
     # Cursor-based pagination: locate the cursor row and add a created_at bound.
-    if after_id and resource_kind == "files":
+    # `after` paginates forward (older rows); `before` paginates backward (newer
+    # rows). When using `before` we flip the fetch order to asc so we get the
+    # page immediately preceding the cursor, then reverse before returning so
+    # callers still see newest-first.
+    fetch_order: str = "desc"
+    cursor_id = after_id or before_id
+    if cursor_id:
+        cursor_table = (
+            prisma_client.db.litellm_managedfiletable
+            if resource_kind == "files"
+            else prisma_client.db.litellm_managedobjecttable
+        )
+        cursor_field = (
+            "unified_file_id" if resource_kind == "files" else "unified_object_id"
+        )
         try:
-            cursor_row = await prisma_client.db.litellm_managedfiletable.find_first(
-                where={"unified_file_id": after_id}
-            )
+            cursor_row = await cursor_table.find_first(where={cursor_field: cursor_id})
             if cursor_row is not None:
-                where["created_at"] = {"lt": cursor_row.created_at}
-        except Exception:
-            pass
-    elif after_id and resource_kind == "batches":
-        try:
-            cursor_row = await prisma_client.db.litellm_managedobjecttable.find_first(
-                where={"unified_object_id": after_id}
-            )
-            if cursor_row is not None:
-                where["created_at"] = {"lt": cursor_row.created_at}
+                if after_id:
+                    where["created_at"] = {"lt": cursor_row.created_at}
+                else:
+                    where["created_at"] = {"gt": cursor_row.created_at}
+                    fetch_order = "asc"
         except Exception:
             pass
 
@@ -618,13 +639,13 @@ async def list_passthrough_ids_from_db(
         if resource_kind == "files":
             rows = await prisma_client.db.litellm_managedfiletable.find_many(
                 where=where,
-                order={"created_at": "desc"},
+                order={"created_at": fetch_order},
                 take=fetch_limit,
             )
         else:
             rows = await prisma_client.db.litellm_managedobjecttable.find_many(
                 where={**where, "file_purpose": "batch"},
-                order={"created_at": "desc"},
+                order={"created_at": fetch_order},
                 take=fetch_limit,
             )
     except Exception:
@@ -635,6 +656,10 @@ async def list_passthrough_ids_from_db(
 
     has_more = len(rows) == fetch_limit
     rows = rows[:raw_limit]
+    if fetch_order == "asc":
+        # `before` cursor: we fetched asc to get the page just before the cursor,
+        # now reverse so the response remains newest-first.
+        rows = list(reversed(rows))
 
     if resource_kind == "files":
         data = []
@@ -646,8 +671,9 @@ async def list_passthrough_ids_from_db(
                     int(row.created_at.timestamp()) if row.created_at else None
                 ),
             }
-            if isinstance(row.file_object, dict):
-                item.update(row.file_object)
+            file_object = _parse_file_object(row.file_object)
+            if isinstance(file_object, dict):
+                item.update(file_object)
             item["id"] = (
                 row.unified_file_id
             )  # managed ID always wins over stored raw id
@@ -656,8 +682,9 @@ async def list_passthrough_ids_from_db(
         data = []
         for row in rows:
             item = {}
-            if isinstance(row.file_object, dict):
-                item.update(row.file_object)
+            file_object = _parse_file_object(row.file_object)
+            if isinstance(file_object, dict):
+                item.update(file_object)
             item["id"] = row.unified_object_id  # managed ID always wins
             item["object"] = "batch"
             data.append(item)
