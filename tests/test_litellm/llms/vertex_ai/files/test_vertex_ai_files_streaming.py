@@ -23,6 +23,7 @@ import pytest
 
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
+    VertexAIJsonlFilesTransformation,
     _iter_openai_jsonl_entries,
     _iter_openai_jsonl_lines,
     _stream_openai_jsonl_to_vertex,
@@ -114,6 +115,21 @@ class TestStreamingLineIterator:
         ):
             assert list(_iter_openai_jsonl_entries(source)) == expected
 
+    def test_str_input_without_trailing_newline(self):
+        assert list(_iter_openai_jsonl_lines('{"a": 1}\n{"b": 2}')) == [
+            '{"a": 1}',
+            '{"b": 2}',
+        ]
+
+    def test_pathlike_input_is_read_line_by_line(self, tmp_path):
+        path = tmp_path / "batch.jsonl"
+        path.write_bytes(b'{"a": 1}\n{"b": 2}\n')
+        assert list(_iter_openai_jsonl_entries(path)) == [{"a": 1}, {"b": 2}]
+
+    def test_unsupported_content_type_raises(self):
+        with pytest.raises(ValueError, match="Unsupported file content type"):
+            list(_iter_openai_jsonl_lines(12345))  # type: ignore[arg-type]
+
     def test_is_lazy_does_not_parse_past_first_entry(self):
         # Second row is invalid JSON; pulling only the first entry must not raise.
         content = b'{"custom_id": "first"}\nnot-json-at-all\n'
@@ -121,6 +137,26 @@ class TestStreamingLineIterator:
         assert next(gen)["custom_id"] == "first"
         with pytest.raises(json.JSONDecodeError):
             next(gen)
+
+
+class TestLegacyHandlerPathStreaming:
+    def test_returns_str_with_object_name_from_first_row(self):
+        transformer = VertexAIJsonlFilesTransformation()
+        raw = _make_openai_jsonl_bytes(50)
+
+        vertex_str, object_name = (
+            transformer.transform_openai_file_content_to_vertex_ai_file_content(raw)
+        )
+
+        assert isinstance(vertex_str, str)
+        assert "gemini-2.5-flash" in object_name
+        # First line is a valid Vertex-wrapped request.
+        assert "request" in json.loads(vertex_str.splitlines()[0])
+
+    def test_empty_payload_raises(self):
+        transformer = VertexAIJsonlFilesTransformation()
+        with pytest.raises(ValueError, match="empty"):
+            transformer.transform_openai_file_content_to_vertex_ai_file_content(b"\n\n")
 
 
 class TestGetObjectNameLazyParse:
