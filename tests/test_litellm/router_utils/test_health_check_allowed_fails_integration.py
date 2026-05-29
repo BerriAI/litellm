@@ -123,6 +123,7 @@ class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
                 2,
             ),
             (litellm.BadRequestError, "BadRequestErrorAllowedFails", 7),
+            (litellm.InternalServerError, "InternalServerErrorAllowedFails", 4),
         ],
     )
     def test_policy_resolves_for_health_check_exception_types(
@@ -226,8 +227,7 @@ class TestHealthCheckCooldownIntegration:
             allowed_fails=1,
         )
 
-        # Use an exception that doesn't match TimeoutErrorAllowedFails
-        # InternalServerError is not checked by get_allowed_fails_from_policy
+        # Use a generic exception that doesn't match any policy field
         # so it will fall back to allowed_fails=1
         generic_exc = Exception("Some internal error")
 
