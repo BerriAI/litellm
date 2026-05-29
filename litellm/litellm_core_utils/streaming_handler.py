@@ -2208,6 +2208,9 @@ class CustomStreamWrapper:
                         cache_hit,
                     )
                 else:
+                    # prefer_async_handlers routes CustomLogger to async_success_handler
+                    # when consumers use ``async for`` on sync-SDK streams. Legacy string
+                    # callbacks still run via executor.submit inside dispatch_success_handlers.
                     asyncio.create_task(
                         self.logging_obj.dispatch_success_handlers(
                             complete_streaming_response,

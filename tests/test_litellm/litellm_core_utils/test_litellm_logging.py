@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -903,6 +904,52 @@ async def test_dispatch_success_handlers_sync_path_invokes_callback_once_for_fin
         mock_async_log.assert_not_awaited()
     finally:
         litellm.success_callback = original_success_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prefer_async_handlers_runs_legacy_callbacks(
+    logging_obj,
+):
+    """``prefer_async_handlers`` must not skip executor.submit for string callbacks."""
+    result = ModelResponse(
+        id="resp-prefer-async",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+    )
+
+    logging_obj.stream = True
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_success_handlers(
+            result=result,
+            prefer_async_handlers=True,
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+    mock_submit.assert_called_once()
 
 
 @pytest.mark.asyncio

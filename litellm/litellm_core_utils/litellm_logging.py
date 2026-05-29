@@ -1643,7 +1643,12 @@ class Logging(LiteLLMLoggingBaseClass):
         prefer_async_handlers: bool = False,
         **kwargs,
     ) -> None:
-        """Route success logging to async and/or sync handlers for this request."""
+        """Route success logging to async and/or sync handlers for this request.
+
+        ``prefer_async_handlers`` only bypasses the sync-SDK-only shortcut (e.g.
+        ``async for`` on a stream from ``completion()``). Legacy string callbacks
+        still run via ``executor.submit(success_handler)`` when configured.
+        """
         from litellm.litellm_core_utils.thread_pool_executor import executor
 
         if self._is_assembled_stream_success(result):
@@ -1672,10 +1677,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-        if (
-            prefer_async_handlers
-            or not self._should_run_sync_callbacks_for_async_calls()
-        ):
+        if not self._should_run_sync_callbacks_for_async_calls():
             return
 
         executor.submit(
