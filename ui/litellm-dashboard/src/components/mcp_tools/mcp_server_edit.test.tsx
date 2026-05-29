@@ -175,6 +175,145 @@ describe("MCPServerEdit (stdio)", () => {
     expect(payload.args).toEqual(["-y", "@circleci/mcp-server-circleci"]);
     expect(payload.env).toEqual({ CIRCLECI_TOKEN: "new-token", CIRCLECI_BASE_URL: "https://circleci.com" });
   });
+
+  it("should preserve existing stdio env when saving without env edits", async () => {
+    const existingEnv = {
+      CIRCLECI_TOKEN: "token",
+      CIRCLECI_BASE_URL: "https://circleci.com",
+    };
+
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      server_id: "server-1",
+      server_name: "TestServer",
+      alias: "test",
+      transport: "stdio",
+      url: null,
+      command: "npx",
+      args: ["-y", "@circleci/mcp-server-circleci"],
+      env: existingEnv,
+      created_at: "2024-01-01T00:00:00Z",
+      created_by: "user-1",
+      updated_at: "2024-01-01T00:00:00Z",
+      updated_by: "user-1",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          server_id: "server-1",
+          server_name: "TestServer",
+          alias: "test",
+          description: "desc",
+          transport: "stdio",
+          url: null,
+          auth_type: "none",
+          command: "npx",
+          args: ["-y", "@circleci/mcp-server-circleci"],
+          env: existingEnv,
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+          mcp_access_groups: [],
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const envTextarea = screen.getByLabelText("Environment (JSON object)");
+    expect(envTextarea).toHaveValue("");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.transport).toBe("stdio");
+    expect(payload).not.toHaveProperty("env");
+  });
+
+  it("should preserve existing stdio env when JSON stdio config omits env", async () => {
+    const existingEnv = {
+      CIRCLECI_TOKEN: "token",
+      CIRCLECI_BASE_URL: "https://circleci.com",
+    };
+
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      server_id: "server-1",
+      server_name: "TestServer",
+      alias: "test",
+      transport: "stdio",
+      url: null,
+      command: "npx",
+      args: ["-y", "@circleci/mcp-server-circleci"],
+      env: existingEnv,
+      created_at: "2024-01-01T00:00:00Z",
+      created_by: "user-1",
+      updated_at: "2024-01-01T00:00:00Z",
+      updated_by: "user-1",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          server_id: "server-1",
+          server_name: "TestServer",
+          alias: "test",
+          description: "desc",
+          transport: "stdio",
+          url: null,
+          auth_type: "none",
+          command: "npx",
+          args: ["-y", "@circleci/mcp-server-circleci"],
+          env: existingEnv,
+          created_at: "2024-01-01T00:00:00Z",
+          created_by: "user-1",
+          updated_at: "2024-01-01T00:00:00Z",
+          updated_by: "user-1",
+          mcp_access_groups: [],
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const stdioConfigTextarea = screen.getByLabelText("Stdio Configuration (JSON)");
+    await act(async () => {
+      fireEvent.change(stdioConfigTextarea, {
+        target: {
+          value: JSON.stringify({
+            command: "node",
+            args: ["server.js"],
+          }),
+        },
+      });
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.transport).toBe("stdio");
+    expect(payload.command).toBe("node");
+    expect(payload.args).toEqual(["server.js"]);
+    expect(payload).not.toHaveProperty("env");
+  });
 });
 
 describe("MCPServerEdit (delegate auth)", () => {

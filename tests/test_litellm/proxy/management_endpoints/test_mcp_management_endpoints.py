@@ -2181,6 +2181,54 @@ class TestUpdateMCPServer:
     """Test suite for update MCP server functionality"""
 
     @pytest.mark.asyncio
+    async def test_update_mcp_server_omits_env_when_not_explicitly_set(self):
+        """Omitted env must not overwrite stored stdio env with the model default."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        update_request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            description="Updated Test Server",
+        )
+
+        await update_mcp_server(mock_prisma_client, update_request, "test-user")
+
+        data_dict = mock_prisma_client.db.litellm_mcpservertable.update.call_args[1][
+            "data"
+        ]
+        assert data_dict["description"] == "Updated Test Server"
+        assert "env" not in data_dict
+
+    @pytest.mark.asyncio
+    async def test_update_mcp_server_serializes_explicit_env(self):
+        """Explicit env updates should still replace stored stdio env."""
+        from litellm.proxy._experimental.mcp_server.db import update_mcp_server
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=MagicMock()
+        )
+
+        update_request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@circleci/mcp-server-circleci"],
+            env={"CIRCLECI_TOKEN": "replacement-token"},
+        )
+
+        await update_mcp_server(mock_prisma_client, update_request, "test-user")
+
+        data_dict = mock_prisma_client.db.litellm_mcpservertable.update.call_args[1][
+            "data"
+        ]
+        assert json.loads(data_dict["env"]) == {"CIRCLECI_TOKEN": "replacement-token"}
+
+    @pytest.mark.asyncio
     async def test_update_mcp_server_respects_extra_headers(self):
         """
         Test that updating an MCP server with extra_headers properly saves the field.
