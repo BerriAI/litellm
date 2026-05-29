@@ -551,7 +551,7 @@ class TestHunyuanImageEditPostCall:
 
 
 class TestHunyuanImageEditLitellmParams:
-    """Verify provider-specific params in litellm_params are merged into the image edit request body."""
+    """Verify provider-specific params in litellm_params.extra are merged into the image edit request body."""
 
     def _make_mock_client(self, job_id: str = "job-edit-extra") -> MagicMock:
         submit_resp = MagicMock(spec=httpx.Response)
@@ -574,8 +574,8 @@ class TestHunyuanImageEditLitellmParams:
         client.post.side_effect = [submit_resp, poll_resp]
         return client
 
-    def test_litellm_params_appends_new_params(self):
-        """Non-reserved keys in litellm_params are appended to the request body."""
+    def test_litellm_params_extra_appends_new_params(self):
+        """Keys in litellm_params.extra are appended to the request body."""
         handler = HunyuanImageEdit()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -592,8 +592,7 @@ class TestHunyuanImageEditLitellmParams:
                 image_edit_optional_request_params={},
                 litellm_params={
                     "api_key": "sk-test",
-                    "seed": 99,
-                    "custom_option": "value",
+                    "extra": {"seed": 99, "custom_option": "value"},
                 },
                 logging_obj=mock_logging,
                 timeout=30.0,
@@ -603,8 +602,8 @@ class TestHunyuanImageEditLitellmParams:
         assert submit_call_body["seed"] == 99
         assert submit_call_body["custom_option"] == "value"
 
-    def test_litellm_params_overwrites_existing_params(self):
-        """Non-reserved keys in litellm_params overwrite keys already in the request body."""
+    def test_litellm_params_extra_overwrites_existing_params(self):
+        """Keys in litellm_params.extra overwrite keys already in the request body."""
         handler = HunyuanImageEdit()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -621,8 +620,7 @@ class TestHunyuanImageEditLitellmParams:
                 image_edit_optional_request_params={"quality": "standard"},
                 litellm_params={
                     "api_key": "sk-test",
-                    "quality": "high",
-                    "extra_param": "extra_value",
+                    "extra": {"quality": "high", "extra_param": "extra_value"},
                 },
                 logging_obj=mock_logging,
                 timeout=30.0,
@@ -632,8 +630,8 @@ class TestHunyuanImageEditLitellmParams:
         assert submit_call_body["quality"] == "high"
         assert submit_call_body["extra_param"] == "extra_value"
 
-    def test_no_extra_params_does_not_affect_request(self):
-        """When litellm_params has only reserved keys, the request body is unchanged."""
+    def test_no_extra_key_does_not_affect_request(self):
+        """When litellm_params has no 'extra' key, the request body is unchanged."""
         handler = HunyuanImageEdit()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -655,7 +653,7 @@ class TestHunyuanImageEditLitellmParams:
 
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
         assert submit_call_body["quality"] == "standard"
-        assert "extra_body" not in submit_call_body
+        assert "extra" not in submit_call_body
 
     def test_logo_add_default_is_zero(self):
         """logo_add is set to 0 by default when not provided."""
@@ -681,8 +679,8 @@ class TestHunyuanImageEditLitellmParams:
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
         assert submit_call_body["logo_add"] == 0
 
-    def test_logo_add_overridable_via_litellm_params(self):
-        """logo_add default can be overridden via litellm_params directly."""
+    def test_logo_add_overridable_via_extra(self):
+        """logo_add default can be overridden via litellm_params.extra."""
         handler = HunyuanImageEdit()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -697,7 +695,7 @@ class TestHunyuanImageEditLitellmParams:
                 image="https://example.com/source.png",
                 prompt="test",
                 image_edit_optional_request_params={},
-                litellm_params={"api_key": "sk-test", "logo_add": 1},
+                litellm_params={"api_key": "sk-test", "extra": {"logo_add": 1}},
                 logging_obj=mock_logging,
                 timeout=30.0,
             )
@@ -705,8 +703,8 @@ class TestHunyuanImageEditLitellmParams:
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
         assert submit_call_body["logo_add"] == 1
 
-    def test_multiple_provider_params_in_litellm_params(self):
-        """Multiple Hunyuan-specific params in litellm_params are all forwarded."""
+    def test_multiple_provider_params_in_extra(self):
+        """Multiple Hunyuan-specific params in litellm_params.extra are all forwarded."""
         handler = HunyuanImageEdit()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -723,9 +721,7 @@ class TestHunyuanImageEditLitellmParams:
                 image_edit_optional_request_params={},
                 litellm_params={
                     "api_key": "sk-test",
-                    "seed": 42,
-                    "logo_add": 1,
-                    "revise_prompt": 0,
+                    "extra": {"seed": 42, "logo_add": 1, "revise_prompt": 0},
                 },
                 logging_obj=mock_logging,
                 timeout=30.0,
