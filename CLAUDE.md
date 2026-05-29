@@ -6,7 +6,7 @@ Don't assume that the existing code is correct or the right way of doing things 
 - correct
 - secure
 - performant
-- readible
+- readable
 - easy to maintain/change
 - modern
 In that order of importance
