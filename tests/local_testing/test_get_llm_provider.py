@@ -526,6 +526,21 @@ class TestClaudeModelPatternMatching:
         assert _matches_claude_model_pattern("claude-sonnet-4-7-20260601") is True
         assert _matches_claude_model_pattern("claude-haiku-4-6-20251201") is True
 
+    def test_matches_unknown_tier_name(self):
+        """A tier segment we don't know about today should still route to anthropic.
+
+        The pattern intentionally accepts any ``[a-z]+`` tier rather than a
+        hard-coded ``opus|sonnet|haiku`` list so a future tier (e.g. a new
+        "mini" line) is covered without a code change. This guards against a
+        regression back to hard-coded tier names.
+        """
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-mini-4-5") is True
+        assert _matches_claude_model_pattern("claude-neptune-6-0") is True
+
     def test_rejects_non_claude_models(self):
         """Test that non-Claude models are not matched."""
         from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -548,8 +563,6 @@ class TestClaudeModelPatternMatching:
         assert _matches_claude_model_pattern("claude-opus") is False
         # Old format (claude-3-opus instead of claude-opus-3)
         assert _matches_claude_model_pattern("claude-3-opus-20240229") is False
-        # Invalid variant
-        assert _matches_claude_model_pattern("claude-mini-4-5") is False
 
     def test_get_llm_provider_future_claude_model(self):
         """Test that get_llm_provider routes future Claude models to anthropic."""
