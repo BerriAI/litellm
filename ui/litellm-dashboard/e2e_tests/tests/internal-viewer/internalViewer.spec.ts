@@ -5,7 +5,7 @@ import {
   INTERNAL_VIEWER_STORAGE_PATH,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
-import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
+import { navigateToPage } from "../../helpers/navigation";
 
 async function clickTeamId(page: import("@playwright/test").Page, teamId: string) {
   const cell = page.locator("td").filter({ hasText: teamId }).first();
@@ -18,10 +18,15 @@ test.describe("Internal Viewer", () => {
   test.use({ storageState: INTERNAL_VIEWER_STORAGE_PATH });
 
   test("Nav shows only the allowed options for the Internal Viewer role", async ({ page }) => {
-    await page.goto("/ui");
-    await dismissFeedbackPopup(page);
+    // Use navigateToPage so the networkidle wait lets the async role-gated nav
+    // settle before we assert — a bare page.goto races the permission fetch.
+    await navigateToPage(page, Page.ApiKeys);
 
-    const nav = page.locator("nav, aside").first();
+    // Scope to the sidebar and match items by their link role + accessible
+    // name. The sidebar is a `complementary` landmark (the `navigation` role
+    // is the top bar), and each item renders as a link inside it — far tighter
+    // than a CSS `nav, aside` selector or a getByText on stray text nodes.
+    const nav = page.getByRole("complementary");
 
     // Items that must be visible per the manual-QA checklist
     const expectedVisible = [
@@ -36,7 +41,7 @@ test.describe("Internal Viewer", () => {
     ];
     for (const label of expectedVisible) {
       await expect(
-        nav.getByText(label, { exact: true }).first(),
+        nav.getByRole("link", { name: label, exact: true }).first(),
         `expected nav item "${label}" to render for Internal Viewer`,
       ).toBeVisible({ timeout: 5_000 });
     }
@@ -45,7 +50,7 @@ test.describe("Internal Viewer", () => {
     const expectedHidden = ["Internal Users", "Organizations", "Models + Endpoints"];
     for (const label of expectedHidden) {
       await expect(
-        nav.getByText(label, { exact: true }),
+        nav.getByRole("link", { name: label, exact: true }),
         `nav item "${label}" must not render for Internal Viewer`,
       ).toHaveCount(0);
     }
@@ -53,7 +58,6 @@ test.describe("Internal Viewer", () => {
 
   test("Virtual Keys page hides Create / Regenerate / Reset / Delete controls", async ({ page }) => {
     await navigateToPage(page, Page.ApiKeys);
-    await dismissFeedbackPopup(page);
 
     // Create button is gated on rolesWithWriteAccess (Internal Viewer is not in it)
     await expect(page.getByRole("button", { name: /Create New Key/i })).toHaveCount(0);
@@ -72,13 +76,15 @@ test.describe("Internal Viewer", () => {
 
   test("Team info page omits Members and Settings tabs for an Internal Viewer", async ({ page }) => {
     await navigateToPage(page, Page.Teams);
-    await dismissFeedbackPopup(page);
 
     await clickTeamId(page, E2E_TEAM_CRUD_ID);
 
     // Overview / Virtual Keys are always visible; Settings + Members are not.
+    // Tabs are conditionally rendered (getTeamInfoVisibleTabs filters the list),
+    // so assert absence from the DOM with toHaveCount(0) to match the nav block.
     await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole("tab", { name: "Settings" })).not.toBeVisible();
-    await expect(page.getByRole("tab", { name: "Members" })).not.toBeVisible();
+    await expect(page.getByRole("tab", { name: "Virtual Keys" })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("tab", { name: "Settings" })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Members" })).toHaveCount(0);
   });
 });
