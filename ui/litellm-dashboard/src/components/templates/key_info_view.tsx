@@ -34,8 +34,15 @@ interface KeyInfoViewProps {
   backButtonText?: string;
 }
 
-// Must stay in sync with LiteLLM_ManagementEndpoint_MetadataFields_Premium
-// in litellm/proxy/_types.py — limited to fields the key-edit form submits.
+// Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
+// litellm/proxy/_types.py) that the key-edit form submits as arrays/strings, where
+// "empty" means "unset". The loop below drops them when they're empty-and-were-empty
+// so a non-premium edit of unrelated fields doesn't trip the server's premium gate.
+//
+// Boolean premium fields (e.g. disable_global_guardrails) do NOT belong here: false is
+// a real value, not "empty", so isEmptyValue(false) is false and the loop would never
+// drop it — we'd resend false on every edit and trip the gate. Booleans get their own
+// "send only when changed" guard instead (see disable_global_guardrails below).
 const PREMIUM_METADATA_FIELDS = [
   "policies",
   "guardrails",

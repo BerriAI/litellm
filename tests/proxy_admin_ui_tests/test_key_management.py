@@ -859,6 +859,12 @@ def test_personal_key_generation_check():
             {},
             {"metadata": {"disable_global_guardrails": True}},
         ),
+        (
+            {"disable_global_guardrails": False},
+            {},
+            {"disable_global_guardrails": True},
+            {"metadata": {"disable_global_guardrails": False}},
+        ),
     ],
 )
 def test_prepare_metadata_fields(
