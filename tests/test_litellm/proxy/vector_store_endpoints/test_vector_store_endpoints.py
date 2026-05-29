@@ -2347,18 +2347,22 @@ class TestLit2384DestructiveVerbDefaultDeny:
     @pytest.fixture
     def non_admin_with_read_perm(self):
         from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
         return UserAPIKeyAuth(
             token="sk-non-admin",
             key_name="sk-...nadm",
             user_role=LitellmUserRoles.INTERNAL_USER,
-            metadata={"allowed_vector_store_indexes": [
-                {"index_name": "admin-created-index", "index_permissions": ["read"]}
-            ]},
+            metadata={
+                "allowed_vector_store_indexes": [
+                    {"index_name": "admin-created-index", "index_permissions": ["read"]}
+                ]
+            },
         )
 
     @pytest.fixture
     def proxy_admin(self):
         from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
         return UserAPIKeyAuth(
             token="sk-admin",
             key_name="sk-...adm",
@@ -2475,4 +2479,3 @@ class TestLit2384DestructiveVerbDefaultDeny:
                     user_api_key_dict=non_admin_with_read_perm,
                 )
         assert exc.value.status_code == 403
-
