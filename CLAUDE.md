@@ -41,6 +41,8 @@ Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer de
 
 Do not put names of customers or customer company names in code, PRs, and issues. The codebase is public
 
+MCP note: **`available_on_public_internet: false` with `delegate_auth_to_upstream: true` (oauth2, interactive — not `client_credentials`)** — LiteLLM still allows the anonymous upstream PKCE path (no proxy API key for `/authorize` and matching MCP routes). The internal-only flag mainly affects other surfaces (e.g. IP-based discovery). Rely on the upstream IdP and network policy; the dashboard shows a warning when both are set, and the proxy logs a warning when the server is loaded from config or the database.
+
 ## Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
