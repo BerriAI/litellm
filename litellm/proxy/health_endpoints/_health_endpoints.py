@@ -1837,9 +1837,14 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        # Include health_check_params if provided
+        # Include health_check_params if provided. Pass through the
+        # caller-supplied `model_info` so flags like
+        # `health_check_supports_max_tokens` are honored — matches the
+        # behavior of the background `/health` endpoint. Previously this
+        # was hardcoded to `{}`, silently dropping those flags and always
+        # injecting `max_tokens: 5`.
         litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
+            model_info=model_info or {},
             litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)

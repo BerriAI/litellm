@@ -697,6 +697,86 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_passes_model_info_to_health_check_helper():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29266
+
+    `test_model_connection` previously hardcoded `model_info={}` when
+    calling `_update_litellm_params_for_health_check`, silently dropping
+    flags like `health_check_supports_max_tokens: False`. As a result,
+    `max_tokens: 5` was always injected by the UI "Test Connection"
+    button — even when the operator had configured the deployment to
+    skip it. Verify that the caller-supplied `model_info` is forwarded
+    through to the helper so the UI matches the background `/health`
+    behavior.
+    """
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+
+    mock_prisma_client = MagicMock()
+    mock_router = MagicMock()
+    mock_router.get_model_list.return_value = []
+
+    mock_can_user_make_model_call = AsyncMock()
+    mock_health_check_result = {"status": "healthy"}
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+
+    captured = {}
+
+    def mock_update_params(model_info, litellm_params):
+        captured["model_info"] = model_info
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    def mock_reject_os_environ(params):
+        return None
+
+    request_model_info = {"health_check_supports_max_tokens": False}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "azure/gpt-4o"},
+            model_info=request_model_info,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # The caller-supplied model_info must reach the helper unchanged so
+    # that `health_check_supports_max_tokens: False` is honored. Before
+    # the fix this was always `{}`.
+    assert captured["model_info"] == request_model_info
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
