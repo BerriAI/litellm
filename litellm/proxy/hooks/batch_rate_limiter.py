@@ -252,10 +252,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # could smuggle restricted/expensive models inside the file
             # and the upstream provider would execute the batch under
             # the proxy's shared API key.
+            #
+            # For managed/unified file IDs, the JSONL `body.model` has
+            # already been rewritten by `replace_model_in_jsonl` to the
+            # upstream provider name (e.g. `litellm_params.model`) — the
+            # caller's key is scoped to the proxy alias (`model_name`),
+            # so we validate the aliases recorded in the unified file ID
+            # itself rather than the rewritten upstream names.
             if user_api_key_dict is not None:
+                unified_file_id = (
+                    is_managed_file if isinstance(is_managed_file, str) else None
+                )
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
                     file_content_as_dict=file_content_as_dict,
+                    unified_file_id=unified_file_id,
                 )
 
             input_file_usage = _get_batch_job_input_file_usage(
@@ -291,9 +302,20 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         file_content_as_dict: List[dict],
+        unified_file_id: Optional[str] = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for every
-        ``body.model`` named inside the JSONL.
+        model named in the input file.
+
+        For raw uploads, the relevant names are the distinct ``body.model``
+        values inside the JSONL. For managed/unified file IDs, the JSONL
+        ``body.model`` field has been rewritten to the upstream provider
+        name (``litellm_params.model``) by ``replace_model_in_jsonl``; the
+        caller's key is scoped to the proxy alias (``model_name`` in
+        config), so we validate against the proxy aliases recorded in the
+        unified file ID (``target_model_names``) instead. Managed-file
+        uploads themselves are already authorized against those aliases
+        when the unified file ID is minted.
 
         Reuses ``can_key_call_model`` so the same allowlist semantics
         (wildcards, access groups, ``all-proxy-models``, team aliases)
@@ -302,7 +324,21 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         from litellm.proxy.auth.auth_checks import can_key_call_model
         from litellm.proxy.proxy_server import llm_router
 
-        models = _get_models_from_batch_input_file_content(file_content_as_dict)
+        if unified_file_id is not None:
+            from litellm.proxy.openai_files_endpoints.common_utils import (
+                get_models_from_unified_file_id,
+            )
+
+            models = get_models_from_unified_file_id(unified_file_id)
+            if not models:
+                # Managed file with no recoverable target_model_names —
+                # fall back to the JSONL check so we don't silently skip
+                # validation for a malformed unified ID.
+                models = _get_models_from_batch_input_file_content(
+                    file_content_as_dict
+                )
+        else:
+            models = _get_models_from_batch_input_file_content(file_content_as_dict)
         if not models:
             return
 
