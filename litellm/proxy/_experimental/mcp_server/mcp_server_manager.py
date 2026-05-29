@@ -1515,10 +1515,39 @@ class MCPServerManager:
         client = None
 
         try:
+            # Match call_tool: load per-user OAuth from DB when the client did not
+            # send x-mcp-* headers and REST did not already pass extra_headers.
+            if server.needs_user_oauth_token and user_api_key_auth is not None:
+                extra_headers = await self._resolve_oauth2_headers_for_tool_call(
+                    server,
+                    oauth2_headers=extra_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
+                if isinstance(mcp_auth_header, dict):
+                    merged = dict(extra_headers or {})
+                    merged.update(mcp_auth_header)
+                    extra_headers = merged or None
+
             if server.static_headers:
                 if extra_headers is None:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
+
+            if server.needs_user_oauth_token and not (
+                mcp_auth_header
+                or (
+                    extra_headers
+                    and any(
+                        isinstance(k, str) and k.lower() == "authorization"
+                        for k in extra_headers
+                    )
+                )
+            ):
+                verbose_logger.warning(
+                    "_get_tools_from_server: no OAuth token for server=%s "
+                    "(user must connect via OAuth or pass x-mcp-*-authorization)",
+                    server.server_id,
+                )
 
             # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
             # Skip entirely when the signer is not configured (avoid an unnecessary
@@ -1607,6 +1636,8 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
@@ -2225,7 +2256,9 @@ class MCPServerManager:
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools()
+                # Finish the upstream MCP handshake even if the browser aborts the
+                # HTTP request (common when React Query invalidates a prior fetch).
+                tools = await asyncio.shield(client.list_tools())
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2233,7 +2266,10 @@ class MCPServerManager:
             return []
         except asyncio.CancelledError:
             verbose_logger.warning(
-                f"Task cancelled while listing tools from {server_name}"
+                "Task cancelled while listing tools from %s "
+                "(client disconnected before MCP list_tools completed; "
+                "retry the list request after OAuth connect)",
+                server_name,
             )
             return []
         except ConnectionError as e:
@@ -3544,15 +3580,60 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
+    async def _probe_upstream_mcp_connectivity(
+        self,
+        server: MCPServer,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[Literal["healthy", "unhealthy", "unknown"], Optional[str]]:
+        """Open a short-lived upstream MCP session to verify reachability."""
+        merged_extra_headers: Dict[str, str] = dict(extra_headers or {})
+        if server.static_headers:
+            merged_extra_headers.update(server.static_headers)
+
+        client = await self._create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=merged_extra_headers or None,
+            stdio_env=None,
+        )
+
+        try:
+
+            async def _noop(session):
+                return "ok"
+
+            await asyncio.wait_for(
+                client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+            )
+            self._remember_upstream_initialize_instructions(server, client)
+            return "healthy", None
+        except asyncio.TimeoutError:
+            return (
+                "unhealthy",
+                f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds",
+            )
+        except asyncio.CancelledError:
+            return "unknown", "Health check was cancelled"
+        except Exception as e:
+            return "unhealthy", str(e)
+
     async def health_check_server(
-        self, server_id: str, mcp_auth_header: Optional[str] = None
+        self,
+        server_id: str,
+        mcp_auth_header: Optional[str] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> LiteLLM_MCPServerTable:
         """
         Perform a health check on a specific MCP server.
 
+        For per-user OAuth2 servers (authorization_code flow), probes upstream using
+        the stored access token for ``user_api_key_auth`` when provided.
+
         Args:
             server_id: The ID of the server to health check
             mcp_auth_header: Optional authentication header for the MCP server
+            user_api_key_auth: Caller identity used to load per-user OAuth tokens
 
         Returns:
             Dict containing health check results
@@ -3572,58 +3653,57 @@ class MCPServerManager:
             )
 
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
-        health_check_error = None
+        health_check_error: Optional[str] = None
 
-        # Check if we should skip health check based on auth configuration
-        should_skip_health_check = False
+        if server.needs_user_oauth_token:
+            if user_api_key_auth is None:
+                health_check_error = (
+                    "OAuth MCP health check requires a user identity "
+                    "(API key with user_id)"
+                )
+            else:
+                from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                    _get_user_oauth_extra_headers_from_db,
+                )
 
-        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
-        if server.requires_per_user_auth:
-            should_skip_health_check = True
-        # Skip if auth_type is not none and authentication_token is missing
-        # (except aws_sigv4 which uses its own credential fields)
+                oauth_headers = await _get_user_oauth_extra_headers_from_db(
+                    server=server,
+                    user_api_key_auth=user_api_key_auth,
+                )
+                if not oauth_headers:
+                    status = "unhealthy"
+                    health_check_error = (
+                        "No stored OAuth token for this user. "
+                        "Connect OAuth for this server."
+                    )
+                else:
+                    status, health_check_error = (
+                        await self._probe_upstream_mcp_connectivity(
+                            server=server,
+                            mcp_auth_header=mcp_auth_header,
+                            extra_headers=oauth_headers,
+                        )
+                    )
+        elif server.requires_per_user_auth:
+            # PAT passthrough: auth lives in per-request headers, not in LiteLLM storage.
+            health_check_error = (
+                "Health check skipped: server requires per-request credentials"
+            )
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
             and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
         ):
-            should_skip_health_check = True
-
-        if not should_skip_health_check:
-            extra_headers = {}
-            if server.static_headers:
-                extra_headers.update(server.static_headers)
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=None,
-                extra_headers=extra_headers,
-                stdio_env=None,
+            health_check_error = (
+                "Health check skipped: server auth is configured but no "
+                "authentication token is stored"
             )
-
-            try:
-
-                async def _noop(session):
-                    return "ok"
-
-                # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(
-                    client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
-                )
-                self._remember_upstream_initialize_instructions(server, client)
-                status = "healthy"
-            except asyncio.TimeoutError:
-                health_check_error = (
-                    f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
-                )
-                status = "unhealthy"
-            except asyncio.CancelledError:
-                health_check_error = "Health check was cancelled"
-                status = "unknown"
-            except Exception as e:
-                health_check_error = str(e)
-                status = "unhealthy"
+        else:
+            status, health_check_error = await self._probe_upstream_mcp_connectivity(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+            )
 
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
@@ -3684,7 +3764,9 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks(
+            target_server_ids, user_api_key_auth=user_api_key_auth
+        )
 
     async def get_all_allowed_mcp_servers(
         self,
@@ -3785,12 +3867,17 @@ class MCPServerManager:
         return await self._run_health_checks(target_server_ids)
 
     async def _run_health_checks(
-        self, target_server_ids: List[str]
+        self,
+        target_server_ids: List[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[LiteLLM_MCPServerTable]:
         if not target_server_ids:
             return []
 
-        tasks = [self.health_check_server(server_id) for server_id in target_server_ids]
+        tasks = [
+            self.health_check_server(server_id, user_api_key_auth=user_api_key_auth)
+            for server_id in target_server_ids
+        ]
         results = await asyncio.gather(*tasks)
         return [server for server in results if server is not None]
 

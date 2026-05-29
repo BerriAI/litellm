@@ -349,6 +349,7 @@ async def exchange_token_with_server(
     code_verifier: Optional[str],
     refresh_token: Optional[str] = None,
     scope: Optional[str] = None,
+    lite_llm_user_id: Optional[str] = None,
 ):
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
@@ -418,7 +419,7 @@ async def exchange_token_with_server(
     # the calling client has provided a valid LiteLLM identity.
     # Errors are non-fatal: the token is still returned to the client.
     if mcp_server.needs_user_oauth_token:
-        user_id = await _extract_user_id_from_request(request)
+        user_id = lite_llm_user_id or await _extract_user_id_from_request(request)
         if user_id:
             try:
                 await _store_per_user_token_server_side(

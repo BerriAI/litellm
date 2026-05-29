@@ -948,7 +948,7 @@ if MCP_AVAILABLE:
                               When provided, the Redis and individual DB lookups are
                               skipped in favour of the pre-fetched batch result.
         """
-        if server.auth_type != MCPAuth.oauth2:
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
             return None
         if user_api_key_auth is None:
             return None

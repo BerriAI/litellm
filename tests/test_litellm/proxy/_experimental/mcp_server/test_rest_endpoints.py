@@ -681,8 +681,8 @@ class TestListToolsRestAPI:
         assert "access_denied" in result["message"]
 
     async def test_oauth2_user_token_injected_for_single_server(self, monkeypatch):
-        """For a single-server OAuth2 request, _get_user_oauth_extra_headers is called
-        and the returned headers are forwarded to _get_tools_for_single_server."""
+        """For a single-server OAuth2 request, DB OAuth headers are loaded and
+        forwarded to _get_tools_for_single_server."""
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
 
@@ -706,8 +706,8 @@ class TestListToolsRestAPI:
 
         oauth_headers = {"Authorization": "Bearer user-oauth-token"}
 
-        async def fake_get_user_oauth_extra_headers(
-            server, user_api_key_dict, prefetched_creds=None
+        async def fake_get_user_oauth_extra_headers_from_db(
+            server, user_api_key_auth, prefetched_creds=None
         ):
             return oauth_headers
 
@@ -744,8 +744,8 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             rest_endpoints,
-            "_get_user_oauth_extra_headers",
-            fake_get_user_oauth_extra_headers,
+            "_get_user_oauth_extra_headers_from_db",
+            fake_get_user_oauth_extra_headers_from_db,
             raising=False,
         )
         monkeypatch.setattr(

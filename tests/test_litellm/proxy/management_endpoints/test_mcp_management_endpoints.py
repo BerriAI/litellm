@@ -1847,6 +1847,7 @@ class TestTemporaryMCPSessionEndpoints:
             code_verifier="verifier",
             refresh_token=None,
             scope=None,
+            lite_llm_user_id=admin_auth.user_id,
         )
 
     @pytest.mark.asyncio
@@ -1899,6 +1900,7 @@ class TestTemporaryMCPSessionEndpoints:
             code_verifier=None,
             refresh_token="rt-123",
             scope=None,
+            lite_llm_user_id=admin_auth.user_id,
         )
 
     @pytest.mark.asyncio

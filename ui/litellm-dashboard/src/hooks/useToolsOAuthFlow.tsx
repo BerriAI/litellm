@@ -3,10 +3,8 @@
 /**
  * OAuth2 PKCE flow for the Tools screen re-authentication path.
  *
- * Unlike useUserMcpOAuthFlow (used in the chat panel), this hook:
- * - stores the resulting token in sessionStorage via mcpTokenStore only
- * - does NOT call storeMCPOAuthUserCredential (no backend DB write)
- * - uses "litellm-tools-mcp-oauth-result" as its result key to avoid
+ * Unlike useUserMcpOAuthFlow (used in the chat panel), this hook uses
+ * "litellm-tools-mcp-oauth-result" as its result key to avoid
  *   collisions with the admin and user flows
  *
  * The OAuth callback page (src/app/mcp/oauth/callback/page.tsx) writes
@@ -18,6 +16,7 @@ import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
   registerMcpOAuthClient,
+  storeMCPOAuthUserCredential,
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
@@ -197,7 +196,6 @@ export const useToolsOAuthFlow = ({
         accessToken,
       });
 
-      // Store in sessionStorage only — no backend DB write
       setToken(
         flowState.serverId,
         {
@@ -208,6 +206,13 @@ export const useToolsOAuthFlow = ({
         },
         userId,
       );
+
+      await storeMCPOAuthUserCredential(accessToken, flowState.serverId, {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        expires_in: token.expires_in,
+        scopes: flowState.scopes,
+      });
 
       setStatus("success");
       setError(null);

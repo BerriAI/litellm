@@ -1341,7 +1341,8 @@ if MCP_AVAILABLE:
         # Perform health check on the server using server manager
         try:
             health_result = await global_mcp_server_manager.health_check_server(
-                server_id
+                server_id,
+                user_api_key_auth=user_api_key_dict,
             )
             # Update the server object with health check results
             mcp_server.status = (
@@ -1755,6 +1756,7 @@ if MCP_AVAILABLE:
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             scope=scope,
+            lite_llm_user_id=user_api_key_dict.user_id,
         )
 
     @router.post(

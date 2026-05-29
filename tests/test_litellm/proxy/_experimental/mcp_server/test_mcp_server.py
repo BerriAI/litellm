@@ -3159,9 +3159,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert create.await_count == 1, (
-                    "Second probe within cooldown must not reconnect to upstream"
-                )
+                assert (
+                    create.await_count == 1
+                ), "Second probe within cooldown must not reconnect to upstream"
                 assert (
                     "empty-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
@@ -3186,7 +3186,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
 
         server = _make_instruction_server(server_id="boom-server", instructions=None)
         fake_client = MagicMock()
-        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
+        fake_client.run_with_session = AsyncMock(
+            side_effect=RuntimeError("upstream down")
+        )
         fake_client._last_initialize_instructions = None
 
         create = AsyncMock(return_value=fake_client)
@@ -3198,9 +3200,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert create.await_count == 1, (
-                    "Second probe within cooldown must not reconnect after failure"
-                )
+                assert (
+                    create.await_count == 1
+                ), "Second probe within cooldown must not reconnect after failure"
                 assert (
                     "boom-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
@@ -3598,3 +3600,165 @@ def test_get_forwarded_auth_from_scope_skips_when_no_litellm_key_header():
         ]
     }
     assert _get_forwarded_auth_from_scope(scope) is None
+
+
+class TestMCPHealthCheckOAuth:
+    """Per-user OAuth MCP servers should probe upstream with stored tokens."""
+
+    @pytest.mark.asyncio
+    async def test_oauth_health_healthy_when_stored_token_reaches_upstream(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        manager.registry[server.server_id] = server
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+        oauth_headers = {"Authorization": "Bearer stored-token"}
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+                AsyncMock(return_value=oauth_headers),
+            ),
+            patch.object(
+                manager,
+                "_probe_upstream_mcp_connectivity",
+                AsyncMock(return_value=("healthy", None)),
+            ) as mock_probe,
+        ):
+            result = await manager.health_check_server(
+                server.server_id,
+                user_api_key_auth=user_auth,
+            )
+
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        mock_probe.assert_awaited_once_with(
+            server=server,
+            mcp_auth_header=None,
+            extra_headers=oauth_headers,
+        )
+
+    @pytest.mark.asyncio
+    async def test_oauth_health_unhealthy_when_no_stored_token(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        manager.registry[server.server_id] = server
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(
+                manager,
+                "_probe_upstream_mcp_connectivity",
+                AsyncMock(),
+            ) as mock_probe,
+        ):
+            result = await manager.health_check_server(
+                server.server_id,
+                user_api_key_auth=user_auth,
+            )
+
+        assert result.status == "unhealthy"
+        assert "No stored OAuth token" in (result.health_check_error or "")
+        mock_probe.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_oauth_health_unhealthy_when_upstream_probe_fails(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        manager.registry[server.server_id] = server
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-1")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+                AsyncMock(return_value={"Authorization": "Bearer stored-token"}),
+            ),
+            patch.object(
+                manager,
+                "_probe_upstream_mcp_connectivity",
+                AsyncMock(return_value=("unhealthy", "connection refused")),
+            ),
+        ):
+            result = await manager.health_check_server(
+                server.server_id,
+                user_api_key_auth=user_auth,
+            )
+
+        assert result.status == "unhealthy"
+        assert result.health_check_error == "connection refused"
+
+    @pytest.mark.asyncio
+    async def test_oauth_health_unknown_without_user_identity(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        manager.registry[server.server_id] = server
+
+        with patch.object(
+            manager,
+            "_probe_upstream_mcp_connectivity",
+            AsyncMock(),
+        ) as mock_probe:
+            result = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unknown"
+        assert "user identity" in (result.health_check_error or "").lower()
+        mock_probe.assert_not_called()

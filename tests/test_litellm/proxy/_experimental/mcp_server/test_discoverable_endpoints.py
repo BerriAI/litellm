@@ -2661,3 +2661,73 @@ async def test_token_endpoint_sets_no_store_cache_control():
 
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_exchange_token_stores_per_user_token_when_user_id_supplied():
+    """Token exchange must persist credentials using the authenticated user id."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="oauth-user-srv",
+        name="oauth-user-srv",
+        server_name="oauth-user-srv",
+        alias="oauth-user-srv",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://provider.com/oauth/token",
+        oauth2_flow="authorization_code",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {
+        "access_token": "upstream-tok",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "upstream-rt",
+    }
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._store_per_user_token_server_side",
+            new_callable=AsyncMock,
+        ) as store_mock,
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://127.0.0.1/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier="verifier",
+            lite_llm_user_id="user-abc",
+        )
+
+    store_mock.assert_awaited_once()
+    assert store_mock.await_args.kwargs["user_id"] == "user-abc"
+    assert store_mock.await_args.kwargs["token_response"]["access_token"] == "upstream-tok"
