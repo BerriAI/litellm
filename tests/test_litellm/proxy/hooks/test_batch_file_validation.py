@@ -285,7 +285,6 @@ async def test_pre_call_skips_check_when_no_models_present():
     )
 
 
-
 # ---------------------------------------------------------------------------
 # Managed/unified file ID — proxy-alias validation
 # ---------------------------------------------------------------------------
@@ -361,9 +360,7 @@ async def test_managed_file_validates_proxy_alias_not_upstream_jsonl_model():
         )
 
     # Critically: the alias was validated, not the upstream JSONL name.
-    assert seen == ["proxy-alias-batch"], (
-        f"expected proxy-alias validation, got {seen}"
-    )
+    assert seen == ["proxy-alias-batch"], f"expected proxy-alias validation, got {seen}"
 
 
 @pytest.mark.asyncio
@@ -400,9 +397,7 @@ async def test_managed_file_rejects_unauthorized_proxy_alias():
     )
 
     async def _reject(**kwargs):
-        raise Exception(
-            f"Key not allowed to access model={kwargs['model']}"
-        )
+        raise Exception(f"Key not allowed to access model={kwargs['model']}")
 
     with (
         patch(
