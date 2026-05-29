@@ -101,6 +101,31 @@ jobs:
           docker logs litellm-test
           exit 1
 
+      - name: Setup Node for Playwright
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Install UI deps and Chromium
+        working-directory: ui/litellm-dashboard
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run SERVER_ROOT_PATH redirect e2e
+        working-directory: ui/litellm-dashboard
+        env:
+          SERVER_ROOT_PATH: ${{ matrix.root_path }}
+        run: npx playwright test --config=e2e_tests/serverRootPath.config.ts
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-trace-${{ strategy.job-index }}
+          path: ui/litellm-dashboard/test-results/
+          retention-days: 7
+
       - name: Cleanup
         if: always()
         run: |
