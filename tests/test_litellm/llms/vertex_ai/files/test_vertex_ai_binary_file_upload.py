@@ -8,6 +8,7 @@ Regression test for: UTF-8 codec error when uploading binary files
 """
 
 import io
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -137,11 +138,13 @@ class TestVertexAIBinaryFileUpload:
         ), "Binary file data should remain as bytes"
 
     @pytest.mark.asyncio
-    async def test_jsonl_file_upload_returns_string(self):
+    async def test_jsonl_file_upload_returns_utf8_bytes(self):
         """
-        Test that JSONL files (text) are correctly transformed to strings.
+        Test that JSONL batch files are transformed to UTF-8 bytes.
 
-        This ensures we handle both binary and text files correctly.
+        The streaming transform emits bytes so the async upload ships the
+        payload to GCS without a str->bytes re-encode (one fewer full copy of
+        a ~1 GB Gemini batch file).
         """
         # Create mock JSONL content
         mock_jsonl_content = (
@@ -164,10 +167,14 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
 
-        # JSONL files should be transformed to string
         assert isinstance(
-            transformed_request, str
-        ), f"Expected string for JSONL file, got {type(transformed_request)}"
+            transformed_request, bytes
+        ), f"Expected bytes for JSONL file, got {type(transformed_request)}"
+
+        decoded = json.loads(transformed_request.decode("utf-8"))
+        assert (
+            "request" in decoded
+        ), "JSONL transform must wrap each row in {'request': ...}"
 
     @pytest.mark.asyncio
     async def test_mixed_file_types_in_sequence(self):
@@ -208,7 +215,7 @@ class TestVertexAIBinaryFileUpload:
             optional_params={},
             litellm_params={},
         )
-        assert isinstance(result2, str)
+        assert isinstance(result2, bytes)
 
         # Test 3: Upload another binary file
         binary_content2 = b"\xc4\xe5\xf2\xe5\xeb"
@@ -251,7 +258,7 @@ class TestVertexAIBinaryFileUpload:
             },
             "text_files": {
                 "input_type": "str or bytes",
-                "output_type": "str",
+                "output_type": "bytes",
                 "examples": ["JSONL", "CSV", "TXT"],
                 "http_method": "POST",
                 "encoding": "UTF-8",
