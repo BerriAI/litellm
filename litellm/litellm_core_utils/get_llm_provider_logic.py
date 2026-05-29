@@ -72,9 +72,7 @@ def _is_azure_claude_model(model: str) -> bool:
         return False
 
 
-_CLAUDE_PATTERN = re.compile(
-    r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE
-)
+_CLAUDE_PATTERN = re.compile(r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE)
 
 
 def _matches_claude_model_pattern(model: str) -> bool:
