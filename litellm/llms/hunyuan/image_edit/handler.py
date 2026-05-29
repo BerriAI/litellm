@@ -26,7 +26,11 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageResponse
 
-from ..image_generation.transformation import HUNYUAN_BASE_URL, HUNYUAN_QUERY_ENDPOINT
+from ..image_generation.transformation import (
+    HUNYUAN_BASE_URL,
+    HUNYUAN_QUERY_ENDPOINT,
+    extract_hunyuan_extra_params,
+)
 from .transformation import HunyuanImageEditConfig
 
 HUNYUAN_EDIT_POLLING_INTERVAL = 1.5
@@ -104,6 +108,10 @@ class HunyuanImageEdit:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        data.setdefault("logo_add", 0)
+        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
+        if extra_params:
+            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,
@@ -189,6 +197,10 @@ class HunyuanImageEdit:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        data.setdefault("logo_add", 0)
+        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
+        if extra_params:
+            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,
