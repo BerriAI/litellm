@@ -644,6 +644,23 @@ def _should_drop_telemetry_record(request) -> bool:
     return not _current_test_records_telemetry()
 
 
+def _should_passthrough_credential_exchange(request) -> bool:
+    """Force the Google OAuth2/STS token mint to run live, never from cassette.
+
+    The mint returns a short-lived ``ya29.*`` access token. Recording it lets a
+    *stale* token replay on a later run; litellm caches it (the recorded
+    ``expires_in`` keeps ``credentials.expired`` False, so it is never
+    refreshed) and sends it to a live Vertex/Gemini endpoint, which rejects it
+    with ``ACCESS_TOKEN_EXPIRED``. The token body carries nothing a test asserts
+    on, so always mint it live: returning ``None`` from ``before_record_request``
+    makes vcrpy neither store nor replay the call. Inert during
+    ``Cassette._load`` for the same reason as ``_should_drop_telemetry_record``.
+    """
+    if _vcr_load_in_progress():
+        return False
+    return _is_credential_exchange_request(request)
+
+
 # Google APIs (Vertex AI, Gemini, OAuth2/STS). Auth is a ``ya29.*`` OAuth2
 # access token minted fresh on every run, so the per-request key fingerprint
 # rotates and never matches a recording. The logical credential — the GCP
@@ -930,6 +947,8 @@ def _before_record_request(request):
     # ``_should_drop_telemetry_record``). Returning ``None`` tells vcrpy not to
     # store the interaction; the request passes through live (fire-and-forget).
     if _should_drop_telemetry_record(request):
+        return None
+    if _should_passthrough_credential_exchange(request):
         return None
     headers = getattr(request, "headers", None)
     if headers is None:
