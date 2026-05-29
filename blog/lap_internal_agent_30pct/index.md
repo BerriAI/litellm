@@ -64,7 +64,7 @@ We started with agent frameworks: Pydantic AI, LangGraph, the PI SDK. Each one m
 
 We landed on **OpenCode**. The Claude Agents SDK spawns a CLI session per run and OOM'd for us at ~1 RPM. OpenCode hits the same fundamental bottleneck (long-running sessions held in memory), but its memory usage grew more slowly, making it the better fit for now.
 
-That choice stays flexible because we also wrote a harness unification layer, [`BerriAI/lite-harness`](https://github.com/BerriAI/lite-harness), which adapts OpenCode, Claude Code, Codex, and others to a single HTTP contract:
+That choice stays flexible because we also wrote a harness unification layer, [`LiteLLM-Labs/lite-harness`](https://github.com/LiteLLM-Labs/lite-harness), which adapts OpenCode, Claude Code, Codex, and others to a single HTTP contract:
 
 ```
 lite-harness/
