@@ -348,6 +348,71 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.image_tokens == 100
         assert result.completion_tokens_details.text_tokens == 70
 
+    def test_transform_response_api_usage_defaults_completion_details_when_only_prompt_present(
+        self,
+    ):
+        """Regression test for #15377 / LIT-1771.
+
+        Some providers (e.g. Azure OpenAI Responses API for non-reasoning
+        models) omit ``output_tokens_details`` from the usage payload while
+        still emitting ``input_tokens_details``. Without the fix, callers see
+        an asymmetric ``Usage`` object where ``prompt_tokens_details`` is
+        populated but ``completion_tokens_details`` is ``None``, breaking
+        downstream cost and observability callbacks.
+        """
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 0},
+            # output_tokens_details deliberately omitted
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 0
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 0
+
+    def test_transform_response_api_usage_no_details_stays_none(self):
+        """When neither ``input_tokens_details`` nor ``output_tokens_details``
+        is present, both wrappers should remain ``None`` -- the default only
+        applies on the asymmetric path."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is None
+        assert result.completion_tokens_details is None
+
+    def test_transform_response_api_usage_preserves_existing_completion_details(self):
+        """When ``output_tokens_details`` is populated, it must pass through
+        unchanged -- the new default must not overwrite real data."""
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "total_tokens": 300,
+            "input_tokens_details": {"cached_tokens": 5},
+            "output_tokens_details": {"reasoning_tokens": 42},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 42
+
 
 class TestResponsesAPIProviderSpecificParams:
     """
