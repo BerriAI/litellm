@@ -1071,6 +1071,7 @@ app = FastAPI(
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
     generate_unique_id_function=_generate_stable_operation_id,
+    strict_content_type=False,
 )
 
 vertex_live_passthrough_vertex_base = VertexBase()
