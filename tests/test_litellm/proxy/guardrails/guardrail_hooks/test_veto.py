@@ -15,7 +15,14 @@ import pytest
 from fastapi.exceptions import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.veto.veto import VetoGuardrail
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -67,6 +74,37 @@ def _model_response(content: str) -> ModelResponse:
     return ModelResponse(
         choices=[Choices(message=Message(content=content, role="assistant"))]
     )
+
+
+def _stream_chunk(text: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        model="gpt-x",
+        choices=[StreamingChoices(index=0, delta=Delta(content=text))],
+    )
+
+
+async def _aiter(items):
+    for it in items:
+        yield it
+
+
+async def _collect(agen):
+    return [c async for c in agen]
+
+
+@contextmanager
+def _patch_stream(guardrail, responses):
+    """Patch the shared client; ``post`` returns each item in ``responses``
+    in order — a verdict mock to return, or an Exception instance to raise
+    (drives the fail-closed path)."""
+    post_mock = AsyncMock(side_effect=responses)
+    handler = MagicMock()
+    handler.post = post_mock
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.veto.veto.get_async_httpx_client",
+        return_value=handler,
+    ):
+        yield post_mock
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +482,119 @@ class TestVetoConfigModel:
 
         fields = VetoGuardrailConfigModel.model_fields
         assert {"api_key", "api_base"}.issubset(fields.keys())
+
+
+# ---------------------------------------------------------------------------
+# streaming output hook (SPEC §3.5)
+# ---------------------------------------------------------------------------
+
+
+class TestVetoStreaming:
+    @pytest.mark.asyncio
+    async def test_allow_passes_through(self, veto_guardrail):
+        # total text under the buffer → one final=true POST, all chunks yielded
+        chunks = [_stream_chunk("hel"), _stream_chunk("lo")]
+        with _patch_stream(veto_guardrail, [_verdict("allow")]) as post:
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert [c.choices[0].delta.content for c in out] == ["hel", "lo"]
+        assert post.call_count == 1
+        assert post.call_args.kwargs["json"]["final"] is True
+
+    @pytest.mark.asyncio
+    async def test_midstream_block_drops_held_buffer(self, veto_guardrail):
+        # small buffer → first chunk triggers a flush; block drops the held
+        # chunk (never yielded) and closes with a content_filter terminal.
+        veto_guardrail.buffer_tokens = 1  # buffer_chars = 4
+        chunks = [_stream_chunk("AKIA"), _stream_chunk("more")]
+        with _patch_stream(veto_guardrail, [_verdict("block")]) as post:
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert len(out) == 1
+        assert out[0].choices[0].finish_reason == "content_filter"
+        assert post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_final_block(self, veto_guardrail):
+        # under buffer → block surfaces only at EOF; held tail is dropped.
+        chunks = [_stream_chunk("hi")]
+        with _patch_stream(veto_guardrail, [_verdict("block")]):
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert out[-1].choices[0].finish_reason == "content_filter"
+        assert all(
+            getattr(c.choices[0], "delta", None) is None
+            or c.choices[0].delta.content != "hi"
+            for c in out
+        )
+
+    @pytest.mark.asyncio
+    async def test_fail_closed_on_gateway_error(self, veto_guardrail):
+        # a thrown gateway call must close the stream, not pass tokens through
+        chunks = [_stream_chunk("hi")]
+        with _patch_stream(veto_guardrail, [RuntimeError("boom")]):
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert out[-1].choices[0].finish_reason == "content_filter"
+
+    @pytest.mark.asyncio
+    async def test_buffer_flush_releases_and_params(self, veto_guardrail):
+        veto_guardrail.buffer_tokens = 1  # buffer_chars = 4
+        chunks = [_stream_chunk("aaaa"), _stream_chunk("bb")]
+        with _patch_stream(
+            veto_guardrail, [_verdict("allow"), _verdict("allow")]
+        ) as post:
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert [c.choices[0].delta.content for c in out] == ["aaaa", "bb"]
+        assert post.call_count == 2  # one mid-stream flush + one final
+        p0 = post.call_args_list[0].kwargs["params"]
+        p1 = post.call_args_list[1].kwargs["params"]
+        assert p0["stream_id"] == p1["stream_id"]  # stable across chunks
+        assert p0["buffer"] == 1
+        assert post.call_args_list[0].kwargs["json"]["final"] is False
+        assert post.call_args_list[1].kwargs["json"]["final"] is True
+        assert post.call_args_list[1].kwargs["json"]["chunk_index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_eof_redact_treated_as_allow(self, veto_guardrail):
+        # redact is EOF-only and can't unsay yielded tokens → streaming
+        # honors only block; a final redact verdict releases the tail as-is.
+        chunks = [_stream_chunk("email a@b.com")]
+        with _patch_stream(veto_guardrail, [_verdict("redact", redacted="email X")]):
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert [c.choices[0].delta.content for c in out] == ["email a@b.com"]
+
+    @pytest.mark.asyncio
+    async def test_non_chat_chunk_passthrough(self, veto_guardrail):
+        # raw bytes (Anthropic native SSE) pass through untouched; chat
+        # chunks are still buffered + scanned.
+        chunks = [b"raw bytes", _stream_chunk("hi")]
+        with _patch_stream(veto_guardrail, [_verdict("allow")]) as post:
+            out = await _collect(
+                veto_guardrail.async_post_call_streaming_iterator_hook(
+                    MagicMock(), _aiter(chunks), {"model": "gpt-x"}
+                )
+            )
+        assert out[0] == b"raw bytes"
+        assert out[-1].choices[0].delta.content == "hi"
+        assert post.call_count == 1

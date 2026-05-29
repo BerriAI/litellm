@@ -11,12 +11,25 @@
 # contract. See veto-core/integrations/litellm/README.md for the full PR
 # checklist (enum + initializer + registry edits).
 
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union
+import uuid
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+)
 
 from fastapi import HTTPException
 
 from litellm import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -24,8 +37,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     CallTypesLiteral,
+    Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
 )
 
 if TYPE_CHECKING:
@@ -38,6 +54,15 @@ if TYPE_CHECKING:
 # redact → swap message content for the masked text and continue; allow → pass.
 VETO_DEFAULT_CATEGORIES = ["pii", "secrets", "injection"]
 
+# Streaming (SPEC §3.5): the adapter buffers ~N tokens of the upstream
+# stream locally, holds them until the gateway clears that buffer, then
+# releases. Default 128 tokens (tier-tunable 64/128/256). The gateway has
+# no tokenizer either, so token budget is approximated as chars/4 on both
+# sides — buffer size is passed back via ?buffer=N so the gateway's
+# sliding window matches what the adapter buffered.
+VETO_STREAM_BUFFER_TOKENS = 128
+VETO_APPROX_CHARS_PER_TOKEN = 4
+
 
 class VetoGuardrail(CustomGuardrail):
     def __init__(
@@ -49,6 +74,7 @@ class VetoGuardrail(CustomGuardrail):
         self.api_base = (api_base or "https://api.vetocheck.com").rstrip("/")
         self.api_key = api_key
         self.categories = VETO_DEFAULT_CATEGORIES
+        self.buffer_tokens = VETO_STREAM_BUFFER_TOKENS
         self.timeout = 10.0
         super().__init__(**kwargs)
 
@@ -84,6 +110,131 @@ class VetoGuardrail(CustomGuardrail):
         # unscanned text through to the model.
         resp.raise_for_status()
         return resp.json()
+
+    async def _check_stream(
+        self, text: str, stream_id: str, chunk_index: int, final: bool
+    ) -> dict:
+        """POST one buffered chunk to the stateful streaming endpoint
+        (POST /v1/check?stream_id=…&buffer=N — SPEC §3.5.2). The gateway
+        keeps a Redis-backed sliding window keyed by stream_id; the fast
+        lane runs per chunk, the slow lane on final=true. Fail closed on
+        any non-2xx, same as the batch path."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        resp = await client.post(
+            f"{self.api_base}/v1/check",
+            headers=headers,
+            params={"stream_id": stream_id, "buffer": self.buffer_tokens},
+            json={
+                "text": text,
+                "chunk_index": chunk_index,
+                "final": final,
+                "categories": self.categories,
+            },
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @staticmethod
+    def _stream_chunk_text(chunk: ModelResponseStream) -> str:
+        """Concatenate the assistant text delta carried by one stream chunk.
+        Tool-call / function deltas and role-only chunks contribute no text."""
+        parts: List[str] = []
+        for choice in getattr(chunk, "choices", None) or []:
+            delta = getattr(choice, "delta", None)
+            content = getattr(delta, "content", None) if delta is not None else None
+            if isinstance(content, str):
+                parts.append(content)
+        return "".join(parts)
+
+    @staticmethod
+    def _blocked_stream_chunk(model: str) -> ModelResponseStream:
+        """Terminal chunk emitted when Veto blocks mid-stream: an empty
+        delta with finish_reason="content_filter" (SPEC §3.5.8 chunked-JSON
+        fallback). Downstream SDKs read it as a content-policy stop; the
+        offending buffered tokens are never yielded."""
+        return ModelResponseStream(
+            model=model,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=None),
+                    finish_reason="content_filter",
+                )
+            ],
+        )
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        """Output guardrail for streaming responses (SPEC §3.5).
+
+        Wraps the upstream LLM iterator. Buffers ~buffer_tokens of assistant
+        text locally and HOLDS those chunks until the gateway clears the
+        buffer, then releases them. On a fast-lane block the held buffer is
+        dropped (never yielded) and a content_filter terminal chunk closes
+        the stream — already-yielded tokens cannot be unsaid, so redact is
+        not applied mid-stream (SPEC §3.5.1); a final redact verdict is
+        treated as allow. Fails closed on any gateway error: blocks the
+        remainder of the stream (SPEC §3.6 / §3.5.8)."""
+        stream_id = uuid.uuid4().hex
+        model = request_data.get("model") or ""
+        buffer_chars = self.buffer_tokens * VETO_APPROX_CHARS_PER_TOKEN
+        chunk_index = 0
+        held: List[ModelResponseStream] = []
+        buffered_text = ""
+
+        async for chunk in response:
+            # Non-chat stream shapes (raw bytes SSE, /v1/responses events)
+            # are passed through unscanned in v1 — the prompt was already
+            # scanned by the pre-call + moderation hooks. Documented limit.
+            if not isinstance(chunk, ModelResponseStream):
+                yield chunk
+                continue
+
+            held.append(chunk)
+            buffered_text += self._stream_chunk_text(chunk)
+            if len(buffered_text) < buffer_chars:
+                continue
+
+            try:
+                verdict = await self._check_stream(
+                    buffered_text, stream_id, chunk_index, final=False
+                )
+            except Exception:
+                yield self._blocked_stream_chunk(model)  # fail closed
+                return
+            chunk_index += 1
+            if verdict.get("action") == "block":
+                yield self._blocked_stream_chunk(model)
+                return
+            for held_chunk in held:
+                yield held_chunk
+            held = []
+            buffered_text = ""
+
+        # EOF: flush the trailing buffer with final=true so the slow lane
+        # (AI classifiers) runs on the assembled response.
+        try:
+            verdict = await self._check_stream(
+                buffered_text, stream_id, chunk_index, final=True
+            )
+        except Exception:
+            yield self._blocked_stream_chunk(model)
+            return
+        if verdict.get("action") == "block":
+            yield self._blocked_stream_chunk(model)
+            return
+        for held_chunk in held:
+            yield held_chunk
 
     def _raise_blocked(self, verdict: dict) -> None:
         raise HTTPException(
@@ -210,6 +361,7 @@ class VetoGuardrail(CustomGuardrail):
                 message.content = await self._scan_text(content)
         return response
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
