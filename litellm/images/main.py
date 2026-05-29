@@ -236,7 +236,6 @@ def image_generation(  # noqa: PLR0915
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
-        extra_body: Optional[Dict[str, Any]] = kwargs.get("extra_body", None)
         headers: dict = kwargs.get("headers", None) or {}
         base_model = kwargs.get("base_model", None)
         if extra_headers is not None:
