@@ -10133,6 +10133,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "retry_policy",
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
@@ -10156,6 +10157,15 @@ class Router:
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
+                elif var == "retry_policy":
+                    # Mirror Router.__init__ semantics: accept dict | RetryPolicy
+                    # | None, coercing dicts to RetryPolicy so the runtime retry
+                    # path (which reads ``self.retry_policy``) keeps seeing the
+                    # typed object regardless of write path.
+                    value = kwargs[var]
+                    if isinstance(value, dict):
+                        value = RetryPolicy(**value)
+                    setattr(self, var, value)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
