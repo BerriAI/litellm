@@ -1166,7 +1166,6 @@ async def test_generate_service_account_works_with_team_id():
             "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
         ) as mock_generate_key,
     ):
-
         # Configure mocks
         mock_prisma.return_value = AsyncMock()
         mock_router.return_value = None
@@ -1531,17 +1530,35 @@ def test_lit3416_generate_path_merges_into_metadata(monkeypatch):
         _set_object_metadata_field,
     )
 
-    req = GenerateKeyRequest(disable_global_guardrails=True, key_alias="lit3416")
-    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if getattr(req, field, None) is not None:
-            _set_object_metadata_field(req, field, getattr(req, field))
-            delattr(req, field)
-    for field in LiteLLM_ManagementEndpoint_MetadataFields:
-        if getattr(req, field, None) is not None:
-            _set_object_metadata_field(req, field, getattr(req, field))
-            delattr(req, field)
+    def run(req):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(req, field, None) is not None:
+                _set_object_metadata_field(req, field, getattr(req, field))
+                delattr(req, field)
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if getattr(req, field, None) is not None:
+                _set_object_metadata_field(req, field, getattr(req, field))
+                delattr(req, field)
 
-    assert req.metadata["disable_global_guardrails"] is True
+    # Generate with True
+    req_true = GenerateKeyRequest(
+        disable_global_guardrails=True, key_alias="lit3416-on"
+    )
+    run(req_true)
+    assert req_true.metadata["disable_global_guardrails"] is True
+
+    # Generate with False — explicit opt-out at create time must still persist,
+    # not be confused with "field omitted". (Greptile follow-up.)
+    req_false = GenerateKeyRequest(
+        disable_global_guardrails=False, key_alias="lit3416-off"
+    )
+    run(req_false)
+    assert req_false.metadata["disable_global_guardrails"] is False
+
+    # Generate without the field — metadata should not gain a stray entry.
+    req_omit = GenerateKeyRequest(key_alias="lit3416-omit")
+    run(req_omit)
+    assert "disable_global_guardrails" not in (req_omit.metadata or {})
 
 
 @pytest.mark.asyncio
@@ -2158,7 +2175,6 @@ async def test_validate_key_team_change_with_member_permissions():
                 with patch(
                     "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
                 ) as mock_has_perms:
-
                     mock_get_user.return_value = mock_member_object
                     mock_is_admin.return_value = False
                     mock_has_perms.return_value = True
