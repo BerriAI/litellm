@@ -168,7 +168,7 @@ def image_generation(
     *,
     aimg_generation: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, ImageResponse]: 
+) -> Coroutine[Any, Any, ImageResponse]:
     ...
 
 
@@ -192,7 +192,7 @@ def image_generation(
     *,
     aimg_generation: Literal[False] = False,
     **kwargs,
-) -> ImageResponse: 
+) -> ImageResponse:
     ...
 
 # fmt: on
