@@ -3151,13 +3151,10 @@ async def provider_budgets() -> ProviderBudgetResponse:
 
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
+            router_budget_logger = (
+                llm_router._get_router_deployment_budget_limiter()
+                if llm_router is not None
+                else None
             )
             if router_budget_logger is None:
                 raise ValueError("No router budget logger found")

@@ -887,6 +887,22 @@ class RouterBudgetLimiting(CustomLogger):
             f"Initialized Deployment Budget Config: {self.deployment_budget_config}"
         )
 
+    def register_deployment_budget(
+        self,
+        deployment: Union[Dict[str, Any], DeploymentTypedDict],
+    ) -> None:
+        """
+        Register or refresh deployment-level budget config for a runtime-added deployment.
+        """
+        self._init_deployment_budgets(model_list=[deployment])
+
+    def unregister_deployment_budget(self, model_id: str) -> None:
+        if self.deployment_budget_config is None:
+            return
+        self.deployment_budget_config.pop(model_id, None)
+        if len(self.deployment_budget_config) == 0:
+            self.deployment_budget_config = None
+
     def _init_tag_budgets(self):
         if litellm.tag_budget_config is None:
             return
