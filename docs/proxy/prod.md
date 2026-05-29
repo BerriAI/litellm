@@ -76,30 +76,86 @@ targetMemoryUtilizationPercentage: 80
 ```
 
 
-## 3. On Kubernetes — Use 1 Uvicorn Worker per Pod [Suggested CMD]
+## 3. Choose your server: Uvicorn vs. Gunicorn
 
-We recommend running **1 Uvicorn worker per pod** and scaling out horizontally with more pods rather than more workers per pod. This gives the most stable latency under load and works best with the HPA thresholds above.
+LiteLLM Proxy runs on [Uvicorn](https://www.uvicorn.org/) by default. Passing `--run_gunicorn` instead starts [Gunicorn](https://docs.gunicorn.org/en/stable/) as a process manager that supervises [Uvicorn worker processes](https://www.uvicorn.org/deployment/#gunicorn) (`uvicorn.workers.UvicornWorker`). In both cases your application code still runs on Uvicorn; the difference is which process manages and recycles the workers.
+
+| | Uvicorn (default) | Gunicorn (`--run_gunicorn`) |
+|---|---|---|
+| **When to use** | Recommended for almost all deployments, especially Kubernetes with one worker per pod. | Choose when you run **multiple workers in a single container** and want a mature process manager to supervise and recycle them. |
+| **Worker recycling** | Uvicorn's [`limit_max_requests`](https://www.uvicorn.org/settings/#resource-limits). | Gunicorn's [`max_requests`](https://docs.gunicorn.org/en/stable/settings.html#max-requests), the battle-tested mechanism Gunicorn has shipped for years. |
+| **Process supervision** | Uvicorn's built-in multiprocess manager. | Gunicorn's [arbiter](https://docs.gunicorn.org/en/stable/design.html), which restarts workers one at a time as they exit. |
+
+:::tip Recommendation
+
+On Kubernetes, run **one Uvicorn worker per pod** and scale **horizontally** (more pods) rather than vertically (more workers per pod). One process per pod keeps latency predictable under load, lets the Horizontal Pod Autoscaler use the [thresholds above](#2-recommended-machine-specifications) accurately, and makes rolling restarts hitless because Kubernetes drains one pod at a time. Reach for Gunicorn only when you must pack multiple workers into one container.
+
+:::
+
+### 3a. Recommended: one Uvicorn worker per pod
+
+This is the default server, so you only need to set `--num_workers 1` (the default is already `1`):
 
 ```shell
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "1"]
 ```
 
-> **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
-> You can configure this either via CLI or environment variable:
+### 3b. Recycle workers with `--max_requests_before_restart`
+
+If you observe gradual memory growth under sustained load, recycle each worker after a fixed number of requests to bound memory usage. `--max_requests_before_restart` maps to Uvicorn's [`limit_max_requests`](https://www.uvicorn.org/settings/#resource-limits) (default server) and to Gunicorn's [`max_requests`](https://docs.gunicorn.org/en/stable/settings.html#max-requests) under `--run_gunicorn`. Configure it via CLI flag or environment variable:
 
 ```shell
 # CLI
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--max_requests_before_restart", "10000"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "1", "--max_requests_before_restart", "10000"]
 
 # or ENV (for deployment manifests / containers)
 export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
-> **Tip:** When using `--max_requests_before_restart`, the `--run_gunicorn` flag is more stable and mature as it uses Gunicorn's battle-tested worker recycling mechanism instead of Uvicorn's implementation.
+:::tip
+
+When you run **multiple workers in one container** and rely on `--max_requests_before_restart`, prefer `--run_gunicorn`. Gunicorn's [`max_requests`](https://docs.gunicorn.org/en/stable/settings.html#max-requests) recycling is more mature than Uvicorn's, and its [arbiter](https://docs.gunicorn.org/en/stable/design.html) restarts workers one at a time so the pod keeps serving traffic while a worker is replaced.
+
+:::
 
 ```shell
-# Use Gunicorn for more stable worker recycling
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--run_gunicorn", "--max_requests_before_restart", "10000"]
+# Multiple workers in one container, with Gunicorn-managed recycling
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "4", "--run_gunicorn", "--max_requests_before_restart", "10000"]
+```
+
+### 3c. Keep restarts hitless
+
+A restart is "hitless" when in-flight requests finish before the process exits, so no client sees a dropped connection. Two cases matter in production:
+
+**Worker recycling (from `--max_requests_before_restart`).** Both servers stop accepting new connections on the recycled worker and let outstanding requests drain before it exits, then a replacement worker starts. Gunicorn additionally guarantees in-flight requests up to its [`graceful_timeout`](https://docs.gunicorn.org/en/stable/settings.html#graceful-timeout) (30s by default) on [`SIGTERM`](https://docs.gunicorn.org/en/stable/signals.html). With one worker per pod, recycling briefly reduces that pod's capacity, which is why we recommend scaling horizontally so the load balancer can route around it.
+
+**Rolling deploys and pod restarts (Kubernetes).** Make restarts hitless at the orchestration layer rather than relying on the server alone:
+
+- Use a [`RollingUpdate`](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-update-deployment) strategy (the Deployment default) so new pods become Ready before old pods are terminated.
+- Keep a [readiness probe](https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/) on `/health/readiness` so Kubernetes only sends traffic to pods that can serve it, and stops routing to a pod as soon as termination begins.
+- Set [`terminationGracePeriodSeconds`](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination) to comfortably exceed your longest expected request (LiteLLM's request timeout defaults to 600s; see [Section 1](#1-use-this-configyaml)). On termination Kubernetes sends `SIGTERM`, and both Uvicorn and Gunicorn shut down [gracefully](https://www.uvicorn.org/deployment/) by draining in-flight requests before exiting.
+- Optionally add a small [`preStop` hook](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/#container-hooks) (for example `sleep 5`) to give the load balancer time to deregister the pod before the server begins shutting down, eliminating the brief window where traffic can still arrive at a terminating pod.
+
+```yaml title="Kubernetes Deployment snippet for hitless rolling restarts"
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never drop below desired replica count
+      maxSurge: 1         # add one new pod at a time
+  template:
+    spec:
+      terminationGracePeriodSeconds: 620   # > your longest request (request_timeout: 600)
+      containers:
+        - name: litellm
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
 ```
 
 
