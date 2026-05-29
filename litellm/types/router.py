@@ -91,6 +91,11 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     routing_groups: Optional[List[RoutingGroup]] = None
+    # Global retry policy (per-exception-type retry counts). Persisted as a
+    # plain dict so this schema does not need to import the typed
+    # ``RetryPolicy`` model; ``Router.update_settings`` coerces the dict to
+    # ``RetryPolicy`` before storing it on the router instance.
+    retry_policy: Optional[dict] = None
     model_group_retry_policy: Optional[dict] = None
     model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
