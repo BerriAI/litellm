@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DailyData } from "../types";
+import { mergeDailyResults } from "../utils/mergeDailyResults";
 
 export interface PaginationProgress {
   currentPage: number;
@@ -164,7 +165,10 @@ export function usePaginatedDailyActivity({
 
         if (isStale()) return;
 
-        setData(firstPage);
+        setData({
+          ...firstPage,
+          results: mergeDailyResults(firstPage.results),
+        });
 
         const totalPages = firstPage.metadata?.total_pages || 1;
 
@@ -179,7 +183,7 @@ export function usePaginatedDailyActivity({
         setLoading(false);
         setIsFetchingMore(true);
 
-        let accumulatedResults = [...firstPage.results];
+        let accumulatedResults: DailyData[] = mergeDailyResults(firstPage.results);
         let accumulatedMetadata = { ...firstPage.metadata };
 
         for (let page = 2; page <= totalPages; page++) {
@@ -195,7 +199,7 @@ export function usePaginatedDailyActivity({
 
           if (isStale()) return;
 
-          accumulatedResults = [...accumulatedResults, ...pageData.results];
+          accumulatedResults = mergeDailyResults([...accumulatedResults, ...pageData.results]);
           accumulatedMetadata = sumMetadata(
             accumulatedMetadata,
             pageData.metadata,
