@@ -959,6 +959,14 @@ class ResponseAPILoggingUtils:
                 image_tokens=getattr(output_tokens_details, "image_tokens", None),
                 text_tokens=getattr(output_tokens_details, "text_tokens", None),
             )
+        elif prompt_tokens_details is not None:
+            # Some providers (e.g. Azure non-reasoning Responses API) omit
+            # output_tokens_details even when input_tokens_details is populated.
+            # Default to reasoning_tokens=0 so downstream logging / cost callbacks
+            # receive a symmetric Usage object instead of completion_tokens_details=None.
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+            )
 
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
