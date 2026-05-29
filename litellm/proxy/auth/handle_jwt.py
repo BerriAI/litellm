@@ -1158,6 +1158,18 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
+                        if (
+                            is_allowed
+                            and RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route
+                            )
+                        ):
+                            is_allowed = RouteChecks.check_passthrough_route_access(
+                                route=route,
+                                user_api_key_dict=UserAPIKeyAuth(
+                                    team_metadata=team_object.metadata or {}
+                                ),
+                            )
                         verbose_proxy_logger.debug(
                             f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
