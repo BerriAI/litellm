@@ -251,11 +251,14 @@ def test_reasoning_effort_in_supported_params():
         "claude-sonnet-4-6",
         "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
         "vertex_ai/claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "bedrock/invoke/us.anthropic.claude-opus-4-6",
+        "vertex_ai/claude-opus-4-6",
     ],
 )
 def test_legacy_thinking_high_budget_clamps_to_high_when_xhigh_unsupported(model):
-    """Claude Code sends ``thinking.budget_tokens=31999``; Sonnet 4.6 has no
-    ``xhigh`` tier, so the translator must emit ``high`` rather than the
+    """Claude Code sends ``thinking.budget_tokens=31999``; Sonnet 4.6 and Opus 4.6
+    have no ``xhigh`` tier, so the translator must emit ``high`` rather than the
     provider-invalid ``xhigh`` (regression for issue #29282)."""
     config = AnthropicMessagesConfig()
     optional_params = {
