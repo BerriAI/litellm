@@ -230,6 +230,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
         """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
         if not AnthropicModelInfo._is_adaptive_thinking_model(model):
             return
         thinking = optional_params.get("thinking")
@@ -237,7 +239,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         budget = int(thinking.get("budget_tokens") or 0)
-        if budget >= 24000:
+        if budget >= 24000 and AnthropicConfig._supports_effort_level(model, "xhigh"):
             effort = "xhigh"
         elif budget >= 10000:
             effort = "high"
