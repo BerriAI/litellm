@@ -1613,6 +1613,53 @@ def _create_oauth2_server(
     )
 
 
+def test_server_scoped_openid_configuration_matches_oauth_metadata_route():
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            router,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    try:
+        oidc_response = client.get("/test_oauth/.well-known/openid-configuration")
+        oauth_response = client.get(
+            "/.well-known/oauth-authorization-server/test_oauth"
+        )
+
+        assert oidc_response.status_code == 200
+        assert oauth_response.status_code == 200
+        assert oidc_response.json() == oauth_response.json()
+        assert (
+            oidc_response.json()["authorization_endpoint"]
+            == "http://testserver/test_oauth/authorize"
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_mcp_discoverable_loads_for_server_scoped_openid_configuration():
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    feature = next(feat for feat in LAZY_FEATURES if feat.name == "mcp_discoverable")
+
+    assert "/.well-known/openid-configuration" in feature.path_suffixes
+
+
 @pytest.mark.asyncio
 async def test_authorize_root_resolves_single_oauth2_server():
     """When /authorize is hit without server name and exactly 1 OAuth2 server exists, resolve it."""

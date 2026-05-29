@@ -988,9 +988,10 @@ async def oauth_authorization_server_mcp(
 
 
 # Alias for standard OpenID discovery
+@router.get("/{mcp_server_name}/.well-known/openid-configuration")
 @router.get("/.well-known/openid-configuration")
-async def openid_configuration(request: Request):
-    response = await oauth_authorization_server_mcp(request)
+async def openid_configuration(request: Request, mcp_server_name: Optional[str] = None):
+    response = await oauth_authorization_server_mcp(request, mcp_server_name)
 
     # If MCPJWTSigner is active, augment the discovery doc with JWKS fields so
     # MCP servers and gateways (e.g. AWS Bedrock AgentCore Gateway) can resolve
