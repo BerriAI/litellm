@@ -194,8 +194,11 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     elif alias:
         alias = normalize_server_name(alias)
 
-    # Update the payload with normalized alias
-    if hasattr(payload, "alias"):
+    # Update the payload with normalized alias ONLY when it actually changed.
+    # Blind assignment marks ``alias`` as set on the Pydantic model, which
+    # causes ``model_dump(exclude_unset=True)`` to include ``alias=None`` and
+    # silently clear the column on a partial PUT (LIT-3423).
+    if hasattr(payload, "alias") and getattr(payload, "alias", None) != alias:
         payload.alias = alias
 
 
