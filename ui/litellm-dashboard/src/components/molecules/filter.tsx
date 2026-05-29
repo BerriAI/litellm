@@ -1,7 +1,7 @@
 import { FilterIcon } from "@heroicons/react/outline";
 import { Button, Input, Select } from "antd";
 import debounce from "lodash/debounce";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 export interface FilterOptionCustomComponentProps {
   value?: string;
@@ -30,6 +30,25 @@ interface FilterComponentProps {
   buttonLabel?: string;
   onResetFilters: () => void;
 }
+
+// Whitelist of filter names that have an established visual order across the
+// app (view_logs, VirtualKeysTable, TeamVirtualKeysTable, FilterTeamDropdown).
+// Caller-supplied options whose name/label is NOT on this list are still rendered,
+// appended in input order (fix for LIT-3151). Module-scoped so the array is
+// allocated once at module load, not on every render.
+const PRIORITY_FILTER_ORDER: readonly string[] = [
+  "Team ID",
+  "Status",
+  "Organization ID",
+  "Key Alias",
+  "User ID",
+  "End User",
+  "Error Code",
+  "Error Message",
+  "Key Hash",
+  "Model",
+  "Public model / search tool",
+];
 
 const FilterComponent: React.FC<FilterComponentProps> = ({
   options,
@@ -129,20 +148,32 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     }
   };
 
-  // Define the order of filters
-  const orderedFilters = [
-    "Team ID",
-    "Status",
-    "Organization ID",
-    "Key Alias",
-    "User ID",
-    "End User",
-    "Error Code",
-    "Error Message",
-    "Key Hash",
-    "Model",
-    "Public model / search tool",
-  ];
+  // Render whitelisted filter names first (preserves prior ordering for view_logs,
+  // VirtualKeysTable, TeamVirtualKeysTable, etc.), then any remaining options the
+  // caller passed (e.g. "Input Policy" / "Output Policy" / "Team Name" / "Key Name"
+  // on the Tool Policies page) in input order. Before this change, options whose
+  // name/label was not in PRIORITY_FILTER_ORDER were silently dropped, so the Filters
+  // panel on Tool Policies opened to a blank/empty area (LIT-3151).
+  const orderedOptions: FilterOption[] = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: FilterOption[] = [];
+    for (const filterName of PRIORITY_FILTER_ORDER) {
+      const option = options.find(
+        (opt) => opt.label === filterName || opt.name === filterName,
+      );
+      if (option && !seen.has(option.name)) {
+        ordered.push(option);
+        seen.add(option.name);
+      }
+    }
+    for (const option of options) {
+      if (!seen.has(option.name)) {
+        ordered.push(option);
+        seen.add(option.name);
+      }
+    }
+    return ordered;
+  }, [options]);
 
   return (
     <div className="w-full">
@@ -159,10 +190,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
-          {orderedFilters.map((filterName) => {
-            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
-            if (!option) return null;
-
+          {orderedOptions.map((option) => {
             return (
               <div key={option.name} className="flex flex-col gap-2">
                 <label className="text-sm text-gray-600">{option.label || option.name}</label>
