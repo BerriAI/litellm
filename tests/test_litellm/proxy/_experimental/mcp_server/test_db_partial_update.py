@@ -208,3 +208,24 @@ class TestPartialUpdatePreservesOmittedFields:
             "validate_and_normalize_mcp_server_payload should not assign "
             "alias when caller omitted both alias and server_name (LIT-3423)."
         )
+
+
+    def test_validate_and_normalize_assigns_alias_when_normalization_changes_it(self):
+        """When the caller provides an alias with spaces, validate_and_normalize
+        must reassign payload.alias to the normalized form (covers the True
+        branch of the new equality guard added for LIT-3423)."""
+        from litellm.proxy._experimental.mcp_server.utils import (
+            validate_and_normalize_mcp_server_payload,
+        )
+        from litellm.proxy._types import NewMCPServerRequest
+
+        payload = NewMCPServerRequest(
+            server_name="srv",
+            alias="My Server",  # space normalizes to underscore
+            url="https://example.com/mcp",
+        )
+        validate_and_normalize_mcp_server_payload(payload)
+        assert payload.alias == "My_Server"
+        # alias should be marked as set (we DID change it).
+        assert "alias" in payload.model_fields_set
+
