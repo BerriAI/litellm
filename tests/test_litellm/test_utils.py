@@ -983,6 +983,55 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         raise AssertionError(error_message)
 
 
+def test_input_cost_per_token_cache_hit_has_canonical_field():
+    """
+    Guard against the legacy `input_cost_per_token_cache_hit` field being set
+    without the canonical `cache_read_input_token_cost` field.
+
+    The cost calculator only reads `cache_read_input_token_cost` for cached
+    prompt tokens. When a model entry only declares
+    `input_cost_per_token_cache_hit`, cached tokens are silently billed at $0.
+    See Issue #28854.
+    """
+    json_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "model_prices_and_context_window.json",
+    )
+    with open(json_path, "r") as f:
+        models = json.load(f)
+
+    violations = []
+    for model_name, model_info in models.items():
+        if not isinstance(model_info, dict):
+            continue
+        if model_name == "sample_spec":
+            continue
+        legacy = model_info.get("input_cost_per_token_cache_hit")
+        if legacy is None:
+            continue
+        canonical = model_info.get("cache_read_input_token_cost")
+        if canonical is None:
+            violations.append(
+                f"{model_name}: declares `input_cost_per_token_cache_hit`={legacy} "
+                f"but is missing the canonical `cache_read_input_token_cost`. "
+                f"Cached prompt tokens for this model are silently priced at $0."
+            )
+        elif canonical != legacy:
+            violations.append(
+                f"{model_name}: `cache_read_input_token_cost`={canonical} "
+                f"disagrees with legacy `input_cost_per_token_cache_hit`={legacy}."
+            )
+
+    if violations:
+        raise AssertionError(
+            "Models declaring legacy `input_cost_per_token_cache_hit` must also "
+            "declare matching `cache_read_input_token_cost` (the field actually "
+            "consumed by the cost calculator):\n  - " + "\n  - ".join(violations)
+        )
+
+
 def test_max_tokens_consistency():
     """
     Test that max_tokens == max_output_tokens for all models.
