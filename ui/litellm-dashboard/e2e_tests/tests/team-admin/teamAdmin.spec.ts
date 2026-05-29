@@ -60,7 +60,7 @@ test.describe("Team Admin", () => {
 
     await modal.getByRole("button", { name: /Add Member/i }).click();
 
-    await expect(page.getByText(/member.*added|success/i).first())
+    await expect(page.getByText("Team member added successfully").first())
       .toBeVisible({ timeout: 10_000 });
   });
 
@@ -72,17 +72,17 @@ test.describe("Team Admin", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    // Find the row for the seeded removable member and click its delete icon.
-    const row = page.locator("tr", { hasText: "removable@test.local" }).first();
+    // Seeded members appear in the roster by user_id (members_with_roles has no
+    // email), so match the row on the user_id rather than the email.
+    const row = page.locator("tr", { hasText: "e2e-removable-member" }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
-    // The trash icon sits in the Actions column at the end of the row.
-    await row.locator("svg, img").last().click();
+    await row.getByTestId("delete-member").click();
 
     const modal = page.locator(".ant-modal:visible");
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /^Delete$/ }).click();
 
-    await expect(page.getByText(/removed|deleted|success/i).first())
+    await expect(page.getByText("Team member removed successfully").first())
       .toBeVisible({ timeout: 10_000 });
   });
 
