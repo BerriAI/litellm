@@ -678,6 +678,7 @@ async def _fetch_provider_scoped_list_rows(
     scan_where = dict(where)
     id_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
     max_scans = 20
+    last_batch_full = False  # True when the last DB page was full-sized
 
     for _ in range(max_scans):
         batch = await _fetch_list_rows(
@@ -691,9 +692,13 @@ async def _fetch_provider_scoped_list_rows(
                 provider,
                 resource_kind,
             )
+            last_batch_full = False
             break
         if not batch:
+            last_batch_full = False
             break
+
+        last_batch_full = len(batch) >= fetch_limit
 
         for row in batch:
             if _managed_id_matches_provider(getattr(row, id_field), provider):
@@ -702,7 +707,7 @@ async def _fetch_provider_scoped_list_rows(
         if len(matched) >= fetch_limit:
             break
 
-        if len(batch) < fetch_limit:
+        if not last_batch_full:
             break
 
         cursor_row = batch[-1]
@@ -718,7 +723,13 @@ async def _fetch_provider_scoped_list_rows(
             scan_where["created_at"] = created_at_bound
 
     effective_limit = min(raw_limit, 100)
-    has_more = len(matched) > effective_limit
+    # has_more is True when:
+    # 1. We accumulated more rows than the requested limit (normal path), OR
+    # 2. The scan cap was hit while the last DB page was still full-sized —
+    #    meaning unscanned rows almost certainly remain.  Without this,
+    #    high-mixed-provider pools would return has_more=False on a truncated page.
+    scan_cap_hit = len(matched) < fetch_limit and last_batch_full
+    has_more = len(matched) > effective_limit or scan_cap_hit
     page = matched[:effective_limit]
     if fetch_order == "asc":
         page = list(reversed(page))

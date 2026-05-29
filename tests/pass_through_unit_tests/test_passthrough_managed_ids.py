@@ -913,6 +913,54 @@ class TestListPassthroughIdsFromDb:
         assert result["data"] == []
 
     @pytest.mark.asyncio
+    async def test_list_has_more_true_when_scan_cap_hit_with_full_batch(self):
+        """
+        When the 20-iteration scan cap is exhausted and the last DB batch was
+        full-sized (indicating more rows exist), has_more must be True even if
+        we haven't accumulated fetch_limit matched rows yet.  Without this fix,
+        a high-mixed-provider pool returns has_more=False on a truncated page.
+        """
+        import datetime
+        from unittest.mock import AsyncMock
+
+        # Simulate a pool of rows where every DB page is full (fetch_limit = 21)
+        # but ALL rows belong to "azure" — so an "openai" scan never matches any.
+        # After max_scans the last batch was still full, so has_more must be True.
+        fetch_limit = 21  # raw_limit=20 → fetch_limit=21
+        azure_rows = [
+            _fake_file_row(new_managed_id("azure", f"file-{i}"))
+            for i in range(fetch_limit)
+        ]
+        # Shift created_at so repeated calls return "different" pages
+        for i, row in enumerate(azure_rows):
+            row.created_at = datetime.datetime(
+                2025, 1, 1, tzinfo=datetime.timezone.utc
+            ) - datetime.timedelta(seconds=i)
+
+        call_count = 0
+
+        async def always_full_azure_pages(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return azure_rows  # always returns a full page of azure rows
+
+        pc = _prisma_with_list()
+        pc.db.litellm_managedfiletable.find_many = always_full_azure_pages
+
+        result = await list_passthrough_ids_from_db(
+            provider="openai",  # asking for openai but DB only has azure rows
+            route="/openai/v1/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+            query_params={"limit": "20"},
+        )
+
+        assert result is not None
+        # No openai-matched rows, but scan cap was hit with a full last batch
+        assert result["has_more"] is True
+        assert result["data"] == []
+
+    @pytest.mark.asyncio
     async def test_list_files_filters_by_provider(self):
         openai_row = _fake_file_row(new_managed_id("openai", "file-openai"))
         azure_row = _fake_file_row(new_managed_id("azure", "file-azure"))
