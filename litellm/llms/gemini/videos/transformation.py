@@ -55,7 +55,7 @@ def _convert_image_to_gemini_format(image_file) -> Dict[str, str]:
 
 
 def _usage_video_resolution_from_parameters(
-    parameters: Dict[str, Any]
+    parameters: Dict[str, Any],
 ) -> Optional[str]:
     """Normalize Veo ``parameters.resolution`` for usage and cost tracking."""
     res = parameters.get("resolution")
@@ -581,12 +581,23 @@ class GeminiVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video get character is not supported for Gemini")
 
     def transform_video_edit_request(
-        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+        self,
+        prompt,
+        video_id,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+        prefetched_source_data=None,
     ):
         raise NotImplementedError("video edit is not supported for Gemini")
 
     def transform_video_edit_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
+        self,
+        raw_response,
+        logging_obj,
+        custom_llm_provider=None,
+        request_data=None,
     ):
         raise NotImplementedError("video edit is not supported for Gemini")
 

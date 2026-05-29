@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, Optional
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -793,6 +794,25 @@ class TestCallToolRestAPI:
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             fake_add_litellm_data_to_request,
+            raising=False,
+        )
+
+        mock_server = MagicMock()
+        mock_server.server_id = "server-1"
+
+        def fake_get_mcp_server_by_id(server_id):
+            return mock_server if server_id == "server-1" else None
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            fake_get_mcp_server_by_id,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda *args, **kwargs: None,
             raising=False,
         )
 

@@ -305,7 +305,7 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _merge_openapi_tool_request_headers(
-    static_headers: Dict[str, str]
+    static_headers: Dict[str, str],
 ) -> Dict[str, str]:
     """Merge static closure headers with per-request ContextVar overrides.
 

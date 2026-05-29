@@ -4,8 +4,10 @@ Base Vertex, Google AI Studio LLM Class
 Handles Authentication and generating request urls for Vertex AI and Google AI Studio
 """
 
+import asyncio
 import json
 import os
+import threading
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import litellm
@@ -30,6 +32,7 @@ GOOGLE_IMPORT_ERROR_MESSAGE = (
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
+    from google.auth.credentials import TokenState
 else:
     GoogleCredentialsObject = Any
 
@@ -42,10 +45,28 @@ class VertexBase:
         self._credentials: Optional[GoogleCredentialsObject] = None
         self._credentials_project_mapping: Dict[
             Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            Tuple[GoogleCredentialsObject, str],
+            Tuple[GoogleCredentialsObject, Optional[str]],
         ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
+        # Per-credential-key asyncio.Lock for single-flight async refresh.
+        # Prevents thundering herd when token expires under high concurrency.
+        # Uses a regular dict (not WeakValueDictionary) so the lock identity is
+        # stable across concurrent callers — a weak reference can be GC'd
+        # between two coroutines arriving at the lock, breaking single-flight.
+        # An explicit refcount tracks the number of coroutines currently using
+        # each lock; the entry is pruned when the count reaches zero, so the
+        # dict stays bounded even in long-running high-cardinality deployments
+        # without depending on any private asyncio internals.
+        self._async_refresh_locks: Dict[tuple, asyncio.Lock] = {}
+        self._async_refresh_lock_refcounts: Dict[tuple, int] = {}
+        # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
+        self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
+        # Protects the sync get_access_token refresh path.
+        # Use RLock so that the reauthentication retry path (which calls
+        # back into get_access_token while still holding the lock) can
+        # re-acquire it without deadlocking the current thread.
+        self._sync_refresh_lock = threading.RLock()
 
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
         import litellm
@@ -77,7 +98,9 @@ class VertexBase:
         return vertex_region or "us-central1"
 
     def load_auth(
-        self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
     ) -> Tuple[Any, str]:
         if credentials is not None:
             if isinstance(credentials, str):
@@ -343,7 +366,241 @@ class VertexBase:
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
-        credentials.refresh(Request())
+        # Serialize all refreshes on this VertexBase across threads.
+        # ``credentials.refresh()`` is not safe to call concurrently on the
+        # same credentials object, and this method is invoked from three
+        # places that can run on different threads:
+        #   - sync ``get_access_token`` (already holds ``_sync_refresh_lock``)
+        #   - the async slow path (via ``asyncify`` in a worker thread)
+        #   - the background proactive refresh task (via ``asyncify``)
+        # ``_sync_refresh_lock`` is an ``RLock`` so reentrant acquisition
+        # from the sync path is safe.
+        with self._sync_refresh_lock:
+            credentials.refresh(Request())
+
+    def _acquire_async_refresh_lock(self, credential_cache_key: tuple) -> asyncio.Lock:
+        """Increment the refcount and return the lock for ``credential_cache_key``.
+
+        Every call must be paired with ``_release_async_refresh_lock`` once the
+        caller is done with the lock so the entry can be pruned when no other
+        coroutine is holding or waiting on it.
+        """
+        lock = self._async_refresh_locks.setdefault(
+            credential_cache_key, asyncio.Lock()
+        )
+        self._async_refresh_lock_refcounts[credential_cache_key] = (
+            self._async_refresh_lock_refcounts.get(credential_cache_key, 0) + 1
+        )
+        return lock
+
+    def _release_async_refresh_lock(
+        self, credential_cache_key: tuple, lock: asyncio.Lock
+    ) -> None:
+        """Decrement the refcount and drop the lock entry when it reaches zero.
+
+        Must be called only after the caller has released ``lock`` (i.e. once
+        the surrounding ``async with`` has exited). asyncio is cooperative, so
+        the decrement-then-pop sequence below runs atomically with respect to
+        other coroutines.
+        """
+        remaining = self._async_refresh_lock_refcounts.get(credential_cache_key, 0) - 1
+        if remaining > 0:
+            self._async_refresh_lock_refcounts[credential_cache_key] = remaining
+            return
+        self._async_refresh_lock_refcounts.pop(credential_cache_key, None)
+        if self._async_refresh_locks.get(credential_cache_key) is lock:
+            self._async_refresh_locks.pop(credential_cache_key, None)
+
+    def _try_get_cached_token(
+        self,
+        credential_cache_key: tuple,
+        project_id: Optional[str],
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Look up cached credentials and return (token, project_id) if the token
+        is FRESH. Returns None if not cached or not fresh.
+        """
+        from google.auth.credentials import TokenState
+
+        creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
+        if (
+            creds is not None
+            and self._get_token_state(creds) == TokenState.FRESH
+            and creds.token is not None
+            and isinstance(creds.token, str)
+        ):
+            resolved_project = project_id or cached_project_id
+            if resolved_project:
+                return creds.token, resolved_project
+        return None
+
+    def _try_get_usable_cached_token(
+        self,
+        credential_cache_key: tuple,
+        project_id: Optional[str],
+    ) -> Optional[Tuple[str, str, "TokenState", Any, Optional[str]]]:
+        """
+        Look up cached credentials and return usable token info for FRESH or
+        STALE tokens (both are still valid for outbound requests). STALE
+        tokens are returned along with their state and the underlying
+        credentials object so the caller can schedule a background refresh
+        without holding the per-key async lock.
+        """
+        from google.auth.credentials import TokenState
+
+        creds, cached_project_id = self._unpack_cached_credentials(credential_cache_key)
+        if creds is None:
+            return None
+        token_state = self._get_token_state(creds)
+        if token_state not in (TokenState.FRESH, TokenState.STALE):
+            return None
+        if creds.token is None or not isinstance(creds.token, str):
+            return None
+        resolved_project = project_id or cached_project_id
+        if not resolved_project:
+            return None
+        return creds.token, resolved_project, token_state, creds, cached_project_id
+
+    def _unpack_cached_credentials(
+        self, credential_cache_key: tuple
+    ) -> Tuple[Any, Optional[str]]:
+        """
+        Return (credentials, project_id) from the cache, or (None, None) if
+        not cached. Handles both tuple and legacy cache formats.
+        """
+        if credential_cache_key not in self._credentials_project_mapping:
+            return None, None
+        cached_entry = self._credentials_project_mapping[credential_cache_key]
+        if isinstance(cached_entry, tuple):
+            return cached_entry
+        return cached_entry, cached_entry.quota_project_id or getattr(
+            cached_entry, "project_id", None
+        )
+
+    def _get_token_state(self, credentials: Any) -> "TokenState":
+        """
+        Return the token state using google-auth's TokenState enum.
+
+        Falls back to expired/valid checks if token_state is unavailable
+        (e.g. older google-auth versions or mock objects in tests).
+        """
+        from google.auth.credentials import TokenState as _TokenState
+
+        token_state = getattr(credentials, "token_state", None)
+        if isinstance(token_state, _TokenState):
+            return token_state
+        # Fallback for credentials without a real token_state (e.g. mocks)
+        if getattr(credentials, "expired", True):
+            return _TokenState.INVALID
+        if getattr(credentials, "valid", False):
+            return _TokenState.FRESH
+        return _TokenState.INVALID
+
+    async def _load_and_cache_credentials(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        credential_cache_key: tuple,
+    ) -> Tuple[Any, Optional[str]]:
+        """Load credentials via load_auth (in thread) and cache the result."""
+        try:
+            _credentials, credential_project_id = await asyncify(self.load_auth)(
+                credentials=credentials,
+                project_id=project_id,
+            )
+        except Exception as e:
+            verbose_logger.exception("Failed to load vertex credentials: %s", str(e))
+            raise
+        if _credentials is None:
+            raise ValueError("Could not resolve credentials")
+        self._credentials_project_mapping[credential_cache_key] = (
+            _credentials,
+            credential_project_id,
+        )
+        return _credentials, credential_project_id
+
+    async def _background_refresh_credentials(
+        self,
+        credentials: Any,
+        credential_cache_key: tuple,
+        credential_project_id: Optional[str],
+    ) -> None:
+        """
+        Refresh credentials in the background without blocking the calling request.
+
+        Called when the token is still valid but nearing expiry (proactive refresh).
+        Errors are logged but not raised — the current token is still usable.
+        """
+        try:
+            verbose_logger.debug("Background proactive credential refresh")
+            await asyncify(self.refresh_auth)(credentials)
+            # Only update the cache if it still points at the credentials
+            # object we just refreshed. The per-key async lock is not held
+            # here, so a concurrent INVALID path may have already replaced
+            # this entry (e.g. via _handle_reauthentication_async, which
+            # creates a fresh credentials object). In that case our write
+            # would clobber the newer entry with a stale reference.
+            cached_creds, _ = self._unpack_cached_credentials(credential_cache_key)
+            if cached_creds is credentials:
+                self._credentials_project_mapping[credential_cache_key] = (
+                    credentials,
+                    credential_project_id,
+                )
+        except Exception:
+            verbose_logger.debug(
+                "Background credential refresh failed, will retry on next request",
+                exc_info=True,
+            )
+
+    async def _await_in_flight_background_refresh(
+        self, credential_cache_key: tuple
+    ) -> None:
+        """Wait for an in-flight background refresh to finish, if any.
+
+        google-auth's ``Credentials.refresh()`` is not safe to invoke
+        concurrently on the same credentials object. Coroutines that need a
+        blocking refresh must first drain any background refresh that was
+        scheduled while a previous STALE token was being served.
+        """
+        existing_task = self._background_refresh_tasks.get(credential_cache_key)
+        if existing_task is None or existing_task.done():
+            return
+        try:
+            await existing_task
+        except Exception:
+            # Background refresh failures are already logged inside
+            # _background_refresh_credentials; the caller will fall through
+            # to its own blocking refresh.
+            pass
+
+    def _schedule_background_refresh(
+        self,
+        credentials: Any,
+        credential_cache_key: tuple,
+        credential_project_id: Optional[str],
+    ) -> None:
+        """Kick off a single background refresh for ``credential_cache_key``.
+
+        Skips scheduling if a refresh is already in flight. The done-callback
+        guards against removing a newer task that has replaced this one in the
+        tracking dict (done_callbacks are scheduled via ``call_soon``).
+        """
+        existing = self._background_refresh_tasks.get(credential_cache_key)
+        if existing is not None and not existing.done():
+            return
+        self._background_refresh_tasks.pop(credential_cache_key, None)
+        task = asyncio.create_task(
+            self._background_refresh_credentials(
+                credentials, credential_cache_key, credential_project_id
+            )
+        )
+
+        def _drop_background_refresh_task(_fut: asyncio.Future[Any]) -> None:
+            if self._background_refresh_tasks.get(credential_cache_key) is _fut:
+                self._background_refresh_tasks.pop(credential_cache_key, None)
+
+        task.add_done_callback(_drop_background_refresh_task)
+        self._background_refresh_tasks[credential_cache_key] = task
 
     def _ensure_access_token(
         self,
@@ -563,6 +820,65 @@ class VertexBase:
             # Re-raise the original error for better context
             raise error
 
+    async def _handle_reauthentication_async(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        credential_cache_key: Tuple,
+        error: Exception,
+    ) -> Tuple[str, str]:
+        """
+        Async reauthentication retry that stays within the per-key async lock.
+        """
+        verbose_logger.debug(
+            f"Handling async reauthentication for project_id: {project_id}. "
+            f"Clearing cache and retrying once."
+        )
+
+        self._credentials_project_mapping.pop(credential_cache_key, None)
+
+        try:
+            _credentials, credential_project_id = (
+                await self._load_and_cache_credentials(
+                    credentials=credentials,
+                    project_id=project_id,
+                    credential_cache_key=credential_cache_key,
+                )
+            )
+            if project_id is None and isinstance(credential_project_id, str):
+                project_id = credential_project_id
+                cache_credentials = (
+                    json.dumps(credentials)
+                    if isinstance(credentials, dict)
+                    else credentials
+                )
+                resolved_cache_key = (cache_credentials, project_id)
+                # Always overwrite — any pre-existing entry at the resolved key
+                # references the OLD credentials object we just replaced, and
+                # leaving it would force the next request to do a redundant
+                # refresh/reauth before realizing the cached creds are stale.
+                self._credentials_project_mapping[resolved_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
+
+            if _credentials.token is None or not isinstance(_credentials.token, str):
+                raise ValueError(
+                    "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                        type(_credentials.token).__name__
+                    )
+                )
+            if project_id is None:
+                raise ValueError("Could not resolve project_id")
+
+            return _credentials.token, project_id
+        except Exception as retry_error:
+            verbose_logger.error(
+                f"Async reauthentication retry failed for project_id: {project_id}. "
+                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+            )
+            raise error
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -646,7 +962,7 @@ class VertexBase:
             )
 
         ## VALIDATE CREDENTIALS
-        verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
+        verbose_logger.debug("Validating credentials")
         if (
             project_id is None
             and credential_project_id is not None
@@ -666,26 +982,27 @@ class VertexBase:
             raise ValueError("Credentials are None after loading")
 
         if _credentials.expired:
-            try:
-                verbose_logger.debug(
-                    f"Credentials expired, refreshing for project_id: {project_id}"
-                )
-                self.refresh_auth(_credentials)
-                self._credentials_project_mapping[credential_cache_key] = (
-                    _credentials,
-                    credential_project_id,
-                )
-            except Exception as e:
-                # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
-                # in this case, we should try to reload the credentials by clearing the cache and retrying
-                if "Reauthentication is needed" in str(e) and not _retry_reauth:
-                    return self._handle_reauthentication(
-                        credentials=credentials,
-                        project_id=project_id,
-                        credential_cache_key=credential_cache_key,
-                        error=e,
-                    )
-                raise e
+            with self._sync_refresh_lock:
+                # Double-check after acquiring lock
+                if _credentials.expired:
+                    try:
+                        verbose_logger.debug("Credentials expired, refreshing")
+                        self.refresh_auth(_credentials)
+                        self._credentials_project_mapping[credential_cache_key] = (
+                            _credentials,
+                            credential_project_id,
+                        )
+                    except Exception as e:
+                        # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
+                        # in this case, we should try to reload the credentials by clearing the cache and retrying
+                        if "Reauthentication is needed" in str(e) and not _retry_reauth:
+                            return self._handle_reauthentication(
+                                credentials=credentials,
+                                project_id=project_id,
+                                credential_cache_key=credential_cache_key,
+                                error=e,
+                            )
+                        raise e
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
@@ -699,6 +1016,149 @@ class VertexBase:
             raise ValueError("Could not resolve project_id")
 
         return _credentials.token, project_id
+
+    async def get_access_token_async(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+    ) -> Tuple[str, str]:
+        """
+        Async version of get_access_token with single-flight refresh coordination.
+
+        Prevents thundering herd: when credentials expire under high concurrency,
+        only one coroutine refreshes while others wait on the lock. Uses native
+        async refresh for service_account and authorized_user credentials.
+        """
+        from google.auth.credentials import TokenState
+
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        credential_cache_key = (cache_credentials, project_id)
+
+        # === FAST PATH (no lock) ===
+        # If credentials are FRESH or STALE, return immediately without
+        # touching the per-key async lock. STALE tokens are still usable;
+        # we kick off a deduplicated background refresh so subsequent
+        # requests get a fresh token, but we must not serialize concurrent
+        # callers on the lock just to schedule that refresh.
+        usable = self._try_get_usable_cached_token(credential_cache_key, project_id)
+        if usable is not None:
+            cached_token, resolved_project, token_state, creds, cached_project_id = (
+                usable
+            )
+            if token_state == TokenState.STALE:
+                self._schedule_background_refresh(
+                    creds, credential_cache_key, cached_project_id
+                )
+            return cached_token, resolved_project
+
+        # === SLOW PATH (per-key lock) ===
+        lock = self._acquire_async_refresh_lock(credential_cache_key)
+        try:
+            async with lock:
+                # Double-check after acquiring lock — another coroutine may have refreshed.
+                cached = self._try_get_cached_token(credential_cache_key, project_id)
+                if cached is not None:
+                    return cached
+
+                _credentials, credential_project_id = self._unpack_cached_credentials(
+                    credential_cache_key
+                )
+
+                # Load credentials if not cached
+                if _credentials is None:
+                    _credentials, credential_project_id = (
+                        await self._load_and_cache_credentials(
+                            credentials, project_id, credential_cache_key
+                        )
+                    )
+
+                # Resolve project_id from credentials if not provided
+                if project_id is None and isinstance(credential_project_id, str):
+                    project_id = credential_project_id
+                    resolved_cache_key = (cache_credentials, project_id)
+                    # Always overwrite — a pre-existing entry at the resolved
+                    # key may reference stale credentials (e.g. from before a
+                    # reauth that only repopulated the unresolved key), which
+                    # would force the next request through an unnecessary
+                    # refresh/reauth cycle.
+                    self._credentials_project_mapping[resolved_cache_key] = (
+                        _credentials,
+                        credential_project_id,
+                    )
+
+                # Use google-auth's token_state to decide refresh strategy:
+                # - STALE: token is usable but within REFRESH_THRESHOLD (3:45) of
+                #   expiry — return it immediately and refresh in the background.
+                # - INVALID: token is expired or missing — must block on refresh.
+                token_state = self._get_token_state(_credentials)
+
+                if token_state == TokenState.STALE:
+                    if project_id is None:
+                        raise ValueError("Could not resolve project_id")
+                    current_token = _credentials.token
+                    if current_token is None or not isinstance(current_token, str):
+                        # Token is malformed despite STALE state — block on a full
+                        # refresh using the same path as INVALID credentials.
+                        token_state = TokenState.INVALID
+                    else:
+                        self._schedule_background_refresh(
+                            _credentials,
+                            credential_cache_key,
+                            credential_project_id,
+                        )
+                        return current_token, project_id
+
+                if token_state == TokenState.INVALID:
+                    # Drain any in-flight background refresh before invoking
+                    # refresh_auth ourselves; google-auth's
+                    # Credentials.refresh() is not safe to call concurrently
+                    # on the same credentials object, and the background task
+                    # runs outside this lock.
+                    await self._await_in_flight_background_refresh(credential_cache_key)
+                    cached = self._try_get_cached_token(
+                        credential_cache_key, project_id
+                    )
+                    if cached is not None:
+                        return cached
+
+                    # Token is expired or missing — must block until refresh completes.
+                    try:
+                        verbose_logger.debug("Credentials expired, refreshing")
+                        await asyncify(self.refresh_auth)(_credentials)
+                        self._credentials_project_mapping[credential_cache_key] = (
+                            _credentials,
+                            credential_project_id,
+                        )
+                    except Exception as e:
+                        if "Reauthentication is needed" in str(e):
+                            verbose_logger.debug(
+                                "Reauthentication needed, clearing cache and retrying"
+                            )
+                            return await self._handle_reauthentication_async(
+                                credentials=credentials,
+                                project_id=project_id,
+                                credential_cache_key=credential_cache_key,
+                                error=e,
+                            )
+                        raise
+
+                # Final validation
+                if _credentials.token is None or not isinstance(
+                    _credentials.token, str
+                ):
+                    raise ValueError(
+                        "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                            type(_credentials.token).__name__
+                        )
+                    )
+                if project_id is None:
+                    raise ValueError("Could not resolve project_id")
+
+                return _credentials.token, project_id
+        finally:
+            self._release_async_refresh_lock(credential_cache_key, lock)
 
     async def _ensure_access_token_async(
         self,
@@ -714,13 +1174,10 @@ class VertexBase:
         if custom_llm_provider == "gemini":
             return "", ""
         else:
-            try:
-                return await asyncify(self.get_access_token)(
-                    credentials=credentials,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                raise e
+            return await self.get_access_token_async(
+                credentials=credentials,
+                project_id=project_id,
+            )
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]

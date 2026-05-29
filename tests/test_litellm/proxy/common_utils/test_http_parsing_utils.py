@@ -16,6 +16,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _is_form_content_type,
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -853,3 +854,145 @@ class TestGetTagsFromRequestBodyStringCoerce:
 
         tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
         assert tags == ["x"]
+
+
+class TestIsFormContentType:
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "application/x-www-form-urlencoded",
+            "multipart/form-data",
+            "multipart/form-data; boundary=----WebKitFormBoundary",
+            "Application/X-WWW-Form-Urlencoded",
+            "  multipart/form-data  ",
+            "application/x-www-form-urlencoded; charset=utf-8",
+        ],
+    )
+    def test_form_types_match(self, content_type):
+        assert _is_form_content_type(content_type) is True
+
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "",
+            "application/json",
+            "application/json; charset=utf-8",
+            "application/form-json",
+            "multiform/anything",
+            "application/json; xform=1",
+            "application/xml-with-form-data-but-not-actually",
+            "text/plain",
+            "form",
+        ],
+    )
+    def test_non_form_types_rejected(self, content_type):
+        assert _is_form_content_type(content_type) is False
+
+
+class TestReadRequestBodyNonCanonicalContentType:
+    """A JSON body with a ``"form"``-substring Content-Type must parse as JSON."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content_type",
+        [
+            "application/form-json",
+            "application/json; xform=1",
+            "multiform/anything",
+        ],
+    )
+    async def test_json_body_with_formlike_content_type_parses_as_json(
+        self, content_type
+    ):
+        payload = {"user_config": {"model_list": []}, "model": "x"}
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
+        mock_request.form = AsyncMock(return_value={})
+        mock_request.headers = {"content-type": content_type}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == payload
+        mock_request.form.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_real_form_post_still_parsed_as_form(self):
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == {"k": "v"}
+        mock_request.form.assert_awaited_once()
+
+
+class TestReadRequestBodyFormParseFailure:
+    """
+    A failed ``request.form()`` parse (e.g. multipart with missing boundary)
+    must surface as a 400, not silently return ``{}`` — otherwise the
+    auth-time pre-read sees an empty body while a later raw-body re-read
+    sees the original payload, defeating every banned-param check.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised_exception",
+        [
+            ValueError("Missing boundary in multipart."),
+            AssertionError("malformed chunk"),
+            RuntimeError("form parser exploded"),
+        ],
+    )
+    async def test_form_parse_failure_raises_400(self, raised_exception):
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(side_effect=raised_exception)
+        mock_request.headers = {"content-type": "multipart/form-data"}
+        mock_request.scope = {}
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _read_request_body(mock_request)
+        assert str(exc_info.value.code) == "400"
+
+
+class TestGetRequestBody:
+    @pytest.mark.asyncio
+    async def test_json_with_charset_param_parses_as_json(self):
+        payload = {"k": "v"}
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
+        mock_request.headers = {"content-type": "application/json; charset=utf-8"}
+        mock_request.scope = {}
+
+        result = await get_request_body(mock_request)
+        assert result == payload
+
+    @pytest.mark.asyncio
+    async def test_form_post_routes_to_form_data(self):
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
+        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.scope = {}
+
+        result = await get_request_body(mock_request)
+        assert result == {"k": "v"}
+
+    @pytest.mark.asyncio
+    async def test_substring_match_no_longer_accepted(self):
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/form-json"}
+        mock_request.scope = {}
+
+        with pytest.raises(ValueError, match="Unsupported content type"):
+            await get_request_body(mock_request)
+
+    @pytest.mark.asyncio
+    async def test_non_post_returns_empty(self):
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        assert await get_request_body(mock_request) == {}

@@ -869,14 +869,18 @@ def test_different_roles_without_session_names_should_not_share_cache():
         ({}, {"verify": True}),
         (
             {"aws_region_name": "us-east-1"},
-            {"region_name": "us-east-1", "verify": True},
+            {"verify": True},
         ),
         (
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
-            {"endpoint_url": "https://sts.eu-west-1.amazonaws.com", "verify": True},
+            {
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+                "verify": True,
+            },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -926,6 +930,316 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
 
 
 @pytest.mark.parametrize(
+    "endpoint,expected_region",
+    [
+        ("https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        ("https://sts.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.cn-north-1.amazonaws.com.cn", "cn-north-1"),
+        (
+            "https://vpce-abc123.sts.eu-west-1.vpce.amazonaws.com",
+            "eu-west-1",
+        ),
+        ("https://sts.amazonaws.com", None),
+        ("https://invalid.example.com", None),
+    ],
+)
+def test_parse_sts_region_from_endpoint(endpoint, expected_region):
+    assert BaseAWSLLM._parse_sts_region_from_endpoint(endpoint) == expected_region
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,expected_region",
+    [
+        ({}, None, None),
+        ({"AWS_REGION": "us-east-1"}, None, "us-east-1"),
+        ({"AWS_DEFAULT_REGION": "ap-southeast-1"}, None, "ap-southeast-1"),
+        ({}, "https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            "eu-west-1",
+        ),
+        ({}, "https://sts.amazonaws.com", None),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            "eu-central-1",
+        ),
+    ],
+    ids=[
+        "no_env_no_endpoint",
+        "env_region",
+        "env_default_region",
+        "parsed_from_endpoint",
+        "parsed_endpoint_over_env",
+        "global_endpoint",
+        "vpce_endpoint",
+    ],
+)
+def test_resolve_sts_region(env, aws_sts_endpoint, expected_region):
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            BaseAWSLLM._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
+            == expected_region
+        )
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,ssl_verify,expected",
+    [
+        ({}, None, None, {"verify": True}),
+        (
+            {"AWS_REGION": "us-east-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "us-east-1"},
+        ),
+        (
+            {},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {},
+            "https://sts.amazonaws.com",
+            None,
+            {"verify": True, "endpoint_url": "https://sts.amazonaws.com"},
+        ),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+                "region_name": "eu-central-1",
+            },
+        ),
+        ({}, None, False, {"verify": False}),
+        (
+            {"AWS_DEFAULT_REGION": "ap-southeast-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "ap-southeast-1"},
+        ),
+    ],
+    ids=[
+        "default_verify_only",
+        "env_region",
+        "endpoint_with_parsed_region",
+        "endpoint_parsed_over_env",
+        "global_endpoint_no_region",
+        "vpce_endpoint",
+        "ssl_verify_false",
+        "env_default_region",
+    ],
+)
+def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
+    base_aws_llm = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            base_aws_llm._build_sts_client_kwargs(
+                aws_sts_endpoint=aws_sts_endpoint,
+                ssl_verify=ssl_verify,
+            )
+            == expected
+        )
+
+
+def test_irsa_cross_account_sts_client_uses_resolved_region():
+    """IRSA cross-account path must use _build_sts_client_kwargs (env region, not Bedrock)."""
+    base_aws_llm = BaseAWSLLM()
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("test-web-identity-token")
+        token_file = f.name
+
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_WEB_IDENTITY_TOKEN_FILE": token_file,
+                "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/eks-service-account-role",
+                "AWS_REGION": "eu-west-1",
+            },
+            clear=True,
+        ):
+            mock_sts_client = MagicMock()
+            mock_sts_client.assume_role_with_web_identity.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "temp-key",
+                    "SecretAccessKey": "temp-secret",
+                    "SessionToken": "temp-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+            mock_sts_client.assume_role.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "assumed-key",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+
+            with patch(
+                "boto3.client", return_value=mock_sts_client
+            ) as mock_boto3_client:
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::222222222222:role/target-role",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                )
+
+                for call in mock_boto3_client.call_args_list:
+                    assert call.args == ("sts",)
+                    assert call.kwargs["region_name"] == "eu-west-1"
+                    assert call.kwargs["verify"] is True
+    finally:
+        os.unlink(token_file)
+
+
+def test_web_identity_token_sts_client_uses_build_sts_client_kwargs():
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "key",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        "PackedPolicySize": 0,
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            with patch(
+                "litellm.llms.bedrock.base_aws_llm.get_secret",
+                return_value="oidc-token",
+            ):
+                base_aws_llm._auth_with_web_identity_token(
+                    aws_web_identity_token="my-token",
+                    aws_role_name="arn:aws:iam::111111111111:role/target",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                    aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+                )
+
+                mock_boto3_client.assert_called_once_with(
+                    "sts",
+                    verify=True,
+                    endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                    region_name="eu-west-1",
+                )
+
+
+def test_sts_uses_workload_region_not_bedrock_region():
+    """Air-gapped: Bedrock in eu-central-1, STS VPC endpoint in eu-west-1 via AWS_REGION."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+def test_sts_endpoint_region_matches_bedrock_region_param():
+    """aws_sts_endpoint signing region must not follow aws_region_name when they differ."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    env_without_irsa = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (
+            "AWS_ROLE_ARN",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+        )
+    }
+    with patch.dict(env_without_irsa, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+                aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+@pytest.mark.parametrize(
     "role_kwargs,expected_client_kwargs",
     [
         (
@@ -940,7 +1254,6 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
         (
             {"aws_region_name": "us-east-1"},
             {
-                "region_name": "us-east-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -951,6 +1264,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
             {
                 "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -958,7 +1272,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
@@ -2112,3 +2426,102 @@ def test_is_already_running_as_role_ssl_verify_passed():
                 mock_boto3_client.assert_called_once_with(
                     "sts", verify="/path/to/ca-bundle.crt"
                 )
+
+
+# ---------------------------------------------------------------------------
+# LIT-3274: get_bedrock_model_id must strip "bedrock/" prefix and URL-encode
+# ARNs for the invoke path (invoke-with-response-stream).  Without this fix
+# the Bedrock API receives a malformed URL, returns a JSON error body, and
+# botocore's EventStreamBuffer raises ChecksumMismatch instead of the real
+# error.  0x223a7b22 == ':{\"' — the start of a JSON object.
+# ---------------------------------------------------------------------------
+
+
+class TestGetBedrockModelIdArnHandling:
+    """Unit tests for get_bedrock_model_id with inference-profile ARNs."""
+
+    ARN = "arn:aws:bedrock:us-east-1:086734376398:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    def _call(self, model: str, optional_params: dict | None = None) -> str:
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        return BaseAWSLLM.get_bedrock_model_id(
+            model=model,
+            provider=provider,
+            optional_params=optional_params or {},
+        )
+
+    def test_arn_with_bedrock_prefix_is_stripped_and_encoded(self):
+        """bedrock/arn:... must not appear verbatim in the model_id."""
+        model_id = self._call(f"bedrock/{self.ARN}")
+        assert (
+            "bedrock/arn" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        # Must be URL-encoded (colons → %3A)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(
+        self,
+    ):
+        """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
+
+        The old fix used ``break`` after the first matched prefix, so
+        ``bedrock/invoke/arn:...`` would only strip ``bedrock/``, leaving
+        ``invoke/arn:...``.  The subsequent ``.replace('invoke/', '')`` call
+        then returned the bare unencoded ARN, reproducing the same
+        malformed-URL bug the fix aimed to prevent.
+
+        strip_bedrock_routing_prefix() has no break and handles this correctly.
+        """
+        model_id = self._call(f"bedrock/invoke/{self.ARN}")
+        assert (
+            "invoke/" not in model_id
+        ), f"'invoke/' prefix not stripped; got: {model_id}"
+        assert (
+            "bedrock/" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_bare_arn_is_encoded(self):
+        """Direct ARN without routing prefix must also be URL-encoded."""
+        model_id = self._call(self.ARN)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_url_matches_expected(self):
+        """Full URL built from messages config must match expected encoded form."""
+        import urllib.parse
+        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeMessagesConfig,
+        )
+
+        config = AmazonAnthropicClaudeMessagesConfig()
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=f"bedrock/{self.ARN}",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+            stream=True,
+        )
+        encoded_arn = urllib.parse.quote(self.ARN, safe="")
+        expected = (
+            f"https://bedrock-runtime.us-east-1.amazonaws.com"
+            f"/model/{encoded_arn}/invoke-with-response-stream"
+        )
+        assert (
+            url == expected
+        ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+
+    def test_regular_model_id_unaffected(self):
+        """Non-ARN model IDs must continue to work as before."""
+        model_id = self._call("anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    def test_invoke_prefixed_model_unaffected(self):
+        """invoke/ prefix stripping still works after the fix."""
+        model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"

@@ -10,10 +10,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
+    make_valid_bedrock_tool_name,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -2080,6 +2082,90 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     result = _convert_to_bedrock_tool_call_invoke(tool_calls)
     assert len(result) == 1
     assert result[0]["toolUse"]["input"] == {}
+
+
+def test_make_valid_bedrock_tool_name_preserves_hyphens():
+    assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
+    assert (
+        make_valid_bedrock_tool_name(
+            "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+        )
+        == "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+    )
+
+
+def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
+    """toolSpec and toolUse names must match after sanitization (issue #5007)."""
+    raw_name = "foo@bar"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": raw_name,
+                "description": "test",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    tool_spec_name = _bedrock_tools_pt(tools)[0]["toolSpec"]["name"]
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": raw_name, "arguments": "{}"},
+        }
+    ]
+    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"][
+        "name"
+    ]
+
+    assert tool_spec_name == "foo_bar"
+    assert tool_use_name == tool_spec_name
+
+
+def test_bedrock_converse_messages_pt_tool_use_matches_tool_spec_hyphen_name():
+    """Hyphenated tool names are preserved and consistent in multi-turn history."""
+    tool_name = "my-tool"
+    messages = [
+        {"role": "user", "content": "call the tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_hyphen",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": "{}"},
+                }
+            ],
+        },
+    ]
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+    tool_use_blocks = [
+        block
+        for msg in translated
+        for block in msg.get("content", [])
+        if "toolUse" in block
+    ]
+    assert len(tool_use_blocks) == 1
+    assert tool_use_blocks[0]["toolUse"]["name"] == tool_name
+
+    tool_spec_name = _bedrock_tools_pt(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": "test",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+    )[0]["toolSpec"]["name"]
+    assert tool_spec_name == tool_name
 
 
 def test_bedrock_tool_call_invoke_multiple_normal_tools():

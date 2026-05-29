@@ -39,7 +39,8 @@ class AnthropicOutputSchema(TypedDict, total=False):
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
 
-    effort: Literal["high", "medium", "low"]
+    effort: Literal["high", "medium", "low", "xhigh", "max"]
+    format: AnthropicOutputSchema
 
 
 class AnthropicMessagesTool(TypedDict, total=False):

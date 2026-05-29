@@ -111,6 +111,28 @@ def test_callback_capabilities_captures_iterator_override(monkeypatch):
     assert kind == "override"
 
 
+def test_callback_capabilities_detects_inherited_streaming_chunk_override(monkeypatch):
+    """
+    ``async_post_call_streaming_hook`` must be detected even when the override
+    lives on an intermediate parent class — a vendor base class can carry the
+    override and the registered class can add nothing else. Before this PR the
+    hook was unconditionally invoked, so a leaf-class ``__dict__`` miss here
+    would silently drop the inherited hook.
+    """
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    class _StreamingBase(CustomLogger):
+        async def async_post_call_streaming_hook(self, *args, **kwargs):  # type: ignore[override]
+            return kwargs.get("response")
+
+    class _LeafWithoutOverride(_StreamingBase):
+        pass
+
+    monkeypatch.setattr(litellm, "callbacks", [_LeafWithoutOverride()])
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_streaming_chunk_override is True
+
+
 def test_callback_capabilities_cache_invalidates_on_list_change(monkeypatch):
     """The cache key includes (length, id-of-each-callback).  Mutating the
     callback list must produce a fresh capability snapshot."""

@@ -2078,6 +2078,146 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     assert slo["response_cost"] > 0
 
 
+def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
+    """
+    Regression: PR #21844 preserved response_cost=0 set by failure_handler on failed
+    router retry attempts, so a later successful response with usage logged $0 spend.
+    """
+    from datetime import datetime
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-retry-zero-cost",
+        function_id="test-retry-zero-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+
+    err = litellm.RateLimitError(
+        message="rate limit",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+    for _ in range(2):
+        logging_obj._failure_handler_helper_fn(
+            exception=err,
+            traceback_exception="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    assert logging_obj.model_call_details.get("response_cost") == 0
+
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=9698, completion_tokens=30, total_tokens=9728),
+    )
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    cost = logging_obj.model_call_details.get("response_cost")
+    assert cost is not None and cost > 0
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost", 0) > 0
+
+
+def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
+    """Pass-through handlers often set response_cost on result._hidden_params (including 0)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-hidden-zero-cost",
+        function_id="test-hidden-zero-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "model": "gemini-2.5-flash-lite"
+    }
+    logging_obj.optional_params = {}
+
+    result = ModelResponse(
+        id="batch-pending",
+        choices=[{"message": {"role": "assistant", "content": "pending"}}],
+        usage=Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+    )
+    result._hidden_params = {"response_cost": 0.0}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") == 0.0
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == 0.0
+
+
+def test_process_hidden_params_uses_hidden_params_cost_after_failure_handler_zero():
+    """After retry failures pin model_call_details to 0, success cost on _hidden_params wins."""
+    from datetime import datetime
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-retry-hidden-cost",
+        function_id="test-retry-hidden-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+
+    err = litellm.RateLimitError(
+        message="rate limit",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+    for _ in range(2):
+        logging_obj._failure_handler_helper_fn(
+            exception=err,
+            traceback_exception="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    assert logging_obj.model_call_details.get("response_cost") == 0
+
+    passthrough_cost = 0.00042
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=9698, completion_tokens=30, total_tokens=9728),
+    )
+    result._hidden_params = {"response_cost": passthrough_cost}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") == passthrough_cost
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == passthrough_cost
+
+
 def test_function_setup_litellm_metadata_populates_metadata():
     """
     Test that function_setup() properly handles litellm_metadata (used by /v1/messages,

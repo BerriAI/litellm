@@ -534,6 +534,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        prefetched_source_data: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         original_video_id = extract_original_video_id(video_id)
         url = f"{api_base.rstrip('/')}/edits"
@@ -547,6 +548,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: Any,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         video_obj = VideoObject(**raw_response.json())
         if custom_llm_provider and video_obj.id:

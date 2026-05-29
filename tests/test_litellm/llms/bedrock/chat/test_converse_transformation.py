@@ -318,6 +318,7 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "high", "high"),
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
         ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max", "max"),
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "high", "high"),
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
@@ -367,6 +368,132 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
     additional = result.get("additionalModelRequestFields", {})
     assert additional.get("output_config") == {"effort": "high"}
+
+
+def test_output_config_format_translated_to_native_output_config_converse():
+    """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
+    config = AmazonConverseConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    result = config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {
+                "effort": "xhigh",
+                "format": {"type": "json_schema", "schema": schema},
+            },
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "xhigh"}
+    assert "format" not in additional["output_config"]
+    assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
+    parsed_schema = json.loads(
+        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+    )
+    assert parsed_schema == {**schema, "additionalProperties": False}
+
+
+def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog):
+    """When Converse model lacks native structured-output support, the silently
+    dropped ``output_config.format`` must surface as a warning so callers can
+    diagnose plain-text responses."""
+    from unittest.mock import patch
+
+    config = AmazonConverseConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    with patch.object(
+        AmazonConverseConfig,
+        "_supports_native_structured_outputs",
+        return_value=False,
+    ):
+        with caplog.at_level("WARNING"):
+            result = config._transform_request(
+                model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={
+                    "maxTokens": 256,
+                    "output_config": {
+                        "format": {"type": "json_schema", "schema": schema},
+                    },
+                },
+                litellm_params={},
+                headers={},
+            )
+
+    assert "outputConfig" not in result
+    assert any(
+        "dropping `output_config.format`" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_output_config_normalized_marker_does_not_leak_into_optional_params():
+    """The internal ``_output_config_normalized`` marker set by
+    ``_handle_reasoning_effort_parameter`` must be consumed during request
+    preparation so it does not linger on the caller's ``optional_params``."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        drop_params=False,
+    )
+    assert optional_params.get("_output_config_normalized") is True
+
+    config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "_output_config_normalized" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_output_config_effort_normalized_for_bedrock_converse_opus(
+    model, expected_effort
+):
+    """Bedrock Converse accepts ``xhigh`` and forwards the provider-safe effort."""
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": expected_effort}
 
 
 @pytest.mark.parametrize(

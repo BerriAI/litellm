@@ -273,6 +273,7 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIConfig",
     "AzureOpenAIGPT5Config",
     "AzureOpenAITextConfig",
+    "AzureSpeechAudioTranscriptionConfig",
     "HostedVLLMChatConfig",
     "HostedVLLMEmbeddingConfig",
     # Alias for backwards compatibility
@@ -1054,6 +1055,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AzureOpenAITextConfig": (
         ".llms.azure.completion.transformation",
         "AzureOpenAITextConfig",
+    ),
+    "AzureSpeechAudioTranscriptionConfig": (
+        ".llms.azure.audio_transcription.transformation",
+        "AzureSpeechAudioTranscriptionConfig",
     ),
     "HostedVLLMChatConfig": (
         ".llms.hosted_vllm.chat.transformation",

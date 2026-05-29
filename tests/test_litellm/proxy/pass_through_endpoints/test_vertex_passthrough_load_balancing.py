@@ -538,6 +538,36 @@ def test_forward_headers_from_request_protected_headers_not_overwritten():
     assert "Anthropic-Beta" not in result
 
 
+def test_forward_headers_custom_wins_case_insensitive_over_request_authorization():
+    """
+    When forwarding request headers, provider-signed/custom headers must win
+    even if the incoming request uses a different case for the same header name.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "authorization": "Bearer sk-litellm-key",
+        "content-type": "application/json",
+        "x-request-id": "req-123",
+    }
+    signed_headers = {
+        "Authorization": "AWS4-HMAC-SHA256 signed",
+        "Content-Type": "application/json",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=signed_headers.copy(),
+        forward_headers=True,
+    )
+
+    assert result["Authorization"] == "AWS4-HMAC-SHA256 signed"
+    assert "authorization" not in result
+    assert result["Content-Type"] == "application/json"
+    assert "content-type" not in result
+    assert result["x-request-id"] == "req-123"
+
+
 @pytest.mark.asyncio
 async def test_vertex_passthrough_custom_model_name_replaced_in_url():
     """

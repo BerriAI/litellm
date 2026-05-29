@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
+from openai._streaming import SSEDecoder
 
 import litellm
 from litellm.constants import (
@@ -27,7 +28,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
-from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+from litellm.utils import async_post_call_success_deployment_hook
 
 
 @lru_cache(maxsize=1)
@@ -120,10 +121,10 @@ class BaseResponsesAPIStreamingIterator:
         if not chunk:
             return None
 
-        # Handle SSE format (data: {...})
-        chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
-        if chunk is None:
-            return None
+        # NOTE: ``SSEDecoder`` already strips the SSE ``data:`` field prefix, so
+        # the value passed in here is the raw field content. Do not re-run
+        # ``_strip_sse_data_from_chunk`` on it — doing so would incorrectly mangle
+        # payloads whose actual JSON value happens to start with ``data:``.
 
         # Handle "[DONE]" marker
         if chunk == STREAM_SSE_DONE_STRING:
@@ -634,7 +635,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
 
     def __aiter__(self):
         return self
@@ -645,13 +646,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             while True:
                 # Get the next chunk from the stream
                 try:
-                    chunk = await self.stream_iterator.__anext__()
+                    sse = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
                     self.finished = True
                     raise StopAsyncIteration
 
                 self._check_max_streaming_duration()
-                result = self._process_chunk(chunk)
+                result = self._process_chunk(sse.data)
 
                 if self.finished:
                     raise StopAsyncIteration
@@ -708,7 +709,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
 
     def __iter__(self):
         return self
@@ -719,13 +720,13 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             while True:
                 # Get the next chunk from the stream
                 try:
-                    chunk = next(self.stream_iterator)
+                    sse = next(self.stream_iterator)
                 except StopIteration:
                     self.finished = True
                     raise StopIteration
 
                 self._check_max_streaming_duration()
-                result = self._process_chunk(chunk)
+                result = self._process_chunk(sse.data)
 
                 if self.finished:
                     raise StopIteration

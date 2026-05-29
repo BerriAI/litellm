@@ -224,12 +224,21 @@ export const useMcpOAuthFlow = ({
       if (!storedPayload) {
         return;
       }
-      
+
+      // Guard: the callback page writes to the admin result key for *all* OAuth
+      // flows (including the tools re-auth flow).  Only proceed if this hook's
+      // own flow state exists, meaning startOAuthFlow() was actually called here.
+      // Without this guard, a tools re-auth redirect triggers a spurious
+      // "OAuth session state was lost" error from this hook.
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      if (!storedFlowState) {
+        return;
+      }
+
       // Mark as processing
       processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
-      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
+      flowState = JSON.parse(storedFlowState);
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;

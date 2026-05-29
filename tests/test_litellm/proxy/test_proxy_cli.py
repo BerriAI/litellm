@@ -1,7 +1,11 @@
 import os
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import click
+import fastapi
 import pytest
 
 sys.path.insert(
@@ -230,6 +234,96 @@ class TestProxyInitializationHelpers:
         ProxyInitializationHelpers._init_hypercorn_server(
             mock_app, "localhost", 8000, "cert.pem", "key.pem", "ECDHE"
         )
+
+    @patch("granian.Granian")
+    @patch("builtins.print")
+    def test_init_granian_server(self, mock_print, mock_granian_cls):
+        pytest.importorskip("granian")
+        mock_server = MagicMock()
+        mock_granian_cls.return_value = mock_server
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            ProxyInitializationHelpers._init_granian_server(
+                host="0.0.0.0",
+                port=4000,
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=None,
+                ciphers=None,
+                granian_runtime_threads=None,
+            )
+        mock_granian_cls.assert_called_once()
+        call_kwargs = mock_granian_cls.call_args.kwargs
+        assert call_kwargs["target"] == "litellm.proxy.proxy_server:app"
+        assert call_kwargs["address"] == "0.0.0.0"
+        assert call_kwargs["port"] == 4000
+        assert call_kwargs["workers"] == 2
+        assert call_kwargs["interface"] == "asgi"
+        assert call_kwargs["websockets"] is True
+        assert "runtime_threads" not in call_kwargs
+        mock_server.serve.assert_called_once()
+
+    @patch("granian.Granian")
+    @patch("builtins.print")
+    def test_init_granian_server_runtime_threads(self, mock_print, mock_granian_cls):
+        pytest.importorskip("granian")
+        mock_server = MagicMock()
+        mock_granian_cls.return_value = mock_server
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            ProxyInitializationHelpers._init_granian_server(
+                host="0.0.0.0",
+                port=4000,
+                num_workers=1,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=None,
+                ciphers=None,
+                granian_runtime_threads=4,
+            )
+        assert mock_granian_cls.call_args.kwargs["runtime_threads"] == 4
+
+    @patch("granian.Granian")
+    @patch("builtins.print")
+    def test_init_granian_server_ssl(self, mock_print, mock_granian_cls):
+        pytest.importorskip("granian")
+        mock_server = MagicMock()
+        mock_granian_cls.return_value = mock_server
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            ProxyInitializationHelpers._init_granian_server(
+                host="0.0.0.0",
+                port=4000,
+                num_workers=1,
+                ssl_certfile_path="/path/to/cert.pem",
+                ssl_keyfile_path="/path/to/key.pem",
+                max_requests_before_restart=None,
+                ciphers=None,
+                granian_runtime_threads=None,
+            )
+        call_kwargs = mock_granian_cls.call_args.kwargs
+        assert call_kwargs["ssl_cert"] == Path("/path/to/cert.pem")
+        assert call_kwargs["ssl_key"] == Path("/path/to/key.pem")
+        mock_server.serve.assert_called_once()
+
+    @patch("granian.Granian")
+    def test_init_granian_server_ssl_requires_cert_and_key(self, mock_granian_cls):
+        pytest.importorskip("granian")
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            with pytest.raises(click.ClickException, match="Both --ssl_certfile_path"):
+                ProxyInitializationHelpers._init_granian_server(
+                    host="0.0.0.0",
+                    port=4000,
+                    num_workers=1,
+                    ssl_certfile_path="/path/to/cert.pem",
+                    ssl_keyfile_path=None,
+                    max_requests_before_restart=None,
+                    ciphers=None,
+                    granian_runtime_threads=None,
+                )
+        mock_granian_cls.assert_not_called()
 
     @patch("subprocess.Popen")
     def test_run_ollama_serve(self, mock_popen):
@@ -482,6 +576,136 @@ class TestProxyInitializationHelpers:
             appended_params = mock_append_query_params.call_args.args[1]
             assert appended_params["connection_limit"] == 5
             assert appended_params["pool_timeout"] == expected_timeout
+
+    def test_build_db_connection_url_params_defaults(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
+        assert params == {"connection_limit": 10, "pool_timeout": 60}
+
+    def test_build_db_connection_url_params_omits_none_timeouts(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            connect_timeout=None,
+            socket_timeout=None,
+        )
+        assert "connect_timeout" not in params
+        assert "socket_timeout" not in params
+
+    def test_build_db_connection_url_params_includes_optional_timeouts(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            connect_timeout=15,
+            socket_timeout=120,
+        )
+        assert params["connect_timeout"] == 15
+        assert params["socket_timeout"] == 120
+
+    def test_build_db_connection_url_params_extras_override_defaults(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            extra_params={
+                "pgbouncer": "true",
+                "statement_cache_size": 0,
+                "pool_timeout": 5,
+            },
+        )
+        assert params["pgbouncer"] == "true"
+        assert params["statement_cache_size"] == 0
+        assert params["pool_timeout"] == 5
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_db_connection_extra_params_forwarded_to_url(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={
+                "general_settings": {
+                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_connect_timeout": 15,
+                    "database_socket_timeout": 120,
+                    "database_extra_connection_params": {
+                        "pgbouncer": "true",
+                        "statement_cache_size": 0,
+                    },
+                }
+            }
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_append_query_params.assert_called()
+            appended_params = mock_append_query_params.call_args.args[1]
+            assert appended_params["connect_timeout"] == 15
+            assert appended_params["socket_timeout"] == 120
+            assert appended_params["pgbouncer"] == "true"
+            assert appended_params["statement_cache_size"] == 0
 
     @patch("uvicorn.run")
     @patch("atexit.register")

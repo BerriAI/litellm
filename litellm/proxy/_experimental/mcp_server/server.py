@@ -1114,10 +1114,16 @@ if MCP_AVAILABLE:
     ) -> Tuple[Optional[Union[Dict[str, str], str]], Optional[Dict[str, str]]]:
         """Build auth and extra headers for a server."""
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and server.alias is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.alias)
-        elif mcp_server_auth_headers and server.server_name is not None:
-            server_auth_header = mcp_server_auth_headers.get(server.server_name)
+        if mcp_server_auth_headers:
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
+
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=server.alias,
+                server_name=server.server_name,
+            )
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
@@ -1159,7 +1165,7 @@ if MCP_AVAILABLE:
     def _merge_gateway_initialize_instructions(
         allowed_mcp_servers: List[MCPServer],
     ) -> Optional[str]:
-        """YAML/DB override, else in-memory upstream text from list_tools / health_check / call_tool."""
+        """YAML/DB override, else upstream text (prefetch on init, or list_tools / health_check / call_tool cache)."""
         if not allowed_mcp_servers:
             return None
 
@@ -1200,6 +1206,20 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        if allowed:
+            # return_exceptions=True: a per-server probe failure (incl. CancelledError
+            # bubbled from anyio task group teardown on connection refused) must not
+            # cancel sibling probes or 500 the gateway initialize request.
+            await asyncio.gather(
+                *[
+                    global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
+                        s
+                    )
+                    for s in allowed
+                    if s is not None
+                ],
+                return_exceptions=True,
+            )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
         tok = _mcp_gateway_initialize_instructions.set(merged)
         try:
@@ -1368,6 +1388,7 @@ if MCP_AVAILABLE:
                         extra_headers=extra_headers,
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
+                        user_api_key_auth=user_api_key_auth,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -2074,6 +2095,7 @@ if MCP_AVAILABLE:
         """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
+        requested_server_id: Optional[str] = kwargs.get("requested_server_id")
 
         # If the client called with a display-name override (e.g. "Get Pet"),
         # translate it back to the original prefixed name before any routing.
@@ -2082,13 +2104,54 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
+        requested_server: Optional[MCPServer] = None
+        if requested_server_id:
+            requested_server = next(
+                (s for s in allowed_mcp_servers if s.server_id == requested_server_id),
+                None,
+            )
+
         # Resolve the actual MCP server up-front so the permission check uses
         # the canonical server.name even when the tool name is prefixed with a
         # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
         # server's display name directly.
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server is None and requested_server is not None:
+            # REST callers may pass the raw tool name (no prefix) plus a
+            # ``requested_server_id``. The mapping might only contain the
+            # prefixed form, so retry the lookup with every known prefix of
+            # the requested server before treating the tool as unresolved —
+            # otherwise the tool_server_mismatch guard below is silently
+            # bypassed.
+            for known_prefix in iter_known_server_prefixes(requested_server):
+                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                    add_server_prefix_to_name(name, known_prefix)
+                )
+                if candidate is not None:
+                    mcp_server = candidate
+                    break
         if mcp_server is not None:
             server_name = mcp_server.name
+
+        # REST /mcp-rest/tools/call passes server_id — tool must belong to that server
+        if requested_server is not None:
+            if (
+                mcp_server is not None
+                and mcp_server.server_id != requested_server.server_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "tool_server_mismatch",
+                        "message": (
+                            f"Tool '{name}' belongs to MCP server '{mcp_server.name}' "
+                            f"but request specified server_id for '{requested_server.name}'."
+                        ),
+                    },
+                )
+            if mcp_server is None:
+                mcp_server = requested_server
+                server_name = requested_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:

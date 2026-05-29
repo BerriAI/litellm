@@ -7,8 +7,10 @@ and one has explicit zero-cost pricing in model_info, the other deployment
 should still use the built-in pricing.
 """
 
+import copy
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -19,6 +21,16 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.utils import _invalidate_model_cost_lowercase_map
+
+
+def _restore_model_cost_entries(original_entries):
+    for key, value in original_entries.items():
+        if value is None:
+            litellm.model_cost.pop(key, None)
+        else:
+            litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
@@ -323,3 +335,70 @@ def test_responses_prefix_stripped_alias_registered_for_add_deployment():
         )
         is True
     )
+
+
+def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
+    """
+    ChatGPT aliases that share the same backend model should not be able to
+    downgrade the shared backend key from responses -> chat during router setup.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "chatgpt/gpt-5.4"
+    model_keys = {
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+        "chatgpt-shared-mode-base": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-base")
+        ),
+        "chatgpt-shared-mode-alias": copy.deepcopy(
+            litellm.model_cost.get("chatgpt-shared-mode-alias")
+        ),
+    }
+
+    try:
+        backend_entry = copy.deepcopy(model_keys[backend_model]) or {}
+        backend_entry["litellm_provider"] = "chatgpt"
+        backend_entry["mode"] = "responses"
+        litellm.model_cost[backend_model] = backend_entry
+        _invalidate_model_cost_lowercase_map()
+
+        router = Router(model_list=[])
+        with patch.object(
+            Router, "_add_deployment", lambda self, deployment: deployment
+        ):
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-base",
+                    "mode": "responses",
+                },
+            )
+            router._create_deployment(
+                deployment_info={},
+                _model_name="chatgpt/gpt-5.4-medium",
+                _litellm_params={
+                    "model": "gpt-5.4",
+                    "custom_llm_provider": "chatgpt",
+                },
+                _model_info={
+                    "id": "chatgpt-shared-mode-alias",
+                    "mode": "chat",
+                },
+            )
+
+        assert litellm.model_cost[backend_model]["mode"] == "responses"
+        assert "mode" in litellm.model_cost[backend_model]
+
+        bridge_model_info, bridge_model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="chatgpt",
+        )
+        assert bridge_model == "gpt-5.4"
+        assert bridge_model_info["mode"] == "responses"
+    finally:
+        _restore_model_cost_entries(model_keys)

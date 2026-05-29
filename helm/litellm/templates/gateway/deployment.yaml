@@ -22,7 +22,8 @@ spec:
       labels:
         {{- include "litellm.gateway.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      serviceAccountName: {{ include "litellm.gateway.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccounts.gateway.automount }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

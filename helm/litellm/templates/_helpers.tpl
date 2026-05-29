@@ -56,16 +56,34 @@ app.kubernetes.io/component: ui
 {{- end -}}
 
 {{/*
-Shared ServiceAccount name used by all three component Deployments. When
-`serviceAccount.create` is true and `serviceAccount.name` is empty, default
-to the chart fullname. When `create` is false, fall back to the provided
-name or the namespace's `default` SA.
+Per-component ServiceAccount name helpers.
+
+Each component (gateway, backend, ui) has its own SA config under
+.Values.serviceAccounts.<component>. When `create` is true and `name` is
+empty the chart defaults to "<release>-litellm-<component>". When `create`
+is false the chart uses the provided name, or the namespace `default` SA.
 */}}
-{{- define "litellm.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{ default (include "litellm.fullname" .) .Values.serviceAccount.name }}
+{{- define "litellm.gateway.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.gateway.create -}}
+{{ default (include "litellm.gateway.fullname" .) .Values.serviceAccounts.gateway.name }}
 {{- else -}}
-{{ default "default" .Values.serviceAccount.name }}
+{{ default "default" .Values.serviceAccounts.gateway.name }}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.backend.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.backend.create -}}
+{{ default (include "litellm.backend.fullname" .) .Values.serviceAccounts.backend.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.backend.name }}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.ui.serviceAccountName" -}}
+{{- if .Values.serviceAccounts.ui.create -}}
+{{ default (include "litellm.ui.fullname" .) .Values.serviceAccounts.ui.name }}
+{{- else -}}
+{{ default "default" .Values.serviceAccounts.ui.name }}
 {{- end -}}
 {{- end -}}
 

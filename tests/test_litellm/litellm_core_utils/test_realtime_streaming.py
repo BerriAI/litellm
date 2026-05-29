@@ -133,7 +133,9 @@ def test_make_disable_auto_response_message_produces_ga_shape():
         "turn_detection" not in session
     ), "turn_detection must not be at the top-level session (beta shape); use audio.input"
     # turn_detection must be nested under audio.input
-    assert session["audio"]["input"]["turn_detection"]["create_response"] is False
+    td = session["audio"]["input"]["turn_detection"]
+    assert td["type"] == "server_vad"
+    assert td["create_response"] is False
 
 
 def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients():
@@ -148,7 +150,55 @@ def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients
 
     assert msg["type"] == "session.update"
     session = msg["session"]
-    assert session == {"turn_detection": {"create_response": False}}
+    assert session == {
+        "turn_detection": {"type": "server_vad", "create_response": False}
+    }
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_send_text_receives_str_not_bytes():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.created", "session": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.called
+    sent = client_ws.send_text.call_args_list[0].args[0]
+    assert isinstance(sent, str)
+
+
+@pytest.mark.asyncio
+async def test_backend_to_client_skips_non_utf8_binary_frames():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            b"\xff\xfe",
+            json.dumps({"type": "session.created", "session": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert client_ws.send_text.call_count == 1
+    assert isinstance(client_ws.send_text.call_args_list[0].args[0], str)
 
 
 @pytest.mark.asyncio
@@ -424,6 +474,50 @@ async def test_transcription_captured_in_backend_to_client():
     assert streaming.input_messages[0]["role"] == "user"
     assert streaming.input_messages[0]["content"] == "What are the opening hours?"
     assert logging_obj.model_call_details["messages"] == streaming.input_messages
+
+
+@pytest.mark.asyncio
+async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    # Two session.update messages arrive before setupComplete round-trip.
+    websocket.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            Exception("client done"),
+        ]
+    )
+
+    provider_config = MagicMock()
+
+    def _transform(message: str, model: str, session_configuration_request=None):
+        if session_configuration_request is None:
+            return [json.dumps({"setup": {"model": "models/gemini-2.5-flash"}})]
+        return []
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=_transform)
+
+    backend_ws.send = AsyncMock()
+
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming.client_ack_messages()
+
+    # Setup should be forwarded exactly once even with repeated session.update.
+    assert backend_ws.send.await_count == 1
+    assert streaming.session_configuration_request is not None
+    sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
+    assert "setup" in sent_payload
 
 
 def test_collect_session_tools_from_session_update():
@@ -830,6 +924,169 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
 
 
 @pytest.mark.asyncio
+async def test_realtime_function_call_output_guardrail_blocks_and_returns_error():
+    """
+    Test that a client-supplied function_call_output whose content triggers a
+    guardrail is blocked: it is not forwarded to the backend, and an error
+    event is sent to the client.
+    """
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            texts = inputs.get("texts", [])
+            for text in texts:
+                if "@" in text:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "email address detected"},
+                    )
+            return inputs
+
+    guardrail = BlockingGuardrail(
+        guardrail_name="email-blocker",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    item_create_msg = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call_123",
+                "output": "Tool says: my email is test@example.com",
+            },
+        }
+    )
+
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create_msg,
+            Exception("connection closed"),
+        ]
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_texts = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list]
+    error_events = [e for e in sent_texts if e.get("type") == "error"]
+    assert len(error_events) == 1, f"Expected one error event, got: {sent_texts}"
+    assert error_events[0]["error"]["type"] == "guardrail_violation"
+
+    sent_to_backend = [c.args[0] for c in backend_ws.send.call_args_list if c.args]
+    forwarded_tool_outputs = [
+        json.loads(m)
+        for m in sent_to_backend
+        if isinstance(m, str)
+        and json.loads(m).get("type") == "conversation.item.create"
+        and json.loads(m).get("item", {}).get("type") == "function_call_output"
+    ]
+    # A sanitized placeholder must reach the backend so providers that pair
+    # every toolCall with a toolResponse (Gemini/Vertex Live) exit their
+    # pending-tool-call state instead of stalling. The placeholder must NOT
+    # contain any of the blocked content.
+    assert len(forwarded_tool_outputs) == 1, (
+        f"Sanitized function_call_output should be forwarded, got: "
+        f"{forwarded_tool_outputs}"
+    )
+    sanitized_item = forwarded_tool_outputs[0]["item"]
+    assert sanitized_item["call_id"] == "call_123"
+    assert "test@example.com" not in sanitized_item["output"]
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_function_call_output_guardrail_allows_clean_output():
+    """
+    Test that a clean function_call_output passes through and reaches the backend
+    when guardrails are configured.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            return inputs
+
+    guardrail = BlockingGuardrail(
+        guardrail_name="noop",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    item_create_msg = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "function_call_output",
+                "call_id": "call_456",
+                "output": '{"temperature": 72, "unit": "F"}',
+            },
+        }
+    )
+
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create_msg,
+            Exception("connection closed"),
+        ]
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = [c.args[0] for c in backend_ws.send.call_args_list if c.args]
+    forwarded = [
+        json.loads(m)
+        for m in sent_to_backend
+        if isinstance(m, str)
+        and json.loads(m).get("type") == "conversation.item.create"
+        and json.loads(m).get("item", {}).get("type") == "function_call_output"
+    ]
+    assert (
+        len(forwarded) == 1
+    ), f"Clean function_call_output should be forwarded, got: {forwarded}"
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
 async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     """
     Test that _has_realtime_guardrails returns True for a guardrail configured with
@@ -1110,3 +1367,406 @@ async def test_on_violation_end_session_closes_on_first_fail():
     assert streaming._violation_count == 1
 
     litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_provider_path_suppresses_duplicate_session_created_after_synthetic():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Simulate synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_payloads = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list]
+    assert not any(
+        payload.get("type") == "session.created" for payload in sent_payloads
+    ), f"Expected duplicate session.created to be suppressed, got: {sent_payloads}"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_session_created_still_triggers_guardrail_turn_detection_update():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    streaming._send_to_backend = AsyncMock()  # type: ignore[method-assign]
+
+    await streaming.backend_to_client_send_messages()
+
+    # Duplicate session.created should still cause the one-time guardrail
+    # turn_detection update to be sent to backend.
+    assert streaming._send_to_backend.await_count == 1
+    sent_update = json.loads(streaming._send_to_backend.await_args_list[0].args[0])
+    assert sent_update["type"] == "session.update"
+    injected_session = sent_update["session"]
+    assert injected_session["type"] == "realtime"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_guardrail_update_respects_idempotency_flag():
+    """Verify guardrail turn-detection update uses idempotency flag correctly."""
+    client_ws = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(
+        side_effect=lambda msg, model, session_config: [msg]
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    # First call should send the update
+    assert streaming._guardrail_turn_detection_update_sent is False
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert streaming._guardrail_turn_detection_update_sent is True
+    assert backend_ws.send.await_count == 1
+
+    # Second call should be a no-op (idempotent)
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert backend_ws.send.await_count == 1  # Still 1, not 2
+
+
+@pytest.mark.asyncio
+async def test_guardrail_turn_detection_injected_into_first_session_update_deferred_mode():
+    """Verify turn_detection is injected into first session.update in deferred mode."""
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    transformed_messages = []
+
+    def mock_transform(msg, model, session_config):
+        transformed_messages.append((msg, session_config))
+        return [msg]  # Pass through for simplicity
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    # Simulate first session.update in deferred mode
+    await streaming.client_ack_messages()
+
+    # Verify turn_detection was injected into the session.update. The
+    # injection runs before the GA remap, so the create_response flag ends
+    # up nested under audio.input.turn_detection in the GA-shaped payload.
+    assert len(transformed_messages) == 1
+    transformed_msg, session_config = transformed_messages[0]
+    msg_obj = json.loads(transformed_msg)
+    assert msg_obj["type"] == "session.update"
+    session_obj = msg_obj["session"]
+    injected_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
+    assert injected_turn_detection is not None
+    assert injected_turn_detection["create_response"] is False
+    assert streaming._guardrail_turn_detection_update_sent is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_turn_detection", [None, "auto", 42, ["server_vad"]])
+async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
+    existing_turn_detection,
+):
+    """Client-supplied non-dict turn_detection must not crash client_ack_messages."""
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "modalities": ["text", "audio"],
+                        "turn_detection": existing_turn_detection,
+                    },
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    transformed_messages = []
+
+    def mock_transform(msg, model, session_config):
+        transformed_messages.append((msg, session_config))
+        return [msg]
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    await streaming.client_ack_messages()
+
+    assert len(transformed_messages) == 1
+    transformed_msg, _ = transformed_messages[0]
+    msg_obj = json.loads(transformed_msg)
+    session_obj = msg_obj["session"]
+    injected_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
+    assert isinstance(injected_turn_detection, dict)
+    assert injected_turn_detection["create_response"] is False
+    assert streaming._guardrail_turn_detection_update_sent is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_session",
+    [
+        {"turn_detection": {"type": "server_vad", "create_response": True}},
+        {
+            "audio": {
+                "input": {
+                    "turn_detection": {"type": "server_vad", "create_response": True}
+                }
+            }
+        },
+    ],
+)
+async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_active(
+    client_session,
+):
+    """A subsequent client session.update must not be allowed to flip
+    ``create_response`` back to True once audio transcription guardrails have
+    disabled VAD auto-response. Covers both the flat beta shape and the
+    nested GA ``audio.input.turn_detection`` shape.
+    """
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": client_session}),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    transformed_messages = []
+
+    def mock_transform(msg, model, session_config):
+        transformed_messages.append((msg, session_config))
+        return [msg]
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    # Simulate that initial setup + guardrail disable have already happened.
+    streaming.session_configuration_request = json.dumps({"setup": {"model": "x"}})
+    streaming._guardrail_turn_detection_update_sent = True
+
+    await streaming.client_ack_messages()
+
+    assert len(transformed_messages) == 1
+    forwarded_msg, _ = transformed_messages[0]
+    msg_obj = json.loads(forwarded_msg)
+    session_obj = msg_obj["session"]
+    forwarded_turn_detection = session_obj.get("turn_detection") or session_obj.get(
+        "audio", {}
+    ).get("input", {}).get("turn_detection")
+    assert isinstance(forwarded_turn_detection, dict)
+    assert forwarded_turn_detection["create_response"] is False
+
+
+@pytest.mark.asyncio
+async def test_follow_up_setup_updates_cached_session_configuration_request():
+    """A follow-up setup produced by a subsequent session.update must replace
+    the cached ``session_configuration_request`` so downstream readers
+    (e.g. modality lookup in ``response.created``) see the latest config."""
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    follow_up_setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["TEXT"]},
+                "tools": [{"function_declarations": []}],
+            }
+        }
+    )
+    provider_config.transform_realtime_request = MagicMock(
+        return_value=[follow_up_setup]
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Simulate that the original auto-setup was already cached.
+    streaming.session_configuration_request = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+
+    await streaming.client_ack_messages()
+
+    assert streaming.session_configuration_request == follow_up_setup

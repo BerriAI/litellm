@@ -360,11 +360,15 @@ class TestProxySettingEndpoints:
         assert "proxy_base_url" in values
         assert "user_email" in values
 
-        # Verify values match our mock config
+        # Verify non-secret values match our mock config. OAuth client
+        # secrets are masked on read so the GET response never carries
+        # plaintext credentials.
         assert values["google_client_id"] == "test_google_client_id"
-        assert values["google_client_secret"] == "test_google_client_secret"
+        assert values["google_client_secret"] != "test_google_client_secret"
+        assert "*" in values["google_client_secret"]
         assert values["microsoft_client_id"] == "test_microsoft_client_id"
-        assert values["microsoft_client_secret"] == "test_microsoft_client_secret"
+        assert values["microsoft_client_secret"] != "test_microsoft_client_secret"
+        assert "*" in values["microsoft_client_secret"]
         assert values["proxy_base_url"] == "https://example.com"
         assert values["user_email"] == "admin@example.com"
 
@@ -1321,10 +1325,12 @@ class TestProxySettingEndpoints:
         assert "values" in data
         assert "field_schema" in data
 
-        # Verify decrypted values are returned
+        # Verify decrypted values are returned. OAuth client secrets are
+        # masked on read so plaintext is never sent to the UI.
         values = data["values"]
         assert values["google_client_id"] == "decrypted_google_id"
-        assert values["google_client_secret"] == "decrypted_google_secret"
+        assert values["google_client_secret"] != "decrypted_google_secret"
+        assert "*" in values["google_client_secret"]
         assert values["microsoft_client_id"] == "decrypted_microsoft_id"
         assert values["proxy_base_url"] == "https://decrypted.example.com"
 

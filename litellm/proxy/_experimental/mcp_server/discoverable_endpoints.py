@@ -1,3 +1,4 @@
+import html as _html
 import json
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -618,8 +619,105 @@ async def token_endpoint(
     )
 
 
+# Per RFC 6749 §4.1.2.1, an IdP that rejects an OAuth authorization request
+# redirects back to the configured redirect URI with ``error`` /
+# ``error_description`` / ``error_uri`` query params and no ``code``. The MCP
+# loopback flow funnels that response through this /callback endpoint, so
+# the endpoint must accept either a successful (``code``+``state``) or an
+# error response. Declaring ``code``/``state`` as required would cause
+# FastAPI to reject the error response with a 422 before the handler runs,
+# which strands the MCP client waiting on the loopback (see LIT-2750).
+
+
+def _render_oauth_error_html(error: str, description: Optional[str]) -> HTMLResponse:
+    """Render an actionable HTML page for an IdP-reported OAuth error.
+
+    Used when we cannot propagate the error back to the registered
+    ``redirect_uri`` (state missing or undecryptable). Returned with a 400
+    status so the failure is observable to operators while still being a
+    human-readable page for the end user.
+    """
+    safe_error = _html.escape(error or "unknown_error")
+    safe_description = _html.escape(description) if description else ""
+    description_html = f"<p>{safe_description}</p>" if safe_description else ""
+    body = (
+        "<html><body>"
+        "<h2>Authentication failed</h2>"
+        f"<p><strong>Error:</strong> {safe_error}</p>"
+        f"{description_html}"
+        "<p>You can close this window and try again.</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(body, status_code=400)
+
+
 @router.get("/callback")
-async def callback(request: Request, code: str, state: str):
+async def callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    error_uri: Optional[str] = None,
+):
+    """OAuth 2.0 authorization response handler for MCP loopback clients.
+
+    Accepts either:
+
+    - A successful authorization response (``code`` + ``state``), which is
+      forwarded back to the validated client ``redirect_uri`` with the
+      original (un-wrapped) ``state``.
+    - An error response (``error``[+``error_description``/``error_uri``]), per
+      RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
+      ``redirect_uri``, the error params are propagated back to the client so
+      its OAuth library can surface them. Otherwise we render an HTML error
+      page so the user is not left on an opaque 422 / blank screen.
+    """
+    # 1. IdP-reported error path (e.g. ``?error=access_denied``).
+    if error:
+        verbose_logger.info(
+            "MCP /callback received IdP error: error=%s, error_description=%s",
+            error,
+            error_description,
+        )
+        if state:
+            try:
+                state_data = decode_state_hash(state)
+                original_state = state_data.get("original_state")
+                redirect_uri = _get_validated_client_redirect_uri(request, state_data)
+            except HTTPException:
+                # Untrusted/invalid client redirect_uri — surface inline rather
+                # than blindly forwarding the error to an attacker-controlled URL.
+                return _render_oauth_error_html(error, error_description)
+            except Exception:
+                # State could not be decrypted (expired key, tampered, etc.).
+                return _render_oauth_error_html(error, error_description)
+
+            params: Dict[str, str] = {"error": error}
+            if error_description:
+                params["error_description"] = error_description
+            if error_uri:
+                params["error_uri"] = error_uri
+            if original_state is not None:
+                params["state"] = original_state
+            complete_returned_url = _append_query_params(redirect_uri, params)
+            return RedirectResponse(url=complete_returned_url, status_code=302)
+
+        # No state — nothing to round-trip to. Show the user the error.
+        return _render_oauth_error_html(error, error_description)
+
+    # 2. Neither success nor error parameters present — most likely a stray
+    #    GET / dropped SSO redirect chain. Surface a 400 instead of 422.
+    if not code or not state:
+        missing = [
+            name for name, value in (("code", code), ("state", state)) if not value
+        ]
+        return _render_oauth_error_html(
+            "invalid_request",
+            f"Missing authorization {' and '.join(repr(m) for m in missing)} parameter(s).",
+        )
+
+    # 3. Successful authorization response.
     try:
         state_data = decode_state_hash(state)
         original_state = state_data["original_state"]

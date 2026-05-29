@@ -23,11 +23,11 @@ model_list:
       model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       #########################################################
       ########## batch specific params ########################
-      s3_bucket_name: litellm-proxy
+      s3_bucket_name: litellm-proxy-123456789012
       s3_region_name: us-west-2
       s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
+      aws_batch_role_arn: arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForAgents_EXAMPLE
     model_info: 
       mode: batch
 

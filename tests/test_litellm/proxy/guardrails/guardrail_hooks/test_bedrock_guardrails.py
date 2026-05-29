@@ -2073,6 +2073,226 @@ def test_get_http_exception_includes_assessments_and_identifier():
     assert exc.detail["assessments"][0]["matches"][0]["match"] == "[REDACTED]"
 
 
+def test_extract_violation_category_names_mixed_policies():
+    """Topic names, content-filter types, PII types, and managed-word types
+    flatten into a single category-name list — using only the operator-
+    defined `name`/`type` labels."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Fiduciary Advice", "action": "BLOCKED"},
+                        {"name": "Tax Advice", "action": "BLOCKED"},
+                    ]
+                },
+                "contentPolicy": {
+                    "filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]
+                },
+                "wordPolicy": {
+                    "managedWordLists": [{"type": "PROFANITY", "action": "BLOCKED"}],
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "EMAIL", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "Fiduciary Advice" in names
+    assert "Tax Advice" in names
+    assert "VIOLENCE" in names
+    assert "PROFANITY" in names
+    assert "EMAIL" in names
+
+
+def test_extract_violation_category_names_does_not_leak_user_input():
+    """SECURITY: customWords.match is the raw user-submitted word that
+    triggered the rule, and an unnamed regex match is the actual sensitive
+    value (e.g. a credit-card number). Neither must appear in
+    violation_categories — otherwise the content the guardrail blocked
+    leaks straight into telemetry backends."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": [
+                        {"match": "secret-codeword-abc-123", "action": "BLOCKED"}
+                    ],
+                },
+                "sensitiveInformationPolicy": {
+                    "regexes": [{"match": "4111-1111-1111-1111", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "secret-codeword-abc-123" not in names
+    assert "4111-1111-1111-1111" not in names
+    assert names == []
+
+
+def test_extract_violation_category_names_named_regex_uses_name():
+    """A regex with a `name` field surfaces that operator-defined label
+    (safe to log), not the matched value."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "regexes": [
+                        {
+                            "name": "credit-card-pattern",
+                            "match": "4111-1111-1111-1111",
+                            "action": "BLOCKED",
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert names == ["credit-card-pattern"]
+
+
+def test_extract_violation_category_names_skips_anonymized():
+    """ANONYMIZED entries are not blocks — they must not contribute to the
+    violation_categories list."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "NAME", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+    }
+    assert g._extract_violation_category_names(response) == []
+
+
+def test_extract_violation_category_names_no_assessments():
+    """Empty / missing assessments → empty list, not an error."""
+    g = _make_guardrail()
+    assert g._extract_violation_category_names({"action": "NONE"}) == []
+    assert g._extract_violation_category_names({"assessments": None}) == []
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_forwards_guardrail_action():
+    """Bedrock's top-level ``action`` string must be propagated through
+    ``tracing_detail`` so downstream loggers (OTEL, ...) can surface the
+    raw provider verdict as a queryable attribute without re-parsing the
+    redacted guardrail_response blob."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [{"name": "Fiduciary Advice", "action": "BLOCKED"}]
+                }
+            }
+        ],
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+        patch.object(
+            guardrail,
+            "_get_http_exception_for_blocked_guardrail",
+            return_value=Exception("blocked"),
+        ),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        with pytest.raises(Exception):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        assert tracing_detail is not None
+        assert tracing_detail["guardrail_action"] == "GUARDRAIL_INTERVENED"
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_omits_guardrail_action_when_missing():
+    """If the Bedrock response omits ``action`` (older / partial payloads),
+    the field must be left off ``tracing_detail`` rather than written as
+    ``None`` — downstream code expects strings or absence, not nulls."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"assessments": []}
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hi"}],
+            request_data={"model": "gpt-4o", "messages": []},
+        )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        # No violation categories and no action ⇒ tracing_detail stays None
+        # (the hook collapses an empty dict before forwarding).
+        if tracing_detail is not None:
+            assert "guardrail_action" not in tracing_detail
+
+
 def test_get_http_exception_no_blocked_assessments_omits_field():
     """L3: when no assessments are blocked, the `assessments` key is omitted entirely."""
     g = _make_guardrail()

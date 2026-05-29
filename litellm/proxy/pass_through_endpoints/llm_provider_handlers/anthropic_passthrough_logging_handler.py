@@ -266,7 +266,174 @@ class AnthropicPassthroughLoggingHandler:
         model: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
-        Builds complete response from raw Anthropic chunks
+        Builds complete response from raw Anthropic chunks.
+
+        Fast path: for the dominant case of a pure-text streaming response
+        (no tool_use / thinking / non-text content blocks), the long run of
+        ``content_block_delta`` text deltas is collapsed into a single
+        equivalent SSE event before conversion. ``chunk_parser`` and
+        ``stream_chunk_builder`` remain the single source of truth for chunk
+        shape, usage math and finish-reason mapping, so the rebuilt response
+        (and therefore the logged/billed payload) is identical -- this is
+        asserted by a parity test. Anything non-trivial falls back to the
+        unchanged legacy reconstruction.
+
+        Per-event Pydantic ``ModelResponseStream`` construction dominated
+        event-loop CPU under concurrent streaming; collapsing the homogeneous
+        text run removes O(num_output_tokens) of it.
+        """
+        collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
+            all_chunks
+        )
+        if collapsed is not None:
+            return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
+                all_chunks=collapsed,
+                litellm_logging_obj=litellm_logging_obj,
+                model=model,
+            )
+        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy(
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=model,
+        )
+
+    # Anthropic SSE block/delta types that the fast path is NOT allowed to
+    # collapse -- their presence forces the unchanged legacy path so tool
+    # calls, thinking, citations, etc. keep byte-identical reconstruction.
+    _FAST_PATH_DISALLOWED_DELTA_TYPES = frozenset(
+        {
+            "input_json_delta",
+            "thinking_delta",
+            "signature_delta",
+            "citations_delta",
+        }
+    )
+
+    @staticmethod
+    def _collapse_pure_text_chunks(  # noqa: PLR0915
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> Optional[List[str]]:
+        """
+        Return a new chunk list with the contiguous run of text-only
+        ``content_block_delta`` events replaced by a single equivalent event,
+        or ``None`` if the stream is not a pure single-text-block response
+        (in which case the caller uses the legacy path unchanged).
+
+        Only ``message_start`` / ``content_block_start(text)`` /
+        ``content_block_delta(text_delta)`` / ``content_block_stop`` /
+        ``message_delta`` / ``message_stop`` / ``ping`` events are accepted.
+        Any other content-block type or delta type returns ``None``.
+        """
+        normalized: List[str] = []
+        for raw in all_chunks:
+            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            for ev in line.split("\n\n"):
+                ev = ev.strip()
+                if ev:
+                    normalized.append(ev)
+
+        text_block_indexes: set = set()
+        out: List[str] = []
+        pending_text: List[str] = []
+        pending_index: Optional[int] = None
+        saw_any_text_delta = False
+
+        def flush() -> None:
+            nonlocal pending_text, pending_index
+            if pending_text:
+                merged = {
+                    "type": "content_block_delta",
+                    "index": pending_index if pending_index is not None else 0,
+                    "delta": {"type": "text_delta", "text": "".join(pending_text)},
+                }
+                out.append("data: " + json.dumps(merged))
+                pending_text = []
+                pending_index = None
+
+        for ev in normalized:
+            idx = ev.find("data:")
+            if idx == -1:
+                # Bare "event: <name>" line. The legacy converter turns this
+                # into an empty ModelResponseStream that contributes nothing
+                # to stream_chunk_builder. Drop the high-frequency interior
+                # markers (content_block_delta / ping); keep every other
+                # bare event line verbatim so chunk ordering and the
+                # load-bearing chunks[0] (event: message_start) are retained.
+                name = ev[len("event:") :].strip() if ev.startswith("event:") else ""
+                if name in ("content_block_delta", "ping"):
+                    continue
+                flush()
+                out.append(ev)
+                continue
+
+            json_str = ev[idx + len("data:") :].strip()
+            try:
+                data = json.loads(json_str)
+            except (json.JSONDecodeError, ValueError):
+                return None
+
+            etype = data.get("type")
+            if etype == "content_block_start":
+                block = data.get("content_block") or {}
+                if block.get("type") != "text":
+                    return None
+                text_block_indexes.add(data.get("index"))
+                flush()
+                out.append(ev)
+            elif etype == "content_block_delta":
+                delta = data.get("delta") or {}
+                dtype = delta.get("type")
+                if (
+                    dtype
+                    in AnthropicPassthroughLoggingHandler._FAST_PATH_DISALLOWED_DELTA_TYPES
+                ):
+                    return None
+                if dtype != "text_delta":
+                    return None
+                cur_index = data.get("index")
+                if cur_index not in text_block_indexes:
+                    return None
+                # Defensive: Anthropic sends blocks strictly sequentially
+                # (start/deltas/stop, then next block), so pending_text from
+                # block N must be flushed by content_block_stop before block
+                # N+1's deltas arrive. If we ever see a delta whose index
+                # disagrees with the current pending buffer, the stream is
+                # interleaved -- fall back to legacy rather than risk merging
+                # text from different blocks under a single index.
+                if (
+                    pending_text
+                    and pending_index is not None
+                    and cur_index != pending_index
+                ):
+                    return None
+                saw_any_text_delta = True
+                pending_index = cur_index
+                pending_text.append(delta.get("text") or "")
+            elif etype == "ping":
+                # Interior no-op; legacy maps it to an empty chunk.
+                continue
+            else:
+                # message_start / content_block_stop / message_delta /
+                # message_stop / error: pass through unchanged.
+                flush()
+                out.append(ev)
+
+        flush()
+
+        if not saw_any_text_delta:
+            return None
+        return out
+
+    @staticmethod
+    def _build_complete_streaming_response_legacy(
+        all_chunks: Sequence[Union[str, bytes]],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        model: str,
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+        """
+        Original reconstruction: convert every SSE event to a generic chunk
+        and assemble via stream_chunk_builder. Kept verbatim as the fallback
+        / source of truth for the fast path's parity test.
 
         - Splits multi-event chunks into individual SSE events
         - Converts str chunks to generic chunks

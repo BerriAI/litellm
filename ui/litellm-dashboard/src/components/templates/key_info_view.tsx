@@ -509,7 +509,7 @@ export default function KeyInfoView({
                   <Text>
                     of{" "}
                     {currentKeyData.max_budget !== null
-                      ? `$${formatNumberWithCommas(currentKeyData.max_budget)}`
+                      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                       : "Unlimited"}
                   </Text>
                 </div>

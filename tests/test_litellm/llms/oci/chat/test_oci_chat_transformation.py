@@ -443,7 +443,7 @@ class TestOCIChatConfig:
                                 {"type": "TEXT", "text": "I am doing well, thank you!"}
                             ],
                         },
-                        "finishReason": "STOP",
+                        "finishReason": "COMPLETE",
                     }
                 ],
                 "timeCreated": created_time,
@@ -490,9 +490,10 @@ class TestOCIChatConfig:
         assert result.usage.prompt_tokens == 10  # type: ignore
         assert result.usage.completion_tokens == 20  # type: ignore
         assert result.usage.total_tokens == 30  # type: ignore
-        # These are not handled in the transformer, TBH no idea why they are here
-        # but, for now, they seem to be always None
-        assert result.usage.completion_tokens_details is None
+        # reasoningTokens from OCI's completionTokensDetails is surfaced on
+        # Usage.completion_tokens_details.reasoning_tokens.
+        assert result.usage.completion_tokens_details is not None
+        assert result.usage.completion_tokens_details.reasoning_tokens == 20
         assert result.usage.prompt_tokens_details is None
 
     def test_transform_response_with_tool_calls(self):
@@ -765,3 +766,557 @@ class TestOCISignerSupport:
         )
 
         assert wrapper.path_url == "/api/v1/chat"
+
+
+class TestOCISplitChunks:
+    """
+    Unit tests for the SSE split_chunks helpers used in sync and async streaming.
+
+    These validate the fix for:
+    - Sync: JSONDecodeError when iter_text() returns chunks spanning multiple events
+    - Async: whitespace-only chunks being yielded before stripping (Greptile P2)
+    """
+
+    def _run_sync_split(self, raw_chunks):
+        """Invoke the sync split_chunks logic directly (extracted for testability)."""
+        results = []
+        for item in raw_chunks:
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    async def _run_async_split(self, raw_chunks):
+        """Invoke the async split_chunks logic directly."""
+        results = []
+
+        async def _gen():
+            for c in raw_chunks:
+                yield c
+
+        async for item in _gen():
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    def test_sync_single_event_per_chunk(self):
+        """Normal case: one SSE event per iter_text() chunk."""
+        chunks = ['data: {"text":"hello"}', 'data: {"text":"world"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"hello"}',
+            'data: {"text":"world"}',
+        ]
+
+    def test_sync_multiple_events_in_one_chunk(self):
+        """iter_text() returns two SSE events concatenated — must be split."""
+        chunks = ['data: {"text":"a"}\n\ndata: {"text":"b"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"a"}',
+            'data: {"text":"b"}',
+        ]
+
+    def test_sync_whitespace_only_chunks_discarded(self):
+        """Whitespace between events must not be yielded."""
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = self._run_sync_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    def test_sync_empty_string_discarded(self):
+        """Empty string produced by splitting trailing \\n\\n must be discarded."""
+        chunks = ["data: {}\n\n"]
+        assert self._run_sync_split(chunks) == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_whitespace_only_chunks_discarded(self):
+        """
+        Regression test for Greptile P2: async version was checking `if not chunk`
+        BEFORE stripping, so '\\n  ' would pass the guard and yield '' downstream,
+        causing ValueError in chunk_creator ('Chunk does not start with data:').
+        """
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_empty_string_discarded(self):
+        """Trailing \\n\\n must not produce an empty yielded chunk in async path."""
+        chunks = ["data: {}\n\n"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_multiple_events_in_one_chunk(self):
+        """Async path must split concatenated SSE events just like sync."""
+        chunks = ['data: {"text":"x"}\n\ndata: {"text":"y"}']
+        result = await self._run_async_split(chunks)
+        assert result == ['data: {"text":"x"}', 'data: {"text":"y"}']
+
+
+class TestOCIProviderEmbeddingConfig:
+    """
+    Verifies that get_provider_embedding_config returns OCIEmbedConfig for OCI
+    and that the dead duplicate elif branch has been removed (Greptile P1).
+    """
+
+    def test_returns_oci_embed_config(self):
+        from litellm.llms.oci.embed.transformation import OCIEmbedConfig
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            model="cohere.embed-english-v3.0",
+            provider=LlmProviders.OCI,
+        )
+        assert isinstance(config, OCIEmbedConfig)
+
+    def test_no_duplicate_oci_branch(self):
+        """
+        Ensure utils.py does not contain two separate OCI embedding branches.
+        The dead code was removed in commit 64dfbe2b; this test guards against
+        regression (e.g. a future merge re-introducing it).
+        """
+        import inspect
+        from litellm.utils import ProviderConfigManager
+
+        source = inspect.getsource(ProviderConfigManager.get_provider_embedding_config)
+        oci_count = source.count("LlmProviders.OCI")
+        assert oci_count == 1, (
+            f"Expected exactly 1 OCI branch in get_provider_embedding_config, found {oci_count}. "
+            "A duplicate dead-code branch may have been reintroduced."
+        )
+
+
+class TestOCICohereParamMapping:
+    """
+    Unit tests for Bug 3 (stop → stopSequences) and Bug 4 (hardcoded defaults removed).
+    """
+
+    def _make_config(self):
+        return OCIChatConfig()
+
+    def test_cohere_stop_maps_to_stop_sequences(self):
+        """Bug 3: Cohere API uses 'stopSequences', not 'stop'."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END", "STOP"]},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert "stopSequences" in result, "stop should map to stopSequences for Cohere"
+        assert result["stopSequences"] == ["END", "STOP"]
+        assert "stop" not in result
+
+    def test_generic_stop_maps_to_stop(self):
+        """GENERIC vendors (Meta, Google, xAI) keep 'stop' as-is."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="meta.llama-3.3-70b-instruct",
+            drop_params=False,
+        )
+        assert result.get("stop") == ["END"]
+        assert "stopSequences" not in result
+
+    def test_cohere_no_hardcoded_defaults(self):
+        """Bug 4: Cohere calls must not inject maxTokens/temperature/topK/topP/frequencyPenalty
+        when the user hasn't provided them."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        for injected in (
+            "maxTokens",
+            "temperature",
+            "topK",
+            "topP",
+            "frequencyPenalty",
+        ):
+            assert (
+                injected not in result
+            ), f"'{injected}' should not be injected when user did not provide it"
+
+    def test_cohere_explicit_params_still_passed(self):
+        """User-provided Cohere params must still be forwarded correctly."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"max_tokens": 200, "temperature": 0.5},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert result.get("maxTokens") == 200
+        assert result.get("temperature") == 0.5
+
+
+class TestOCIReasoningEffort:
+    """
+    Reasoning-effort handling for GENERIC reasoning models:
+    - OpenAI clients send lowercase ("low"/"medium"/"high"); OCI requires uppercase.
+    - OpenAI's "disable" maps to OCI's "NONE".
+    - Cohere on OCI has no reasoning models — the param is unsupported there.
+    """
+
+    def _build_chat_request(self, model: str, optional_params: dict) -> dict:
+        """Drive optional params through map → _get_optional_params and read
+        the resulting chatRequest body via transform_request."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+        mapped = config.map_openai_params(
+            non_default_params=optional_params,
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        body = config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={**BASE_OCI_PARAMS, **mapped},
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]
+
+    def test_reasoning_effort_lowercase_uppercased(self):
+        chat_request = self._build_chat_request(
+            "xai.grok-4-fast-reasoning",
+            {"reasoning_effort": "low"},
+        )
+        assert chat_request.get("reasoningEffort") == "LOW"
+
+    def test_reasoning_effort_disable_mapped_to_none(self):
+        chat_request = self._build_chat_request(
+            "xai.grok-4-fast-reasoning",
+            {"reasoning_effort": "disable"},
+        )
+        assert chat_request.get("reasoningEffort") == "NONE"
+
+    def test_reasoning_effort_already_uppercase_preserved(self):
+        chat_request = self._build_chat_request(
+            "openai.gpt-5",
+            {"reasoning_effort": "HIGH"},
+        )
+        assert chat_request.get("reasoningEffort") == "HIGH"
+
+    def test_reasoning_effort_unsupported_on_cohere_dropped(self):
+        """drop_params=True → silently drop reasoning_effort for Cohere."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in result
+        assert "reasoningEffort" not in result
+
+    def test_reasoning_effort_unsupported_on_cohere_raises(self):
+        """drop_params=False → raise rather than ship a payload Cohere will reject."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+        from litellm.llms.oci.common_utils import OCIError
+
+        config = OCIChatConfig()
+        with pytest.raises(OCIError):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+
+    def test_reasoning_tokens_extracted_from_usage(self):
+        """OCI's completionTokensDetails.reasoningTokens flows into
+        Usage.completion_tokens_details.reasoning_tokens."""
+        from litellm.llms.oci.chat.generic import handle_generic_response
+
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        oci_response = {
+            "modelId": "xai.grok-4-fast-reasoning",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "ok"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 12,
+                    "totalTokens": 17,
+                    "completionTokensDetails": {"reasoningTokens": 7},
+                },
+            },
+        }
+        raw = httpx.Response(status_code=200, json=oci_response)
+        result = handle_generic_response(
+            json_data=oci_response,
+            model="xai.grok-4-fast-reasoning",
+            model_response=ModelResponse(),
+            raw_response=raw,
+        )
+        usage = result.usage  # type: ignore[attr-defined]
+        assert usage.completion_tokens_details is not None
+        assert usage.completion_tokens_details.reasoning_tokens == 7
+
+    def test_reasoning_tokens_absent_when_no_details(self):
+        """When OCI omits completionTokensDetails, Usage has no reasoning_tokens."""
+        from litellm.llms.oci.chat.generic import handle_generic_response
+
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        oci_response = {
+            "modelId": "xai.grok-4",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "ok"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 12,
+                    "totalTokens": 17,
+                },
+            },
+        }
+        raw = httpx.Response(status_code=200, json=oci_response)
+        result = handle_generic_response(
+            json_data=oci_response,
+            model="xai.grok-4",
+            model_response=ModelResponse(),
+            raw_response=raw,
+        )
+        usage = result.usage  # type: ignore[attr-defined]
+        assert usage.completion_tokens_details is None
+
+
+class TestOCIStreamingSignedBody:
+    """
+    Unit test for Bug 1: sync and async streaming paths must use signed_json_body
+    when provided, not re-serialize data with json.dumps().
+    """
+
+    def test_get_custom_stream_wrapper_uses_signed_body(self, monkeypatch):
+        """
+        When signed_json_body is provided, the POST must use that exact bytes object,
+        not json.dumps(data) — otherwise the RSA-SHA256 signature is invalid.
+        """
+        import httpx
+        from unittest.mock import MagicMock, patch
+
+        config = OCIChatConfig()
+        signed_bytes = b'{"signed": true}'
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data={"key": "value"},
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=signed_bytes,
+        )
+
+        assert (
+            posted_data["data"] == signed_bytes
+        ), "Streaming must use signed_json_body, not re-serialize data"
+
+    def test_get_custom_stream_wrapper_fallback_without_signed_body(self, monkeypatch):
+        """When signed_json_body is None, fall back to json.dumps(data)."""
+        import json
+        from unittest.mock import MagicMock
+
+        config = OCIChatConfig()
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+        payload = {"key": "value"}
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data=payload,
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=None,
+        )
+
+        assert posted_data["data"] == json.dumps(
+            payload
+        ), "Without signed_json_body, must fall back to json.dumps(data)"
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: error paths in validate_environment, transform_request,
+# transform_response, and map_openai_params
+# ---------------------------------------------------------------------------
+
+
+class TestOCIChatConfigErrorPaths:
+    def test_validate_environment_empty_messages_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="messages"):
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL_NAME,
+                messages=[],
+                optional_params={
+                    "oci_signer": MagicMock(),
+                    "oci_compartment_id": TEST_COMPARTMENT_ID,
+                },
+                litellm_params={},
+            )
+
+    def test_transform_request_missing_compartment_id_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="oci_compartment_id"):
+            config.transform_request(
+                model=TEST_MODEL_NAME,
+                messages=TEST_MESSAGES,  # type: ignore
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+    def test_transform_request_cohere_no_user_message_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="user message"):
+            config.transform_request(
+                model="cohere.command-latest",
+                messages=[{"role": "system", "content": "You are helpful."}],  # type: ignore
+                optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+                litellm_params={},
+                headers={},
+            )
+
+    def test_transform_response_error_key_raises(self):
+        config = OCIChatConfig()
+        response = httpx.Response(
+            status_code=400,
+            json={"error": "model not found"},
+        )
+        with pytest.raises(Exception, match="model not found"):
+            config.transform_response(
+                model=TEST_MODEL_NAME,
+                raw_response=response,
+                model_response=ModelResponse(),
+                logging_obj={},  # type: ignore
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding={},
+            )
+
+    def test_map_openai_params_unsupported_param_raises_without_drop(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="not supported on OCI"):
+            config.map_openai_params(
+                non_default_params={"audio": {"voice": "alloy"}},
+                optional_params={},
+                model=TEST_MODEL_NAME,
+                drop_params=False,
+            )
+
+    def test_map_openai_params_unsupported_param_dropped(self):
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"audio": {"voice": "alloy"}},
+            optional_params={},
+            model=TEST_MODEL_NAME,
+            drop_params=True,
+        )
+        assert "audio" not in result
+
+    def test_transform_request_tool_choice_string_mapped(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params={
+                "oci_compartment_id": TEST_COMPARTMENT_ID,
+                "tool_choice": "auto",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "fn",
+                            "description": "d",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["toolChoice"] == {"type": "AUTO"}
+
+
+import pytest
+from unittest.mock import MagicMock

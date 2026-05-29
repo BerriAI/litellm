@@ -4,11 +4,12 @@ import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
-// Written to sessionStorage so both the admin hook (useMcpOAuthFlow) and the
-// user hook (useUserMcpOAuthFlow) can pick up the result.  Each hook reads
-// its own namespace to avoid cross-flow collisions.
+// Written to sessionStorage so the admin hook (useMcpOAuthFlow), the user hook
+// (useUserMcpOAuthFlow), and the tools re-auth hook (useToolsOAuthFlow) can each
+// pick up the result.  Each hook reads its own namespace to avoid cross-flow collisions.
 const ADMIN_RESULT_KEY = "litellm-mcp-oauth-result";
 const USER_RESULT_KEY = "litellm-user-mcp-oauth-result";
+const TOOLS_RESULT_KEY = "litellm-tools-mcp-oauth-result";
 const RETURN_URL_STORAGE_KEY = "litellm-mcp-oauth-return-url";
 
 const resolveDefaultRedirect = () => {
@@ -50,11 +51,12 @@ const McpOAuthCallbackContent = () => {
     }
 
     try {
-      // Write to both namespace keys (admin and user) so whichever hook is
-      // active can consume the result.  sessionStorage only — no localStorage.
+      // Write to all namespace keys so whichever hook is active can consume
+      // the result.  sessionStorage only — no localStorage.
       const serialized = JSON.stringify(payload);
       setSecureItem(ADMIN_RESULT_KEY, serialized);
       setSecureItem(USER_RESULT_KEY, serialized);
+      setSecureItem(TOOLS_RESULT_KEY, serialized);
     } catch (err) {
       // Silently ignore storage errors
     }

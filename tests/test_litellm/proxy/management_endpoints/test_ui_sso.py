@@ -2218,6 +2218,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request
         mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
 
         # Test data
         session_key = "cli-session-4567890"
@@ -2242,11 +2243,14 @@ class TestCLIKeyRegenerationFlow:
             "user_code_verified": False,
             "session_data": None,
         }
-        mock_request.url_for.return_value = (
-            "https://test.example.com/sso/cli/complete/cli-session-4567890"
-        )
-
         with (
+            patch.dict(
+                os.environ,
+                {
+                    "PROXY_BASE_URL": "https://test.example.com",
+                    "SERVER_ROOT_PATH": "",
+                },
+            ),
             patch(
                 "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
                 return_value=mock_user_info,
@@ -2290,6 +2294,10 @@ class TestCLIKeyRegenerationFlow:
             assert result.status_code == 200
             # Verify response contains success message (response is HTML)
             assert result.body is not None
+            assert (
+                'action="https://test.example.com/sso/cli/complete/cli-session-4567890"'
+                in result.body.decode()
+            )
 
     @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
@@ -2430,6 +2438,7 @@ class TestCLIKeyRegenerationFlow:
                 request=mock_request,
                 key="cli-new-session-key-456",
                 result=mock_result,
+                received_response=None,
             )
 
     def test_get_redirect_url_does_not_include_existing_key_in_url(self):
@@ -2488,6 +2497,11 @@ class TestCLIKeyRegenerationFlow:
             "user_id": "test-user-789",
             "user_role": "internal_user",
             "teams": ["team-a", "team-b", "team-c"],
+            "team_details": [
+                {"team_id": "team-a", "team_alias": "Team A"},
+                {"team_id": "team-b", "team_alias": "Team B"},
+                {"team_id": "team-c", "team_alias": "Team C"},
+            ],
             "models": ["gpt-4"],
             "user_email": "test@example.com",
         }
@@ -2542,6 +2556,7 @@ class TestCLIKeyRegenerationFlow:
             mock_get_jwt.assert_called_once()
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
+            assert jwt_call_args.kwargs["team_alias"] == "Team B"
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
@@ -5542,6 +5557,289 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     assert result.extra_fields is not None
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
+
+
+class TestCliSsoAttributionMetadata:
+    """CLI SSO allowlisted OIDC claim persistence and poll exposure."""
+
+    def test_parse_cli_sso_claim_map(self, monkeypatch):
+        from litellm.proxy.management_endpoints import ui_sso
+
+        monkeypatch.setattr(
+            ui_sso,
+            "CLI_SSO_CLAIM_MAP",
+            "employment_type->metadata.acme_employment_type, org_info.department -> department",
+        )
+        assert ui_sso._parse_cli_sso_claim_map() == [
+            ("employment_type", "acme_employment_type"),
+            ("org_info.department", "department"),
+        ]
+
+    def test_build_cli_sso_attribution_metadata_filters_non_scalars(self, monkeypatch):
+        from litellm.proxy.management_endpoints import ui_sso
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+
+        monkeypatch.setattr(
+            ui_sso,
+            "CLI_SSO_CLAIM_MAP",
+            "employment_type->acme_employment_type,access_token->should_drop,group->groups",
+        )
+
+        result = CustomOpenID(
+            id="user-1",
+            email="user@example.com",
+            display_name="User",
+            provider="generic",
+            team_ids=[],
+            extra_fields={
+                "employment_type": "full_time",
+                "access_token": "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+                "group": ["team-a", "team-b"],
+            },
+        )
+
+        metadata = ui_sso.build_cli_sso_attribution_metadata(result=result)
+        assert metadata == {"acme_employment_type": "full_time"}
+
+    def test_build_cli_sso_attribution_metadata_from_oidc_dict(self, monkeypatch):
+        from litellm.proxy.management_endpoints import ui_sso
+
+        monkeypatch.setattr(
+            ui_sso,
+            "CLI_SSO_CLAIM_MAP",
+            "org_info.department->department",
+        )
+
+        metadata = ui_sso.build_cli_sso_attribution_metadata(
+            result={
+                "sub": "user-1",
+                "email": "user@example.com",
+                "org_info": {"department": "Engineering"},
+            }
+        )
+        assert metadata == {"department": "Engineering"}
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_passes_user_defined_values_for_new_users(self):
+        """First CLI SSO login must supply SSOUserDefinedValues so upsert can create the user."""
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints import ui_sso
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
+        session_key = "cli-session-new-user"
+        mock_user_info = LiteLLM_UserTable(
+            user_id="cli-test-user",
+            user_role="internal_user",
+            teams=[],
+            models=[],
+        )
+        mock_sso_result = CustomOpenID(
+            id="cli-test-user",
+            email="cli-test@example.com",
+            display_name="cli-test-user",
+            provider="generic",
+            team_ids=[],
+        )
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        get_user_info_mock = AsyncMock(return_value=mock_user_info)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                get_user_info_mock,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
+        ):
+            await ui_sso.cli_sso_callback(
+                request=mock_request,
+                key=session_key,
+                result=mock_sso_result,
+            )
+
+        get_user_info_mock.assert_awaited_once()
+        assert get_user_info_mock.call_args.kwargs["user_defined_values"] is not None
+        assert (
+            get_user_info_mock.call_args.kwargs["user_defined_values"]["user_id"]
+            == "cli-test-user"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_rejects_restricted_sso_group(self):
+        """CLI SSO must enforce restricted_sso_group before upserting the user."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints import ui_sso
+        from litellm.proxy.management_endpoints.types import CustomOpenID
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        mock_sso_result = CustomOpenID(
+            id="cli-test-user",
+            email="cli-test@example.com",
+            display_name="cli-test-user",
+            provider="generic",
+            team_ids=["other-group"],
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                new=AsyncMock(),
+            ) as get_user_info_mock,
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {
+                    "ui_access_mode": {
+                        "type": "restricted_sso_group",
+                        "restricted_sso_group": "required-group",
+                    }
+                },
+            ),
+        ):
+            with pytest.raises(ProxyException):
+                await ui_sso.cli_sso_callback(
+                    request=mock_request,
+                    key="cli-session-restricted",
+                    result=mock_sso_result,
+                    received_response={"groups": ["other-group"]},
+                )
+
+        get_user_info_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_persists_attribution_metadata(self, monkeypatch):
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints import ui_sso
+
+        monkeypatch.setattr(
+            ui_sso,
+            "CLI_SSO_CLAIM_MAP",
+            "employment_type->acme_employment_type",
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.base_url = "http://internal-proxy.local/"
+        session_key = "cli-session-4567890"
+        mock_user_info = LiteLLM_UserTable(
+            user_id="test-user-123",
+            user_role="internal_user",
+            teams=["team1"],
+            models=["gpt-4"],
+        )
+        mock_sso_result = {
+            "user_email": "test@example.com",
+            "user_id": "test-user-123",
+            "employment_type": "contractor",
+        }
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=MagicMock(metadata={"auth_provider": "generic"})
+        )
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "PROXY_BASE_URL": "https://test.example.com",
+                    "SERVER_ROOT_PATH": "",
+                },
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=mock_user_info,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.user_custom_sso", None),
+            patch(
+                "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
+                return_value="<html>Success</html>",
+            ),
+        ):
+            await ui_sso.cli_sso_callback(
+                request=mock_request,
+                key=session_key,
+                result=mock_sso_result,
+            )
+
+        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        assert flow_data["session_data"]["attribution_metadata"] == {
+            "acme_employment_type": "contractor"
+        }
+        mock_prisma.db.litellm_usertable.update_many.assert_awaited_once()
+        update_data = mock_prisma.db.litellm_usertable.update_many.call_args.kwargs[
+            "data"
+        ]
+        assert update_data["metadata"]["acme_employment_type"] == "contractor"
+        assert update_data["metadata"]["auth_provider"] == "generic"
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_key_returns_attribution_metadata(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        session_key = "cli-session-789123"
+        session_data = {
+            "user_id": "test-user-456",
+            "user_role": "internal_user",
+            "teams": ["team-a", "team-b"],
+            "models": ["gpt-4"],
+            "attribution_metadata": {
+                "acme_employment_type": "full_time",
+                "org": {"cost_center": "CC-42"},
+            },
+        }
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            result = await cli_poll_key(
+                key_id=session_key,
+                team_id=None,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+        assert result["attribution_metadata"] == {
+            "acme_employment_type": "full_time",
+            "org.cost_center": "CC-42",
+        }
 
 
 class TestValidateReturnTo:

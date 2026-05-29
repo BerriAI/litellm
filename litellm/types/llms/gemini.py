@@ -133,7 +133,7 @@ class BidiGenerateContentSetup(TypedDict, total=False):
     tools: List[Tools]
     """The tools to be used for the realtime session."""
 
-    realtimeInputConfig: dict
+    realtimeInputConfig: BidiGenerateContentRealtimeInputConfig
     """The realtime config to be used for the realtime session."""
 
     sessionResumption: dict

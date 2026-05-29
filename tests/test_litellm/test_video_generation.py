@@ -398,6 +398,34 @@ class TestVideoGeneration:
         )
         assert abs(cost - 0.8) < 0.001
 
+    def test_completion_cost_video_edit_uses_video_calculator(self):
+        """video_edit is charged via the same video cost path as create_video."""
+        from litellm.cost_calculator import completion_cost
+
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        type(mock_response)._hidden_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.05,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="vertex_ai/veo-3.1-generate-001",
+            call_type="video_edit",
+            custom_llm_provider="vertex_ai",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.5
+
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
         config = OpenAIVideoConfig()

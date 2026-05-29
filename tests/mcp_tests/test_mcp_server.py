@@ -382,6 +382,11 @@ async def test_mcp_http_transport_tool_not_found():
         }
     )
 
+    # Mapping populated for this server but not for the requested tool
+    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+        "test_http_server"
+    )
+
     # Try to call a tool that doesn't exist in mapping
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
@@ -881,6 +886,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                user_api_key_auth=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1764,6 +1770,26 @@ def test_get_server_auth_header_fallback_to_default():
     assert result == "Bearer default_token"
 
 
+def test_get_server_auth_header_hyphenated_alias_sanitized_header_key():
+    """Header keys use sanitized alias; lookup must match legacy hyphenated aliases."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_server_auth_header,
+    )
+
+    mock_server = MagicMock()
+    mock_server.alias = "GitHub-MCP"
+    mock_server.server_name = "github_mcp_server"
+
+    mcp_server_auth_headers = {
+        "github_mcp": {"Authorization": "Bearer github-mcp-token"},
+    }
+
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, "Bearer default_token"
+    )
+    assert result == {"Authorization": "Bearer github-mcp-token"}
+
+
 def test_get_server_auth_header_no_auth_headers():
     """Test _get_server_auth_header function with no auth headers."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
@@ -1856,6 +1882,7 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            user_api_key_auth=None,
         )
 
         # Verify the result

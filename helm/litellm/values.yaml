@@ -14,16 +14,33 @@ ingress:
   host: ""        # optional; if set, becomes the rule's host
   tls: []
 
-# Shared ServiceAccount used by all three component Deployments. Set
-# `create: true` to have the chart provision it (e.g. when wiring an EKS
-# Pod Identity association by SA name). Set `name` to use an existing SA
-# (chart-created or out-of-band). When both are empty / false, pods run
-# with the namespace's `default` SA.
-serviceAccount:
-  create: false
-  automount: true
-  annotations: {}
-  name: ""
+# Per-component ServiceAccounts for gateway, backend, and ui.
+#
+# Each section mirrors the old shared serviceAccount shape. Set `create:
+# true` to have the chart provision the SA (useful for EKS Pod Identity /
+# GKE Workload Identity annotations). Set `name` to bind an existing SA.
+# When both are unset the component pod runs with the namespace `default` SA.
+#
+# The UI SA deliberately defaults to `automount: false` — the static nginx
+# container does not need the K8s API and should not carry a projected
+# ServiceAccount token that a compromised container could use to call the
+# cloud-provider metadata service or the K8s API.
+serviceAccounts:
+  gateway:
+    create: false
+    automount: true
+    annotations: {}
+    name: ""
+  backend:
+    create: false
+    automount: true
+    annotations: {}
+    name: ""
+  ui:
+    create: false
+    automount: false
+    annotations: {}
+    name: ""
 
 # Pre-install / pre-upgrade Helm hook that runs `prisma migrate deploy`
 # against the writer database, creating the LiteLLM schema (tables that

@@ -44,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -1123,6 +1124,9 @@ async def bedrock_proxy_route(
         _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    # SigV4 signs an exact payload; pass-through must send prepped.body, not json.dumps
+    # of a dict that hooks may mutate (logging_obj, metadata, etc.).
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
     received_value = await endpoint_func(
         request,
         fastapi_response,

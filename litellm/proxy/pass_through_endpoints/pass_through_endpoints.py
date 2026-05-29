@@ -6,7 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -62,6 +62,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     PassthroughStandardLoggingPayload,
 )
 
@@ -735,6 +736,22 @@ async def pass_through_request(  # noqa: PLR0915
             str(url)
         )
 
+        # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
+        # signed via request.state; we must send those instead of re-encoding the
+        # parsed dict (hooks mutate it, breaking the signature / Content-Length).
+        # Tolerate request objects without `state` (test fixtures) and only honor
+        # values httpx accepts for `content=`.
+        _request_state = getattr(request, "state", None)
+        state_raw_body: Optional[Union[str, bytes]] = (
+            getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
+            if _request_state is not None
+            else None
+        )
+        if state_raw_body is not None and not isinstance(
+            state_raw_body, (str, bytes, bytearray)
+        ):
+            state_raw_body = None
+
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
         is_multipart = (
@@ -883,12 +900,19 @@ async def pass_through_request(  # noqa: PLR0915
                     )
                 )
             else:
+                # SigV4-signed callers (Bedrock) supply the exact pre-signed bytes;
+                # otherwise httpx encodes the parsed JSON dict as before.
+                body_kwargs: Dict[str, Any] = (
+                    {"content": state_raw_body}
+                    if state_raw_body is not None
+                    else {"json": _parsed_body}
+                )
                 req = async_client.build_request(
-                    "POST",
+                    request.method,
                     url,
-                    json=_parsed_body,
                     params=requested_query_params,
                     headers=headers,
+                    **body_kwargs,
                 )
 
                 response = await async_client.send(req, stream=stream)
@@ -917,17 +941,28 @@ async def pass_through_request(  # noqa: PLR0915
                 status_code=response.status_code,
             )
 
-        response = (
-            await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
-                request=request,
-                async_client=async_client,
+        if state_raw_body is not None:
+            # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
+            # to be forwarded so the signature/Content-Length stay valid.
+            response = await async_client.request(
+                method=request.method,
                 url=url,
                 headers=headers,
-                requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
-                forward_multipart=is_multipart,
+                params=requested_query_params,
+                content=state_raw_body,
             )
-        )
+        else:
+            response = (
+                await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+                    request=request,
+                    async_client=async_client,
+                    url=url,
+                    headers=headers,
+                    requested_query_params=requested_query_params,
+                    _parsed_body=_parsed_body,
+                    forward_multipart=is_multipart,
+                )
+            )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         if _is_streaming_response(response) is True:
@@ -1225,7 +1260,7 @@ async def _parse_request_data_by_content_type(
 def create_pass_through_route(
     endpoint,
     target: str,
-    custom_headers: Optional[dict] = None,
+    custom_headers: Optional[Mapping[str, Any]] = None,
     _forward_headers: Optional[bool] = False,
     _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
@@ -1272,11 +1307,14 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
             )
 
-            path = request.url.path
+            path = get_request_route(request)
 
             # Parse request data based on content type
             (
@@ -1335,9 +1373,12 @@ def create_pass_through_route(
                 )
             )
 
-            # Ensure custom_headers is a dict
+            # Ensure custom_headers is a dict. Botocore returns a HeadersDict
+            # for SigV4-prepared requests, which is a Mapping but not a dict.
             headers_dict = (
-                param_custom_headers if isinstance(param_custom_headers, dict) else {}
+                dict(param_custom_headers)
+                if isinstance(param_custom_headers, Mapping)
+                else {}
             )
 
             # Ensure query_params and custom_body are dicts or None
@@ -1380,6 +1421,8 @@ def create_pass_through_route(
             finally:
                 if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
+                if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
+                    delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
 
     return endpoint_func
 

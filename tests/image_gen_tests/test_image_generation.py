@@ -7,7 +7,6 @@ import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -136,6 +135,51 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         }
 
 
+# Base64 placeholder used for mocked Bedrock image responses (a 1x1 PNG).
+_MOCK_BEDROCK_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+
+async def _assert_mocked_bedrock_image_generation(call_args: dict) -> None:
+    """Run ``aimage_generation`` with the Bedrock HTTP call mocked.
+
+    The CI account is not entitled to Nova Canvas, so the network call is
+    replaced with a canned Bedrock response. This keeps the request transform,
+    response transform, and cost-tracking path under test without live access.
+    """
+    mock_payload = {"images": [_MOCK_BEDROCK_IMAGE_B64]}
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_payload
+    mock_response.text = json.dumps(mock_payload)
+    mock_response.headers = {}
+
+    custom_logger = TestCustomLogger()
+    litellm.logging_callback_manager._reset_all_callbacks()
+    litellm.callbacks = [custom_logger]
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        response = await litellm.aimage_generation(
+            **call_args,
+            prompt="A image of a otter",
+            aws_access_key_id="fake-access-key-id",
+            aws_secret_access_key="fake-secret-access-key",
+        )
+
+    await asyncio.sleep(1)
+
+    assert custom_logger.standard_logging_payload is not None
+    assert custom_logger.standard_logging_payload["response_cost"] is not None
+    assert custom_logger.standard_logging_payload["response_cost"] > 0
+    assert response.data is not None
+    for d in response.data:
+        assert isinstance(d, Image)
+        assert d.b64_json is not None or d.url is not None
+
+
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
@@ -147,6 +191,12 @@ class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
             "taskType": "TEXT_IMAGE",
             "aws_region_name": "us-east-1",
         }
+
+    @pytest.mark.asyncio(scope="module")
+    async def test_basic_image_generation(self):
+        await _assert_mocked_bedrock_image_generation(
+            self.get_base_image_generation_call_args()
+        )
 
 
 class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
@@ -161,6 +211,12 @@ class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
             "colorGuidedGenerationParams": {"colors": ["#FFFFFF"]},
             "aws_region_name": "us-east-1",
         }
+
+    @pytest.mark.asyncio(scope="module")
+    async def test_basic_image_generation(self):
+        await _assert_mocked_bedrock_image_generation(
+            self.get_base_image_generation_call_args()
+        )
 
 
 class TestOpenAIGPTImage1(BaseImageGenTest):

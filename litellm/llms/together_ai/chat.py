@@ -1,5 +1,5 @@
 """
-Support for OpenAI's `/v1/chat/completions` endpoint. 
+Support for OpenAI's `/v1/chat/completions` endpoint.
 
 Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 

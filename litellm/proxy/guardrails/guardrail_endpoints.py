@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from litellm.proxy.common_utils.path_utils import safe_join
@@ -2187,9 +2187,97 @@ async def test_custom_code_guardrail(
         )
 
 
+def _resolve_guardrail_input_type(
+    active_guardrail: CustomGuardrail, input_type: str
+) -> Literal["request", "response"]:
+    """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
+    if input_type == "request":
+        hook = getattr(active_guardrail, "event_hook", None)
+        if hook == GuardrailEventHooks.post_call or hook == "post_call":
+            return "response"
+    return "response" if input_type == "response" else "request"
+
+
+def _patch_logging_obj_for_guardrail(
+    litellm_logging_obj: Any, request: ApplyGuardrailRequest
+) -> None:
+    """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
+    litellm_logging_obj.call_type = "pass_through_endpoint"
+    litellm_logging_obj.model_call_details["call_type"] = "pass_through_endpoint"
+    litellm_logging_obj.update_messages(
+        request.messages
+        if request.messages
+        else [{"role": "user", "content": request.text}]
+    )
+
+
+async def _emit_guardrail_success_logs(
+    proxy_logging_obj: Any,
+    litellm_logging_obj: Any,
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    response: ApplyGuardrailResponse,
+    start_time: datetime,
+) -> ApplyGuardrailResponse:
+    """Fire proxy and LiteLLM success hooks after a successful guardrail run.
+
+    Each hook is wrapped defensively so a callback failure never prevents the
+    caller from receiving the guardrail response.  Returns the (possibly
+    hook-modified) response.
+    """
+    from litellm.litellm_core_utils.thread_pool_executor import (
+        executor as thread_pool_executor,
+    )
+
+    try:
+        modified = await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if isinstance(modified, ApplyGuardrailResponse):
+            response = modified
+    except Exception:
+        verbose_proxy_logger.exception("apply_guardrail: post_call_success_hook failed")
+
+    # Build the logging payload after post_call_success_hook so that logged
+    # data matches what the caller actually receives if the hook modified
+    # the response.
+    response_for_logging = {"response": response.model_dump(exclude_none=True)}
+
+    if litellm_logging_obj is not None:
+        end_time = datetime.now(timezone.utc)
+        try:
+            await litellm_logging_obj.async_success_handler(
+                result=response_for_logging,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False,
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "apply_guardrail: async_success_handler failed"
+            )
+        try:
+            thread_pool_executor.submit(
+                litellm_logging_obj.success_handler,
+                response_for_logging,
+                start_time,
+                end_time,
+                False,
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "apply_guardrail: success_handler submit failed"
+            )
+
+    return response
+
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
+    fastapi_request: Request,
     request: ApplyGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -2198,7 +2286,28 @@ async def apply_guardrail(
 
     This endpoint allows testing guardrails by applying them to custom text inputs.
     """
+    import traceback
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.litellm_core_utils.thread_pool_executor import (
+        executor as thread_pool_executor,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
     from litellm.proxy.utils import handle_exception_on_proxy
+
+    data: dict = {
+        "guardrail_name": request.guardrail_name,
+        "input": [request.text],
+        "messages": request.messages or [],
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    litellm_logging_obj = None
+    start_time = datetime.now(timezone.utc)
 
     try:
         active_guardrail: Optional[CustomGuardrail] = (
@@ -2212,23 +2321,25 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
-        request_data: dict = {}
-        if request.messages:
-            request_data["messages"] = request.messages
+        request_processor = ProxyBaseLLMRequestProcessing(data=data)
+        data, litellm_logging_obj = (
+            await request_processor.common_processing_pre_call_logic(
+                request=fastapi_request,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_logging_obj=proxy_logging_obj,
+                proxy_config=proxy_config,
+                route_type="apply_guardrail",
+            )
+        )
 
-        # Auto-detect input_type: if the caller didn't specify "response" but the
-        # guardrail only runs post_call (e.g. LLM-as-a-judge), use "response" so
-        # the test actually exercises the guardrail logic.
-        from litellm.types.guardrails import GuardrailEventHooks
+        if litellm_logging_obj is not None:
+            _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        resolved_input_type = request.input_type
-        if resolved_input_type == "request":
-            hook = getattr(active_guardrail, "event_hook", None)
-            if hook == GuardrailEventHooks.post_call or hook == "post_call":
-                resolved_input_type = "response"
-
-        _input_type: Literal["request", "response"] = (
-            "response" if resolved_input_type == "response" else "request"
+        request_data: dict = {"messages": request.messages} if request.messages else {}
+        _input_type = _resolve_guardrail_input_type(
+            active_guardrail, request.input_type
         )
         guardrailed_inputs = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
@@ -2236,12 +2347,54 @@ async def apply_guardrail(
             input_type=_input_type,
         )
         response_text = guardrailed_inputs.get("texts", [])
-
-        return ApplyGuardrailResponse(
+        response = ApplyGuardrailResponse(
             response_text=response_text[0] if response_text else request.text
         )
     except Exception as e:
+        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+            try:
+                await litellm_logging_obj.async_failure_handler(
+                    exception=e,
+                    traceback_exception=traceback.format_exc(),
+                )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "apply_guardrail: async_failure_handler failed"
+                )
+            try:
+                thread_pool_executor.submit(
+                    litellm_logging_obj.failure_handler,
+                    e,
+                    traceback.format_exc(),
+                )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "apply_guardrail: failure_handler submit failed"
+                )
+        try:
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=data,
+            )
+            if isinstance(transformed_exception, Exception):
+                e = transformed_exception
+        except Exception:
+            verbose_proxy_logger.exception(
+                "apply_guardrail: post_call_failure_hook failed"
+            )
         raise handle_exception_on_proxy(e)
+
+    # Success logging outside except so a hook error never triggers failure handlers.
+    response = await _emit_guardrail_success_logs(
+        proxy_logging_obj=proxy_logging_obj,
+        litellm_logging_obj=litellm_logging_obj,
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=response,
+        start_time=start_time,
+    )
+    return response
 
 
 # Usage (dashboard) endpoints: overview, detail, logs
