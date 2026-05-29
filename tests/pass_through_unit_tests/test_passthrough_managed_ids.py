@@ -374,6 +374,31 @@ class TestRewriteResponseIds:
         hook.store_unified_file_id.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_dedup_skips_cross_provider_file_row(self):
+        """Same raw file ID for a different provider must mint a new managed ID."""
+        azure_managed_id = new_managed_id("azure", "file-abc")
+        existing_row = MagicMock()
+        existing_row.unified_file_id = azure_managed_id
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        hook = _managed_files_hook()
+        body = {"id": "file-abc", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert decode(result["id"]).provider == "openai"
+        assert decode(result["id"]).raw_provider_id == "file-abc"
+        assert result["id"] != azure_managed_id
+        hook.store_unified_file_id.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_openai_passthrough_prefix_normalised(self):
         """Routes under /openai_passthrough/ work the same as /openai/."""
         pc = _prisma_client()
@@ -617,7 +642,9 @@ def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
     return pc
 
 
-def _fake_file_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
+def _fake_file_row(
+    unified_id: str, created_by: str = "user-1", team_id: str = "team-1"
+):
     row = MagicMock()
     row.unified_file_id = unified_id
     row.created_by = created_by
@@ -625,11 +652,14 @@ def _fake_file_row(unified_id: str, created_by: str = "user-1", team_id: str = "
     row.file_object = {"filename": "test.jsonl", "bytes": 42, "purpose": "batch"}
 
     import datetime
+
     row.created_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
     return row
 
 
-def _fake_batch_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
+def _fake_batch_row(
+    unified_id: str, created_by: str = "user-1", team_id: str = "team-1"
+):
     row = MagicMock()
     row.unified_object_id = unified_id
     row.created_by = created_by
@@ -638,6 +668,7 @@ def _fake_batch_row(unified_id: str, created_by: str = "user-1", team_id: str = 
     row.file_purpose = "batch"
 
     import datetime
+
     row.created_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
     return row
 
@@ -649,18 +680,24 @@ class TestListPassthroughIdsFromDb:
         assert is_passthrough_list_route("openai", "GET", "/openai/v1/files") is True
 
     def test_is_passthrough_list_route_batches(self):
-        assert is_passthrough_list_route("azure", "GET", "/azure/openai/batches") is True
+        assert (
+            is_passthrough_list_route("azure", "GET", "/azure/openai/batches") is True
+        )
 
     def test_is_passthrough_list_route_not_for_post(self):
         assert is_passthrough_list_route("openai", "POST", "/openai/v1/files") is False
 
     def test_is_passthrough_list_route_not_for_single_resource(self):
         # GET /v1/files/{file_id} is not a list route
-        assert is_passthrough_list_route("openai", "GET", "/openai/v1/files/file-abc") is False
+        assert (
+            is_passthrough_list_route("openai", "GET", "/openai/v1/files/file-abc")
+            is False
+        )
 
     @pytest.mark.asyncio
     async def test_list_files_returns_owned_rows(self):
-        fake_row = _fake_file_row("managed-file-id-1")
+        managed_id = new_managed_id("openai", "file-abc")
+        fake_row = _fake_file_row(managed_id)
         pc = _prisma_with_list(file_rows=[fake_row])
 
         result = await list_passthrough_ids_from_db(
@@ -673,13 +710,14 @@ class TestListPassthroughIdsFromDb:
         assert result is not None
         assert result["object"] == "list"
         assert len(result["data"]) == 1
-        assert result["data"][0]["id"] == "managed-file-id-1"
+        assert result["data"][0]["id"] == managed_id
         assert result["data"][0]["object"] == "file"
-        assert result["first_id"] == "managed-file-id-1"
+        assert result["first_id"] == managed_id
 
     @pytest.mark.asyncio
     async def test_list_batches_returns_owned_rows(self):
-        fake_row = _fake_batch_row("managed-batch-id-1")
+        managed_id = new_managed_id("openai", "batch_abc")
+        fake_row = _fake_batch_row(managed_id)
         pc = _prisma_with_list(batch_rows=[fake_row])
 
         result = await list_passthrough_ids_from_db(
@@ -692,13 +730,16 @@ class TestListPassthroughIdsFromDb:
         assert result is not None
         assert result["object"] == "list"
         assert len(result["data"]) == 1
-        assert result["data"][0]["id"] == "managed-batch-id-1"
+        assert result["data"][0]["id"] == managed_id
         assert result["data"][0]["object"] == "batch"
 
     @pytest.mark.asyncio
     async def test_list_files_admin_gets_all_rows(self):
         """Admin should receive all rows; the where filter passed to DB is {}."""
-        rows = [_fake_file_row("file-1"), _fake_file_row("file-2")]
+        rows = [
+            _fake_file_row(new_managed_id("openai", "file-1")),
+            _fake_file_row(new_managed_id("openai", "file-2")),
+        ]
         pc = _prisma_with_list(file_rows=rows)
 
         result = await list_passthrough_ids_from_db(
@@ -737,7 +778,9 @@ class TestListPassthroughIdsFromDb:
     @pytest.mark.asyncio
     async def test_list_has_more_flag(self):
         """has_more is True when DB returns limit+1 rows."""
-        rows = [_fake_file_row(f"file-{i}") for i in range(21)]  # limit=20, fetch 21
+        rows = [
+            _fake_file_row(new_managed_id("openai", f"file-{i}")) for i in range(21)
+        ]  # limit=20, fetch 21
         pc = _prisma_with_list(file_rows=rows)
 
         result = await list_passthrough_ids_from_db(
@@ -768,7 +811,9 @@ class TestListPassthroughIdsFromDb:
     @pytest.mark.asyncio
     async def test_list_returns_empty_for_caller_without_identity(self):
         """Caller with neither user_id nor team_id should get an empty list."""
-        pc = _prisma_with_list(file_rows=[_fake_file_row("file-1")])
+        pc = _prisma_with_list(
+            file_rows=[_fake_file_row(new_managed_id("openai", "file-1"))]
+        )
         anon = UserAPIKeyAuth()  # no user_id, no team_id, not admin
 
         result = await list_passthrough_ids_from_db(
@@ -780,3 +825,20 @@ class TestListPassthroughIdsFromDb:
 
         assert result is not None
         assert result["data"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_files_filters_by_provider(self):
+        openai_row = _fake_file_row(new_managed_id("openai", "file-openai"))
+        azure_row = _fake_file_row(new_managed_id("azure", "file-azure"))
+        pc = _prisma_with_list(file_rows=[azure_row, openai_row])
+
+        result = await list_passthrough_ids_from_db(
+            provider="openai",
+            route="/openai/v1/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+        )
+
+        assert result is not None
+        assert len(result["data"]) == 1
+        assert decode(result["data"][0]["id"]).provider == "openai"

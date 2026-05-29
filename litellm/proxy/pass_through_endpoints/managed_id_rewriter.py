@@ -157,11 +157,19 @@ _LIST_ROUTE_TABLE: Dict[Tuple[str, str], str] = {
     ("azure", "/v1/batches"): "batches",
 }
 
+
 # Sentinel model_id written to model_mappings for passthrough-created rows.
 # Prevents the unified-endpoint deployment-resolution path from ever finding a
 # real deployment, so a passthrough ID replayed on a unified endpoint fails
 # cleanly (no silent raw-ID leak).
-_SENTINEL_MODEL_ID = "_passthrough_openai"
+def _passthrough_sentinel_model_id(provider: str) -> str:
+    return f"_passthrough_{provider}"
+
+
+def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
+    payload = decode(unified_id)
+    return payload is not None and payload.provider == provider
+
 
 # Strip /openai or /openai_passthrough prefix to produce canonical /v1/... path.
 # Strips provider-specific passthrough prefixes before the /v1/... path:
@@ -335,11 +343,17 @@ async def _mint_or_reuse_file(
                 where=where
             )
             if existing is not None:
+                if _managed_id_matches_provider(existing.unified_file_id, provider):
+                    verbose_proxy_logger.debug(
+                        "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
+                        raw_id.split("-", 1)[0],
+                    )
+                    return existing.unified_file_id
                 verbose_proxy_logger.debug(
-                    "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
+                    "managed_id_rewriter: dedup hit wrong provider for raw prefix=%s expected=%s",
                     raw_id.split("-", 1)[0],
+                    provider,
                 )
-                return existing.unified_file_id
         except Exception:
             verbose_proxy_logger.debug(
                 "managed_id_rewriter: file dedup lookup failed", exc_info=True
@@ -357,7 +371,7 @@ async def _mint_or_reuse_file(
                 file_id=managed_id,
                 file_object=None,
                 litellm_parent_otel_span=None,
-                model_mappings={_SENTINEL_MODEL_ID: raw_id},
+                model_mappings={_passthrough_sentinel_model_id(provider): raw_id},
                 user_api_key_dict=user_api_key_dict,
             )
         except Exception:
@@ -396,11 +410,17 @@ async def _mint_or_reuse_object(
                     status_code=404,
                     detail="Managed resource not found.",
                 )
+            if _managed_id_matches_provider(existing.unified_object_id, provider):
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
+                    raw_id.split("_", 1)[0],
+                )
+                return existing.unified_object_id
             verbose_proxy_logger.debug(
-                "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
+                "managed_id_rewriter: object dedup hit wrong provider for raw prefix=%s expected=%s",
                 raw_id.split("_", 1)[0],
+                provider,
             )
-            return existing.unified_object_id
     except HTTPException:
         raise
     except Exception:
@@ -636,17 +656,55 @@ async def _fetch_list_rows(
         return None
 
 
-def _normalize_list_rows(
-    rows: List[Any],
+async def _fetch_provider_scoped_list_rows(
+    prisma_client: Any,
+    resource_kind: str,
+    provider: str,
+    where: Dict[str, Any],
+    fetch_order: str,
     raw_limit: int,
     fetch_limit: int,
-    fetch_order: str,
-) -> Tuple[List[Any], bool]:
-    has_more = len(rows) == fetch_limit
-    page = rows[:raw_limit]
+) -> Optional[Tuple[List[Any], bool]]:
+    """Fetch list rows scoped to *provider* by decoding each managed ID."""
+    matched: List[Any] = []
+    scan_where = dict(where)
+    id_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    max_scans = 20
+
+    for _ in range(max_scans):
+        batch = await _fetch_list_rows(
+            prisma_client, resource_kind, scan_where, fetch_order, fetch_limit
+        )
+        if batch is None:
+            return None
+        if not batch:
+            break
+
+        for row in batch:
+            if _managed_id_matches_provider(getattr(row, id_field), provider):
+                matched.append(row)
+
+        if len(matched) >= fetch_limit:
+            break
+
+        if len(batch) < fetch_limit:
+            break
+
+        cursor_row = batch[-1]
+        created_at_bound = {
+            "lt" if fetch_order == "desc" else "gt": cursor_row.created_at
+        }
+        if "created_at" in scan_where and isinstance(scan_where["created_at"], dict):
+            scan_where["created_at"] = {
+                **scan_where["created_at"],
+                **created_at_bound,
+            }
+        else:
+            scan_where["created_at"] = created_at_bound
+
+    has_more = len(matched) > raw_limit
+    page = matched[:raw_limit]
     if fetch_order == "asc":
-        # `before` cursor: we fetched asc to get the page just before the cursor,
-        # now reverse so the response remains newest-first.
         page = list(reversed(page))
     return page, has_more
 
@@ -724,13 +782,18 @@ async def list_passthrough_ids_from_db(
     where, fetch_order = await _build_list_where_with_cursor(
         prisma_client, resource_kind, owner_filter, query_params
     )
-    rows = await _fetch_list_rows(
-        prisma_client, resource_kind, where, fetch_order, fetch_limit
+    scoped = await _fetch_provider_scoped_list_rows(
+        prisma_client,
+        resource_kind,
+        provider,
+        where,
+        fetch_order,
+        raw_limit,
+        fetch_limit,
     )
-    if rows is None:
+    if scoped is None:
         return None
-
-    page, has_more = _normalize_list_rows(rows, raw_limit, fetch_limit, fetch_order)
+    page, has_more = scoped
     if resource_kind == "files":
         data = [_serialize_file_list_item(row) for row in page]
     else:
