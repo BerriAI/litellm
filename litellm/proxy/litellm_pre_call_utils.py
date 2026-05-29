@@ -44,6 +44,14 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
+# Legacy geo-bucket header values mapped to the neutral route ids (transition fallback).
+_LEGACY_GEO_ALIAS = {
+    "geo-us-south": "us-south",
+    "geo-us-east": "us-east",
+    "geo-ca": "ca",
+    "geo-default": "default",
+}
+
 
 def _sanitize_for_log(value: Any) -> str:
     """
@@ -1712,14 +1720,18 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    geo_bucket = ""
-    if (
-        request is not None
-        and hasattr(request, "headers")
-        and "x-rayward-geo-bucket" in request.headers
-    ):
-        geo_bucket = request.headers["x-rayward-geo-bucket"]
-    data[_metadata_variable_name]["geo_bucket"] = geo_bucket
+    geo_route = ""
+    if request is not None and hasattr(request, "headers"):
+        geo_route = (
+            request.headers.get("x-geo-route")
+            or _LEGACY_GEO_ALIAS.get(
+                request.headers.get("x-rayward-geo-bucket", ""), ""
+            )
+            or ""
+        )
+    data[_metadata_variable_name][
+        "geo_bucket"
+    ] = geo_route  # metadata key unchanged (fork-internal)
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
     # into request metadata for tag-based routing and spend attribution.
