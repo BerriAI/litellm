@@ -236,9 +236,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
             return
 
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
         budget = int(thinking.get("budget_tokens") or 0)
         if budget >= 24000:
-            effort = "xhigh"
+            # Only use "xhigh" when the model actually supports it (e.g. claude-opus-4-7).
+            # claude-opus-4-6 and claude-sonnet-4-6 support high/medium/low/max but not xhigh.
+            effort = (
+                "xhigh"
+                if AnthropicConfig._supports_effort_level(model, "xhigh")
+                else "high"
+            )
         elif budget >= 10000:
             effort = "high"
         elif budget >= 5000:
