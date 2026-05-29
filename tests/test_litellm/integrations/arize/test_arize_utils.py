@@ -1124,6 +1124,39 @@ def test_arize_passthrough_call_type_does_not_run_on_chat_completion():
     assert span.set_attribute.call_count == 0
 
 
+def test_arize_passthrough_skipped_when_message_redaction_enabled():
+    """Security guard: when message-logging redaction is enabled, the
+    passthrough normalizer must NOT export the raw prompt (read from
+    `complete_input_dict`, which bypasses central redaction) to the span.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _maybe_normalize_passthrough
+
+    span = MagicMock()
+    kwargs = {
+        "additional_args": {
+            "complete_input_dict": {
+                "messages": [
+                    {"role": "user", "content": "Patient John Doe, SSN 123-45-6789"}
+                ]
+            }
+        },
+        # Enables redaction via the dynamic-param path inside
+        # should_redact_message_logging(), without touching globals.
+        "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+    }
+    _maybe_normalize_passthrough(
+        span,
+        kwargs,
+        {"content": [{"type": "text", "text": "secret response"}]},
+        {"content": [{"type": "text", "text": "secret response"}]},
+        {"call_type": "allm_passthrough_route"},
+    )
+    # Nothing — neither input nor output — should be written to the span.
+    assert span.set_attribute.call_count == 0
+
+
 def test_arize_coerce_response_obj_passes_dicts_through_untouched():
     """Regression guard for the BaseModel/dict path."""
     from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs

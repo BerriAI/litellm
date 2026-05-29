@@ -8,6 +8,9 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
@@ -471,7 +474,6 @@ def set_attributes(
         metadata_tools = _extract_metadata_tools(metadata)
         optional_tools = _extract_optional_tools(optional_params)
 
-        call_type = standard_logging_payload.get("call_type")
         _set_request_attributes(
             span=span,
             kwargs=kwargs,
@@ -958,6 +960,15 @@ def _maybe_normalize_passthrough(
     All emits are best-effort: if the provider shape isn't recognized the
     helper exits silently. Existing chat/completion paths never enter this
     helper because their call_type doesn't contain "passthrough".
+
+    TEMPORARY BRIDGE: passthrough handlers don't populate the
+    StandardLoggingPayload `messages` field today (they call
+    `transform_response(messages=[])`), so the input is only available via
+    `additional_args.complete_input_dict`. The proper fix is upstream in
+    `base_passthrough_logging_handler._create_response_logging_payload()`:
+    once that populates SLP `messages`/`response`, every callback gets
+    passthrough I/O (with central redaction) for free and this helper's
+    `complete_input_dict` fallback can be deleted. See follow-up issue.
     """
     call_type = (
         standard_logging_payload.get("call_type")
@@ -965,6 +976,15 @@ def _maybe_normalize_passthrough(
         else None
     )
     if not _is_passthrough_call_type(call_type):
+        return
+
+    # Respect LiteLLM's central message-redaction contract. The normal
+    # chat/completion path is redacted by `perform_redaction` before
+    # callbacks run, but `complete_input_dict` (read below) is NOT covered by
+    # that layer — so without this gate, an operator who enabled redaction
+    # would still see raw passthrough prompts in Arize. Skip entirely when
+    # redaction is on so neither input nor output leaks through this bridge.
+    if should_redact_message_logging(kwargs):
         return
 
     # --- INPUT --------------------------------------------------------------
@@ -975,36 +995,7 @@ def _maybe_normalize_passthrough(
         else None
     )
     if isinstance(complete_input_dict, dict):
-        messages = complete_input_dict.get("messages")
-        if isinstance(messages, list) and messages:
-            # Set INPUT_VALUE from the last user message text if discoverable.
-            last_text = None
-            for msg in reversed(messages):
-                if isinstance(msg, dict):
-                    last_text = _coerce_text(msg.get("content"))
-                    if last_text:
-                        break
-            if last_text:
-                safe_set_attribute(span, SpanAttributes.INPUT_VALUE, last_text)
-            # Mirror messages into LLM_INPUT_MESSAGES so the input pane renders.
-            for idx, msg in enumerate(messages):
-                if not isinstance(msg, dict):
-                    continue
-                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
-                role = msg.get("role")
-                if role:
-                    safe_set_attribute(
-                        span,
-                        f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
-                        role,
-                    )
-                text = _coerce_text(msg.get("content"))
-                if text is not None:
-                    safe_set_attribute(
-                        span,
-                        f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                        text,
-                    )
+        _set_passthrough_input_attributes(span, complete_input_dict.get("messages"))
 
     # --- OUTPUT -------------------------------------------------------------
     parsed_response = _parse_passthrough_response(
@@ -1013,6 +1004,45 @@ def _maybe_normalize_passthrough(
     if not isinstance(parsed_response, dict):
         return
 
+    _set_passthrough_output_attributes(span, parsed_response)
+
+
+def _set_passthrough_input_attributes(span: "Span", messages) -> None:
+    """Render passthrough request messages into INPUT_VALUE + LLM_INPUT_MESSAGES."""
+    if not (isinstance(messages, list) and messages):
+        return
+    # Set INPUT_VALUE from the last user message text if discoverable.
+    last_text = None
+    for msg in reversed(messages):
+        if isinstance(msg, dict):
+            last_text = _coerce_text(msg.get("content"))
+            if last_text:
+                break
+    if last_text:
+        safe_set_attribute(span, SpanAttributes.INPUT_VALUE, last_text)
+    # Mirror messages into LLM_INPUT_MESSAGES so the input pane renders.
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
+        role = msg.get("role")
+        if role:
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                role,
+            )
+        text = _coerce_text(msg.get("content"))
+        if text is not None:
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                text,
+            )
+
+
+def _set_passthrough_output_attributes(span: "Span", parsed_response: dict) -> None:
+    """Render passthrough response into OUTPUT_VALUE + LLM_OUTPUT_MESSAGES."""
     # Anthropic / Bedrock-Anthropic: `content` is a list of typed parts.
     content_list = parsed_response.get("content")
     if isinstance(content_list, list) and content_list:
