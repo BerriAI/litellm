@@ -651,3 +651,109 @@ class TestHunyuanImageEditExtraBody:
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
         assert submit_call_body["quality"] == "standard"
         assert "extra_body" not in submit_call_body
+
+    def test_logo_add_default_is_zero(self):
+        """logo_add is set to 0 by default when not provided."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="test",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["logo_add"] == 0
+
+    def test_logo_add_overridable_via_extra_body(self):
+        """logo_add default can be overridden via extra_body."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="test",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+                extra_body={"logo_add": 1},
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["logo_add"] == 1
+
+    def test_litellm_params_extra_body_merged(self):
+        """extra_body from litellm_params is merged into the request body."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="test",
+                image_edit_optional_request_params={},
+                litellm_params={
+                    "api_key": "sk-test",
+                    "extra_body": {"seed": 42, "logo_add": 1},
+                },
+                logging_obj=mock_logging,
+                timeout=30.0,
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["seed"] == 42
+        assert submit_call_body["logo_add"] == 1
+
+    def test_direct_extra_body_takes_precedence_over_litellm_params_extra_body(self):
+        """Direct extra_body overrides litellm_params extra_body for the same key."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="test",
+                image_edit_optional_request_params={},
+                litellm_params={
+                    "api_key": "sk-test",
+                    "extra_body": {"seed": 100, "logo_add": 1},
+                },
+                logging_obj=mock_logging,
+                timeout=30.0,
+                extra_body={"seed": 999},
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["seed"] == 999
+        assert submit_call_body["logo_add"] == 1

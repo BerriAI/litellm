@@ -116,6 +116,10 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        data.setdefault("logo_add", 0)
+        litellm_params_extra_body = litellm_params_dict.get("extra_body")
+        if litellm_params_extra_body:
+            data.update(litellm_params_extra_body)
         if extra_body:
             data.update(extra_body)
 
@@ -214,6 +218,10 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        data.setdefault("logo_add", 0)
+        litellm_params_extra_body = litellm_params_dict.get("extra_body")
+        if litellm_params_extra_body:
+            data.update(litellm_params_extra_body)
         if extra_body:
             data.update(extra_body)
 
