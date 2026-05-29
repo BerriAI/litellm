@@ -8,11 +8,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-from .common_utils import (
-    WORKSPACE_ID_BODY_KEYS,
-    BedrockClaudePlatformMixin,
-    strip_claude_platform_route,
-)
+from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_route
 
 
 class BedrockClaudePlatformMessagesConfig(
@@ -66,18 +62,22 @@ class BedrockClaudePlatformMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        data = super().transform_anthropic_messages_request(
+        # workspace_id is auth metadata for the AWS gateway: it is sent via the
+        # ``anthropic-workspace-id`` header (see validate_anthropic_messages_environment),
+        # never as a body field. Anthropic's /v1/messages rejects unknown top-level
+        # fields, so strip every accepted alias from the optional params before
+        # the parent transform spreads them into the serialized body.
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic-workspace-id",
+            "anthropic_workspace_id",
+        ):
+            anthropic_messages_optional_request_params.pop(key, None)
+        return super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
-        # The /v1/messages route delegates the body build to AnthropicMessagesConfig,
-        # which spreads the optional params into AnthropicMessagesRequest. Any
-        # workspace_id alias that arrives in optional_params therefore leaks as a
-        # top-level body field unless stripped here -- mirroring the chat route in
-        # BedrockClaudePlatformConfig.transform_request.
-        for key in WORKSPACE_ID_BODY_KEYS:
-            data.pop(key, None)
-        return data
