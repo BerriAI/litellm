@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # Token counter — covers all three batch payload shapes
 # ---------------------------------------------------------------------------
@@ -258,6 +257,47 @@ async def test_pre_call_allows_authorized_model_in_batch_file():
             user_api_key_dict=user,
             file_content_as_dict=file_dict,
         )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias():
+    """After replace_model_in_jsonl, body.model is the provider id (e.g. gpt-5.5).
+    Auth must check the proxy model_name the key was granted, not the stripped id."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    proxy_alias = "openai/openai/gpt-5.5-batch"
+    file_dict = [
+        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-ok",
+        user_id="alice",
+        models=[proxy_alias],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    mock_router = MagicMock()
+    mock_router.model_list = []
+    mock_router.resolve_model_name_from_model_id.return_value = proxy_alias
+    can_key_call_model = AsyncMock(return_value=True)
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=can_key_call_model,
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    can_key_call_model.assert_awaited_once()
+    assert can_key_call_model.await_args.kwargs["model"] == proxy_alias
 
 
 @pytest.mark.asyncio
