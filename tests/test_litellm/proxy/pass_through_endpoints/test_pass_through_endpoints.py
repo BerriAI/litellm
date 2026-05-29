@@ -2767,3 +2767,111 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+async def _invoke_pass_through_request_and_capture_kwargs(request_headers):
+    """Helper: invoke ``pass_through_request`` with mocks wired up and return
+    the kwargs that flowed into the success handler. Factored out so the
+    header-honoring test and the UUID-fallback test share the same scaffolding."""
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
+        ) as mock_http_handler:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    with patch(
+                        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_response_body"
+                    ) as mock_get_response_body:
+                        mock_proxy_logging.pre_call_hook = AsyncMock(
+                            return_value={"test": "data"}
+                        )
+                        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+                        mock_response = MagicMock()
+                        mock_response.status_code = 200
+                        mock_response.headers = {}
+                        mock_response.aread = AsyncMock(
+                            return_value=b'{"success": true}'
+                        )
+                        mock_response.text = '{"success": true}'
+                        mock_response.raise_for_status = MagicMock()
+                        mock_http_handler.return_value = mock_response
+
+                        mock_get_response_body.return_value = {"success": True}
+                        mock_processing.get_custom_headers.return_value = {}
+                        mock_success_handler.return_value = None
+
+                        mock_request = MagicMock(spec=Request)
+                        mock_request.method = "POST"
+                        mock_request.url = "http://test-proxy.com/api/endpoint"
+                        mock_request.body = AsyncMock(
+                            return_value=b'{"message": "test request"}'
+                        )
+                        mock_request.headers = Headers(request_headers)
+                        mock_request.query_params = QueryParams({})
+
+                        mock_user_api_key_dict = MagicMock()
+                        mock_user_api_key_dict.api_key = "test-api-key"
+                        mock_user_api_key_dict.key_alias = "test-alias"
+                        mock_user_api_key_dict.user_email = "test@example.com"
+                        mock_user_api_key_dict.user_id = "test-user-id"
+                        mock_user_api_key_dict.team_id = "test-team-id"
+                        mock_user_api_key_dict.org_id = "test-org-id"
+                        mock_user_api_key_dict.team_alias = "test-team-alias"
+                        mock_user_api_key_dict.end_user_id = "test-end-user-id"
+                        mock_user_api_key_dict.request_route = "/api/endpoint"
+
+                        await pass_through_request(
+                            request=mock_request,
+                            target="http://target-api.com/endpoint",
+                            custom_headers={"X-Custom": "header"},
+                            user_api_key_dict=mock_user_api_key_dict,
+                        )
+
+                        mock_success_handler.assert_called_once()
+                        return mock_success_handler.call_args[1]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_honors_x_litellm_call_id_header():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/28562.
+
+    When the client sends an ``x-litellm-call-id`` header, the passthrough
+    must use that value as ``litellm_call_id`` (mirroring native
+    /chat/completions in common_request_processing.py). Without this,
+    callers cannot correlate the response body's provider-native id
+    (e.g. Anthropic's ``msg_...``) with the litellm spend log entry.
+    """
+    client_call_id = "12345678-1234-5678-1234-567812345678"
+
+    call_kwargs = await _invoke_pass_through_request_and_capture_kwargs(
+        request_headers={"x-litellm-call-id": client_call_id},
+    )
+
+    assert "litellm_call_id" in call_kwargs
+    assert call_kwargs["litellm_call_id"] == client_call_id
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_generates_uuid_when_header_absent():
+    """
+    When ``x-litellm-call-id`` is not provided the passthrough must fall
+    back to a freshly generated UUID4 — the previous, unconditional
+    behaviour. This guards the fix for #28562 against accidental
+    breakage of the no-header path.
+    """
+    import uuid as _uuid
+
+    call_kwargs = await _invoke_pass_through_request_and_capture_kwargs(
+        request_headers={},
+    )
+
+    assert "litellm_call_id" in call_kwargs
+    generated = call_kwargs["litellm_call_id"]
+    # Must parse as a valid UUID. (UUID() raises ValueError on anything else.)
+    _uuid.UUID(generated)

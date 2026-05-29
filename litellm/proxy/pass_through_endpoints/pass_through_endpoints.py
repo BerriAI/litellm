@@ -697,7 +697,11 @@ async def pass_through_request(  # noqa: PLR0915
     #########################################################
     # Initialize variables
     #########################################################
-    litellm_call_id = str(uuid.uuid4())
+    # Honor client-provided x-litellm-call-id header (matches the behavior of
+    # native /chat/completions in common_request_processing.py). This lets
+    # callers correlate the passthrough response body's native id (e.g.
+    # Anthropic's msg_...) with the spend log entry via a known UUID. See #28562.
+    litellm_call_id = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
     url: Optional[httpx.URL] = None
 
     # parsed request body
