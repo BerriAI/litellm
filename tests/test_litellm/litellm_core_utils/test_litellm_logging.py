@@ -787,6 +787,11 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def test_is_sync_litellm_request():
+    assert LitellmLogging._is_sync_litellm_request({}) is True
+    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+
+
 @pytest.mark.asyncio
 async def test_dispatch_success_handlers_invokes_callbacks_once_for_final_stream(
     logging_obj,
