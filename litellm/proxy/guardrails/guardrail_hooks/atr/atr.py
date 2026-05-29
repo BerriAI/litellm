@@ -261,10 +261,9 @@ class ATRGuardrail(CustomGuardrail):
     # Internals
     # ------------------------------------------------------------------
 
-    def _extract_request_content(self, data: dict) -> str:
+    def _extract_messages_content(self, data: dict) -> List[str]:
+        """Chat Completions: messages[].content (str or content-part list)."""
         parts: List[str] = []
-
-        # Chat completions: messages[].content (str or content-part list)
         for msg in data.get("messages") or []:
             if not isinstance(msg, dict):
                 continue
@@ -277,8 +276,11 @@ class ATRGuardrail(CustomGuardrail):
                         text = chunk.get("text")
                         if isinstance(text, str):
                             parts.append(text)
+        return parts
 
-        # Text completions (/v1/completions): prompt is str or list[str]
+    def _extract_prompt_content(self, data: dict) -> List[str]:
+        """Text Completions (/v1/completions): prompt is str or list[str]."""
+        parts: List[str] = []
         prompt = data.get("prompt")
         if isinstance(prompt, str):
             parts.append(prompt)
@@ -286,40 +288,49 @@ class ATRGuardrail(CustomGuardrail):
             for p in prompt:
                 if isinstance(p, str):
                     parts.append(p)
+        return parts
 
-        # Responses API (/v1/responses): data["input"] is str or content-part list.
-        # OpenAI Responses API uses `input` instead of `messages` and the same
-        # part-list shape applies (per veria-ai #28050 review medium 2026-05-27).
+    def _extract_responses_input(self, data: dict) -> List[str]:
+        """Responses API (/v1/responses): data['input'] str or content-part list
+        (per veria-ai #28050 review medium 2026-05-27).
+        """
+        parts: List[str] = []
         responses_input = data.get("input")
         if isinstance(responses_input, str):
             parts.append(responses_input)
-        elif isinstance(responses_input, list):
-            for item in responses_input:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict):
-                    text = item.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
-                    # Responses API also nests content parts under "content"
-                    nested_content = item.get("content")
-                    if isinstance(nested_content, str):
-                        parts.append(nested_content)
-                    elif isinstance(nested_content, list):
-                        for chunk in nested_content:
-                            if isinstance(chunk, dict):
-                                ctext = chunk.get("text")
-                                if isinstance(ctext, str):
-                                    parts.append(ctext)
+            return parts
+        if not isinstance(responses_input, list):
+            return parts
+        for item in responses_input:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+            nested = item.get("content")
+            if isinstance(nested, str):
+                parts.append(nested)
+            elif isinstance(nested, list):
+                for chunk in nested:
+                    if isinstance(chunk, dict):
+                        ctext = chunk.get("text")
+                        if isinstance(ctext, str):
+                            parts.append(ctext)
+        return parts
 
-        # Tool / function definitions can carry prompt injection in
-        # function.description or function.parameters (per veria-ai #28050
-        # review medium 2026-05-27). A malicious client can inject hidden
-        # instructions in the tool catalog that the LLM treats as system text.
+    def _extract_tools_content(self, data: dict) -> List[str]:
+        """Tool / function definitions can carry prompt injection in
+        function.description or function.parameters (per veria-ai #28050
+        review medium 2026-05-27). Covers OpenAI function shape and
+        Anthropic / Claude direct shape.
+        """
+        parts: List[str] = []
         for tool in data.get("tools") or []:
             if not isinstance(tool, dict):
                 continue
-            # OpenAI tool function shape: tool.type == "function" with tool.function
             if tool.get("type") == "function":
                 fn = tool.get("function") or {}
                 if isinstance(fn, dict):
@@ -333,14 +344,12 @@ class ATRGuardrail(CustomGuardrail):
                             parts.append(json.dumps(params, ensure_ascii=False))
                         except (TypeError, ValueError):
                             pass
-            # Anthropic / Claude tool shape: tool.name + tool.description direct
+            # Anthropic shape: tool.name + tool.description directly on tool
             for key in ("name", "description"):
                 val = tool.get(key)
                 if isinstance(val, str):
                     parts.append(val)
-
-        # tool_choice can carry a function definition when the client wants to
-        # force a specific tool. Scan its description too.
+        # tool_choice with forced-function shape
         tool_choice = data.get("tool_choice")
         if isinstance(tool_choice, dict):
             fn = tool_choice.get("function") or {}
@@ -348,7 +357,14 @@ class ATRGuardrail(CustomGuardrail):
                 desc = fn.get("description")
                 if isinstance(desc, str):
                     parts.append(desc)
+        return parts
 
+    def _extract_request_content(self, data: dict) -> str:
+        parts: List[str] = []
+        parts.extend(self._extract_messages_content(data))
+        parts.extend(self._extract_prompt_content(data))
+        parts.extend(self._extract_responses_input(data))
+        parts.extend(self._extract_tools_content(data))
         return "\n".join(p for p in parts if p)
 
     def _extract_response_content(self, response: Any) -> str:
