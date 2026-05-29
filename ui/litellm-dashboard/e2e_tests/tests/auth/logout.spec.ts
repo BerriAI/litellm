@@ -8,13 +8,10 @@ test.describe("Logout", () => {
     await page.goto("/ui");
     await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
 
-    // Open the navbar User dropdown — same synthetic-hover trick as login.spec.ts
-    // because antd's hover trigger closes the popup between Playwright actions.
-    const userTrigger = page.locator("nav").getByRole("button").filter({ hasText: /^User$/ });
-    await userTrigger.evaluate((el: HTMLElement) => {
-      el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-      el.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-    });
+    // Open the navbar User dropdown. The trigger button exposes an aria-label
+    // of "Account menu — <role> — signed in as <email>", and the antd Dropdown
+    // is declared with trigger={["click"]}, so a plain click opens the popup.
+    await page.getByRole("button", { name: /Account menu/i }).click();
 
     const popup = page.locator(".ant-dropdown:visible").filter({
       has: page.locator(".bg-white.rounded-lg.shadow-lg"),
