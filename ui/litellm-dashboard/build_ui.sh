@@ -22,14 +22,28 @@ if ! command -v nvm &> /dev/null; then
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 fi
 
-# Use nvm to set the required Node.js version
-nvm use v20
+# Install + use the pinned Node.js version. `nvm use` alone silently no-ops
+# when v20 isn't installed in the current shell (e.g. non-interactive CI),
+# and the build then runs against whatever node is on PATH. Install first, use
+# second, and verify `node -v` actually reports v20 before continuing.
+if ! nvm install v20; then
+  echo "Error: nvm install v20 failed. Deployment aborted."
+  exit 1
+fi
 
-# Check if nvm use was successful
-if [ $? -ne 0 ]; then
+if ! nvm use v20; then
   echo "Error: Failed to switch to Node.js v20. Deployment aborted."
   exit 1
 fi
+
+NODE_VER="$(node -v 2>/dev/null || true)"
+case "$NODE_VER" in
+  v20.*) echo "Confirmed Node.js $NODE_VER" ;;
+  *)
+    echo "Error: expected Node.js v20.* but got '$NODE_VER'. Deployment aborted."
+    exit 1
+    ;;
+esac
 
 # print contents of ui_colors.json
 echo "Contents of ui_colors.json:"
