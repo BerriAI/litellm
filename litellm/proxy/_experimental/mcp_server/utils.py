@@ -194,8 +194,11 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     elif alias:
         alias = normalize_server_name(alias)
 
-    # Update the payload with normalized alias
-    if hasattr(payload, "alias"):
+    # Update the payload with the normalized alias only when we actually
+    # computed one. Writing payload.alias = None would otherwise mark the
+    # field as set on Pydantic v2 models and clobber the stored alias on a
+    # partial update that did not include alias or server_name (LIT-3423).
+    if hasattr(payload, "alias") and alias is not None:
         payload.alias = alias
 
 

@@ -30,6 +30,7 @@ from litellm.types.mcp import MCPCredentials
 
 def _prepare_mcp_server_data(
     data: Union[NewMCPServerRequest, UpdateMCPServerRequest],
+    is_update: bool = False,
 ) -> Dict[str, Any]:
     """
     Helper function to prepare MCP server data for database operations.
@@ -37,17 +38,33 @@ def _prepare_mcp_server_data(
 
     Args:
         data: NewMCPServerRequest or UpdateMCPServerRequest object
+        is_update: When True, only fields the caller explicitly set on the
+            request participate in the dict. This is required for partial
+            PUT /v1/mcp/server so non-Optional fields with Pydantic
+            defaults (transport, mcp_access_groups, allow_all_keys,
+            available_on_public_internet, delegate_auth_to_upstream,
+            is_byok, args, env, byok_description) do not
+            silently overwrite the stored row. See LIT-3423 / LIT-3424.
 
     Returns:
         Dict with properly serialized JSON fields
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Convert model to dict
-    data_dict = data.model_dump(exclude_none=True)
-    # Ensure alias is always present in the dict (even if None)
-    if "alias" not in data_dict:
-        data_dict["alias"] = getattr(data, "alias", None)
+    if is_update:
+        # Partial-update semantics: only fields the caller explicitly set are
+        # in data_dict. Explicit None survives (e.g. clearing
+        # allowed_tools) while unset fields are absent so we never
+        # clobber the DB with Pydantic defaults.
+        data_dict = data.model_dump(exclude_unset=True)
+    else:
+        # Create semantics: defaults should be applied so the new row has a
+        # well-defined state. Drop None values from the dump exactly as
+        # before so optional columns stay null.
+        data_dict = data.model_dump(exclude_none=True)
+        # Ensure alias is always present in the dict (even if None)
+        if "alias" not in data_dict:
+            data_dict["alias"] = getattr(data, "alias", None)
 
     # Handle credentials serialization
     credentials = data_dict.get("credentials")
@@ -57,33 +74,27 @@ def _prepare_mcp_server_data(
         )
         data_dict["credentials"] = safe_dumps(data_dict["credentials"])
 
-    # Handle static_headers serialization
-    if data.static_headers is not None:
-        data_dict["static_headers"] = safe_dumps(data.static_headers)
+    # Handle JSON-serialized fields. Drive the check off data_dict (not the
+    # model attribute) so we never serialize a default value the caller did
+    # not send on an update.
+    for field in (
+        "static_headers",
+        "mcp_info",
+        "env",
+        "tool_name_to_display_name",
+        "tool_name_to_description",
+    ):
+        value = data_dict.get(field)
+        if value is not None:
+            data_dict[field] = safe_dumps(value)
 
-    # Handle mcp_info serialization
-    if data.mcp_info is not None:
-        data_dict["mcp_info"] = safe_dumps(data.mcp_info)
+    # mcp_access_groups is already List[str], no serialization needed.
 
-    # Handle env serialization
-    if data.env is not None:
-        data_dict["env"] = safe_dumps(data.env)
-
-    # Handle tool name override serialization
-    if data.tool_name_to_display_name is not None:
-        data_dict["tool_name_to_display_name"] = safe_dumps(
-            data.tool_name_to_display_name
-        )
-    if data.tool_name_to_description is not None:
-        data_dict["tool_name_to_description"] = safe_dumps(
-            data.tool_name_to_description
-        )
-
-    # mcp_access_groups is already List[str], no serialization needed
-
-    # Force include is_byok even when False (exclude_none=True would not drop it,
-    # but be explicit to ensure a False value is always written to the DB).
-    data_dict["is_byok"] = getattr(data, "is_byok", False)
+    if not is_update:
+        # Force include is_byok on creates so a False value is always written.
+        # On updates this would resurrect the original LIT-3423 bug for
+        # is_byok, so we only do it for the create path.
+        data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     return data_dict
 
@@ -407,8 +418,10 @@ async def update_mcp_server(
 
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Use helper to prepare data with proper JSON serialization
-    data_dict = _prepare_mcp_server_data(data)
+    # Use helper to prepare data with proper JSON serialization. is_update
+    # switches the dump to exclude_unset=True so a partial PUT does not
+    # silently overwrite omitted fields with Pydantic defaults (LIT-3423).
+    data_dict = _prepare_mcp_server_data(data, is_update=True)
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
