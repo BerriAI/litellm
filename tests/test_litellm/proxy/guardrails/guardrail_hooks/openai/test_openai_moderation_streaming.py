@@ -284,3 +284,270 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
             guardrail_resp, dict
         ), f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
         assert "results" in guardrail_resp
+
+
+@pytest.mark.asyncio
+async def test_lit3320_streaming_end_of_stream_only_default_and_opt_in():
+    """
+    Regression for LIT-3320 / "Post guardrail with OpenAI moderation is too slow".
+
+    Both reviewer bots (Greptile P2 + Veria Medium) flagged the previous PR for
+    defaulting ``streaming_end_of_stream_only=True``: that change silently
+    shifted every existing OpenAI Moderation streaming deployment to deliver
+    the full response to the client before the post-call guardrail ever ran,
+    which is a moderation bypass on upgrade.
+
+    Correct contract verified here:
+
+      1. Default ``streaming_end_of_stream_only`` is ``False`` -- same as every
+         other streaming-aware post-call guardrail in ``unified_guardrail.py``.
+         The unified dispatcher samples mid-stream so a flagged response is
+         interrupted at the next ``streaming_sampling_rate`` tick.
+      2. Operators that prioritise latency over mid-stream interruption can
+         still opt in via ``streaming_end_of_stream_only=True``, which
+         collapses post-call moderation to exactly one ``/moderations``
+         round-trip per streamed completion. This is the LIT-3320 perf knob.
+      3. In the safe default with ``streaming_sampling_rate=5`` over a 20-chunk
+         stream, the LIT-3320 dispatcher dedup (in
+         ``unified_guardrail.async_post_call_streaming_iterator_hook``) skips
+         the redundant end-of-stream pass that would otherwise duplicate the
+         chunk-20 sample, so we see exactly 4 calls (chunks 5/10/15/20)
+         instead of 5.
+    """
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+    from litellm.types.llms.openai import (
+        OpenAIModerationResponse,
+        OpenAIModerationResult,
+    )
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        # 1. Default behaviour -- end_of_stream_only must be False on upgrade.
+        default_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        assert default_guardrail.streaming_end_of_stream_only is False, (
+            "Default streaming_end_of_stream_only must be False so OpenAI "
+            "Moderation preserves mid-stream blocking on upgrade (LIT-3320 "
+            "safety contract)."
+        )
+
+        # 2. Explicit opt-in still honoured -- the LIT-3320 perf knob.
+        opted_in = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+            streaming_end_of_stream_only=True,
+        )
+        assert opted_in.streaming_end_of_stream_only is True
+
+        # 3-4. End-to-end driving the real UnifiedLLMGuardrails streaming hook
+        #     over a 20-chunk stream, in both modes.
+        unified = UnifiedLLMGuardrails()
+
+        chunks_data = [
+            "The", " capital", " of", " France", " is", " Paris", ".",
+            " It", " is", " also", " the", " largest", " city", " in",
+            " the", " country", " and", " a", " global", " hub",
+        ]
+        assert len(chunks_data) == 20
+
+        def make_stream():
+            async def _gen():
+                for i, content in enumerate(chunks_data):
+                    yield ModelResponseStream(
+                        id=f"chunk-{i}",
+                        model="gpt-4",
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=content, role="assistant"),
+                                finish_reason="stop"
+                                if i == len(chunks_data) - 1
+                                else None,
+                            )
+                        ],
+                    )
+            return _gen()
+
+        async def fake_moderation(self, input_text):
+            call_counter["n"] += 1
+            return OpenAIModerationResponse(
+                id="mod",
+                model="omni-moderation-latest",
+                results=[
+                    OpenAIModerationResult(
+                        categories={},
+                        category_applied_input_types={},
+                        category_scores={},
+                        flagged=False,
+                    )
+                ],
+            )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test", request_route="/chat/completions"
+        )
+
+        # --- 3. End-of-stream-only opt-in -> exactly 1 /moderations call ---
+        call_counter = {"n": 0}
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": opted_in,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+            "model": "gpt-4",
+        }
+        with patch.object(
+            OpenAIModerationGuardrail, "async_make_request", fake_moderation
+        ):
+            chunks_received = 0
+            async for _ in unified.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=make_stream(),
+                request_data=request_data,
+            ):
+                chunks_received += 1
+
+        assert chunks_received == len(chunks_data)
+        got_optin = call_counter["n"]
+        assert got_optin == 1, (
+            "Opt-in streaming_end_of_stream_only=True must issue exactly "
+            f"1 /moderations call per streamed completion; got {got_optin}."
+        )
+
+        # --- 4. Safe default -> mid-stream sampling, EOS pass deduped ---
+        call_counter = {"n": 0}
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": default_guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+            "model": "gpt-4",
+        }
+        with patch.object(
+            OpenAIModerationGuardrail, "async_make_request", fake_moderation
+        ):
+            chunks_received = 0
+            async for _ in unified.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=make_stream(),
+                request_data=request_data,
+            ):
+                chunks_received += 1
+
+        assert chunks_received == len(chunks_data)
+        got_default = call_counter["n"]
+        assert got_default == 4, (
+            "Safe default (sampling_rate=5 over 20 chunks) should issue 4 "
+            "mid-stream /moderations calls (chunks 5/10/15/20). The final "
+            "end-of-stream pass is deduped by the LIT-3320 dispatcher fix "
+            f"because chunk 20 already moderated the same content; got {got_default}."
+        )
+
+
+@pytest.mark.asyncio
+async def test_lit3320_dispatcher_dedup_skips_redundant_eos_pass():
+    """
+    Regression for LIT-3320 dispatcher dedup: when the final chunk index is
+    an exact multiple of ``streaming_sampling_rate``, the unified streaming
+    hook used to run the guardrail twice on the same ``responses_so_far``
+    (once mid-stream at the last chunk, once again in the post-loop
+    end-of-stream block). The dedup tracks
+    ``last_chunk_processed_mid_stream`` and skips the EOS pass in that case.
+
+    Drives the unified dispatcher with OpenAI Moderation as the guardrail
+    and asserts:
+
+      * 20 chunks at sampling_rate=5  =>  4 passes (chunks 5/10/15/20,
+        EOS skipped)
+      * 17 chunks at sampling_rate=5  =>  4 passes (chunks 5/10/15
+        mid-stream + EOS)
+    """
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+    from litellm.llms.openai.chat.guardrail_translation.handler import (
+        OpenAIChatCompletionsHandler,
+    )
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        guardrail.streaming_sampling_rate = 5
+        guardrail.streaming_end_of_stream_only = False
+
+        unified = UnifiedLLMGuardrails()
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test", request_route="/chat/completions"
+        )
+
+        def make_stream(n_chunks):
+            async def _gen():
+                for i in range(n_chunks):
+                    yield ModelResponseStream(
+                        id=f"chunk-{i}",
+                        model="gpt-4",
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=f"tok-{i} ", role="assistant"),
+                                finish_reason="stop" if i == n_chunks - 1 else None,
+                            )
+                        ],
+                    )
+            return _gen()
+
+        async def fake_translation(self, *, responses_so_far, **kwargs):
+            call_counter["n"] += 1
+            return None
+
+        # --- A. 20 chunks, sampling_rate=5 -> 4 passes (EOS deduped) ---
+        call_counter = {"n": 0}
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+            "model": "gpt-4",
+        }
+        with patch.object(
+            OpenAIChatCompletionsHandler,
+            "process_output_streaming_response",
+            fake_translation,
+        ):
+            async for _ in unified.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=make_stream(20),
+                request_data=request_data,
+            ):
+                pass
+        got_a = call_counter["n"]
+        assert got_a == 4, (
+            "20 chunks at sampling_rate=5 should fire 4 guardrail passes "
+            "(chunks 5/10/15/20); EOS is skipped because chunk 20 already "
+            f"covered all responses_so_far. Got {got_a}."
+        )
+
+        # --- B. 17 chunks, sampling_rate=5 -> 4 passes (chunks 5/10/15 + EOS) ---
+        call_counter = {"n": 0}
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+            "model": "gpt-4",
+        }
+        with patch.object(
+            OpenAIChatCompletionsHandler,
+            "process_output_streaming_response",
+            fake_translation,
+        ):
+            async for _ in unified.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=make_stream(17),
+                request_data=request_data,
+            ):
+                pass
+        got_b = call_counter["n"]
+        assert got_b == 4, (
+            "17 chunks at sampling_rate=5 should fire 3 mid-stream passes "
+            "(chunks 5/10/15) + 1 EOS pass; the EOS dedup must NOT skip "
+            f"when the last chunk index isn't a multiple of sampling_rate. "
+            f"Got {got_b}."
+        )

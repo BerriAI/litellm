@@ -370,6 +370,13 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type = None
         chunk_counter = 0
         responses_so_far: List[Any] = []
+        # Track whether the most recently yielded chunk also triggered a
+        # mid-stream sampling pass on the full `responses_so_far` list.
+        # Used below to skip the final end-of-stream guardrail pass when it
+        # would re-process the exact same chunks (LIT-3320: prevents one
+        # redundant outbound call per request whenever the chunk count is
+        # an exact multiple of `sampling_rate`).
+        last_chunk_processed_mid_stream = False
 
         async for item in response:
             chunk_counter += 1
@@ -398,6 +405,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             if end_of_stream_only:
                 yield item
                 continue
+
+            # Reset the dedup flag every iteration; we only want to mark
+            # `last_chunk_processed_mid_stream` True if this exact iteration
+            # ran the sampling-driven guardrail pass.
+            last_chunk_processed_mid_stream = False
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
@@ -462,14 +474,19 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield error_chunk
                         return
                     raise
+                last_chunk_processed_mid_stream = True
                 yield original_item
             else:
                 yield item
 
-        # Stream has ended - do final processing with all collected chunks
+        # Stream has ended - do final processing with all collected chunks.
+        # Skip the redundant final pass when the previous chunk already ran
+        # a mid-stream sampling pass on the same `responses_so_far` — the
+        # final pass would otherwise duplicate that work (LIT-3320).
         if (
             call_type is not None
             and CallTypes(call_type) in endpoint_guardrail_translation_mappings
+            and not last_chunk_processed_mid_stream
         ):
             verbose_proxy_logger.debug(
                 "Processing final streaming response with all %s chunks for guardrail %s",
