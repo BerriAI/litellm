@@ -74,7 +74,7 @@ def _is_azure_claude_model(model: str) -> bool:
 import re
 
 _CLAUDE_PATTERN = re.compile(
-    r"^claude-(?:opus|sonnet|haiku)-\d+-\d+(?:-\d{8})?$", re.IGNORECASE
+    r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE
 )
 
 
