@@ -192,7 +192,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
         return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
     )
     mock_config.transform_anthropic_messages_request = Mock(
-        return_value={"model": "claude-3-opus-20240229", "messages": []}
+        return_value={"model": "claude-opus-4-5", "messages": []}
     )
 
     # Mock the client
@@ -204,7 +204,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello!"}],
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-5",
         "stop_reason": "end_turn",
     }
     mock_client.post = AsyncMock(return_value=mock_response)
@@ -239,7 +239,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
         try:
             await handler.async_anthropic_messages_handler(
-                model="claude-3-opus-20240229",
+                model="claude-opus-4-5",
                 messages=[{"role": "user", "content": "Hello"}],
                 anthropic_messages_provider_config=mock_config,
                 anthropic_messages_optional_request_params={},
@@ -372,12 +372,12 @@ async def test_async_anthropic_messages_handler_header_priority():
 
         mock_config.validate_anthropic_messages_environment = capture_validate
         mock_config.transform_anthropic_messages_request = Mock(
-            return_value={"model": "claude-3-opus-20240229", "messages": []}
+            return_value={"model": "claude-opus-4-5", "messages": []}
         )
 
         try:
             await handler.async_anthropic_messages_handler(
-                model="claude-3-opus-20240229",
+                model="claude-opus-4-5",
                 messages=[{"role": "user", "content": "Hello"}],
                 anthropic_messages_provider_config=mock_config,
                 anthropic_messages_optional_request_params={},
