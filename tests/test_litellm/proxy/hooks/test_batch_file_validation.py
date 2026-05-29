@@ -283,3 +283,286 @@ async def test_pre_call_skips_check_when_no_models_present():
         user_api_key_dict=user,
         file_content_as_dict=[{"body": {}}],
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Managed/unified file ID — proxy-alias validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_managed_file_validates_proxy_alias_not_upstream_jsonl_model():
+    """Regression test for LIT-3417.
+
+    Batch JSONL for a managed/unified file ID has its `body.model` rewritten
+    by `replace_model_in_jsonl` to the upstream provider name (taken from
+    `litellm_params.model`). Callers are authorized for the proxy alias
+    (`model_name` in config), not the upstream name. Validating the
+    rewritten JSONL `body.model` therefore returns a spurious 403 even when
+    the caller is fully authorized for the alias.
+
+    The fix validates the proxy aliases recorded in the unified file ID
+    (`target_model_names`) instead, so an authorized caller succeeds.
+    """
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    # JSONL has been rewritten by replace_model_in_jsonl to the upstream
+    # name (e.g. "upstream-batch-name"). The caller is NOT authorized for
+    # that name — only for the proxy alias "proxy-alias-batch".
+    file_dict = [
+        {
+            "body": {
+                "model": "upstream-batch-name",
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,abc-123;"
+        "target_model_names,proxy-alias-batch;llm_output_file_id,;"
+        "llm_output_file_model_id,"
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-aliased",
+        user_id="alice",
+        models=["proxy-alias-batch"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    seen: list = []
+
+    async def _record(**kwargs):
+        seen.append(kwargs["model"])
+        if kwargs["model"] not in (kwargs["valid_token"].models or []):
+            raise Exception(
+                f"Key not allowed to access model. allowed={kwargs['valid_token'].models}"
+            )
+        return True
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_record),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        # Should NOT raise — caller is authorized for the proxy alias.
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+            unified_file_id=unified_file_id,
+        )
+
+    # Critically: the alias was validated, not the upstream JSONL name.
+    assert seen == ["proxy-alias-batch"], (
+        f"expected proxy-alias validation, got {seen}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_file_rejects_unauthorized_proxy_alias():
+    """Symmetric to the above: when the caller is not authorized for the
+    proxy alias recorded in the unified file ID, the batch must be rejected
+    with 403."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    file_dict = [
+        {
+            "body": {
+                "model": "upstream-name",
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,xyz;"
+        "target_model_names,restricted-alias;llm_output_file_id,;"
+        "llm_output_file_model_id,"
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-narrow",
+        user_id="bob",
+        models=["some-other-alias"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    async def _reject(**kwargs):
+        raise Exception(
+            f"Key not allowed to access model={kwargs['model']}"
+        )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_reject),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter._enforce_batch_file_model_access(
+                user_api_key_dict=user,
+                file_content_as_dict=file_dict,
+                unified_file_id=unified_file_id,
+            )
+
+    assert exc.value.status_code == 403
+    # The reported model is the alias, not the upstream name.
+    assert "restricted-alias" in str(exc.value.detail)
+    assert "upstream-name" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_managed_file_with_multiple_aliases_validates_each():
+    """A unified file ID can carry several `target_model_names`. Every one
+    must be validated."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    file_dict = [
+        {"body": {"model": "upstream-a", "messages": []}},
+        {"body": {"model": "upstream-b", "messages": []}},
+    ]
+    unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,multi;"
+        "target_model_names,alias-a, alias-b;llm_output_file_id,;"
+        "llm_output_file_model_id,"
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-multi",
+        user_id="alice",
+        models=["alias-a", "alias-b"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    seen: list = []
+
+    async def _ok(**kwargs):
+        seen.append(kwargs["model"])
+        return True
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_ok),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+            unified_file_id=unified_file_id,
+        )
+
+    # Both aliases validated; whitespace stripped by the extractor.
+    assert seen == ["alias-a", "alias-b"]
+
+
+@pytest.mark.asyncio
+async def test_managed_file_with_no_target_model_names_falls_back_to_jsonl():
+    """If the unified file ID is malformed and has no target_model_names,
+    fall back to validating the JSONL `body.model` so we don't silently
+    drop the security check."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    file_dict = [
+        {"body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "x"}]}}
+    ]
+    # Valid prefix but no target_model_names field
+    unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,broken;"
+        "llm_output_file_id,;llm_output_file_model_id,"
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-broken",
+        user_id="alice",
+        models=["gpt-3.5-turbo"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    async def _raise(**kwargs):
+        raise Exception(f"not allowed: {kwargs['model']}")
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_raise),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter._enforce_batch_file_model_access(
+                user_api_key_dict=user,
+                file_content_as_dict=file_dict,
+                unified_file_id=unified_file_id,
+            )
+
+    assert exc.value.status_code == 403
+    assert "gpt-4o" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_raw_upload_still_validates_jsonl_model_names():
+    """Non-managed uploads (no unified_file_id passed) keep the existing
+    behavior: validate the distinct `body.model` values from the JSONL.
+    This preserves the VERIA-39 protection for raw uploads."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+
+    file_dict = [
+        {"body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "x"}]}}
+    ]
+
+    user = UserAPIKeyAuth(
+        api_key="sk-raw",
+        user_id="alice",
+        models=["gpt-3.5-turbo"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    async def _raise(**kwargs):
+        raise Exception(f"not allowed: {kwargs['model']}")
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_raise),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter._enforce_batch_file_model_access(
+                user_api_key_dict=user,
+                file_content_as_dict=file_dict,
+                # No unified_file_id — raw upload path
+            )
+
+    assert exc.value.status_code == 403
+    assert "gpt-4o" in str(exc.value.detail)
