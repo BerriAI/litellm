@@ -1220,7 +1220,7 @@ def test_get_model_access_groups_cache_invalidation_set_model_list():
         [
             {
                 "model_name": "claude-3",
-                "litellm_params": {"model": "anthropic/claude-3-opus-20240229"},
+                "litellm_params": {"model": "anthropic/claude-opus-4-5"},
                 "model_info": {"access_groups": ["research"]},
             },
         ]

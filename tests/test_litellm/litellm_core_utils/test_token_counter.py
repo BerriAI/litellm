@@ -290,7 +290,7 @@ def test_gpt_vision_token_counting():
     [
         "gpt-4-vision-preview",
         "gpt-4o",
-        "claude-3-opus-20240229",
+        "claude-opus-4-5",
         "command-nightly",
         "mistral/mistral-tiny",
     ],
@@ -620,7 +620,7 @@ class TestTokenizerSelection(unittest.TestCase):
     "model",
     [
         "gpt-4o",
-        "claude-3-opus-20240229",
+        "claude-opus-4-5",
     ],
 )
 @pytest.mark.parametrize(

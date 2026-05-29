@@ -118,7 +118,7 @@ def test_supports_function_calling_github_openai_alias():
 def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
-            model="github/claude-3-7-sonnet-20250219"
+            model="github/claude-sonnet-4-5"
         )
         is True
     )
@@ -1467,7 +1467,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/vertex-gemini-flash", "vertex_ai/gemini-1.5-flash", False),
             # Anthropic with custom names (cannot be resolved)
             ("litellm_proxy/claude-prod", "anthropic/claude-3-sonnet-20240229", False),
-            ("litellm_proxy/claude-dev", "anthropic/claude-3-haiku-20240307", False),
+            ("litellm_proxy/claude-dev", "anthropic/claude-haiku-4-5", False),
             # Groq with custom names (cannot be resolved)
             ("litellm_proxy/fast-llama", "groq/llama-3.1-8b-instant", False),
             ("litellm_proxy/groq-gemma", "groq/gemma-7b-it", False),
@@ -1544,7 +1544,7 @@ class TestProxyFunctionCalling:
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
            - litellm_proxy/claude-sonnet-4-5-20250929
-           - litellm_proxy/anthropic/claude-3-haiku-20240307
+           - litellm_proxy/anthropic/claude-haiku-4-5
            
         ❌ DOESN'T WORK (requires proxy server config):
            - litellm_proxy/my-custom-gpt4
