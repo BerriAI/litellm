@@ -509,7 +509,23 @@ def _count_extra(
     num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
     if tools:
-        num_tokens += count_function(_format_function_definitions(tools))
+        # Normalize Anthropic-format tools to OpenAI format before counting
+        normalized_tools = []
+        for t in tools:
+            if isinstance(t, dict) and "function" not in t and "input_schema" in t:
+                normalized_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name"),
+                            "description": t.get("description", ""),
+                            "parameters": t.get("input_schema", {}),
+                        },
+                    }
+                )
+            else:
+                normalized_tools.append(t)
+        num_tokens += count_function(_format_function_definitions(normalized_tools))
         num_tokens += 9  # Additional tokens for function definition of tools
     # If there's a system message and tools are present, subtract four tokens
     if tools and includes_system_message:

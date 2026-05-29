@@ -10512,11 +10512,13 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     )
 
     tokenizer_used = str(_tokenizer_used["type"])
+
     total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
         messages=messages,
         custom_tokenizer=_tokenizer_used,  # type: ignore
+        tools=tools,  # type: ignore[arg-type]
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
