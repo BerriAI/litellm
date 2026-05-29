@@ -35,6 +35,12 @@ Ask to commit and push your work when you're done (or if you're confident that y
 
 When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out
 
+If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
+
+Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
+
+Do not put names of customers or customer company names in code, PRs, and issues. The codebase is public
+
 ## Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -56,20 +62,3 @@ Before implementing:
 - If you write 200 lines and it could be 50, rewrite it.
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## Confidentiality: Customer and Company Names in Code
-
-The codebase is public. Before writing **any** third-party organization name into this repository — in source code, file or directory names, docstrings, comments, tests, fixtures, mock payloads, error messages, log lines, commit messages, or PR descriptions — pause and check:
-
-**Already in the codebase** (OpenAI, Anthropic, Google, Azure, Bedrock, Fireworks, and other established LLM providers / integrations) — fine to use. Quick check: `git grep -i "<name>"` — if it returns hits in real code (not just your current diff), the name is established.
-
-**Anything else** — customers, prospects, partners, new vendor integrations, observability tools, infra vendors, or any organization name that does not already appear in the repo. STOP and surface it to the user. Ask for explicit consent before writing the name into any file, commit message, or PR description. Do not write it speculatively and clean up later. Do not substitute a placeholder and proceed. Do not assume it is safe because it "looks like" a public company. The user must approve first.
-
-**What to do instead of a customer-specific reference:**
-- If you find yourself reaching for a customer name — real or fake — step back. The code shouldn't be customer-specific in the first place. Generalize the feature, or capture the customer motivation in internal docs (Notion / Linear / the internal staging PR description), never in the repo.
-- Frame changes by the capability they add, not the customer who asked for it ("add per-team Bedrock guardrail routing", not "add routing for $CUSTOMER").
-- Standard "fake value" markers (`example.com`, `localhost`, `127.0.0.1`, `test@example.com`) and abstract identifiers (`team_a`, `user_1`, `tenant_x`) are fine — those are not customer stand-ins.
-
-## MCP OAuth / OpenAPI Transport Mapping
-
-- **`available_on_public_internet: false` with `delegate_auth_to_upstream: true` (oauth2, interactive — not `client_credentials`)** — LiteLLM still allows the anonymous upstream PKCE path (no proxy API key for `/authorize` and matching MCP routes). The internal-only flag mainly affects other surfaces (e.g. IP-based discovery). Rely on the upstream IdP and network policy; the dashboard shows a warning when both are set, and the proxy logs a warning when the server is loaded from config or the database.
