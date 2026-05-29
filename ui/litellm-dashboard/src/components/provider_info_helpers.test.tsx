@@ -78,6 +78,16 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should point the RunwayML logo at the existing runway.png asset", () => {
+      // Regression for https://github.com/BerriAI/litellm/issues/29302 —
+      // the helper previously referenced runwayml.png which doesn't exist
+      // (the asset is shipped as runway.png), producing a 404 in the UI.
+      const result = getProviderLogoAndName("runwayml");
+      expect(result.displayName).toBe(Providers.RunwayML);
+      expect(result.logo).toContain("runway.png");
+      expect(result.logo).not.toContain("runwayml.png");
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
