@@ -1,0 +1,15 @@
+---
+description: LiteLLM documentation lives in BerriAI/litellm-docs (separate repo)
+alwaysApply: true
+---
+
+# LiteLLM code + documentation repos
+
+When answering questions about LiteLLM behavior, configuration, or APIs:
+
+1. Search **this repo** (`litellm/`, `tests/`, `ui/`, etc.) for implementation truth.
+2. Also search the **`litellm-docs` workspace folder** (sibling clone or multi-root workspace) for user-facing documentation.
+3. Do **not** add or edit documentation in this repo; doc changes belong in [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs).
+4. Published docs site: https://docs.litellm.ai
+
+If only this repo is open and `litellm-docs` is not indexed, say so and use `@Docs` (https://docs.litellm.ai) or ask the user to open the multi-root workspace (`litellm-full.code-workspace`).

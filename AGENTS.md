@@ -246,6 +246,14 @@ When opening issues or pull requests, follow these templates:
 
 ## Cursor Cloud specific instructions
 
+### litellm + litellm-docs (dual repo)
+
+- **Code:** this repo (`BerriAI/litellm`).
+- **Docs:** [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs) — served at https://docs.litellm.ai. Do not edit docs here; open doc PRs in `litellm-docs`.
+- **Desktop:** open [`litellm-full.code-workspace`](litellm-full.code-workspace) so both repos are indexed (see [.cursor/README.md](.cursor/README.md)).
+- **Cloud:** configure a **multi-repo environment** with both `BerriAI/litellm` and `BerriAI/litellm-docs` in the [Cloud Agents dashboard](https://cursor.com/dashboard/cloud-agents#environments). The Repos picker alone only selects one active repo.
+- **Doc-only tasks:** change `litellm-docs` only. **Code + doc tasks:** separate PRs per repo.
+
 ### Environment
 
 - uv is installed in `~/.local/bin`; the update script ensures it is on `PATH`.

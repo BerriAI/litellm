@@ -89,7 +89,15 @@ test.py
 
 litellm_config.yaml
 !.github/observatory/litellm_config.yaml
-.cursor
+# Cursor: ignore local state; commit shared rules, skills, and setup docs
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+!.cursor/skills/
+!.cursor/skills/**
+!.cursor/README.md
+!.cursor/commands/
+!.cursor/commands/**
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
 tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
@@ -121,3 +129,4 @@ crash.*.log
 # .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
 # and should be committed.
 .vscode
+litellm-full.local.code-workspace
