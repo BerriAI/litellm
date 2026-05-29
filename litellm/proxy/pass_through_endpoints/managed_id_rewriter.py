@@ -552,6 +552,137 @@ def _parse_file_object(file_object: Any) -> Any:
     return file_object
 
 
+def _empty_list_response() -> Dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [],
+        "first_id": None,
+        "last_id": None,
+        "has_more": False,
+    }
+
+
+def _parse_list_limit(query_params: Optional[Dict[str, Any]]) -> Tuple[int, int]:
+    params = query_params or {}
+    try:
+        raw_limit = int(params.get("limit", 20))
+    except (TypeError, ValueError):
+        raw_limit = 20
+    # Fetch one extra to cheaply detect has_more.
+    return raw_limit, min(raw_limit, 100) + 1
+
+
+async def _build_list_where_with_cursor(
+    prisma_client: Any,
+    resource_kind: str,
+    owner_filter: Dict[str, Any],
+    query_params: Optional[Dict[str, Any]],
+) -> Tuple[Dict[str, Any], str]:
+    """Return a Prisma ``where`` clause and fetch order for a list query."""
+    params = query_params or {}
+    after_id: Optional[str] = params.get("after")
+    before_id: Optional[str] = params.get("before")
+    where: Dict[str, Any] = dict(owner_filter)
+    fetch_order = "desc"
+
+    cursor_id = after_id or before_id
+    if not cursor_id:
+        return where, fetch_order
+
+    cursor_table = (
+        prisma_client.db.litellm_managedfiletable
+        if resource_kind == "files"
+        else prisma_client.db.litellm_managedobjecttable
+    )
+    cursor_field = (
+        "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    )
+    try:
+        cursor_row = await cursor_table.find_first(where={cursor_field: cursor_id})
+        if cursor_row is not None:
+            if after_id:
+                where["created_at"] = {"lt": cursor_row.created_at}
+            else:
+                where["created_at"] = {"gt": cursor_row.created_at}
+                fetch_order = "asc"
+    except Exception:
+        pass
+    return where, fetch_order
+
+
+async def _fetch_list_rows(
+    prisma_client: Any,
+    resource_kind: str,
+    where: Dict[str, Any],
+    fetch_order: str,
+    fetch_limit: int,
+) -> Optional[List[Any]]:
+    try:
+        if resource_kind == "files":
+            return await prisma_client.db.litellm_managedfiletable.find_many(
+                where=where,
+                order={"created_at": fetch_order},
+                take=fetch_limit,
+            )
+        return await prisma_client.db.litellm_managedobjecttable.find_many(
+            where={**where, "file_purpose": "batch"},
+            order={"created_at": fetch_order},
+            take=fetch_limit,
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "managed_id_rewriter: list DB query failed", exc_info=True
+        )
+        return None
+
+
+def _normalize_list_rows(
+    rows: List[Any],
+    raw_limit: int,
+    fetch_limit: int,
+    fetch_order: str,
+) -> Tuple[List[Any], bool]:
+    has_more = len(rows) == fetch_limit
+    page = rows[:raw_limit]
+    if fetch_order == "asc":
+        # `before` cursor: we fetched asc to get the page just before the cursor,
+        # now reverse so the response remains newest-first.
+        page = list(reversed(page))
+    return page, has_more
+
+
+def _serialize_file_list_item(row: Any) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "id": row.unified_file_id,
+        "object": "file",
+        "created_at": int(row.created_at.timestamp()) if row.created_at else None,
+    }
+    file_object = _parse_file_object(row.file_object)
+    if isinstance(file_object, dict):
+        item.update(file_object)
+    item["id"] = row.unified_file_id  # managed ID always wins over stored raw id
+    return item
+
+
+def _serialize_batch_list_item(row: Any) -> Dict[str, Any]:
+    item: Dict[str, Any] = {}
+    file_object = _parse_file_object(row.file_object)
+    if isinstance(file_object, dict):
+        item.update(file_object)
+    item["id"] = row.unified_object_id  # managed ID always wins
+    item["object"] = "batch"
+    return item
+
+
+def _list_boundary_ids(
+    rows: List[Any], resource_kind: str
+) -> Tuple[Optional[str], Optional[str]]:
+    if not rows:
+        return None, None
+    id_attr = "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    return getattr(rows[0], id_attr), getattr(rows[-1], id_attr)
+
+
 async def list_passthrough_ids_from_db(
     provider: str,
     route: str,
@@ -587,125 +718,25 @@ async def list_passthrough_ids_from_db(
         verbose_proxy_logger.warning(
             "managed_id_rewriter: list denied — caller has no user_id or team_id"
         )
-        return {
-            "object": "list",
-            "data": [],
-            "first_id": None,
-            "last_id": None,
-            "has_more": False,
-        }
+        return _empty_list_response()
 
-    params = query_params or {}
-    try:
-        raw_limit = int(params.get("limit", 20))
-    except (TypeError, ValueError):
-        raw_limit = 20
-    # Fetch one extra to cheaply detect has_more.
-    fetch_limit = min(raw_limit, 100) + 1
-
-    after_id: Optional[str] = params.get("after")
-    before_id: Optional[str] = params.get("before")
-
-    where: Dict[str, Any] = dict(owner_filter)
-
-    # Cursor-based pagination: locate the cursor row and add a created_at bound.
-    # `after` paginates forward (older rows); `before` paginates backward (newer
-    # rows). When using `before` we flip the fetch order to asc so we get the
-    # page immediately preceding the cursor, then reverse before returning so
-    # callers still see newest-first.
-    fetch_order: str = "desc"
-    cursor_id = after_id or before_id
-    if cursor_id:
-        cursor_table = (
-            prisma_client.db.litellm_managedfiletable
-            if resource_kind == "files"
-            else prisma_client.db.litellm_managedobjecttable
-        )
-        cursor_field = (
-            "unified_file_id" if resource_kind == "files" else "unified_object_id"
-        )
-        try:
-            cursor_row = await cursor_table.find_first(where={cursor_field: cursor_id})
-            if cursor_row is not None:
-                if after_id:
-                    where["created_at"] = {"lt": cursor_row.created_at}
-                else:
-                    where["created_at"] = {"gt": cursor_row.created_at}
-                    fetch_order = "asc"
-        except Exception:
-            pass
-
-    try:
-        if resource_kind == "files":
-            rows = await prisma_client.db.litellm_managedfiletable.find_many(
-                where=where,
-                order={"created_at": fetch_order},
-                take=fetch_limit,
-            )
-        else:
-            rows = await prisma_client.db.litellm_managedobjecttable.find_many(
-                where={**where, "file_purpose": "batch"},
-                order={"created_at": fetch_order},
-                take=fetch_limit,
-            )
-    except Exception:
-        verbose_proxy_logger.warning(
-            "managed_id_rewriter: list DB query failed", exc_info=True
-        )
+    raw_limit, fetch_limit = _parse_list_limit(query_params)
+    where, fetch_order = await _build_list_where_with_cursor(
+        prisma_client, resource_kind, owner_filter, query_params
+    )
+    rows = await _fetch_list_rows(
+        prisma_client, resource_kind, where, fetch_order, fetch_limit
+    )
+    if rows is None:
         return None
 
-    has_more = len(rows) == fetch_limit
-    rows = rows[:raw_limit]
-    if fetch_order == "asc":
-        # `before` cursor: we fetched asc to get the page just before the cursor,
-        # now reverse so the response remains newest-first.
-        rows = list(reversed(rows))
-
+    page, has_more = _normalize_list_rows(rows, raw_limit, fetch_limit, fetch_order)
     if resource_kind == "files":
-        data = []
-        for row in rows:
-            item: Dict[str, Any] = {
-                "id": row.unified_file_id,
-                "object": "file",
-                "created_at": (
-                    int(row.created_at.timestamp()) if row.created_at else None
-                ),
-            }
-            file_object = _parse_file_object(row.file_object)
-            if isinstance(file_object, dict):
-                item.update(file_object)
-            item["id"] = (
-                row.unified_file_id
-            )  # managed ID always wins over stored raw id
-            data.append(item)
+        data = [_serialize_file_list_item(row) for row in page]
     else:
-        data = []
-        for row in rows:
-            item = {}
-            file_object = _parse_file_object(row.file_object)
-            if isinstance(file_object, dict):
-                item.update(file_object)
-            item["id"] = row.unified_object_id  # managed ID always wins
-            item["object"] = "batch"
-            data.append(item)
+        data = [_serialize_batch_list_item(row) for row in page]
 
-    first_id: Optional[str]
-    last_id: Optional[str]
-    if rows:
-        first_id = (
-            rows[0].unified_file_id
-            if resource_kind == "files"
-            else rows[0].unified_object_id
-        )
-        last_id = (
-            rows[-1].unified_file_id
-            if resource_kind == "files"
-            else rows[-1].unified_object_id
-        )
-    else:
-        first_id = None
-        last_id = None
-
+    first_id, last_id = _list_boundary_ids(page, resource_kind)
     verbose_proxy_logger.debug(
         "managed_id_rewriter: list served from DB provider=%s kind=%s count=%d admin=%s",
         provider,
