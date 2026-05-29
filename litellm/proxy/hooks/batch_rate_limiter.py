@@ -334,9 +334,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 # Managed file with no recoverable target_model_names —
                 # fall back to the JSONL check so we don't silently skip
                 # validation for a malformed unified ID.
-                models = _get_models_from_batch_input_file_content(
-                    file_content_as_dict
-                )
+                models = _get_models_from_batch_input_file_content(file_content_as_dict)
         else:
             models = _get_models_from_batch_input_file_content(file_content_as_dict)
         if not models:
