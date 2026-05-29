@@ -53,7 +53,7 @@ def test_update_router_config_accepts_retry_policy_payload():
         }
     }
     cfg = UpdateRouterConfig(**payload)
-    dumped = cfg.dict(exclude_none=True)
+    dumped = cfg.model_dump(exclude_none=True)
     assert "retry_policy" in dumped
     assert dumped["retry_policy"]["BadRequestErrorRetries"] == 5
     assert dumped["retry_policy"]["RateLimitErrorRetries"] == 7
