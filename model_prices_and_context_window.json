@@ -1171,7 +1171,8 @@
         "supports_vision": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_output_config": true
     },
     "global.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -2106,7 +2107,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "azure_ai/claude-opus-4-6": {
         "input_cost_per_token": 5e-06,
@@ -11410,7 +11412,8 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_output_config": true
     },
     "databricks/databricks-claude-sonnet-4": {
         "input_cost_per_token": 2.9999900000000002e-06,
@@ -18112,7 +18115,8 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "github_copilot/claude-opus-4.6-fast": {
         "litellm_provider": "github_copilot",
@@ -18625,7 +18629,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "gmi/anthropic/claude-sonnet-4.5": {
         "input_cost_per_token": 3e-06,
@@ -27234,7 +27239,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "openrouter/anthropic/claude-opus-4.6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -29296,7 +29302,8 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_output_config": true
     },
     "perplexity/anthropic/claude-sonnet-4-5": {
         "litellm_provider": "perplexity",
@@ -32442,7 +32449,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.6": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -32461,7 +32469,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -33631,7 +33640,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_output_config": true
     },
     "vertex_ai/claude-opus-4-5@20251101": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -33657,7 +33667,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_output_config": true
     },
     "vertex_ai/claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
