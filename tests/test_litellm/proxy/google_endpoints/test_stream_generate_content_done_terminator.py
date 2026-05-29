@@ -220,3 +220,14 @@ def test_generate_content_endpoint_does_not_set_skip_done_flag():
         assert (
             "_litellm_skip_sse_done_terminator" not in data
         ), "Non-streaming generateContent must not set the SSE done-terminator flag"
+
+
+
+# Drift guard: typed key constant must equal the on-the-wire dict key. If a
+# future rename moves the constant without updating both producer and consumer
+# in lock-step, the SSE stream silently regains the OpenAI [DONE] terminator
+# and breaks native Vertex/Gemini SDK consumers again (LIT-3411).
+def test_litellm_skip_sse_done_terminator_key_constant():
+    from litellm.proxy._types import LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY
+
+    assert LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY == "_litellm_skip_sse_done_terminator"
