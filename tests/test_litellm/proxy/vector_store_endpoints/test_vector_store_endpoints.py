@@ -2479,3 +2479,63 @@ class TestLit2384DestructiveVerbDefaultDeny:
                     user_api_key_dict=non_admin_with_read_perm,
                 )
         assert exc.value.status_code == 403
+
+    def test_escape_hatch_flag_restores_legacy_behaviour(
+        self, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        """LIT-2384 escape hatch: setting
+        ``litellm.vector_store_allow_destructive_passthrough = True`` (or the
+        ``LITELLM_VECTOR_STORE_ALLOW_DESTRUCTIVE_PASSTHROUGH`` env var) restores
+        the legacy silent-allow (return ``None``) so operators with a
+        legitimate non-admin destructive flow can preserve the old behaviour
+        during migration."""
+        import litellm
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index"
+
+        prev = getattr(litellm, "vector_store_allow_destructive_passthrough", False)
+        try:
+            litellm.vector_store_allow_destructive_passthrough = True
+            with patch(
+                "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+                return_value=mock_azure_ai_provider_config,
+            ):
+                result = is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="admin-created-index",
+                    request=mock_request,
+                    user_api_key_dict=non_admin_with_read_perm,
+                )
+            assert result is None
+        finally:
+            litellm.vector_store_allow_destructive_passthrough = prev
+
+    def test_escape_hatch_flag_false_keeps_default_deny(
+        self, mock_azure_ai_provider_config, non_admin_with_read_perm
+    ):
+        """Explicit ``False`` on the escape-hatch flag must keep default-deny."""
+        import litellm
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/admin-created-index"
+
+        prev = getattr(litellm, "vector_store_allow_destructive_passthrough", False)
+        try:
+            litellm.vector_store_allow_destructive_passthrough = False
+            with patch(
+                "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+                return_value=mock_azure_ai_provider_config,
+            ):
+                with pytest.raises(HTTPException) as exc:
+                    is_allowed_to_call_vector_store_endpoint(
+                        provider=LlmProviders.AZURE_AI,
+                        index_name="admin-created-index",
+                        request=mock_request,
+                        user_api_key_dict=non_admin_with_read_perm,
+                    )
+            assert exc.value.status_code == 403
+        finally:
+            litellm.vector_store_allow_destructive_passthrough = prev
