@@ -384,12 +384,12 @@ def test_get_supported_openai_params_claude_model():
     assert "thinking" in supported_params
     assert "reasoning_effort" in supported_params
 
-    # Test Claude 3-7 model supports thinking and reasoning_effort parameters
-    supported_params_claude37 = config.get_supported_openai_params(
-        "claude-3-7-sonnet-20250219"
+    # Test Claude Sonnet 4.5 model supports thinking and reasoning_effort parameters
+    supported_params_sonnet45 = config.get_supported_openai_params(
+        "claude-sonnet-4-5"
     )
-    assert "thinking" in supported_params_claude37
-    assert "reasoning_effort" in supported_params_claude37
+    assert "thinking" in supported_params_sonnet45
+    assert "reasoning_effort" in supported_params_sonnet45
 
     # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
     supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")

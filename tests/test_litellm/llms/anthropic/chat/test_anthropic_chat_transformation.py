@@ -1622,6 +1622,29 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_output_config_format_preservation_and_beta_header():
+    """Test that output_config.format is preserved and treated as structured output."""
+    config = AnthropicConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+    optional_params = {"output_config": {"format": output_format, "effort": "xhigh"}}
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    headers = config.update_headers_with_optional_anthropic_beta({}, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1648,7 +1671,7 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
@@ -1781,7 +1804,7 @@ def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
     litellm.drop_params = True
     try:
         result = config.transform_request(
-            model="claude-3-haiku-20240307",
+            model="claude-haiku-4-5",
             messages=messages,
             optional_params={"output_config": {"effort": "low"}},
             litellm_params={},
@@ -1823,7 +1846,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     litellm.drop_params = False
     try:
         result = config.transform_request(
-            model="claude-3-haiku-20240307",
+            model="claude-haiku-4-5",
             messages=messages,
             optional_params={"output_config": {"effort": "low"}},
             litellm_params={},
@@ -1853,9 +1876,9 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-3-haiku-20240307",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-opus-20240229",
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5",
+        "claude-opus-4-1",
         "claude-sonnet-4-20250514",
     ],
 )
@@ -1993,18 +2016,17 @@ def test_get_max_tokens_for_model_claude_35():
         assert max_tokens == 8192
 
 
-def test_get_max_tokens_for_model_claude_37():
+def test_get_max_tokens_for_model_claude_4():
     """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
-    Claude 3.7 Sonnet has max_output_tokens of 64000 by default.
-    128K output requires the beta header 'output-128k-2025-02-19'.
+    Test that get_max_tokens_for_model returns correct value for Claude 4 models.
+    Claude Sonnet 4.5 has max_output_tokens of 64000.
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
     config = AnthropicConfig()
 
-    # Claude 3.7 Sonnet should return 64000 (64K default, 128K requires beta header)
-    max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
+    # Claude Sonnet 4.5 should return 64000
+    max_tokens = config.get_max_tokens_for_model("claude-sonnet-4-5")
     assert max_tokens == 64000
 
 
@@ -2040,9 +2062,9 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
     def _mock_get_max_tokens(model):
         """Return expected max_output_tokens for each model."""
         model_map = {
-            "claude-3-sonnet-20240229": 4096,
-            "claude-3-5-sonnet-20241022": 8192,
-            "claude-3-7-sonnet-20250219": 64000,
+            "claude-haiku-4-5": 64000,
+            "claude-sonnet-4-5": 64000,
+            "claude-opus-4-6": 128000,
         }
         result = model_map.get(model)
         if result is None:
@@ -2053,17 +2075,17 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         "litellm.llms.anthropic.chat.transformation.get_max_tokens",
         side_effect=_mock_get_max_tokens,
     ):
-        # Claude 3 model should get 4096
-        config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
-        assert config_claude3["max_tokens"] == 4096
+        # Claude Haiku 4.5 should get 64000
+        config_haiku = AnthropicConfig.get_config(model="claude-haiku-4-5")
+        assert config_haiku["max_tokens"] == 64000
 
-        # Claude 3.5 model should get 8192
-        config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
-        assert config_claude35["max_tokens"] == 8192
+        # Claude Sonnet 4.5 should get 64000
+        config_sonnet = AnthropicConfig.get_config(model="claude-sonnet-4-5")
+        assert config_sonnet["max_tokens"] == 64000
 
-        # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
-        config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
-        assert config_claude37["max_tokens"] == 64000
+        # Claude Opus 4.6 should get 128000
+        config_opus = AnthropicConfig.get_config(model="claude-opus-4-6")
+        assert config_opus["max_tokens"] == 128000
 
 
 def test_get_config_without_model_uses_fallback():
@@ -2193,9 +2215,9 @@ def test_transform_request_uses_dynamic_max_tokens():
 
     messages = [{"role": "user", "content": "Hello"}]
 
-    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
+    # Claude Sonnet 4.5 should get 64000 as default max_tokens (from model_prices_and_context_window.json)
     result = config.transform_request(
-        model="claude-3-7-sonnet-20250219",
+        model="claude-sonnet-4-5",
         messages=messages,
         optional_params={},  # No max_tokens provided
         litellm_params={},
@@ -2216,7 +2238,7 @@ def test_transform_request_respects_user_max_tokens():
 
     # User provides explicit max_tokens=1000, should not be overridden
     result = config.transform_request(
-        model="claude-3-7-sonnet-20250219",
+        model="claude-sonnet-4-5",
         messages=messages,
         optional_params={"max_tokens": 1000},
         litellm_params={},
@@ -2461,7 +2483,7 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
 
     for model in [
         "claude-sonnet-4-5-20250929",
-        "claude-3-7-sonnet-20250219",
+        "claude-sonnet-4-5",
         "claude-opus-4-5-20251101",
     ]:
         result = config.map_openai_params(
@@ -2513,14 +2535,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2554,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2571,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2606,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(

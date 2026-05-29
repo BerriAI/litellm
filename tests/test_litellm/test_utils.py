@@ -118,7 +118,7 @@ def test_supports_function_calling_github_openai_alias():
 def test_supports_function_calling_github_anthropic_alias():
     assert (
         litellm.utils.supports_function_calling(
-            model="github/claude-3-7-sonnet-20250219"
+            model="github/claude-sonnet-4-5"
         )
         is True
     )
@@ -706,6 +706,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -736,6 +737,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -856,7 +859,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
-                    "supports_output_config": {"type": "boolean"},
+                "supports_output_config": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
@@ -1460,7 +1467,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/vertex-gemini-flash", "vertex_ai/gemini-1.5-flash", False),
             # Anthropic with custom names (cannot be resolved)
             ("litellm_proxy/claude-prod", "anthropic/claude-3-sonnet-20240229", False),
-            ("litellm_proxy/claude-dev", "anthropic/claude-3-haiku-20240307", False),
+            ("litellm_proxy/claude-dev", "anthropic/claude-haiku-4-5", False),
             # Groq with custom names (cannot be resolved)
             ("litellm_proxy/fast-llama", "groq/llama-3.1-8b-instant", False),
             ("litellm_proxy/groq-gemma", "groq/gemma-7b-it", False),
@@ -1537,7 +1544,7 @@ class TestProxyFunctionCalling:
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
            - litellm_proxy/claude-sonnet-4-5-20250929
-           - litellm_proxy/anthropic/claude-3-haiku-20240307
+           - litellm_proxy/anthropic/claude-haiku-4-5
            
         ❌ DOESN'T WORK (requires proxy server config):
            - litellm_proxy/my-custom-gpt4

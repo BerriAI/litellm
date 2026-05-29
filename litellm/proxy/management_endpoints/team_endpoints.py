@@ -64,6 +64,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
@@ -72,6 +73,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -127,6 +129,33 @@ def _sanitize_for_log(value: Any) -> str:
     except Exception:
         text = repr(value)
     return text.replace("\r", "").replace("\n", "")
+
+
+async def _refresh_cached_team(
+    team_row: Any,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> None:
+    """
+    Refresh the in-memory cached team object after a DB write.
+
+    Every endpoint that mutates `litellm_teamtable` must call this so the
+    cached `LiteLLM_TeamTableCachedObj` used by `common_checks` stays in
+    sync. Without this, subsequent auth checks read a stale team and can
+    403 on permissions the DB has already granted (or, symmetrically,
+    keep granting permissions the DB has already revoked).
+
+    `team_row` is the Prisma row returned by `update`/`find_unique` on
+    `litellm_teamtable`. It is converted to `LiteLLM_TeamTableCachedObj`
+    via `model_dump()` to match the cache shape `_cache_team_object`
+    expects.
+    """
+    await _cache_team_object(
+        team_id=team_row.team_id,
+        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def _verify_team_access(
@@ -1156,6 +1185,11 @@ async def new_team(  # noqa: PLR0915
         )
         complete_team_data_dict["router_settings"] = router_settings_json
 
+        if complete_team_data_dict.get("metadata") is not None:
+            complete_team_data_dict["metadata"] = encrypt_callback_vars(
+                complete_team_data_dict["metadata"]
+            )
+
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
@@ -1585,7 +1619,6 @@ async def update_team(  # noqa: PLR0915
     ```
     """
     try:
-        from litellm.proxy.auth.auth_checks import _cache_team_object
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1828,6 +1861,9 @@ async def update_team(  # noqa: PLR0915
         # update team metadata fields
         _update_metadata_fields(updated_kv=updated_kv)
 
+        if updated_kv.get("metadata") is not None:
+            updated_kv["metadata"] = encrypt_callback_vars(updated_kv["metadata"])
+
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")
             _model_id = await _update_model_table(
@@ -1852,7 +1888,13 @@ async def update_team(  # noqa: PLR0915
             await prisma_client.db.litellm_teamtable.update(
                 where={"team_id": data.team_id},
                 data=updated_kv,
-                include={"litellm_model_table": True},  # type: ignore
+                # `object_permission` is included so `_refresh_cached_team`
+                # doesn't write a cached team with the relation nulled out —
+                # see team_model_add for the full rationale.
+                include={
+                    "litellm_model_table": True,
+                    "object_permission": True,
+                },  # type: ignore
             )
         )
 
@@ -1865,9 +1907,8 @@ async def update_team(  # noqa: PLR0915
         verbose_proxy_logger.info(
             "Successfully updated team - %s, info", team_row.team_id
         )
-        await _cache_team_object(
-            team_id=team_row.team_id,
-            team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
+        await _refresh_cached_team(
+            team_row=team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -4560,7 +4601,11 @@ async def team_model_add(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -4594,9 +4639,21 @@ async def team_model_add(
         )
 
     updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
-    # Update team
+    # Update team. `include` mirrors the relations the auth path consumes
+    # off the cached team object so that `_refresh_cached_team` doesn't
+    # null them out — see object_permission_utils.validate_key_search_tools_against_team
+    # and the MCP/agent authz paths, which treat a missing object_permission
+    # as "no team-level restriction".
     updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"models": updated_models}
+        where={"team_id": data.team_id},
+        data={"models": updated_models},
+        include={"object_permission": True},  # type: ignore
+    )
+
+    await _refresh_cached_team(
+        team_row=updated_team,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return updated_team
@@ -4631,7 +4688,11 @@ async def team_model_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -4670,9 +4731,17 @@ async def team_model_delete(
     # Remove specified models
     updated_models = [m for m in current_models if m not in data.models]
 
-    # Update team
+    # Update team. See team_model_add for the rationale on `include`.
     updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"models": updated_models}
+        where={"team_id": data.team_id},
+        data={"models": updated_models},
+        include={"object_permission": True},  # type: ignore
+    )
+
+    await _refresh_cached_team(
+        team_row=updated_team,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return updated_team
