@@ -3497,7 +3497,7 @@ class ModelResponseIterator:
         # the growing buffer on every chunk -- the empty-string flush from
         # __next__/__anext__ at StopIteration still forces a final attempt.
         _stripped = message.rstrip()
-        if _stripped and _stripped[-1] not in ('}', ']'):
+        if _stripped and _stripped[-1] not in ("}", "]"):
             return None
         _full_json = "".join(self.accumulated_json_chunks)
         if not _full_json:
