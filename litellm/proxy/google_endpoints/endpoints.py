@@ -113,7 +113,7 @@ async def google_stream_generate_content(
     # `proxy_server.py`) to skip the OpenAI-style terminator for this
     # route only — every other streaming caller (chat/completions,
     # anthropic messages, responses, etc.) is unaffected (LIT-3411).
-    data["_litellm_skip_sse_done_terminator"] = True
+    data[LITELLM_SKIP_SSE_DONE_TERMINATOR_KEY] = True
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
