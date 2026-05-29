@@ -702,8 +702,9 @@ async def _fetch_provider_scoped_list_rows(
         else:
             scan_where["created_at"] = created_at_bound
 
-    has_more = len(matched) > raw_limit
-    page = matched[:raw_limit]
+    effective_limit = min(raw_limit, 100)
+    has_more = len(matched) > effective_limit
+    page = matched[:effective_limit]
     if fetch_order == "asc":
         page = list(reversed(page))
     return page, has_more
