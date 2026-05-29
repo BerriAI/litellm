@@ -5902,15 +5902,61 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
+
+
+@pytest.mark.asyncio
+async def test_spend_counter_reseed_returns_winning_redis_value_on_set_nx_loss():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    counter_cache = DualCache()
+    counter_key = "spend:team:team-set-nx-loss"
+    redis_reads = 0
+
+    async def redis_get_cache(key, **_):
+        nonlocal redis_reads
+        redis_reads += 1
+        if redis_reads == 1:
+            return None
+        return 45.5
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
+    fake_redis.async_set_cache = AsyncMock(return_value=False)
+    fake_redis.async_increment = AsyncMock()
+    counter_cache.redis_cache = fake_redis
+
+    db_row = MagicMock()
+    db_row.spend = 42.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
+
+    result = await SpendCounterReseed.coalesced(
+        prisma_client=fake_prisma,
+        spend_counter_cache=counter_cache,
+        counter_key=counter_key,
     )
+
+    assert result == pytest.approx(45.5)
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(
+        45.5
+    )
+    fake_redis.async_set_cache.assert_awaited_once_with(
+        key=counter_key,
+        value=42.0,
+        nx=True,
+    )
+    fake_redis.async_increment.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6209,6 +6255,55 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_reseed_returns_winning_redis_value():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+    counter_cache = DualCache()
+    counter_key = "spend:key:key-window-set-nx-loss:window:1h"
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    redis_reads = 0
+
+    async def redis_get_cache(key):
+        nonlocal redis_reads
+        redis_reads += 1
+        if redis_reads == 1:
+            return None
+        return 2.75
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=redis_get_cache)
+    fake_redis.async_set_cache = AsyncMock(return_value=False)
+    fake_redis.async_increment = AsyncMock()
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"api_key": "key-window-set-nx-loss", "_sum": {"spend": 2.25}}]
+    )
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=fake_prisma,
+        spend_counter_cache=counter_cache,
+        counter_key=counter_key,
+        entity_type="Key",
+        entity_id="key-window-set-nx-loss",
+        window_start=window_start,
+    )
+
+    assert result == pytest.approx(2.75)
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(
+        2.75
+    )
+    fake_redis.async_set_cache.assert_awaited_once_with(
+        key=counter_key,
+        value=2.25,
+        nx=True,
+    )
+    fake_redis.async_increment.assert_not_awaited()
 
 
 @pytest.mark.asyncio
