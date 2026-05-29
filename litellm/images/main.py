@@ -236,6 +236,7 @@ def image_generation(  # noqa: PLR0915
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
+        extra_body: Optional[Dict[str, Any]] = kwargs.get("extra_body", None)
         headers: dict = kwargs.get("headers", None) or {}
         base_model = kwargs.get("base_model", None)
         if extra_headers is not None:
@@ -451,6 +452,7 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 client=client,
                 aimg_generation=aimg_generation,
             )
@@ -998,6 +1000,7 @@ def image_edit(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 client=kwargs.get("client"),
                 aimage_edit=_is_async,
             )

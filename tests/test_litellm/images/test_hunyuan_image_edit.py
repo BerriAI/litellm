@@ -286,7 +286,10 @@ class TestImageToUrl:
 
 class TestImageToParam:
     def test_http_url_passthrough(self):
-        assert _image_to_param("https://example.com/img.png") == "https://example.com/img.png"
+        assert (
+            _image_to_param("https://example.com/img.png")
+            == "https://example.com/img.png"
+        )
 
     def test_data_url_wrapped(self):
         data_url = "data:image/jpeg;base64,/9j/4AAQSk.............."
@@ -540,3 +543,111 @@ class TestHunyuanImageEditPostCall:
         call_kwargs = mock_logging.post_call.call_args[1]
         assert call_kwargs["input"] == "edit me"
         assert call_kwargs["api_key"] == "sk-test"
+
+
+# ---------------------------------------------------------------------------
+# extra_body support
+# ---------------------------------------------------------------------------
+
+
+class TestHunyuanImageEditExtraBody:
+    """Verify extra_body parameters are merged into the image edit request body."""
+
+    def _make_mock_client(self, job_id: str = "job-edit-extra") -> MagicMock:
+        submit_resp = MagicMock(spec=httpx.Response)
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {"job_id": job_id}
+        submit_resp.raise_for_status = MagicMock()
+
+        poll_resp = MagicMock(spec=httpx.Response)
+        poll_resp.status_code = 200
+        poll_resp.text = (
+            '{"status":"DONE","data":[{"url":"https://example.com/out.png"}]}'
+        )
+        poll_resp.json.return_value = {
+            "status": "DONE",
+            "data": [{"url": "https://example.com/out.png"}],
+        }
+        poll_resp.raise_for_status = MagicMock()
+
+        client = MagicMock()
+        client.post.side_effect = [submit_resp, poll_resp]
+        return client
+
+    def test_extra_body_appends_new_params(self):
+        """extra_body keys not in the base request are appended."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="油画风格",
+                image_edit_optional_request_params={},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+                extra_body={"seed": 99, "custom_option": "value"},
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["seed"] == 99
+        assert submit_call_body["custom_option"] == "value"
+
+    def test_extra_body_overwrites_existing_params(self):
+        """extra_body overwrites keys already present in the request body."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="original",
+                image_edit_optional_request_params={"quality": "standard"},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+                extra_body={"quality": "high", "extra_param": "extra_value"},
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["quality"] == "high"
+        assert submit_call_body["extra_param"] == "extra_value"
+
+    def test_extra_body_none_does_not_affect_request(self):
+        """When extra_body is None, the request body is unchanged."""
+        handler = HunyuanImageEdit()
+        mock_client = self._make_mock_client()
+        mock_logging = MagicMock()
+
+        os.environ["HUNYUAN_API_KEY"] = "sk-test"
+        with patch(
+            "litellm.llms.hunyuan.image_edit.handler._get_httpx_client",
+            return_value=mock_client,
+        ):
+            handler.image_edit(
+                model="gpt-image-2",
+                image="https://example.com/source.png",
+                prompt="test",
+                image_edit_optional_request_params={"quality": "standard"},
+                litellm_params={"api_key": "sk-test"},
+                logging_obj=mock_logging,
+                timeout=30.0,
+                extra_body=None,
+            )
+
+        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
+        assert submit_call_body["quality"] == "standard"
+        assert "extra_body" not in submit_call_body

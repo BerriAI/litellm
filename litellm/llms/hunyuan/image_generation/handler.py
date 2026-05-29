@@ -60,6 +60,7 @@ class HunyuanImageGeneration:
         logging_obj: LiteLLMLoggingObj,
         timeout: Optional[Union[float, httpx.Timeout]],
         extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         aimg_generation: bool = False,
     ) -> Union[ImageResponse, Any]:
@@ -73,6 +74,7 @@ class HunyuanImageGeneration:
                 logging_obj=logging_obj,
                 timeout=timeout,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
             )
 
@@ -114,6 +116,8 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        if extra_body:
+            data.update(extra_body)
 
         logging_obj.pre_call(
             input=prompt,
@@ -169,6 +173,7 @@ class HunyuanImageGeneration:
         logging_obj: LiteLLMLoggingObj,
         timeout: Optional[Union[float, httpx.Timeout]],
         extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
         litellm_params_dict = (
@@ -209,6 +214,8 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
+        if extra_body:
+            data.update(extra_body)
 
         logging_obj.pre_call(
             input=prompt,
