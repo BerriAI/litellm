@@ -153,7 +153,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Cato: Violation detected enabled policies: {policies}".format(
-                policies=list(analysis_result["policy_drill_down"].keys()),
+                policies=list(analysis_result.get("policy_drill_down", {}).keys()),
             ),
         )
         raise HTTPException(status_code=400, detail=detection_message)
@@ -168,7 +168,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 "role": message["role"],
                 "content": message["content"],
             }
-            for message in redacted_chat["all_redacted_messages"]
+            for message in redacted_chat.get("all_redacted_messages") or []
         ]
         return data
 
@@ -217,7 +217,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         verbose_proxy_logger.info(
             "Cato: detected: {detected}, enabled policies: {policies}".format(
                 detected=True,
-                policies=list(analysis_result["policy_drill_down"].keys()),
+                policies=list(analysis_result.get("policy_drill_down", {}).keys()),
             ),
         )
         return {"detection_message": detection_message}
