@@ -17,11 +17,7 @@ const codingAgentLogos: { name: string; src: string }[] = [
 ];
 
 const CodingAgentLogos: React.FC = () => (
-  <div
-    className="flex items-center"
-    aria-label="Compatible coding agents"
-    data-testid="coding-agent-logos"
-  >
+  <div className="flex items-center" aria-label="Compatible coding agents" data-testid="coding-agent-logos">
     {codingAgentLogos.map((logo, index) => (
       <img
         key={logo.name}
@@ -44,18 +40,25 @@ const CodingAgentLogos: React.FC = () => (
   </div>
 );
 
-const buildCodingAgentPrompt = (apiKey: string, baseUrl: string): string => {
-  return `You have access to LiteLLM, an OpenAI-compatible AI gateway that lets you call 100+ LLMs (OpenAI, Anthropic, Gemini, Bedrock, etc.) through a single API.
+const buildCodingAgentPrompt = (baseUrl: string): string => {
+  return `You have access to LiteLLM, a single AI gateway that fronts 100+ LLMs (OpenAI, Anthropic, Gemini, Bedrock, Vertex, etc.) plus MCP tools.
 
-Use these credentials:
-- Base URL: ${baseUrl}
-- API key: ${apiKey}
+Base URL: ${baseUrl}
+Auth: pass the user's LiteLLM virtual key (e.g. from \`$LITELLM_API_KEY\`) as \`Authorization: Bearer <key>\`. Do not hardcode the key in source.
 
-LiteLLM is a drop-in replacement for the OpenAI SDK. Point the SDK's \`base_url\` at the URL above and use the key as your \`OPENAI_API_KEY\`. To list the models available to this key, GET ${baseUrl}/v1/models with header \`Authorization: Bearer ${apiKey}\`.
+Through this one base URL you can call:
+- POST /chat/completions  - OpenAI Chat Completions format
+- POST /v1/messages       - Anthropic Messages format (works with any provider)
+- POST /v1/responses      - OpenAI Responses API, including MCP tools via \`"server_url": "litellm_proxy"\`
+- GET  /mcp               - MCP Gateway for tool discovery and invocation
+- GET  /v1/models         - list the models this key can use
 
-LiteLLM docs:
-- llms.txt (overview + all doc links): https://docs.litellm.ai/llms.txt
-- llms-full.txt (complete reference with inline code examples): https://docs.litellm.ai/llms-full.txt`;
+Docs:
+- Getting started: https://docs.litellm.ai/docs/learn/gateway_quickstart
+- Claude Code with LiteLLM: https://docs.litellm.ai/docs/tutorials/claude_responses_api
+- /v1/messages (Anthropic format) on LiteLLM: https://docs.litellm.ai/docs/anthropic_unified
+- MCP gateway: https://docs.litellm.ai/docs/mcp
+- Full doc index: https://docs.litellm.ai/llms.txt`;
 };
 
 const resolveProxyBaseUrl = (): string => {
@@ -70,10 +73,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
 
-  const codingAgentPrompt = useMemo(
-    () => buildCodingAgentPrompt(apiKey, resolveProxyBaseUrl()),
-    [apiKey],
-  );
+  const codingAgentPrompt = useMemo(() => buildCodingAgentPrompt(resolveProxyBaseUrl()), []);
 
   const handleCopyKey = () => {
     setCopiedKey(true);
@@ -107,20 +107,12 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         </span>
       </div>
 
-      <div
-        className="rounded-md border mb-4"
-        style={{ borderColor: "#e5e7eb", background: "#fafafa" }}
-      >
+      <div className="rounded-md border mb-4" style={{ borderColor: "#e5e7eb", background: "#fafafa" }}>
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
           <span className="text-sm font-medium text-gray-700">Your API Key</span>
           <Tooltip title={copiedKey ? "Copied!" : "Copy API key"}>
             <CopyToClipboard text={apiKey} onCopy={handleCopyKey}>
-              <Button
-                type="text"
-                size="small"
-                aria-label="Copy API key"
-                icon={<CopyOutlined />}
-              />
+              <Button type="text" size="small" aria-label="Copy API key" icon={<CopyOutlined />} />
             </CopyToClipboard>
           </Tooltip>
         </div>
@@ -140,25 +132,15 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         </div>
       </div>
 
-      <div
-        className="rounded-md border"
-        style={{ borderColor: "#e5e7eb", background: "#fafafa" }}
-      >
+      <div className="rounded-md border" style={{ borderColor: "#e5e7eb", background: "#fafafa" }}>
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-700">
-              Prompt for coding agents
-            </span>
+            <span className="text-sm font-medium text-gray-700">Prompt for coding agents</span>
             <CodingAgentLogos />
           </div>
           <Tooltip title={copiedPrompt ? "Copied!" : "Copy prompt"}>
             <CopyToClipboard text={codingAgentPrompt} onCopy={handleCopyPrompt}>
-              <Button
-                type="text"
-                size="small"
-                aria-label="Copy prompt for coding agents"
-                icon={<CopyOutlined />}
-              />
+              <Button type="text" size="small" aria-label="Copy prompt for coding agents" icon={<CopyOutlined />} />
             </CopyToClipboard>
           </Tooltip>
         </div>

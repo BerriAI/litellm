@@ -31,22 +31,30 @@ describe("CreatedKeyDisplay", () => {
   it("displays the security warning and modal heading", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
     expect(screen.getByRole("heading", { name: /api key created/i })).toBeInTheDocument();
-    expect(
-      screen.getByText(/make sure to copy your api key now/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/make sure to copy your api key now/i)).toBeInTheDocument();
     expect(screen.getByText(/you won't be able to see it again/i)).toBeInTheDocument();
   });
 
-  it("builds a coding agent prompt that embeds the key, base URL, and docs links", () => {
+  it("builds a coding agent prompt that advertises the gateway endpoints and docs without leaking the key", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
     const prompt = screen.getByTestId("coding-agent-prompt").textContent ?? "";
 
     expect(prompt).toMatch(/Base URL: https:\/\/litellm\.example\.com/);
-    expect(prompt).toMatch(/API key: sk-test-123/);
-    expect(prompt).toContain("Authorization: Bearer sk-test-123");
-    expect(prompt).toContain("https://litellm.example.com/v1/models");
+    expect(prompt).not.toContain("sk-test-123");
+    expect(prompt).toContain("$LITELLM_API_KEY");
+    expect(prompt).toContain("Authorization: Bearer <key>");
+
+    expect(prompt).toContain("/chat/completions");
+    expect(prompt).toContain("/v1/messages");
+    expect(prompt).toContain("/v1/responses");
+    expect(prompt).toContain("/mcp");
+    expect(prompt).toContain("/v1/models");
+
+    expect(prompt).toContain("https://docs.litellm.ai/docs/learn/gateway_quickstart");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/tutorials/claude_responses_api");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/anthropic_unified");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/mcp");
     expect(prompt).toContain("https://docs.litellm.ai/llms.txt");
-    expect(prompt).toContain("https://docs.litellm.ai/llms-full.txt");
   });
 
   it("does not produce a trailing slash in the base URL when proxyBaseUrl is provided", () => {
@@ -71,12 +79,7 @@ describe("CreatedKeyDisplay", () => {
     const images = logos.querySelectorAll("img");
     const altText = Array.from(images).map((img) => img.getAttribute("alt"));
 
-    expect(altText).toEqual([
-      "Cursor",
-      "Claude Code",
-      "OpenAI Codex",
-      "GitHub Copilot",
-    ]);
+    expect(altText).toEqual(["Cursor", "Claude Code", "OpenAI Codex", "GitHub Copilot"]);
   });
 
   it("copies the coding agent prompt to clipboard when its copy button is clicked", async () => {
