@@ -135,6 +135,10 @@ async def authenticate_user(  # noqa: PLR0915
             code=500,
         )
 
+    # Strip whitespace from username/email to prevent login failures caused
+    # by accidental leading or trailing spaces in the login form.
+    username = username.strip()
+
     ui_username, ui_password = get_ui_credentials(master_key)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
