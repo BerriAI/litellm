@@ -224,6 +224,28 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     assert result is True
 
 
+def test_auth_enforced_passthrough_check_does_not_apply_to_info_routes():
+    """Auth-enforced passthrough gating only applies to OpenAI/LLM route groups."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["info_routes"],
+    )
+
+    with patch.object(
+        RouteChecks,
+        "is_auth_enforced_pass_through_route",
+        return_value=True,
+    ) as mock_is_auth_enforced_pass_through_route:
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/team/info",
+            valid_token=valid_token,
+        )
+
+    assert result is True
+    mock_is_auth_enforced_pass_through_route.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "route",
     [

@@ -1111,6 +1111,40 @@ class JWTAuthManager:
         return all_team_ids
 
     @staticmethod
+    def _team_has_passthrough_route_access(
+        team_object: Optional[LiteLLM_TeamTable],
+        route: str,
+        request_method: Optional[str] = None,
+    ) -> bool:
+        normalized_request_method = (
+            request_method.upper() if isinstance(request_method, str) else None
+        )
+        if not RouteChecks.is_auth_enforced_pass_through_route(
+            route=route,
+            method=normalized_request_method,
+        ):
+            return True
+
+        # JWT team selection is team-scoped; key metadata is not available here,
+        # so passthrough access is granted only by the selected team's metadata.
+        return RouteChecks.check_passthrough_route_access(
+            route=route,
+            user_api_key_dict=UserAPIKeyAuth(
+                team_metadata=(team_object.metadata or {}) if team_object else {}
+            ),
+        )
+
+    @staticmethod
+    def _raise_team_passthrough_route_denial(route: str) -> None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Team not allowed to access passthrough route {route}. "
+                "Configure `allowed_passthrough_routes` on the team."
+            ),
+        )
+
+    @staticmethod
     async def find_team_with_model_access(
         team_ids: Set[str],
         requested_model: Optional[str],
@@ -1125,9 +1159,6 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
-        normalized_request_method = (
-            request_method.upper() if isinstance(request_method, str) else None
-        )
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
@@ -1166,21 +1197,14 @@ class JWTAuthManager:
                         )
                         if (
                             is_allowed
-                            and RouteChecks.is_auth_enforced_pass_through_route(
+                            and not JWTAuthManager._team_has_passthrough_route_access(
+                                team_object=team_object,
                                 route=route,
-                                method=normalized_request_method,
+                                request_method=request_method,
                             )
                         ):
-                            # JWT team selection is team-scoped; key metadata is not
-                            # available here, so passthrough access is granted only by
-                            # the selected team's metadata.
-                            is_allowed = RouteChecks.check_passthrough_route_access(
-                                route=route,
-                                user_api_key_dict=UserAPIKeyAuth(
-                                    team_metadata=team_object.metadata or {}
-                                ),
-                            )
-                            denied_auth_enforced_pass_through_route = not is_allowed
+                            is_allowed = False
+                            denied_auth_enforced_pass_through_route = True
                         verbose_proxy_logger.debug(
                             f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
@@ -1190,13 +1214,7 @@ class JWTAuthManager:
                 continue
 
         if denied_auth_enforced_pass_through_route:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Team not allowed to access passthrough route {route}. "
-                    "Configure `allowed_passthrough_routes` on the team."
-                ),
-            )
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
         if requested_model:
             raise HTTPException(
@@ -1613,7 +1631,7 @@ class JWTAuthManager:
             return None, None, None
 
     @staticmethod
-    async def auth_builder(
+    async def auth_builder(  # noqa: PLR0915
         api_key: str,
         jwt_handler: JWTHandler,
         request_data: dict,
@@ -1763,6 +1781,14 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
+
+        if team_id and not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=team_object,
+            route=route,
+            request_method=request_method,
+        ):
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+
         # Extract alias fields for resolution (if configured)
         org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
 

@@ -1713,6 +1713,155 @@ async def test_auth_builder_uses_team_from_header_e2e():
 
 
 @pytest.mark.asyncio
+async def test_auth_builder_header_team_denies_auth_passthrough_without_allowlist():
+    """Header-selected JWT teams must enforce team allowed_passthrough_routes."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+        ),
+    )
+
+    team_object = LiteLLM_TeamTable(team_id="team-2", metadata={})
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_object,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+        ) as mock_get_objects,
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
+            return_value=False,
+        ) as mock_passthrough_check,
+    ):
+        mock_auth_jwt.return_value = {
+            "sub": "user-1",
+            "scope": "",
+            "groups": ["team-1", "team-2"],
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.auth_builder(
+                api_key="jwt-token",
+                jwt_handler=jwt_handler,
+                request_data={"model": "gpt-4"},
+                general_settings={},
+                route="/my-pass-through",
+                prisma_client=None,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+                request_headers={"x-litellm-team-id": "team-2"},
+                request_method="POST",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+    mock_get_objects.assert_not_called()
+    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
+    assert user_api_key_dict.team_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_specific_team_denies_auth_passthrough_without_allowlist():
+    """JWT-field-selected teams must enforce team allowed_passthrough_routes."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            user_id_jwt_field="sub",
+        ),
+    )
+
+    team_object = LiteLLM_TeamTable(team_id="team-1", metadata={})
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_object,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+        ) as mock_get_objects,
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
+            return_value=False,
+        ) as mock_passthrough_check,
+    ):
+        mock_auth_jwt.return_value = {
+            "sub": "user-1",
+            "scope": "",
+            "team_id": "team-1",
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.auth_builder(
+                api_key="jwt-token",
+                jwt_handler=jwt_handler,
+                request_data={"model": "gpt-4"},
+                general_settings={},
+                route="/my-pass-through",
+                prisma_client=None,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+                request_method="POST",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+    mock_get_objects.assert_not_called()
+    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
+    assert user_api_key_dict.team_metadata == {}
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_admin_on_llm_route_honors_team_header():
     """JWT proxy_admin + x-litellm-team-id on an LLM API route -> team context is
     attached to the admin result so team TPM/RPM limits and attribution apply."""

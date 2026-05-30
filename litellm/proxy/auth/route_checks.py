@@ -59,6 +59,10 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(
+    ("openai_routes", "llm_api_routes")
+)
+
 
 class RouteChecks:
     @staticmethod
@@ -123,9 +127,12 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        if RouteChecks.is_auth_enforced_pass_through_route(
-                            route=route,
-                            method=RouteChecks._get_request_method(request=request),
+                        if (
+                            allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
+                            and RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            )
                         ):
                             if RouteChecks.check_passthrough_route_access(
                                 route=route, user_api_key_dict=valid_token
