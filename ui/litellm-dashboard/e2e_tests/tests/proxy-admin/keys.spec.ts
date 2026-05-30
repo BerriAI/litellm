@@ -41,8 +41,8 @@ test.describe("Proxy Admin - Keys", () => {
     // Submit
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
-    // Success shows "Save your Key" in a second dialog
-    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    // Success shows "API Key Created" in a second dialog
+    await expect(page.getByText("API Key Created")).toBeVisible({ timeout: 10_000 });
     await page.keyboard.press("Escape");
 
     // Verify the new key appears in the table
@@ -150,7 +150,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
-    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("API Key Created")).toBeVisible({ timeout: 10_000 });
     await page.keyboard.press("Escape");
 
     await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });
@@ -182,7 +182,7 @@ test.describe("Proxy Admin - Keys", () => {
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
-    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("API Key Created")).toBeVisible({ timeout: 10_000 });
 
     // Grab the new key from the success modal (rendered inside a <pre>) and
     // verify it can call /chat/completions for the model it was scoped to.

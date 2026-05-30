@@ -52,6 +52,8 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 
 vi.mock("@ant-design/icons", () => ({
   InfoCircleOutlined: () => null,
+  CopyOutlined: () => null,
+  WarningOutlined: () => null,
 }));
 
 vi.mock("react-copy-to-clipboard", () => ({

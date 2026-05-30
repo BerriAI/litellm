@@ -109,7 +109,7 @@ test.describe("Team Admin", () => {
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
-    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("API Key Created")).toBeVisible({ timeout: 10_000 });
     await page.keyboard.press("Escape");
 
     await expect(page.getByText(keyName)).toBeVisible({ timeout: 10_000 });

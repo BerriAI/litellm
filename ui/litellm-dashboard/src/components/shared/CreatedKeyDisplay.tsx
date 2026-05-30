@@ -1,50 +1,150 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button } from "antd";
+import { Button, Tooltip } from "antd";
+import { CopyOutlined, WarningOutlined } from "@ant-design/icons";
 import MessageManager from "@/components/molecules/message_manager";
+import { proxyBaseUrl } from "@/components/networking";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
 }
 
-/**
- * Shared component for displaying a newly-created virtual key.
- * Used on the Virtual Keys page and in the Add Agent wizard.
- */
-const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
-  const [copied, setCopied] = useState(false);
+const buildCodingAgentPrompt = (apiKey: string, baseUrl: string): string => {
+  return `You have access to LiteLLM, an OpenAI-compatible AI gateway that lets you call 100+ LLMs (OpenAI, Anthropic, Gemini, Bedrock, etc.) through a single API.
 
-  const handleCopy = () => {
-    setCopied(true);
+Use these credentials:
+- Base URL: ${baseUrl}
+- API key: ${apiKey}
+
+LiteLLM is a drop-in replacement for the OpenAI SDK. Point the SDK's \`base_url\` at the URL above and use the key as your \`OPENAI_API_KEY\`. To list the models available to this key, GET ${baseUrl}/v1/models with header \`Authorization: Bearer ${apiKey}\`.
+
+LiteLLM docs:
+- llms.txt (overview + all doc links): https://docs.litellm.ai/llms.txt
+- llms-full.txt (complete reference with inline code examples): https://docs.litellm.ai/llms-full.txt`;
+};
+
+const resolveProxyBaseUrl = (): string => {
+  if (proxyBaseUrl) return proxyBaseUrl.replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "https://your-litellm-proxy";
+};
+
+const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+
+  const codingAgentPrompt = useMemo(
+    () => buildCodingAgentPrompt(apiKey, resolveProxyBaseUrl()),
+    [apiKey],
+  );
+
+  const handleCopyKey = () => {
+    setCopiedKey(true);
     MessageManager.success("Key copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopiedKey(false), 2000);
+  };
+
+  const handleCopyPrompt = () => {
+    setCopiedPrompt(true);
+    MessageManager.success("Prompt copied to clipboard");
+    setTimeout(() => setCopiedPrompt(false), 2000);
   };
 
   return (
-    <div>
-      <p className="mb-2">
-        Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-        <b>you will not be able to view it again</b> through your LiteLLM account. If you
-        lose this secret key, you will need to generate a new one.
-      </p>
-
-      <p className="text-sm text-gray-600 mt-3 mb-1">Virtual Key:</p>
-      <div
-        style={{
-          background: "#f8f8f8",
-          padding: "10px",
-          borderRadius: "5px",
-          marginBottom: "10px",
-        }}
-      >
-        <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>
-          {apiKey}
-        </pre>
+    <div className="created-key-display">
+      <div className="mb-2">
+        <h2 className="text-lg font-semibold m-0">API Key Created</h2>
+        <p className="text-sm text-gray-500 mt-1 mb-0">
+          Paste this prompt into any coding agent to start using LiteLLM.
+        </p>
       </div>
 
-      <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-        <Button type="primary" style={{ marginTop: 12 }}>
-          {copied ? "Copied!" : "Copy Virtual Key"}
+      <div
+        className="flex items-start gap-2 px-3 py-2 mb-4 rounded-md border"
+        style={{ background: "#fffbeb", borderColor: "#fde68a" }}
+        role="alert"
+      >
+        <WarningOutlined style={{ color: "#b45309", marginTop: 3 }} />
+        <span className="text-sm" style={{ color: "#92400e" }}>
+          Make sure to copy your API key now. You won&apos;t be able to see it again.
+        </span>
+      </div>
+
+      <div
+        className="rounded-md border mb-4"
+        style={{ borderColor: "#e5e7eb", background: "#fafafa" }}
+      >
+        <div className="flex items-center justify-between px-3 pt-3 pb-1">
+          <span className="text-sm font-medium text-gray-700">Your API Key</span>
+          <Tooltip title={copiedKey ? "Copied!" : "Copy API key"}>
+            <CopyToClipboard text={apiKey} onCopy={handleCopyKey}>
+              <Button
+                type="text"
+                size="small"
+                aria-label="Copy API key"
+                icon={<CopyOutlined />}
+              />
+            </CopyToClipboard>
+          </Tooltip>
+        </div>
+        <div className="px-3 pb-3">
+          <pre
+            className="m-0 text-sm"
+            style={{
+              wordBreak: "break-all",
+              whiteSpace: "pre-wrap",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            }}
+            data-testid="created-key-value"
+          >
+            {apiKey}
+          </pre>
+        </div>
+      </div>
+
+      <div
+        className="rounded-md border"
+        style={{ borderColor: "#e5e7eb", background: "#fafafa" }}
+      >
+        <div className="flex items-center justify-between px-3 pt-3 pb-1">
+          <span className="text-sm font-medium text-gray-700">
+            Prompt for coding agents
+          </span>
+          <Tooltip title={copiedPrompt ? "Copied!" : "Copy prompt"}>
+            <CopyToClipboard text={codingAgentPrompt} onCopy={handleCopyPrompt}>
+              <Button
+                type="text"
+                size="small"
+                aria-label="Copy prompt for coding agents"
+                icon={<CopyOutlined />}
+              />
+            </CopyToClipboard>
+          </Tooltip>
+        </div>
+        <div className="px-3 pb-3">
+          <pre
+            className="m-0 text-sm text-gray-700"
+            style={{
+              maxHeight: 200,
+              overflowY: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            }}
+            data-testid="coding-agent-prompt"
+          >
+            {codingAgentPrompt}
+          </pre>
+        </div>
+      </div>
+
+      <CopyToClipboard text={apiKey} onCopy={handleCopyKey}>
+        <Button type="primary" style={{ marginTop: 16 }}>
+          {copiedKey ? "Copied!" : "Copy Virtual Key"}
         </Button>
       </CopyToClipboard>
     </div>
