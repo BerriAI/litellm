@@ -623,12 +623,23 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video get character is not supported for RunwayML")
 
     def transform_video_edit_request(
-        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+        self,
+        prompt,
+        video_id,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+        prefetched_source_data=None,
     ):
         raise NotImplementedError("video edit is not supported for RunwayML")
 
     def transform_video_edit_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
+        self,
+        raw_response,
+        logging_obj,
+        custom_llm_provider=None,
+        request_data=None,
     ):
         raise NotImplementedError("video edit is not supported for RunwayML")
 

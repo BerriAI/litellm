@@ -619,6 +619,9 @@ async def common_checks(  # noqa: PLR0915
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
         # 3. If team is in budget
@@ -658,6 +661,14 @@ async def common_checks(  # noqa: PLR0915
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+            )
+
+        if valid_token is not None:
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+                request_data=request_body,
+                user_api_key_dict=valid_token,
             )
 
         with tracer.trace("litellm.proxy.auth.common_checks.tag_max_budget_check"):
@@ -709,7 +720,6 @@ async def common_checks(  # noqa: PLR0915
             await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     _enforce_user_param_check(general_settings, request, request_body, route)
-    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
     _guardrail_modification_check(request_body, team_object)
 
