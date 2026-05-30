@@ -761,18 +761,24 @@ async def _fetch_list_rows(
     where: Dict[str, Any],
     fetch_order: str,
     fetch_limit: int,
+    skip: int = 0,
 ) -> Optional[List[Any]]:
+    # created_at is not unique, so a second sort on the unique id column gives a
+    # total order; the scan loop relies on it to advance by offset without
+    # skipping or repeating rows that share a created_at timestamp.
     try:
         if resource_kind == "files":
             return await prisma_client.db.litellm_managedfiletable.find_many(
                 where=where,
-                order={"created_at": fetch_order},
+                order=[{"created_at": fetch_order}, {"unified_file_id": fetch_order}],
                 take=fetch_limit,
+                skip=skip,
             )
         return await prisma_client.db.litellm_managedobjecttable.find_many(
             where={**where, "file_purpose": "batch"},
-            order={"created_at": fetch_order},
+            order=[{"created_at": fetch_order}, {"unified_object_id": fetch_order}],
             take=fetch_limit,
+            skip=skip,
         )
     except Exception:
         verbose_proxy_logger.warning(
@@ -807,10 +813,11 @@ async def _fetch_provider_scoped_list_rows(
         scan_where["model_object_id"] = {"startswith": f"passthrough:{provider}:"}
     max_scans = 20
     last_batch_full = False  # True when the last DB page was full-sized
+    scanned = 0  # offset into the totally-ordered result set
 
     for _ in range(max_scans):
         batch = await _fetch_list_rows(
-            prisma_client, resource_kind, scan_where, fetch_order, fetch_limit
+            prisma_client, resource_kind, scan_where, fetch_order, fetch_limit, scanned
         )
         if batch is None:
             # DB error — fail closed: return the rows matched so far.
@@ -826,6 +833,7 @@ async def _fetch_provider_scoped_list_rows(
             last_batch_full = False
             break
 
+        scanned += len(batch)
         last_batch_full = len(batch) >= fetch_limit
 
         for row in batch:
@@ -837,18 +845,6 @@ async def _fetch_provider_scoped_list_rows(
 
         if not last_batch_full:
             break
-
-        cursor_row = batch[-1]
-        created_at_bound = {
-            "lt" if fetch_order == "desc" else "gt": cursor_row.created_at
-        }
-        if "created_at" in scan_where and isinstance(scan_where["created_at"], dict):
-            scan_where["created_at"] = {
-                **scan_where["created_at"],
-                **created_at_bound,
-            }
-        else:
-            scan_where["created_at"] = created_at_bound
 
     effective_limit = min(raw_limit, 100)
     # has_more is True when:

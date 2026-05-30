@@ -1560,3 +1560,66 @@ class TestListPassthroughIdsFromDb:
         where = pc.db.litellm_managedobjecttable.find_many.call_args.kwargs["where"]
         assert where["model_object_id"] == {"startswith": "passthrough:azure:"}
         assert pc.db.litellm_managedobjecttable.find_many.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_list_files_scan_does_not_skip_same_timestamp_rows(self):
+        """Files have no DB provider column, so the scan filters by provider in
+        the application layer and pages through the DB.  Several rows can share a
+        created_at timestamp; when a non-matching row sits on the first page
+        boundary, advancing by a created_at cursor would drop every matching row
+        that shares that timestamp.  Offset paging must still return them all."""
+        import datetime
+
+        t1 = datetime.datetime(2025, 1, 3, tzinfo=datetime.timezone.utc)
+        t2 = datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc)
+        t3 = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+
+        def _row(provider: str, raw: str, created_at):
+            row = _fake_file_row(new_managed_id(provider, raw))
+            row.created_at = created_at
+            return row
+
+        # Canonical newest->oldest. The three t2 rows tie on the timestamp and the
+        # only openai row in that tie sits just past the first page (fetch_limit=3).
+        rows = [
+            _row("azure", "file-a", t1),
+            _row("azure", "file-b", t2),
+            _row("azure", "file-c", t2),
+            _row("openai", "file-d", t2),
+            _row("openai", "file-e", t3),
+        ]
+
+        async def fake_find_many(where=None, order=None, take=None, skip=0):
+            where = where or {}
+            out = list(rows)
+            created_at = where.get("created_at")
+            if isinstance(created_at, dict):
+                if "lt" in created_at:
+                    out = [r for r in out if r.created_at < created_at["lt"]]
+                if "gt" in created_at:
+                    out = [r for r in out if r.created_at > created_at["gt"]]
+                if "lte" in created_at:
+                    out = [r for r in out if r.created_at <= created_at["lte"]]
+                if "gte" in created_at:
+                    out = [r for r in out if r.created_at >= created_at["gte"]]
+            out.sort(key=lambda r: r.created_at, reverse=True)
+            out = out[skip:]
+            if take is not None:
+                out = out[:take]
+            return out
+
+        pc = _prisma_with_list()
+        pc.db.litellm_managedfiletable.find_many = fake_find_many
+
+        result = await list_passthrough_ids_from_db(
+            provider="openai",
+            route="/openai/v1/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+            query_params={"limit": "2"},
+        )
+
+        assert result is not None
+        returned = {item["id"] for item in result["data"]}
+        assert returned == {rows[3].unified_file_id, rows[4].unified_file_id}
+        assert result["has_more"] is False
