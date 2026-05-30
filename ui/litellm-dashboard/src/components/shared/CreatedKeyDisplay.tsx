@@ -9,6 +9,41 @@ interface CreatedKeyDisplayProps {
   apiKey: string;
 }
 
+const codingAgentLogos: { name: string; src: string }[] = [
+  { name: "Cursor", src: "../ui/assets/logos/cursor.svg" },
+  { name: "Claude Code", src: "../ui/assets/logos/anthropic.svg" },
+  { name: "OpenAI Codex", src: "../ui/assets/logos/openai_small.svg" },
+  { name: "GitHub Copilot", src: "../ui/assets/logos/github_copilot.svg" },
+];
+
+const CodingAgentLogos: React.FC = () => (
+  <div
+    className="flex items-center"
+    aria-label="Compatible coding agents"
+    data-testid="coding-agent-logos"
+  >
+    {codingAgentLogos.map((logo, index) => (
+      <img
+        key={logo.name}
+        src={logo.src}
+        alt={logo.name}
+        title={logo.name}
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          padding: 2,
+          marginLeft: index === 0 ? 0 : -6,
+          objectFit: "contain",
+          boxSizing: "border-box",
+        }}
+      />
+    ))}
+  </div>
+);
+
 const buildCodingAgentPrompt = (apiKey: string, baseUrl: string): string => {
   return `You have access to LiteLLM, an OpenAI-compatible AI gateway that lets you call 100+ LLMs (OpenAI, Anthropic, Gemini, Bedrock, etc.) through a single API.
 
@@ -110,9 +145,12 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         style={{ borderColor: "#e5e7eb", background: "#fafafa" }}
       >
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
-          <span className="text-sm font-medium text-gray-700">
-            Prompt for coding agents
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">
+              Prompt for coding agents
+            </span>
+            <CodingAgentLogos />
+          </div>
           <Tooltip title={copiedPrompt ? "Copied!" : "Copy prompt"}>
             <CopyToClipboard text={codingAgentPrompt} onCopy={handleCopyPrompt}>
               <Button

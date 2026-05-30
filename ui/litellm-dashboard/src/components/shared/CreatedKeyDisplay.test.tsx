@@ -65,6 +65,20 @@ describe("CreatedKeyDisplay", () => {
     expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
   });
 
+  it("renders coding agent logos next to the prompt heading", () => {
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+    const logos = screen.getByTestId("coding-agent-logos");
+    const images = logos.querySelectorAll("img");
+    const altText = Array.from(images).map((img) => img.getAttribute("alt"));
+
+    expect(altText).toEqual([
+      "Cursor",
+      "Claude Code",
+      "OpenAI Codex",
+      "GitHub Copilot",
+    ]);
+  });
+
   it("copies the coding agent prompt to clipboard when its copy button is clicked", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
