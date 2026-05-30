@@ -77,6 +77,7 @@ class MCPServer(BaseModel):
     is_byok: bool = False
     byok_description: List[str] = []
     byok_api_key_help_url: Optional[str] = None
+    source_url: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # OAuth2 flow type.  Defaults to None (interactive / authorization_code).
