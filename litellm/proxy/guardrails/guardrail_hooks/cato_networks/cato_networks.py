@@ -142,7 +142,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Cato: monitor action")
         elif action_type == "block_action":
-            self._handle_block_action(res["analysis_result"], required_action)
+            self._handle_block_action(res.get("analysis_result", {}), required_action)
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
@@ -200,7 +200,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         action_type = required_action and required_action.get("action_type", None)
         if action_type and action_type == "block_action":
             return self._handle_block_action_on_output(
-                res["analysis_result"], required_action
+                res.get("analysis_result", {}), required_action
             )
         redacted_chat = res.get("redacted_chat", None)
 
