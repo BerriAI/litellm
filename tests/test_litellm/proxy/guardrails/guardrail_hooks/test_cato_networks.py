@@ -43,7 +43,8 @@ def test_cato_guard_config():
     )
 
 
-def test_cato_guard_config_no_api_key():
+def test_cato_guard_config_no_api_key(monkeypatch):
+    monkeypatch.delenv("CATO_API_KEY", raising=False)
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
     with pytest.raises(CatoNetworksGuardrailMissingSecrets, match="Couldn't get Cato Networks api key"):
@@ -565,6 +566,39 @@ async def test_anonymize_action_without_redacted_chat_returns_data_unchanged():
     ):
         result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
     assert result["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_fewer_redacted_messages_preserves_remaining():
+    guard = _make_guardrail()
+    data = {
+        "messages": [
+            {"role": "user", "content": "Hi my name is Brian"},
+            {"role": "assistant", "content": "Hello Brian"},
+            {"role": "user", "content": "Thanks"},
+        ]
+    }
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Hi my name is [NAME_1]"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+    assert result["messages"] == [
+        {"role": "user", "content": "Hi my name is [NAME_1]"},
+        {"role": "assistant", "content": "Hello Brian"},
+        {"role": "user", "content": "Thanks"},
+    ]
 
 
 @pytest.mark.asyncio
