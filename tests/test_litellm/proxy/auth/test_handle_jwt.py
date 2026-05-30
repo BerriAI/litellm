@@ -207,14 +207,14 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
             "path": "/custom",
             "type": "exact",
             "methods": ["GET"],
-            "passthrough_params": {"dependencies": None},
+            "auth": False,
         },
         "test-uuid-2:exact:/custom:POST": {
             "endpoint_id": "test-uuid-2",
             "path": "/custom",
             "type": "exact",
             "methods": ["POST"],
-            "passthrough_params": {"dependencies": [object()]},
+            "auth": True,
         },
     }
 

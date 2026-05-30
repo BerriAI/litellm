@@ -697,8 +697,7 @@ class RouteChecks:
         )
         if route_info is None:
             return False
-        dependencies = route_info.get("passthrough_params", {}).get("dependencies")
-        return dependencies is not None
+        return route_info.get("auth") is True
 
     @staticmethod
     def _auth_pass_through_denied_exception(route: str) -> HTTPException:

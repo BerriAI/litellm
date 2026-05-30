@@ -712,19 +712,18 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     allowed_passthrough_routes is configured on the key or team.
     """
 
-    mock_dependencies = [object()]
     mock_registered_routes = {
         "test-uuid-1:exact:/azure-assistant:DELETE,GET,PATCH,POST,PUT": {
             "endpoint_id": "test-uuid-1",
             "path": "/azure-assistant",
             "type": "exact",
-            "passthrough_params": {"dependencies": mock_dependencies},
+            "auth": True,
         },
         "test-uuid-2:subpath:/custom-endpoint:DELETE,GET,PATCH,POST,PUT": {
             "endpoint_id": "test-uuid-2",
             "path": "/custom-endpoint",
             "type": "subpath",
-            "passthrough_params": {"dependencies": mock_dependencies},
+            "auth": True,
         },
     }
 
@@ -775,8 +774,8 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
 def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoints():
     """
     Virtual keys with llm_api_routes can access registered pass-through endpoints that
-    are NOT auth-enforced (no FastAPI dependencies) without configuring
-    allowed_passthrough_routes. This is the original behaviour and must not regress.
+    are NOT auth-enforced (auth=false) without configuring allowed_passthrough_routes.
+    This is the original behaviour and must not regress.
     """
 
     mock_registered_routes = {
@@ -784,13 +783,13 @@ def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoi
             "endpoint_id": "test-uuid-1",
             "path": "/azure-assistant",
             "type": "exact",
-            "passthrough_params": {"dependencies": None},
+            "auth": False,
         },
         "test-uuid-2:subpath:/custom-endpoint:DELETE,GET,PATCH,POST,PUT": {
             "endpoint_id": "test-uuid-2",
             "path": "/custom-endpoint",
             "type": "subpath",
-            "passthrough_params": {"dependencies": None},
+            "auth": False,
         },
     }
 
@@ -840,7 +839,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
             "endpoint_id": "test-uuid-1",
             "path": "/azure-assistant",
             "type": "exact",
-            "passthrough_params": {"dependencies": [object()]},
+            "auth": True,
         },
     }
 
@@ -877,14 +876,14 @@ def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
             "path": "/custom",
             "type": "exact",
             "methods": ["GET"],
-            "passthrough_params": {"dependencies": None},
+            "auth": False,
         },
         "test-uuid-2:exact:/custom:POST": {
             "endpoint_id": "test-uuid-2",
             "path": "/custom",
             "type": "exact",
             "methods": ["POST"],
-            "passthrough_params": {"dependencies": [object()]},
+            "auth": True,
         },
     }
 
@@ -934,7 +933,7 @@ def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
             "endpoint_id": "test-uuid-1",
             "path": "/my-pass-through",
             "type": "exact",
-            "passthrough_params": {"dependencies": [object()]},
+            "auth": True,
         },
     }
 
@@ -972,7 +971,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
             "endpoint_id": "test-uuid-1",
             "path": "/my-pass-through",
             "type": "exact",
-            "passthrough_params": {"dependencies": [object()]},
+            "auth": True,
         },
     }
 

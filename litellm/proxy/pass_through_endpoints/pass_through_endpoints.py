@@ -2090,6 +2090,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        auth: bool = False,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2141,6 +2142,7 @@ class InitPassThroughEndpointHelpers:
             "path": path,
             "type": "exact",
             "methods": methods,
+            "auth": auth,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2168,6 +2170,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        auth: bool = False,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2220,6 +2223,7 @@ class InitPassThroughEndpointHelpers:
             "path": path,
             "type": "subpath",
             "methods": methods,
+            "auth": auth,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2401,8 +2405,9 @@ async def _register_pass_through_endpoint(
     default_query_params = endpoint_data.get("default_query_params")
     auth = endpoint_data.get("auth")
     dependencies = None
+    auth_enforced = auth is not None and str(auth).lower() == "true"
 
-    if auth is not None and str(auth).lower() == "true":
+    if auth_enforced:
         # Authentication on a pass-through endpoint used to be enterprise-only.
         # That left OSS with no safe configuration: auth=True raised at startup
         # unless the operator had a license. The safe option must always be free,
@@ -2435,6 +2440,7 @@ async def _register_pass_through_endpoint(
         methods=methods,
         default_query_params=default_query_params,
         config_file_path=config_file_path,
+        auth=auth_enforced,
     )
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -2460,6 +2466,7 @@ async def _register_pass_through_endpoint(
             methods=methods,
             default_query_params=default_query_params,
             config_file_path=config_file_path,
+            auth=auth_enforced,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
@@ -2838,6 +2845,7 @@ async def update_pass_through_endpoints(
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
             default_query_params=updated_endpoint.default_query_params,
+            auth=updated_endpoint.auth,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2853,6 +2861,7 @@ async def update_pass_through_endpoints(
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
             default_query_params=updated_endpoint.default_query_params,
+            auth=updated_endpoint.auth,
         )
 
     return PassThroughEndpointResponse(
@@ -2931,6 +2940,7 @@ async def create_pass_through_endpoints(
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
             default_query_params=created_endpoint.default_query_params,
+            auth=created_endpoint.auth,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2946,6 +2956,7 @@ async def create_pass_through_endpoints(
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
             default_query_params=created_endpoint.default_query_params,
+            auth=created_endpoint.auth,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])

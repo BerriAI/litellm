@@ -1230,6 +1230,181 @@ async def test_update_pass_through_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_create_pass_through_endpoint_auth_true_enforces_allowlist():
+    """
+    Regression: a pass-through endpoint created through the management API with
+    auth=true (the model default) must be treated as allowlist-enforced. The
+    create path registers FastAPI routes with dependencies=None, so deriving
+    enforcement from dependency metadata let a key with broad llm_api_routes
+    access call the route without an allowed_passthrough_routes match.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=[]
+        )
+
+        # auth is not passed -> defaults to True on PassThroughGenericEndpoint
+        endpoint = PassThroughGenericEndpoint(
+            path="/secure-passthrough",
+            target="http://example.com/api",
+            methods=["POST"],
+        )
+        await create_pass_through_endpoints(
+            data=endpoint,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert any(value.get("auth") is True for value in registry.values())
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/secure-passthrough", method="POST"
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+
+        without_allowlist = UserAPIKeyAuth(
+            user_id="u", allowed_routes=["llm_api_routes"]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/secure-passthrough",
+                valid_token=without_allowlist,
+                request=post_request,
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+        with_allowlist = UserAPIKeyAuth(
+            user_id="u",
+            allowed_routes=["llm_api_routes"],
+            metadata={"allowed_passthrough_routes": ["/secure-passthrough"]},
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/secure-passthrough",
+                valid_token=with_allowlist,
+                request=post_request,
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_auth_true_enforces_allowlist():
+    """
+    Regression: editing a pass-through endpoint through the management API must
+    keep an auth=true route allowlist-enforced. remove_endpoint_routes drops the
+    old registry entry, so the re-registration has to record the auth flag.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+    existing_endpoint_id = "edit-me-123"
+    existing_endpoints = [
+        {
+            "id": existing_endpoint_id,
+            "path": "/edited-passthrough",
+            "target": "http://example.com/api",
+            "auth": True,
+            "methods": ["POST"],
+        }
+    ]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=existing_endpoints
+        )
+
+        update_data = PassThroughGenericEndpoint(
+            path="/edited-passthrough",
+            target="http://newapi.com/v2",
+            methods=["POST"],
+        )
+        await update_pass_through_endpoints(
+            endpoint_id=existing_endpoint_id,
+            data=update_data,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/edited-passthrough", method="POST"
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+
+        without_allowlist = UserAPIKeyAuth(
+            user_id="u", allowed_routes=["llm_api_routes"]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/edited-passthrough",
+                valid_token=without_allowlist,
+                request=post_request,
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_update_pass_through_endpoint_not_found():
     """
     Test updating a non-existent pass-through endpoint raises HTTPException
