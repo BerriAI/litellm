@@ -668,7 +668,10 @@ class RouteChecks:
         if request is None:
             return None
 
-        method = getattr(request, "method", None)
+        try:
+            method = request.method
+        except (AttributeError, KeyError):
+            return None
         if not isinstance(method, str):
             return None
 
