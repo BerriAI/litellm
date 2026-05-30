@@ -43,6 +43,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import OpenAIFileObject
 
 from .managed_id_codec import ManagedIdPayload, decode, is_managed, new_managed_id
 
@@ -319,12 +320,33 @@ async def _resolve_one(
 # ---------------------------------------------------------------------------
 
 
+def _build_managed_file_object(
+    snapshot: Optional[Dict[str, Any]], managed_id: str
+) -> Optional[OpenAIFileObject]:
+    """Build an ``OpenAIFileObject`` (with the managed ID swapped in) from an
+    upstream file response so the DB-served list returns the same metadata as a
+    direct file GET.  Returns ``None`` when no usable snapshot is available, in
+    which case the row is stored without metadata (previous behaviour)."""
+    if not snapshot:
+        return None
+    try:
+        return OpenAIFileObject(**{**snapshot, "id": managed_id})
+    except Exception:
+        verbose_proxy_logger.debug(
+            "managed_id_rewriter: file object snapshot incomplete; "
+            "storing file row without list metadata",
+            exc_info=True,
+        )
+        return None
+
+
 async def _mint_or_reuse_file(
     raw_id: str,
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
     managed_files_hook: Any,
+    file_object_snapshot: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Return an existing managed file ID or mint + store a new one."""
     if prisma_client is None and managed_files_hook is None:
@@ -369,7 +391,9 @@ async def _mint_or_reuse_file(
         try:
             await managed_files_hook.store_unified_file_id(
                 file_id=managed_id,
-                file_object=None,
+                file_object=_build_managed_file_object(
+                    file_object_snapshot, managed_id
+                ),
                 litellm_parent_otel_span=None,
                 model_mappings={_passthrough_sentinel_model_id(provider): raw_id},
                 user_api_key_dict=user_api_key_dict,
@@ -499,32 +523,8 @@ async def rewrite_response_ids(
     mutated = dict(body)  # shallow copy; only return if something changed
     changed = False
 
-    for field_name, expected_prefix in field_specs:
-        raw_value = mutated.get(field_name)
-        if not isinstance(raw_value, str):
-            continue  # null / missing field → skip without error
-        if not raw_value.startswith(expected_prefix):
-            continue  # unexpected format; do not touch
-
-        if expected_prefix in _FILE_PREFIXES:
-            managed_id = await _mint_or_reuse_file(
-                raw_value,
-                provider,
-                user_api_key_dict,
-                prisma_client,
-                managed_files_hook,
-            )
-        else:
-            purpose = "batch" if raw_value.startswith("batch_") else "response"
-            managed_id = await _mint_or_reuse_object(
-                raw_value,
-                provider,
-                purpose,
-                body,
-                user_api_key_dict,
-                prisma_client,
-            )
-
+    def _record(field_name: str, raw_value: str, managed_id: str) -> None:
+        nonlocal changed
         if managed_id != raw_value:
             mutated[field_name] = managed_id
             changed = True
@@ -534,6 +534,44 @@ async def rewrite_response_ids(
                 canonical,
                 method,
             )
+
+    # File fields are rewritten first so that nested references (e.g. a batch's
+    # input_file_id) are already managed IDs when the object snapshot is
+    # captured below — keeping the DB-served list in sync with a direct GET.
+    for field_name, expected_prefix in field_specs:
+        if expected_prefix not in _FILE_PREFIXES:
+            continue
+        raw_value = mutated.get(field_name)
+        if not isinstance(raw_value, str) or not raw_value.startswith(expected_prefix):
+            continue
+        managed_id = await _mint_or_reuse_file(
+            raw_value,
+            provider,
+            user_api_key_dict,
+            prisma_client,
+            managed_files_hook,
+            # The file's own ``id`` carries the full upstream metadata; nested
+            # references do not, so only the former is persisted as a snapshot.
+            file_object_snapshot=body if field_name == "id" else None,
+        )
+        _record(field_name, raw_value, managed_id)
+
+    for field_name, expected_prefix in field_specs:
+        if expected_prefix in _FILE_PREFIXES:
+            continue
+        raw_value = mutated.get(field_name)
+        if not isinstance(raw_value, str) or not raw_value.startswith(expected_prefix):
+            continue
+        purpose = "batch" if raw_value.startswith("batch_") else "response"
+        managed_id = await _mint_or_reuse_object(
+            raw_value,
+            provider,
+            purpose,
+            mutated,
+            user_api_key_dict,
+            prisma_client,
+        )
+        _record(field_name, raw_value, managed_id)
 
     verbose_proxy_logger.debug(
         "managed_id_rewriter: output rewrite completed changed=%s provider=%s method=%s route=%s",

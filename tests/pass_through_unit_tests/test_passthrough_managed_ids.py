@@ -505,6 +505,89 @@ class TestRewriteResponseIds:
         assert decode(result["output_file_id"]).raw_provider_id == "file-out"  # type: ignore[union-attr]
         assert decode(result["error_file_id"]).raw_provider_id == "file-err"  # type: ignore[union-attr]
 
+    @pytest.mark.asyncio
+    async def test_file_create_persists_metadata_for_list(self):
+        """The file's upstream metadata is stored so the DB-served list returns
+        the same fields as a direct file GET (managed ID swapped in)."""
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {
+            "id": "file-abc123",
+            "object": "file",
+            "bytes": 120,
+            "created_at": 1234567890,
+            "filename": "train.jsonl",
+            "purpose": "batch",
+            "status": "processed",
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        stored = hook.store_unified_file_id.call_args.kwargs["file_object"]
+        assert stored is not None
+        assert stored.filename == "train.jsonl"
+        assert stored.bytes == 120
+        assert stored.purpose == "batch"
+        # Managed ID is swapped into the persisted metadata (never the raw one).
+        assert stored.id == result["id"]
+        assert decode(stored.id).raw_provider_id == "file-abc123"  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_file_create_without_metadata_stores_no_file_object(self):
+        """A minimal file response (no bytes/filename) falls back to storing the
+        row without metadata rather than raising."""
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {"id": "file-abc123", "object": "file"}
+        await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        hook.store_unified_file_id.assert_awaited_once()
+        assert hook.store_unified_file_id.call_args.kwargs["file_object"] is None
+
+    @pytest.mark.asyncio
+    async def test_batch_snapshot_stores_managed_nested_file_ids(self):
+        """The persisted batch snapshot must carry the managed nested file ID so
+        the list response matches the rewritten direct GET response."""
+        import json as _json
+
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        body = {
+            "id": "batch_xyz",
+            "object": "batch",
+            "input_file_id": "file-in",
+            "output_file_id": None,
+            "error_file_id": None,
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/batches",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        stored = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"][
+            "create"
+        ]["file_object"]
+        snapshot = _json.loads(stored)
+        assert snapshot["input_file_id"] == result["input_file_id"]
+        assert decode(snapshot["input_file_id"]).raw_provider_id == "file-in"  # type: ignore[union-attr]
+
 
 # ---------------------------------------------------------------------------
 # rewrite_path_ids — INPUT
