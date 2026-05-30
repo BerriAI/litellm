@@ -16,7 +16,6 @@ from litellm.proxy.guardrails.guardrail_hooks.vigil_guard import (
     initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.vigil_guard.vigil_guard import (
-    VigilGuardBackendError,
     VigilGuardMissingConfig,
 )
 from litellm.types.guardrails import LitellmParams, SupportedGuardrailIntegrations
@@ -499,12 +498,13 @@ async def test_invalid_decision_fail_closed_raises(caplog):
     g = _make_guardrail(handler)
     with (
         caplog.at_level(logging.ERROR),
-        pytest.raises(VigilGuardBackendError) as exc_info,
+        pytest.raises(GuardrailRaisedException) as exc_info,
     ):
         await g.apply_guardrail(
             inputs={"texts": ["x"]}, request_data={}, input_type="request"
         )
-    assert "MAYBE" not in str(exc_info.value)
+    assert exc_info.value.status_code == 400
+    assert "MAYBE" not in exc_info.value.message
     assert any("MAYBE" in record.message for record in caplog.records)
 
 
@@ -515,6 +515,24 @@ async def test_invalid_decision_fail_open_returns_inputs():
         inputs={"texts": ["x"]}, request_data={}, input_type="request"
     )
     assert out["texts"] == ["x"]
+
+
+async def test_fail_open_multi_text_preserves_earlier_sanitization():
+    handler = FakeHandler(
+        [
+            _resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"}),
+            _resp({}, status_code=503),
+            _resp({}, status_code=503),
+        ]
+    )
+    g = _make_guardrail(handler, unreachable_fallback="fail_open")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["my ssn is 123", "second"]},
+        request_data={},
+        input_type="request",
+    )
+    assert out["texts"] == ["[REDACTED]", "second"]
+    assert len(handler.calls) == 3
 
 
 async def test_metadata_allowlist_and_clamping():
@@ -529,6 +547,7 @@ async def test_metadata_allowlist_and_clamping():
             "session_id": "s" * 600,
             "org_id": ["a"] * 20,
             "request_id": True,
+            "conversation_id": 7,
         },
     }
     await g.apply_guardrail(
@@ -541,7 +560,8 @@ async def test_metadata_allowlist_and_clamping():
     assert "secret_unlisted" not in md
     assert len(md["session_id"]) == 500
     assert len(md["org_id"]) == 10
-    assert md["request_id"] is True
+    assert "request_id" not in md
+    assert md["conversation_id"] == 7
 
 
 async def test_metadata_source_precedence_and_litellm_metadata_fallback():
@@ -584,7 +604,7 @@ async def test_metadata_array_items_are_clamped_and_filtered():
     await g.apply_guardrail(
         inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
     )
-    assert handler.calls[0].json["metadata"]["org_id"] == ["z" * 500, 123, True]
+    assert handler.calls[0].json["metadata"]["org_id"] == ["z" * 500, 123]
 
 
 async def test_metadata_array_with_no_supported_items_is_dropped():

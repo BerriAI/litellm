@@ -78,10 +78,6 @@ class VigilGuardMissingConfig(ValueError):
     pass
 
 
-class VigilGuardBackendError(Exception):
-    pass
-
-
 class VigilGuardGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -148,7 +144,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         metadata = self._collect_metadata(request_data, logging_obj)
 
         result_texts: List[str] = []
-        for text in texts:
+        for index, text in enumerate(texts):
             if not isinstance(text, str) or not text.strip():
                 result_texts.append(text)
                 continue
@@ -163,7 +159,9 @@ class VigilGuardGuardrail(CustomGuardrail):
                 JSONDecodeError,
                 OSError,
             ) as exc:
-                return self._handle_backend_failure(exc, inputs, source)
+                return self._handle_backend_failure(
+                    exc, inputs, source, result_texts, texts[index:]
+                )
 
             decision = analysis.get("decision") if isinstance(analysis, dict) else None
             if decision not in _VALID_DECISIONS:
@@ -174,12 +172,14 @@ class VigilGuardGuardrail(CustomGuardrail):
                     source,
                     decision,
                 )
-                return self._handle_backend_failure(
-                    VigilGuardBackendError(
-                        "Vigil Guard returned an unrecognized decision."
-                    ),
-                    inputs,
-                    source,
+                if self.unreachable_fallback == "fail_open":
+                    return self._fail_open_passthrough(
+                        inputs, result_texts, texts[index:]
+                    )
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message="Vigil Guard returned an unrecognized decision.",
+                    should_wrap_with_default_message=False,
                 )
 
             if decision == "BLOCKED":
@@ -202,7 +202,12 @@ class VigilGuardGuardrail(CustomGuardrail):
         return guardrailed
 
     def _handle_backend_failure(
-        self, exc: Exception, inputs: GenericGuardrailAPIInputs, source: str
+        self,
+        exc: Exception,
+        inputs: GenericGuardrailAPIInputs,
+        source: str,
+        scanned: List[Any],
+        remaining: List[Any],
     ) -> GenericGuardrailAPIInputs:
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(
@@ -212,7 +217,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 source,
                 str(exc),
             )
-            return cast(GenericGuardrailAPIInputs, dict(inputs))
+            return self._fail_open_passthrough(inputs, scanned, remaining)
         verbose_proxy_logger.error(
             "Vigil Guard backend failure with fail_closed; blocking request. "
             "guardrail_name=%s source=%s error=%s",
@@ -221,6 +226,16 @@ class VigilGuardGuardrail(CustomGuardrail):
             str(exc),
         )
         raise exc
+
+    @staticmethod
+    def _fail_open_passthrough(
+        inputs: GenericGuardrailAPIInputs,
+        scanned: List[Any],
+        remaining: List[Any],
+    ) -> GenericGuardrailAPIInputs:
+        guardrailed = dict(inputs)
+        guardrailed["texts"] = list(scanned) + list(remaining)
+        return cast(GenericGuardrailAPIInputs, guardrailed)
 
     async def _analyze(
         self, text: str, source: str, metadata: Dict[str, Any]
@@ -260,7 +275,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     )
                     continue
                 raise
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable")  # pragma: no cover
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:
@@ -326,6 +341,8 @@ class VigilGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _clamp_metadata_value(value: Any) -> Any:
+        if isinstance(value, bool):
+            return None
         if isinstance(value, str):
             return value[:_METADATA_STRING_MAX_CHARS]
         if isinstance(value, (int, float)):
@@ -333,6 +350,8 @@ class VigilGuardGuardrail(CustomGuardrail):
         if isinstance(value, list):
             clamped: List[Any] = []
             for item in value[:_METADATA_ARRAY_MAX_ITEMS]:
+                if isinstance(item, bool):
+                    continue
                 if isinstance(item, str):
                     clamped.append(item[:_METADATA_STRING_MAX_CHARS])
                 elif isinstance(item, (int, float)):
