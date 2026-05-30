@@ -2472,3 +2472,172 @@ def test_translate_anthropic_tool_choice_none():
 
     result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
     assert result == "none"
+
+
+# ---------------------------------------------------------------------------
+# PolyfillResult integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_simple_openai_response(
+    text: str = "Hello", prompt_tokens: int = 10, completion_tokens: int = 5
+) -> ModelResponse:
+    return ModelResponse(
+        id="resp_polyfill_test",
+        model="gpt-4o",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(role="assistant", content=text),
+            )
+        ],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_compaction_block():
+    """compaction_block from PolyfillResult must be prepended to content at index 0."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    compaction_block = {"type": "compaction", "content": "Summary of prior turns."}
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=compaction_block,
+        iterations_usage=None,
+    )
+    response = _make_simple_openai_response(text="Hello after compaction.")
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "compaction"
+    assert content[0]["content"] == "Summary of prior turns."
+    assert content[1]["type"] == "text"
+    assert content[1]["text"] == "Hello after compaction."
+
+    # applied_edits must surface on context_management
+    cm = result.get("context_management")
+    assert cm is not None
+    assert cm["applied_edits"][0]["type"] == "compact_20260112"
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_iterations_usage():
+    """iterations_usage from PolyfillResult must produce usage['iterations'] with a message entry."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=None,
+        iterations_usage=[
+            {"type": "compaction", "input_tokens": 200, "output_tokens": 50},
+        ],
+    )
+    response = _make_simple_openai_response(prompt_tokens=100, completion_tokens=30)
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    usage = result.get("usage")
+    assert usage is not None
+    iterations = usage.get("iterations")
+    assert iterations is not None
+    assert len(iterations) == 2
+    assert iterations[0] == {
+        "type": "compaction",
+        "input_tokens": 200,
+        "output_tokens": 50,
+    }
+    assert iterations[1]["type"] == "message"
+    assert iterations[1]["input_tokens"] == 100
+    assert iterations[1]["output_tokens"] == 30
+
+    # Top-level tokens must still reflect the message iteration
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 30
+
+
+def test_translate_openai_response_to_anthropic_no_polyfill_no_change():
+    """Without a PolyfillResult the response must be unchanged (no compaction, no iterations)."""
+    response = _make_simple_openai_response()
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(response=response)
+
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "text"
+
+    usage = result.get("usage")
+    assert usage is not None
+    assert "iterations" not in usage
+
+
+def test_translate_openai_response_to_anthropic_with_polyfill_both_compaction_and_iterations():
+    """Full summary path: compaction_block and iterations_usage both present simultaneously."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
+        PolyfillResult,
+    )
+
+    compaction_block = {
+        "type": "compaction",
+        "content": "Summary of a long conversation.",
+    }
+    polyfill = PolyfillResult(
+        messages=[],
+        system=None,
+        applied_edits=[{"type": "compact_20260112"}],
+        compaction_block=compaction_block,
+        iterations_usage=[
+            {"type": "compaction", "input_tokens": 300, "output_tokens": 75},
+        ],
+    )
+    response = _make_simple_openai_response(
+        text="After compaction.", prompt_tokens=120, completion_tokens=40
+    )
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, polyfill_result=polyfill
+    )
+
+    # compaction block must come first
+    content = result.get("content")
+    assert content is not None
+    assert content[0]["type"] == "compaction"
+    assert content[0]["content"] == "Summary of a long conversation."
+    assert content[1]["type"] == "text"
+    assert content[1]["text"] == "After compaction."
+
+    # iterations: compaction entry + message entry
+    usage = result.get("usage")
+    assert usage is not None
+    iterations = usage.get("iterations")
+    assert iterations is not None
+    assert len(iterations) == 2
+    assert iterations[0] == {
+        "type": "compaction",
+        "input_tokens": 300,
+        "output_tokens": 75,
+    }
+    assert iterations[1]["type"] == "message"
+    assert iterations[1]["input_tokens"] == 120
+    assert iterations[1]["output_tokens"] == 40
+
+    # top-level tokens match the message iteration
+    assert usage["input_tokens"] == 120
+    assert usage["output_tokens"] == 40
+
+    # context_management applied_edits must surface
+    cm = result.get("context_management")
+    assert cm is not None
+    assert cm["applied_edits"][0]["type"] == "compact_20260112"

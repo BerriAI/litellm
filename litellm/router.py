@@ -1753,11 +1753,14 @@ class Router:
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(cache=self.cache)
             elif pre_call_check == "router_budget_limiting":
+                if self._get_router_deployment_budget_limiter() is not None:
+                    continue
                 _callback = RouterBudgetLimiting(
                     dual_cache=self.cache,
                     provider_budget_config=self.provider_budget_config,
                     model_list=self.model_list,
                 )
+                self.router_budget_logger = _callback
             elif pre_call_check == "enforce_model_rate_limits":
                 _callback = ModelRateLimitingCheck(dual_cache=self.cache)
 
@@ -8529,6 +8532,7 @@ class Router:
             model=_deployment, model_id=deployment.model_info.id
         )
         self.model_names.add(deployment.model_name)
+        self._sync_deployment_budget_config(deployment=deployment)
         return deployment
 
     def _update_deployment_indices_after_removal(
@@ -8717,11 +8721,63 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                _budget_limiter = self._get_router_deployment_budget_limiter()
+                if _budget_limiter is not None:
+                    _budget_limiter.unregister_deployment_budget(model_id=id)
                 return item
             else:
                 return None
         except Exception:
             return None
+
+    def _get_router_deployment_budget_limiter(
+        self,
+    ) -> Optional[RouterBudgetLimiting]:
+        """
+        Return the router's deployment-budget callback.
+
+        Uses exact-type matching so proxy subclasses (e.g. virtual-key model budgets)
+        registered on litellm.callbacks are not mistaken for router deployment budgets.
+        """
+        if self.router_budget_logger is not None:
+            return self.router_budget_logger
+
+        if self.optional_callbacks:
+            for _cb in self.optional_callbacks:
+                if type(_cb) is RouterBudgetLimiting:
+                    self.router_budget_logger = _cb
+                    return _cb
+        return None
+
+    def _deployment_has_budget_limits(self, deployment: Deployment) -> bool:
+        return (
+            deployment.litellm_params.get("max_budget") is not None
+            and deployment.litellm_params.get("budget_duration") is not None
+            and deployment.model_info.id is not None
+        )
+
+    def _sync_deployment_budget_config(self, deployment: Deployment) -> None:
+        model_id = deployment.model_info.id
+        if model_id is None:
+            return
+
+        _budget_limiter = self._get_router_deployment_budget_limiter()
+
+        if not self._deployment_has_budget_limits(deployment=deployment):
+            if _budget_limiter is not None:
+                _budget_limiter.unregister_deployment_budget(model_id=model_id)
+            return
+
+        if _budget_limiter is None:
+            self.add_optional_pre_call_checks(
+                optional_pre_call_checks=["router_budget_limiting"]
+            )
+            _budget_limiter = self._get_router_deployment_budget_limiter()
+
+        if _budget_limiter is not None:
+            _budget_limiter.register_deployment_budget(
+                deployment=deployment.to_json(exclude_none=True)
+            )
 
     def get_deployment(self, model_id: str) -> Optional[Deployment]:
         """
