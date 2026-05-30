@@ -46,7 +46,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
                 supported_params.append("reasoning_effort")
                 supported_params.append("thinking")
 
-            if "qwen" in model.lower():
+            if self._supports_cache_control_in_content(model):
                 supported_params.append("cache_control")
                 supported_params.append("cache_control_injection_points")
 
