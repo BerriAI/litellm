@@ -1,11 +1,11 @@
 import pytest
 from fastapi import HTTPException
 
+from litellm.exceptions import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeCompilationError,
     CustomCodeGuardrail,
 )
-
 
 # str.mro() + generator gi_code + code.replace(co_names=...) + __setattr__
 # to swap a function's bytecode and read http_get's real builtins dict.
@@ -155,7 +155,27 @@ async def test_async_guardrail_compiles_and_runs():
 
 
 @pytest.mark.asyncio
-async def test_custom_code_block_raises_http_400():
+async def test_custom_code_pre_call_block_uses_passthrough():
+    code = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        '    return block("blocked by test")\n'
+    )
+    guardrail = _compile(code)
+
+    with pytest.raises(ModifyResponseException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["test"]},
+            request_data={"model": "test-model"},
+            input_type="request",
+        )
+
+    assert exc_info.value.message == "blocked by test"
+    assert exc_info.value.model == "test-model"
+    assert exc_info.value.guardrail_name == "t"
+
+
+@pytest.mark.asyncio
+async def test_custom_code_post_call_block_raises_http_400():
     code = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
         '    return block("blocked by test")\n'
@@ -166,7 +186,7 @@ async def test_custom_code_block_raises_http_400():
         await guardrail.apply_guardrail(
             inputs={"texts": ["test"]},
             request_data={"model": "test-model"},
-            input_type="request",
+            input_type="response",
         )
 
     assert exc_info.value.status_code == 400
