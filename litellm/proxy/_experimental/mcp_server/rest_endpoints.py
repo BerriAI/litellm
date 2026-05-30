@@ -605,11 +605,49 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
+    async def _resolve_toolset_filter(
+        toolset_name: Optional[str],
+    ) -> Optional[Dict[str, List[str]]]:
+        """Resolve a toolset name to its {server_id: [tool_names]} permission map.
+
+        Returns None when no toolset filter is requested. Raises 404 when the
+        named toolset does not exist.
+        """
+        if not toolset_name:
+            return None
+
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to use MCP toolsets."
+        )
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+            prisma_client, toolset_name
+        )
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "toolset_not_found",
+                    "message": f"Toolset '{toolset_name}' not found",
+                },
+            )
+        return await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=[toolset.toolset_id]
+        )
+
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
         request: Request,
         server_id: Optional[str] = Query(
             None, description="The server id to list tools for"
+        ),
+        mcp_server_name: Optional[str] = Query(
+            None,
+            description="The server name or alias to list tools for (alias for server_id)",
+        ),
+        toolset_name: Optional[str] = Query(
+            None, description="The toolset name to scope the listed tools to"
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ) -> dict:
@@ -669,10 +707,11 @@ if MCP_AVAILABLE:
             list_tools_result = []
             error_message = None
 
-            # If server_id is specified, only query that specific server
-            if server_id:
+            # If a server is specified (by id, name, or alias), only query it.
+            single_server_identifier = server_id or mcp_server_name
+            if single_server_identifier:
                 return await _list_tools_for_single_server(
-                    server_id=server_id,
+                    server_id=single_server_identifier,
                     allowed_server_ids=allowed_server_ids,
                     rest_client_ip=_rest_client_ip,
                     mcp_server_auth_headers=mcp_server_auth_headers,
@@ -711,9 +750,19 @@ if MCP_AVAILABLE:
                     else {}
                 )
 
+                # When a toolset filter is supplied, scope the listing to the
+                # toolset's servers and tools, reusing the same resolution the
+                # streamable HTTP /toolset/{name}/mcp path uses.
+                toolset_tool_permissions = await _resolve_toolset_filter(toolset_name)
+
                 # Query all servers the user has access to
                 errors = []
-                for allowed_server_id in allowed_server_ids:
+                servers_to_query = (
+                    [s for s in allowed_server_ids if s in toolset_tool_permissions]
+                    if toolset_tool_permissions is not None
+                    else allowed_server_ids
+                )
+                for allowed_server_id in servers_to_query:
                     server = global_mcp_server_manager.get_mcp_server_by_id(
                         allowed_server_id
                     )
@@ -737,6 +786,15 @@ if MCP_AVAILABLE:
                             user_api_key_dict,
                             extra_headers=user_oauth_extra_headers,
                         )
+                        if toolset_tool_permissions is not None:
+                            allowed_names = toolset_tool_permissions.get(
+                                allowed_server_id, []
+                            )
+                            tools_result = [
+                                tool
+                                for tool in tools_result
+                                if _tool_name_matches(tool.name, allowed_names)
+                            ]
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(

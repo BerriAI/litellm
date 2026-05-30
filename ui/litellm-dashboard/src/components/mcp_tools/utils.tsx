@@ -51,3 +51,25 @@ export const validateMCPServerName = (value: string) => {
     ? Promise.reject("Cannot contain '-' (hyphen) or spaces. Please use '_' (underscore) instead.")
     : Promise.resolve();
 };
+
+// A tool's display name replaces the tool name sent to the LLM provider. Providers
+// such as AWS Bedrock require tool names to match [a-zA-Z0-9_-]+, so spaces and
+// special characters must be rejected before they are persisted.
+const TOOL_DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export const TOOL_DISPLAY_NAME_ERROR =
+  "Display name may only contain letters, numbers, underscores, and hyphens (a-z, A-Z, 0-9, _, -). It replaces the tool name sent to the provider; spaces or special characters fail with providers like AWS Bedrock.";
+
+export const isValidToolDisplayName = (value: string): boolean =>
+  value === "" || TOOL_DISPLAY_NAME_PATTERN.test(value);
+
+export const findInvalidToolDisplayName = (
+  map: Record<string, string>,
+): { toolName: string; displayName: string } | null => {
+  for (const [toolName, displayName] of Object.entries(map || {})) {
+    if (!isValidToolDisplayName(displayName)) {
+      return { toolName, displayName };
+    }
+  }
+  return null;
+};

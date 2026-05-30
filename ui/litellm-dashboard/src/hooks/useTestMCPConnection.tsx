@@ -75,6 +75,9 @@ export const useTestMCPConnection = ({
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
+    if (!enabled) {
+      return;
+    }
     if (!accessToken || (!formValues.url && !formValues.spec_path)) {
       return;
     }

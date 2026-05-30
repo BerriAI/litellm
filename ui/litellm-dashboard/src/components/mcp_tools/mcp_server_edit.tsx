@@ -9,7 +9,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, findInvalidToolDisplayName, TOOL_DISPLAY_NAME_ERROR } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -373,6 +373,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
+    const invalidDisplayName = findInvalidToolDisplayName(toolNameToDisplayName);
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Invalid display name "${invalidDisplayName.displayName}" for tool "${invalidDisplayName.toolName}". ${TOOL_DISPLAY_NAME_ERROR}`,
+      );
+      return;
+    }
     try {
       // Ensure access groups is always a string array
       const {
@@ -618,6 +625,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             </Form.Item>
             <Form.Item label="Description" name="description">
               <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+            </Form.Item>
+            <Form.Item label="Instructions" name="instructions">
+              <Input.TextArea
+                rows={4}
+                placeholder="Server-level instructions sent to the model alongside the tool list"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
             </Form.Item>
             <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>

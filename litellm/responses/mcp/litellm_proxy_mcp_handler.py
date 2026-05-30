@@ -16,7 +16,11 @@ from typing import (
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
+from litellm.proxy._experimental.mcp_server.utils import (
+    iter_known_server_prefixes,
+    normalize_server_name,
+    split_server_prefix_from_name,
+)
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -348,6 +352,42 @@ class LiteLLM_Proxy_MCP_Handler:
                     )
 
         return deduplicated_tools, tool_server_map
+
+    @staticmethod
+    def _resolve_upstream_tool_name(
+        tool_name: str,
+        server_name: str,
+        mcp_server: Optional[Any],
+    ) -> str:
+        """Translate the model-facing tool name back to the upstream tool name.
+
+        tools/list exposes each tool prefixed with the server's alias and, when
+        configured, renamed to a display name. The model echoes that name back,
+        so reverse both transformations before dispatching upstream, mirroring
+        the direct /mcp path's _resolve_display_name_to_original.
+        """
+        unprefixed_name, prefixed_server_name = split_server_prefix_from_name(tool_name)
+        upstream_name = tool_name
+        if prefixed_server_name and unprefixed_name:
+            if mcp_server is not None:
+                known_prefixes = {
+                    normalize_server_name(prefix)
+                    for prefix in iter_known_server_prefixes(mcp_server)
+                }
+            else:
+                known_prefixes = {normalize_server_name(server_name)}
+            if normalize_server_name(prefixed_server_name) in known_prefixes:
+                upstream_name = unprefixed_name
+
+        if mcp_server is not None:
+            display_to_original = {
+                display_name: original_name
+                for original_name, display_name in (
+                    getattr(mcp_server, "tool_name_to_display_name", None) or {}
+                ).items()
+            }
+            return display_to_original.get(upstream_name, upstream_name)
+        return upstream_name
 
     @staticmethod
     def _filter_mcp_tools_by_allowed_tools(
@@ -690,18 +730,21 @@ class LiteLLM_Proxy_MCP_Handler:
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
                 server_name = tool_server_map[tool_name]
-
-                # Remove the server name prefix if the tool name includes it.
-                sanitized_tool_name = tool_name
-                unprefixed_name, prefixed_server_name = split_server_prefix_from_name(
-                    tool_name
+                mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name
                 )
-                if (
-                    prefixed_server_name
-                    and prefixed_server_name == server_name
-                    and unprefixed_name
-                ):
-                    sanitized_tool_name = unprefixed_name
+
+                # The model calls tools by the name shown during tools/list, which
+                # is prefixed with the server's alias and may be a configured
+                # display name. Reverse both so the upstream server receives the
+                # tool name it actually knows.
+                sanitized_tool_name = (
+                    LiteLLM_Proxy_MCP_Handler._resolve_upstream_tool_name(
+                        tool_name=tool_name,
+                        server_name=server_name,
+                        mcp_server=mcp_server,
+                    )
+                )
 
                 start_time = datetime.now()
                 logging_input = [
@@ -784,9 +827,6 @@ class LiteLLM_Proxy_MCP_Handler:
                     "arguments": parsed_arguments,
                     "namespaced_tool_name": tool_name,
                 }
-                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(
-                    tool_name
-                )
                 if mcp_server:
                     mcp_info = mcp_server.mcp_info or {}
                     standard_logging_mcp_tool_call["mcp_server_name"] = (

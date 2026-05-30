@@ -14,7 +14,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, findInvalidToolDisplayName, TOOL_DISPLAY_NAME_ERROR } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -78,12 +78,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
+  const isAdmin = isAdminRole(userRole);
+
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
+  // The tool preview hits the admin-only /mcp_server/test/tools/list endpoint, so only
+  // enable it for admins; non-admin submitters would otherwise get a 403 on every change.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
     accessToken,
     oauthAccessToken,
     formValues,
-    enabled: true,
+    enabled: isAdmin,
   });
 
   const authType = formValues.auth_type as string | undefined;
@@ -280,6 +284,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
+    const invalidDisplayName = findInvalidToolDisplayName(toolNameToDisplayName);
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Invalid display name "${invalidDisplayName.displayName}" for tool "${invalidDisplayName.toolName}". ${TOOL_DISPLAY_NAME_ERROR}`,
+      );
+      setIsLoading(false);
+      return;
+    }
     try {
       const {
         static_headers: staticHeadersList,
@@ -522,8 +534,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [isModalVisible]);
 
-  const isAdmin = isAdminRole(userRole);
-
   // rendering
   return (
     <Modal
@@ -631,6 +641,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             >
               <TextInput
                 placeholder="Brief description of what this server does"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">Instructions</span>}
+              name="instructions"
+            >
+              <Input.TextArea
+                rows={4}
+                placeholder="Server-level instructions sent to the model alongside the tool list"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
             </Form.Item>

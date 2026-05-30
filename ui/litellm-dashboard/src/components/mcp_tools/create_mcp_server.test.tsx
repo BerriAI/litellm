@@ -542,4 +542,38 @@ describe("CreateMCPServer", () => {
       expect(onBackToDiscovery).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("tool preview gating by role (Bug #15)", () => {
+    async function fillFetchableHttpForm() {
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(
+          screen.getByPlaceholderText("https://your-mcp-server.com"),
+        ).toBeInTheDocument();
+      });
+      const user = userEvent.setup({ delay: null });
+      await user.type(getServerNameInput(), "Preview_Server");
+      await user.type(
+        screen.getByPlaceholderText("https://your-mcp-server.com"),
+        "https://example.com/mcp",
+      );
+      await selectAntOption("Authentication", "None");
+    }
+
+    it("admin create form fetches the tool preview", async () => {
+      render(<CreateMCPServer {...defaultProps} userRole="Admin" />);
+      await fillFetchableHttpForm();
+      await waitFor(() => {
+        expect(networking.testMCPToolsListRequest).toHaveBeenCalled();
+      });
+    });
+
+    it("non-admin submit form does not call the admin-only tool preview", async () => {
+      render(<CreateMCPServer {...defaultProps} userRole="Internal User" />);
+      await fillFetchableHttpForm();
+      // Allow any auto-fetch effect to settle; it must stay gated for non-admins.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -63,6 +63,26 @@ _request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
 )
 
 
+def format_byok_authorization_header(
+    auth_type: Any, token: Optional[str]
+) -> Optional[str]:
+    """Build the full Authorization header value for a BYOK credential.
+
+    The OpenAPI tool handler injects this verbatim as the Authorization header
+    (via the _request_auth_header ContextVar), so the auth-type prefix is baked
+    in here rather than known by the generator. Returns None when no token.
+    """
+    if not token:
+        return None
+    from litellm.types.mcp import MCPAuth
+
+    if auth_type == MCPAuth.api_key:
+        return f"ApiKey {token}"
+    if auth_type == MCPAuth.basic:
+        return f"Basic {token}"
+    return f"Bearer {token}"
+
+
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
     if param_value is None:

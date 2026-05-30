@@ -892,6 +892,7 @@ class MCPServerManager:
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            submitted_by=getattr(mcp_server, "submitted_by", None),
             # AWS SigV4 fields
             aws_access_key_id=aws_creds.get("aws_access_key_id"),
             aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
@@ -995,6 +996,18 @@ class MCPServerManager:
             if server.allow_all_keys is True
         ]
 
+    def get_server_ids_submitted_by(self, user_id: str) -> List[str]:
+        """Return server IDs that ``user_id`` submitted.
+
+        A user who submits a server for review keeps visibility of it after an
+        admin approves it, even if no access group grants them access.
+        """
+        return [
+            server.server_id
+            for server in self.get_registry().values()
+            if server.submitted_by == user_id
+        ]
+
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
@@ -1052,6 +1065,15 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+                submitter_user_id = (
+                    getattr(user_api_key_auth, "user_id", None)
+                    if user_api_key_auth
+                    else None
+                )
+                if submitter_user_id:
+                    combined_servers.update(
+                        self.get_server_ids_submitted_by(submitter_user_id)
+                    )
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
@@ -2538,6 +2560,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        mcp_auth_header: Optional[str] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2570,6 +2593,23 @@ class MCPServerManager:
                 isError=True,
             )
 
+        # BYOK credential injection for the Responses/Playground path: OpenAPI
+        # tool handlers read the Authorization header from this ContextVar. The
+        # direct /mcp route sets it in execute_mcp_tool; set it here too so the
+        # stored credential reaches the upstream HTTP request.
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+            format_byok_authorization_header,
+        )
+
+        auth_header_value = format_byok_authorization_header(
+            getattr(server, "auth_type", None), mcp_auth_header
+        )
+        auth_token_reset = (
+            _request_auth_header.set(auth_header_value)
+            if auth_header_value is not None
+            else None
+        )
         try:
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
@@ -2590,6 +2630,9 @@ class MCPServerManager:
                 content=[TextContent(type="text", text=error_msg)],
                 isError=True,
             )
+        finally:
+            if auth_token_reset is not None:
+                _request_auth_header.reset(auth_token_reset)
 
     async def pre_call_tool_check(
         self,
@@ -3056,6 +3099,26 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        # Inject the stored BYOK credential for paths that don't pre-resolve it
+        # (e.g. the Responses/Playground path, which calls call_tool directly
+        # rather than through execute_mcp_tool). The direct /mcp route already
+        # sets mcp_auth_header, so the guard below leaves it untouched there.
+        if (
+            mcp_server is not None
+            and getattr(mcp_server, "is_byok", False)
+            and not mcp_auth_header
+            and user_api_key_auth is not None
+            and user_api_key_auth.user_id
+        ):
+            from litellm.proxy._experimental.mcp_server.server import (
+                get_user_byok_credential,
+            )
+
+            mcp_auth_header = await get_user_byok_credential(
+                user_id=user_api_key_auth.user_id,
+                server_id=mcp_server.server_id,
+            )
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3107,7 +3170,9 @@ class MCPServerManager:
                 )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server, name, arguments, mcp_auth_header=mcp_auth_header
+                    )
                 )
             )
         else:
@@ -3747,6 +3812,8 @@ class MCPServerManager:
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
+            tool_name_to_display_name=server.tool_name_to_display_name,
+            tool_name_to_description=server.tool_name_to_description,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

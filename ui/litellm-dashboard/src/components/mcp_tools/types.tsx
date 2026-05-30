@@ -181,6 +181,7 @@ export interface MCPServer {
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
+  instructions?: string | null;
   /**
    * Only required for HTTP/SSE transports.
    * For `stdio`, the backend can return null/undefined.
