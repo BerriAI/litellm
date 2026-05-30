@@ -5763,10 +5763,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
         if provider_config is not None:
-            get_model_info = getattr(provider_config, "get_model_info", None)
-            if callable(get_model_info):
+            provider_get_model_info = getattr(provider_config, "get_model_info", None)
+            if callable(provider_get_model_info):
                 try:
-                    provider_model_info = get_model_info(
+                    provider_model_info = provider_get_model_info(
                         model=model,
                         api_base=api_base,
                         api_key=api_key,
