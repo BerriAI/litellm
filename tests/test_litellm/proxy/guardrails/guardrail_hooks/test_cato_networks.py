@@ -1356,6 +1356,49 @@ async def test_post_call_success_hook_anonymize_action_missing_content_key_keeps
 
 
 @pytest.mark.asyncio
+async def test_post_call_success_hook_anonymize_action_partial_redacted_keeps_output():
+    guard = _make_guardrail()
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "second"},
+        ]
+    }
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "[REDACTED_INPUT_1]"},
+                    {"role": "user", "content": "[REDACTED_INPUT_2]"},
+                ]
+            },
+        }
+    )
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "assistant output", "role": "assistant"},
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=anonymize_response,
+    ):
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=llm_response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "assistant output"
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_no_action_keeps_content():
     guard = _make_guardrail()
     request_data = {"messages": [{"role": "user", "content": "hi"}]}

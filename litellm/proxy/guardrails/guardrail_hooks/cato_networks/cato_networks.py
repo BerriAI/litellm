@@ -333,6 +333,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
         user_email: Optional[str] = None,
     ) -> Optional[dict]:
         call_id = request_data.get("litellm_call_id")
+        inspection_messages = self._inspection_messages(request_data)
+        assistant_index = len(inspection_messages)
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=self._build_cato_headers(
@@ -342,7 +344,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
-                "messages": self._inspection_messages(request_data)
+                "messages": inspection_messages
                 + [{"role": "assistant", "content": output}]
             },
         )
@@ -358,9 +360,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
         if action_type and action_type == "anonymize_action" and redacted_chat:
             all_redacted = redacted_chat.get("all_redacted_messages") or []
-            redacted_output = all_redacted[-1].get("content") if all_redacted else None
-            if redacted_output is not None:
-                return {"redacted_output": redacted_output}
+            if assistant_index < len(all_redacted):
+                redacted_output = all_redacted[assistant_index].get("content")
+                if redacted_output is not None:
+                    return {"redacted_output": redacted_output}
         return {"redacted_output": output}
 
     def _handle_block_action_on_output(
