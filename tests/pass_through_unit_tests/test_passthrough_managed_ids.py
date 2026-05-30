@@ -154,6 +154,9 @@ class TestCanonicalPath:
             == "/v1/batches/batch_abc123"
         )
 
+    def test_strips_azure_openai_responses(self):
+        assert _canonical_path("/azure/openai/responses") == "/v1/responses"
+
 
 # ---------------------------------------------------------------------------
 # _resolve_one
@@ -315,7 +318,7 @@ class TestRewriteResponseIds:
         result = await rewrite_response_ids(
             provider="azure",
             method="POST",
-            route="/azure/openai/v1/responses",
+            route="/azure/openai/responses",
             body=body,
             user_api_key_dict=_user(),
             prisma_client=pc,

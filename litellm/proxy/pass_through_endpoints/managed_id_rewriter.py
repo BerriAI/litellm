@@ -175,7 +175,7 @@ def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
 # Strips provider-specific passthrough prefixes before the /v1/... path:
 #   /openai_passthrough/v1/files  -> /v1/files
 #   /openai/v1/files              -> /v1/files
-#   /azure/openai/files           -> /files  (then normalize_request_route adds context)
+#   /azure/openai/files           -> /files  (_canonical_path then prepends /v1/)
 #   /azure_ai/openai/files        -> /files
 _PASSTHROUGH_PREFIX_RE = re.compile(r"^/(?:azure(?:_ai)?/)?openai(?:_passthrough)?")
 
@@ -621,7 +621,9 @@ async def _build_list_where_with_cursor(
         "unified_file_id" if resource_kind == "files" else "unified_object_id"
     )
     try:
-        cursor_row = await cursor_table.find_first(where={cursor_field: cursor_id})
+        cursor_row = await cursor_table.find_first(
+            where={**owner_filter, cursor_field: cursor_id}
+        )
         if cursor_row is not None:
             if after_id:
                 where["created_at"] = {"lt": cursor_row.created_at}
