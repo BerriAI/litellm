@@ -1,5 +1,7 @@
+import re
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import urlsplit, urlunsplit
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
@@ -175,6 +177,38 @@ def mask_sensitive_keys(
         else:
             masked[key] = value
     return masked
+
+
+# A connection URL whose authority contains userinfo, e.g. ``redis://u:p@host``.
+# Requires the ``@`` to appear before any path/query/fragment so plain URLs
+# without credentials (``https://host/path?x=@y``) are left untouched.
+_URL_WITH_USERINFO = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://[^/?#\s]*@")
+
+
+def mask_url_credentials(value: Any) -> Any:
+    """Redact a password embedded in a connection URL's userinfo while keeping
+    the scheme, host, and port intact so the field stays diagnostically useful.
+
+    ``redis://user:pass@host:6379`` -> ``redis://user:****@host:6379``
+    ``rediss://:pass@host``         -> ``rediss://:****@host``
+
+    Strings without credentialed userinfo, and non-strings, are returned
+    unchanged.
+    """
+    if not isinstance(value, str) or not _URL_WITH_USERINFO.match(value):
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if parts.password is None:
+        return value
+    netloc = (
+        f"{parts.username or ''}:{_default_masker.mask_char * 4}@{parts.hostname or ''}"
+    )
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 # Usage example:

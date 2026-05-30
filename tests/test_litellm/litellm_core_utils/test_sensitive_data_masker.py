@@ -154,3 +154,39 @@ def test_cost_per_token_fields_not_masked():
     # Actual secrets must still be masked
     assert "*" in masked["api_key"]
     assert "*" in masked["access_token"]
+
+
+from litellm.litellm_core_utils.sensitive_data_masker import mask_url_credentials
+
+
+def test_mask_url_credentials_redacts_password_only():
+    """A password embedded in a connection URL is redacted while scheme/host/
+    port stay intact, so the value is still diagnostically useful."""
+    assert (
+        mask_url_credentials("redis://:supersecretpw@redis.internal:6379")
+        == "redis://:****@redis.internal:6379"
+    )
+    assert (
+        mask_url_credentials("rediss://user:supersecretpw@host.example:6380/0")
+        == "rediss://user:****@host.example:6380/0"
+    )
+    # The plaintext password must never survive.
+    assert "supersecretpw" not in mask_url_credentials(
+        "redis://user:supersecretpw@host:6379"
+    )
+
+
+def test_mask_url_credentials_leaves_non_credentialed_values_untouched():
+    """URLs without a password, non-URL strings, and the '@' appearing only in
+    a path/query are all returned verbatim."""
+    assert (
+        mask_url_credentials("redis://redis.internal:6379")
+        == "redis://redis.internal:6379"
+    )
+    assert mask_url_credentials("redis://user@host:6379") == "redis://user@host:6379"
+    assert mask_url_credentials("https://api.example.com/v1?to=a@b.com") == (
+        "https://api.example.com/v1?to=a@b.com"
+    )
+    assert mask_url_credentials("plain-secret-value") == "plain-secret-value"
+    assert mask_url_credentials(None) is None
+    assert mask_url_credentials(1234) == 1234
