@@ -538,6 +538,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
         litellm_metadata = litellm_params_in_body.pop("litellm_metadata", None)
         metadata = litellm_params_in_body.pop("metadata", None)
