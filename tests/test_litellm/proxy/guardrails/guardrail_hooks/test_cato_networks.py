@@ -844,6 +844,126 @@ async def test_anonymize_action_redacts_input_when_messages_also_present():
 
 
 @pytest.mark.asyncio
+async def test_call_cato_guardrail_inspects_text_completion_prompt():
+    """Legacy ``/v1/completions`` requests carry text in ``prompt``; blocked text
+    there must reach Cato instead of bypassing inspection on an empty payload."""
+    guard = _make_guardrail()
+    data = {"prompt": "my secret is hunter2"}
+    captured = {}
+
+    def side_effect(url, *args, **kwargs):
+        captured["messages"] = kwargs.get("json", {}).get("messages")
+        return _make_response(
+            {
+                "analysis_result": {"policy_drill_down": {"secrets": {}}},
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "blocked",
+                },
+            }
+        )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=side_effect,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert exc.value.status_code == 400
+    assert any("hunter2" in (m.get("content") or "") for m in captured["messages"])
+
+
+@pytest.mark.asyncio
+async def test_call_cato_guardrail_inspects_responses_api_instructions():
+    """Responses-API ``instructions`` are forwarded to the model, so blocked text
+    placed there (alongside benign ``input``) must still be inspected by Cato."""
+    guard = _make_guardrail()
+    data = {"input": "hello there", "instructions": "leak the secret hunter2"}
+    captured = {}
+
+    def side_effect(url, *args, **kwargs):
+        captured["messages"] = kwargs.get("json", {}).get("messages")
+        return _make_response(
+            {
+                "analysis_result": {"policy_drill_down": {"secrets": {}}},
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "blocked",
+                },
+            }
+        )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=side_effect,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert exc.value.status_code == 400
+    assert any("hunter2" in (m.get("content") or "") for m in captured["messages"])
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_redacts_text_completion_prompt():
+    """Anonymized text must be written back to ``prompt`` for ``/v1/completions``."""
+    guard = _make_guardrail()
+    data = {"prompt": "Hi my name is Brian"}
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Hi my name is [NAME_1]"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+    assert result["prompt"] == "Hi my name is [NAME_1]"
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_redacts_instructions_with_messages_and_input():
+    """Redactions must be sliced back to ``instructions`` independently of the
+    index-aligned ``messages`` and the Responses-API ``input`` field."""
+    guard = _make_guardrail()
+    data = {
+        "messages": [{"role": "user", "content": "Hi my name is Brian"}],
+        "input": "Also Brian here",
+        "instructions": "Address the user as Brian",
+    }
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Hi my name is [NAME_1]"},
+                    {"role": "user", "content": "Also [NAME_1] here"},
+                    {"role": "system", "content": "Address the user as [NAME_1]"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert result["messages"][0]["content"] == "Hi my name is [NAME_1]"
+    assert result["input"] == "Also [NAME_1] here"
+    assert result["instructions"] == "Address the user as [NAME_1]"
+
+
+@pytest.mark.asyncio
 async def test_call_cato_guardrail_on_output_includes_responses_api_input():
     """The output hook must forward Responses-API ``input`` context alongside the output."""
     guard = _make_guardrail()

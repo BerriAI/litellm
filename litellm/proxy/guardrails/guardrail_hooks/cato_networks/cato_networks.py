@@ -135,13 +135,14 @@ class CatoNetworksGuardrail(CustomGuardrail):
             user_email=self._resolve_cato_user_email(user_api_key_dict),
         )
 
-    @staticmethod
-    def _inspection_messages(data: dict) -> list:
+    @classmethod
+    def _inspection_messages(cls, data: dict) -> list:
         """Flatten multimodal list ``content`` into plain text so Cato inspects
         every text fragment. Chat ``messages`` stay 1:1 with the request so
-        redacted results map back by index, and Responses-API ``input`` text is
-        appended as synthetic messages so it is inspected even when ``messages``
-        is also present."""
+        redacted results map back by index, and every other field the proxy
+        forwards to the model (Responses-API ``input``/``instructions`` and
+        legacy completion ``prompt``) is appended as synthetic messages so blocked
+        text cannot bypass inspection by hiding in one of them."""
         flattened = []
         for message in data.get("messages") or []:
             if isinstance(message, dict) and isinstance(message.get("content"), list):
@@ -151,8 +152,43 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 )
             else:
                 flattened.append(message)
-        flattened.extend(build_inspection_messages({"input": data.get("input")}))
+        for _field, messages in cls._extra_inspection_sources(data):
+            flattened.extend(messages)
         return flattened
+
+    @staticmethod
+    def _prompt_inspection_messages(prompt: Any) -> list:
+        """Synthetic user messages for a legacy completion ``prompt`` (a string
+        or a list of string prompts)."""
+        if isinstance(prompt, str):
+            return [{"role": "user", "content": prompt}] if prompt else []
+        if isinstance(prompt, list):
+            return [
+                {"role": "user", "content": part}
+                for part in prompt
+                if isinstance(part, str) and part
+            ]
+        return []
+
+    @classmethod
+    def _extra_inspection_sources(cls, data: dict) -> list:
+        """Text the proxy forwards to the model outside chat ``messages``:
+        Responses-API ``input`` and ``instructions``, and legacy completion
+        ``prompt``. Returned as ``(field, messages)`` in a fixed order so the
+        anonymize path can slice redactions back to the field they came from."""
+        sources: list = []
+        input_messages = build_inspection_messages({"input": data.get("input")})
+        if input_messages:
+            sources.append(("input", input_messages))
+        instructions = data.get("instructions")
+        if isinstance(instructions, str) and instructions:
+            sources.append(
+                ("instructions", [{"role": "system", "content": instructions}])
+            )
+        prompt_messages = cls._prompt_inspection_messages(data.get("prompt"))
+        if prompt_messages:
+            sources.append(("prompt", prompt_messages))
+        return sources
 
     async def call_cato_guardrail(
         self,
@@ -206,24 +242,54 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         redacted_messages = redacted_chat.get("all_redacted_messages") or []
         original_messages = data.get("messages")
-        if not original_messages:
-            apply_redacted_messages_back(data, redacted_messages)
-            return data
-        data["messages"] = [
-            (
-                {**original, "content": redacted_messages[idx]["content"]}
-                if idx < len(redacted_messages)
-                and redacted_messages[idx].get("content") is not None
-                else original
-            )
-            for idx, original in enumerate(original_messages)
-        ]
-        input_redactions = redacted_messages[len(original_messages) :]
-        if input_redactions and data.get("input") is not None:
-            input_only = {"input": data["input"]}
-            apply_redacted_messages_back(input_only, input_redactions)
-            data["input"] = input_only["input"]
+        offset = 0
+        if original_messages:
+            data["messages"] = [
+                (
+                    {**original, "content": redacted_messages[idx]["content"]}
+                    if idx < len(redacted_messages)
+                    and redacted_messages[idx].get("content") is not None
+                    else original
+                )
+                for idx, original in enumerate(original_messages)
+            ]
+            offset = len(original_messages)
+        for field, messages in self._extra_inspection_sources(data):
+            redacted_slice = redacted_messages[offset : offset + len(messages)]
+            offset += len(messages)
+            if redacted_slice:
+                self._apply_extra_redaction(data, field, redacted_slice)
         return data
+
+    @classmethod
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> None:
+        if field == "input":
+            input_only = {"input": data["input"]}
+            apply_redacted_messages_back(input_only, redacted)
+            data["input"] = input_only["input"]
+        elif field == "instructions":
+            if redacted[0].get("content") is not None:
+                data["instructions"] = redacted[0]["content"]
+        elif field == "prompt":
+            cls._apply_prompt_redaction(data, redacted)
+
+    @staticmethod
+    def _apply_prompt_redaction(data: dict, redacted: list) -> None:
+        contents = [m.get("content") for m in redacted if isinstance(m, dict)]
+        prompt = data.get("prompt")
+        if isinstance(prompt, str):
+            if contents and contents[0] is not None:
+                data["prompt"] = contents[0]
+            return
+        if isinstance(prompt, list):
+            new_prompt = list(prompt)
+            redactions = iter(contents)
+            for idx, part in enumerate(new_prompt):
+                if isinstance(part, str) and part:
+                    replacement = next(redactions, None)
+                    if replacement is not None:
+                        new_prompt[idx] = replacement
+            data["prompt"] = new_prompt
 
     async def call_cato_guardrail_on_output(
         self,
