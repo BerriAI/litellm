@@ -442,3 +442,64 @@ describe("MCPServerEdit (interactive OAuth)", () => {
     expect(payload.token_storage_ttl_seconds).toBe(7200);
   });
 });
+
+describe("MCPServerEdit (instructions, Bug #14)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const baseServer = {
+    server_id: "instr-server-1",
+    server_name: "InstrServer",
+    alias: "instr_server",
+    description: "desc",
+    transport: "stdio",
+    url: null,
+    auth_type: "none",
+    command: "npx",
+    args: ["-y", "pkg"],
+    env: {},
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [],
+  };
+
+  it("pre-populates Instructions and forwards edits in the update payload", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...baseServer,
+      instructions: "Updated guidance.",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...baseServer, instructions: "Original guidance." }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const field = document.getElementById("instructions") as HTMLTextAreaElement;
+    await waitFor(() => expect(field).not.toBeNull());
+    expect(field.value).toBe("Original guidance.");
+
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "Updated guidance." } });
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.instructions).toBe("Updated guidance.");
+  });
+});

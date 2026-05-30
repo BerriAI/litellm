@@ -619,6 +619,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <Form.Item label="Description" name="description">
               <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
+            <Form.Item label="Instructions" name="instructions">
+              <Input.TextArea
+                rows={4}
+                placeholder="Server-level instructions sent to the model alongside the tool list"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
             <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
