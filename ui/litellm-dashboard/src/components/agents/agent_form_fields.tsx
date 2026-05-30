@@ -93,21 +93,37 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                       {...field}
                       label={SKILL_FIELD_CONFIG.tags.label}
                       name={[field.name, 'tags']}
-                      rules={[{ required: SKILL_FIELD_CONFIG.tags.required, message: 'Required' }]}
-                      getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim())}
-                      getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : value })}
+                      rules={[
+                        {
+                          required: SKILL_FIELD_CONFIG.tags.required,
+                          validator: (_, value) =>
+                            Array.isArray(value) && value.length > 0
+                              ? Promise.resolve()
+                              : Promise.reject(new Error('At least one tag is required')),
+                        },
+                      ]}
                     >
-                      <Input placeholder={SKILL_FIELD_CONFIG.tags.placeholder} />
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        placeholder={SKILL_FIELD_CONFIG.tags.placeholder}
+                        tokenSeparators={[',']}
+                        notFoundContent={null}
+                      />
                     </Form.Item>
                     
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.examples.label}
                       name={[field.name, 'examples']}
-                      getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim()).filter((s: string) => s)}
-                      getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : '' })}
                     >
-                      <Input placeholder={SKILL_FIELD_CONFIG.examples.placeholder} />
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        placeholder={SKILL_FIELD_CONFIG.examples.placeholder}
+                        tokenSeparators={[',']}
+                        notFoundContent={null}
+                      />
                     </Form.Item>
                     
                     <AntButton 
