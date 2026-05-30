@@ -94,6 +94,36 @@ def _write_byok_cred_cache(
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
 
 
+async def get_user_byok_credential(
+    user_id: Optional[str], server_id: str
+) -> Optional[str]:
+    """Fetch a stored per-user BYOK credential, using the shared TTL cache.
+
+    Shared by the direct /mcp route and the Responses/Playground path so both
+    inject the same credential, keyed on user_id + server_id. Returns None when
+    no credential is stored or the database is unavailable.
+    """
+    if not user_id:
+        return None
+
+    cached = _byok_cred_cache.get((user_id, server_id))
+    if cached is not None:
+        credential, ts = cached
+        if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
+            return credential
+
+    from litellm.proxy._experimental.mcp_server.db import get_user_credential
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return None
+    credential = await get_user_credential(
+        prisma_client=prisma_client, user_id=user_id, server_id=server_id
+    )
+    _write_byok_cred_cache(user_id, server_id, credential)
+    return credential
+
+
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
 # We're making this conditional import to avoid breaking users who use python 3.8.
@@ -164,6 +194,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
+        format_byok_authorization_header,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -1944,29 +1975,8 @@ if MCP_AVAILABLE:
         """
         if not mcp_server.is_byok:
             return None
-        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
-        if not user_id:
-            return None
-
-        cache_key = (user_id, mcp_server.server_id)
-        cached = _byok_cred_cache.get(cache_key)
-        if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
-
-        from litellm.proxy._experimental.mcp_server.db import get_user_credential
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            return None
-        credential = await get_user_credential(
-            prisma_client=prisma_client,
-            user_id=user_id,
-            server_id=mcp_server.server_id,
-        )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
-        return credential
+        user_id = user_api_key_auth.user_id if user_api_key_auth else None
+        return await get_user_byok_credential(user_id, mcp_server.server_id)
 
     async def _check_byok_credential(
         mcp_server: MCPServer,
@@ -2269,17 +2279,10 @@ if MCP_AVAILABLE:
             # because the tool function has headers baked into its closure.
             # Pre-format the full Authorization header value using the server's
             # configured auth_type so the generator doesn't need to know the prefix.
-            auth_header_value: Optional[str] = None
-            if mcp_auth_header:
-                server_auth_type = (
-                    getattr(mcp_server, "auth_type", None) if mcp_server else None
-                )
-                if server_auth_type == MCPAuth.api_key:
-                    auth_header_value = f"ApiKey {mcp_auth_header}"
-                elif server_auth_type == MCPAuth.basic:
-                    auth_header_value = f"Basic {mcp_auth_header}"
-                else:
-                    auth_header_value = f"Bearer {mcp_auth_header}"
+            auth_header_value = format_byok_authorization_header(
+                getattr(mcp_server, "auth_type", None) if mcp_server else None,
+                mcp_auth_header,
+            )
 
             # Forward named client headers to OpenAPI tool upstream requests.
             # MCPServer.extra_headers lists header names to copy from raw_headers.

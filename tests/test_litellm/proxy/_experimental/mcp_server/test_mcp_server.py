@@ -283,6 +283,131 @@ async def test_call_tool_m2m_skips_authorization_headers():
 
 
 @pytest.mark.asyncio
+async def test_call_tool_injects_byok_credential_for_regular_server():
+    """Bug #13: the Responses/Playground path calls call_tool() directly (not
+    execute_mcp_tool), so the stored BYOK credential must be looked up here and
+    injected into the upstream MCP client. Before the fix the client received
+    mcp_auth_header=None -> upstream 401."""
+    from litellm.proxy._experimental.mcp_server import server as server_module
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    server_module._byok_cred_cache.clear()
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="byok-server-1",
+        name="byok_server",
+        server_name="byok_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        is_byok=True,
+    )
+    manager.registry[server.server_id] = server
+    manager.tool_name_to_mcp_server_name_mapping["echo"] = server.name
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="ui-token", user_id="sso-user-123", team_id="litellm-dashboard"
+    )
+
+    mock_client = MagicMock()
+    mock_client.call_tool = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+            new=AsyncMock(return_value="stored-byok-secret"),
+        ) as get_cred_mock,
+        patch("litellm.proxy.proxy_server.prisma_client", new=MagicMock()),
+        patch.object(
+            manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)
+        ) as create_client_mock,
+    ):
+        await manager.call_tool(
+            server_name="byok_server",
+            name="echo",
+            arguments={"message": "hello"},
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            proxy_logging_obj=None,
+        )
+
+    get_cred_mock.assert_awaited_once()
+    assert get_cred_mock.await_args.kwargs["user_id"] == "sso-user-123"
+    assert get_cred_mock.await_args.kwargs["server_id"] == "byok-server-1"
+    assert (
+        create_client_mock.await_args.kwargs["mcp_auth_header"]
+        == "stored-byok-secret"
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_injects_byok_credential_for_openapi_server():
+    """Bug #13 (OpenAPI / Firecrawl repro): OpenAPI tool handlers read the
+    Authorization header from the _request_auth_header ContextVar. The
+    Playground path must set it from the stored BYOK credential, formatted with
+    the server's auth-type prefix."""
+    from litellm.proxy._experimental.mcp_server import server as server_module
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_auth_header,
+    )
+    from litellm.proxy._experimental.mcp_server.tool_registry import (
+        global_mcp_tool_registry,
+    )
+
+    server_module._byok_cred_cache.clear()
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="byok-openapi-1",
+        name="firecrawl_byok",
+        server_name="firecrawl_byok",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        is_byok=True,
+        spec_path="/tmp/firecrawl_openapi.json",
+    )
+    manager.registry[server.server_id] = server
+    manager.tool_name_to_mcp_server_name_mapping["scrape"] = server.name
+
+    observed = {}
+
+    async def fake_handler(**kwargs):
+        observed["auth"] = _request_auth_header.get()
+        return "scraped content"
+
+    tool = MagicMock()
+    tool.handler = fake_handler
+
+    with (
+        patch.object(global_mcp_tool_registry, "get_tool", return_value=tool),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+            new=AsyncMock(return_value="fc-secret"),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", new=MagicMock()),
+    ):
+        await manager.call_tool(
+            server_name="firecrawl_byok",
+            name="scrape",
+            arguments={"url": "https://example.com"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="ui", user_id="user-9"),
+            mcp_auth_header=None,
+            proxy_logging_obj=None,
+        )
+
+    # The upstream OpenAPI request must carry the stored credential as a fully
+    # formatted Authorization header.
+    assert observed["auth"] == "Bearer fc-secret"
+    # And the ContextVar must be reset afterwards (no leakage across requests).
+    assert _request_auth_header.get() is None
+
+
+@pytest.mark.asyncio
 async def test_get_prompts_from_mcp_servers_success():
     try:
         from litellm.proxy._experimental.mcp_server.server import (

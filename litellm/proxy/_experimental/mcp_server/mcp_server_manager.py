@@ -2538,6 +2538,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        mcp_auth_header: Optional[str] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2570,6 +2571,23 @@ class MCPServerManager:
                 isError=True,
             )
 
+        # BYOK credential injection for the Responses/Playground path: OpenAPI
+        # tool handlers read the Authorization header from this ContextVar. The
+        # direct /mcp route sets it in execute_mcp_tool; set it here too so the
+        # stored credential reaches the upstream HTTP request.
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header,
+            format_byok_authorization_header,
+        )
+
+        auth_header_value = format_byok_authorization_header(
+            getattr(server, "auth_type", None), mcp_auth_header
+        )
+        auth_token_reset = (
+            _request_auth_header.set(auth_header_value)
+            if auth_header_value is not None
+            else None
+        )
         try:
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
@@ -2590,6 +2608,9 @@ class MCPServerManager:
                 content=[TextContent(type="text", text=error_msg)],
                 isError=True,
             )
+        finally:
+            if auth_token_reset is not None:
+                _request_auth_header.reset(auth_token_reset)
 
     async def pre_call_tool_check(
         self,
@@ -3056,6 +3077,26 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        # Inject the stored BYOK credential for paths that don't pre-resolve it
+        # (e.g. the Responses/Playground path, which calls call_tool directly
+        # rather than through execute_mcp_tool). The direct /mcp route already
+        # sets mcp_auth_header, so the guard below leaves it untouched there.
+        if (
+            mcp_server is not None
+            and getattr(mcp_server, "is_byok", False)
+            and not mcp_auth_header
+            and user_api_key_auth is not None
+            and user_api_key_auth.user_id
+        ):
+            from litellm.proxy._experimental.mcp_server.server import (
+                get_user_byok_credential,
+            )
+
+            mcp_auth_header = await get_user_byok_credential(
+                user_id=user_api_key_auth.user_id,
+                server_id=mcp_server.server_id,
+            )
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3107,7 +3148,9 @@ class MCPServerManager:
                 )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server, name, arguments, mcp_auth_header=mcp_auth_header
+                    )
                 )
             )
         else:
