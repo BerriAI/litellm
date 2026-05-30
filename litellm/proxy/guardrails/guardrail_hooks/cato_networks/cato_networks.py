@@ -135,6 +135,26 @@ class CatoNetworksGuardrail(CustomGuardrail):
             user_email=self._resolve_cato_user_email(user_api_key_dict),
         )
 
+    @staticmethod
+    def _inspection_messages(data: dict) -> list:
+        """Flatten multimodal list ``content`` into plain text so Cato inspects
+        every text fragment, while keeping the list 1:1 with the request so
+        redacted results map back by index. Responses-API ``input`` requests
+        (no ``messages``) are lifted into synthetic messages instead."""
+        messages = data.get("messages")
+        if not messages:
+            return build_inspection_messages(data)
+        flattened = []
+        for message in messages:
+            if isinstance(message, dict) and isinstance(message.get("content"), list):
+                parts = build_inspection_messages({"messages": [message]})
+                flattened.append(
+                    {**message, "content": parts[0]["content"] if parts else ""}
+                )
+            else:
+                flattened.append(message)
+        return flattened
+
     async def call_cato_guardrail(
         self,
         data: dict,
@@ -152,7 +172,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": data.get("messages") or build_inspection_messages(data)},
+            json={"messages": self._inspection_messages(data)},
         )
         response.raise_for_status()
         res = response.json()
@@ -219,10 +239,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
-                "messages": (
-                    request_data.get("messages")
-                    or build_inspection_messages(request_data)
-                )
+                "messages": self._inspection_messages(request_data)
                 + [{"role": "assistant", "content": output}]
             },
         )
