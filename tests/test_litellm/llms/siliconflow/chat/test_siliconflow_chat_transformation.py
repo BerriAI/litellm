@@ -51,7 +51,13 @@ class TestSiliconFlowConfig:
             assert SiliconFlowConfig.API_BASE_URL == "https://api.siliconflow.com/v1"
 
     def test_get_openai_compatible_provider_info(self):
-        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "sk-secret"}, clear=False):
+        def fake_secret(name, *args, **kwargs):
+            return "sk-secret" if name == "SILICONFLOW_API_KEY" else None
+
+        with patch(
+            "litellm.llms.siliconflow.chat.transformation.get_secret_str",
+            side_effect=fake_secret,
+        ):
             api_base, api_key = self.config._get_openai_compatible_provider_info(
                 api_base=None, api_key=None
             )
