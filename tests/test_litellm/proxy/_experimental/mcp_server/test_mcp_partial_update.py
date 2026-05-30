@@ -26,9 +26,9 @@ def _mock_prisma():
     return mock_prisma
 
 
-async def _run_update(data: UpdateMCPServerRequest) -> dict:
+async def _run_update(data: UpdateMCPServerRequest, fields_set=None) -> dict:
     mock_prisma = _mock_prisma()
-    await update_mcp_server(mock_prisma, data, "test-user")
+    await update_mcp_server(mock_prisma, data, "test-user", fields_set=fields_set)
     return mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
 
 
@@ -124,12 +124,30 @@ async def test_partial_update_does_not_clear_alias_when_unset():
         server_id="my-test-server",
         allowed_tools=["foo"],
     )
+    fields_set = set(data.fields_set())
     # Simulate validate_and_normalize_mcp_server_payload assigning alias=None.
     data.alias = None
 
-    data_dict = await _run_update(data)
+    data_dict = await _run_update(data, fields_set=fields_set)
 
     assert "alias" not in data_dict
+
+
+@pytest.mark.asyncio
+async def test_partial_update_can_explicitly_clear_alias():
+    """Caller can clear an existing alias by explicitly sending alias=None."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        alias=None,
+    )
+    fields_set = set(data.fields_set())
+    # Simulate validate_and_normalize_mcp_server_payload preserving alias=None.
+    data.alias = None
+
+    data_dict = await _run_update(data, fields_set=fields_set)
+
+    assert "alias" in data_dict
+    assert data_dict["alias"] is None
 
 
 @pytest.mark.asyncio

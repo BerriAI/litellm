@@ -31,6 +31,7 @@ from litellm.types.mcp import MCPCredentials
 def _prepare_mcp_server_data(
     data: Union[NewMCPServerRequest, UpdateMCPServerRequest],
     exclude_unset: bool = False,
+    fields_set: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Helper function to prepare MCP server data for database operations.
@@ -57,11 +58,14 @@ def _prepare_mcp_server_data(
     #   omitted fields are never written and keep their existing DB value.
     # - Create (exclude_none): drop None-valued fields and let DB defaults apply.
     if exclude_unset:
+        if fields_set is None:
+            fields_set = data.fields_set()
         data_dict = data.model_dump(exclude_unset=True)
         # ``validate_and_normalize_mcp_server_payload`` always assigns ``alias``
         # on the payload, which marks it as set even when the caller omitted it.
-        # Drop it when None so a partial update does not clear an existing alias.
-        if data_dict.get("alias") is None:
+        # Drop it only when the original request omitted alias; an explicit
+        # ``alias=None`` is a valid request to clear the stored alias.
+        if data_dict.get("alias") is None and "alias" not in fields_set:
             data_dict.pop("alias", None)
     else:
         data_dict = data.model_dump(exclude_none=True)
@@ -418,7 +422,10 @@ async def create_mcp_server(
 
 
 async def update_mcp_server(
-    prisma_client: PrismaClient, data: UpdateMCPServerRequest, touched_by: str
+    prisma_client: PrismaClient,
+    data: UpdateMCPServerRequest,
+    touched_by: str,
+    fields_set: Optional[Set[str]] = None,
 ) -> LiteLLM_MCPServerTable:
     """
     Update a new mcp server record in the db
@@ -431,7 +438,9 @@ async def update_mcp_server(
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
-    data_dict = _prepare_mcp_server_data(data, exclude_unset=True)
+    data_dict = _prepare_mcp_server_data(
+        data, exclude_unset=True, fields_set=fields_set
+    )
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
