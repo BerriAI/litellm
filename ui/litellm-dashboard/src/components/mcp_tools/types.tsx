@@ -247,6 +247,10 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  // PROTOTYPE: which sidebar sub-view should be shown. Driven by the new
+  // MCP Servers → Templates / Variables / Instances dropdown in leftnav.
+  // Defaults to "instances" when omitted (preserves legacy single-page entry).
+  initialView?: "instances" | "templates" | "variables";
 }
 
 export interface MCPToolsetTool {

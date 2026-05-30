@@ -1,8 +1,8 @@
 import { isAdminRole } from "@/utils/roles";
-import { QuestionCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { QuestionCircleOutlined, SearchOutlined, DownOutlined, FileTextOutlined, AppstoreOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";
-import { Descriptions, Empty, Input, Modal, Select, Spin, Tooltip, Typography } from "antd";
+import { Descriptions, Dropdown, Empty, Input, Modal, Select, Spin, Tag, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -22,6 +22,9 @@ import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
 import FillUserFieldsModal from "./mock/FillUserFieldsModal";
 import MockClaudeCodeModal from "./mock/MockClaudeCodeModal";
+import TemplatesTab from "./mock/TemplatesTab";
+import VariablesTab from "./mock/VariablesTab";
+import InstanceFromTemplateModal from "./mock/InstanceFromTemplateModal";
 
 type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
@@ -76,7 +79,12 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const { Option } = Select;
 
-const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
+const MCPServers: React.FC<MCPServerProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  initialView = "instances",
+}) => {
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
@@ -118,6 +126,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [mockDemoServer, setMockDemoServer] = useState<MCPServer | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
+  // PROTOTYPE: which sub-view to render. Driven by the sidebar dropdown
+  // (Templates / Variables / Instances) via the `initialView` prop. Kept in
+  // state so the URL switch re-renders cleanly when the sidebar item changes.
+  const [topTab, setTopTab] = useState<"instances" | "templates" | "variables">(
+    initialView,
+  );
+  // Keep the sub-view in sync if the parent passes a new initialView (e.g.
+  // when the user clicks a different sidebar child without remounting).
+  useEffect(() => {
+    setTopTab(initialView);
+  }, [initialView]);
+  const [fromTemplateModalOpen, setFromTemplateModalOpen] = useState(false);
   // Bumped after the per-user fill modal saves so each MCPServerCard
   // re-fetches its missing-fields status. Demo wiring — a real impl
   // would use a single bulk endpoint with React Query invalidation.
@@ -388,38 +408,68 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setDiscoveryVisible(true);
         }}
       />
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <Title>MCP Servers</Title>
-            {filteredServers.length > 0 && (
-              <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
-                {filteredServers.length}
-              </span>
+      {/* PROTOTYPE: per-sub-view header. The Templates / Variables panels
+          render their own titles, so we only show the "MCP Servers / Instances"
+          header on the Instances sub-page. */}
+      {topTab === "instances" && (
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <Title>Instances</Title>
+              {filteredServers.length > 0 && (
+                <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                  {filteredServers.length}
+                </span>
+              )}
+              <Tag color="purple" style={{ marginLeft: 4 }}>
+                Prototype
+              </Tag>
+            </div>
+            <Text className="text-tremor-content mt-1">
+              Running MCP server instances. Spin up new ones from a template or from scratch.
+            </Text>
+          </div>
+          <div className="flex items-center gap-2">
+            {isAdminRole(userRole) && (
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: "from_template",
+                      label: "From Template",
+                      icon: <FileTextOutlined />,
+                      onClick: () => setFromTemplateModalOpen(true),
+                    },
+                    {
+                      key: "from_blank",
+                      label: "From Blank",
+                      icon: <AppstoreOutlined />,
+                      onClick: () => setDiscoveryVisible(true),
+                    },
+                  ],
+                }}
+                trigger={["click"]}
+              >
+                <Button className="flex-shrink-0">
+                  + New MCP Server <DownOutlined style={{ fontSize: 10, marginLeft: 4 }} />
+                </Button>
+              </Dropdown>
+            )}
+            {!isAdminRole(userRole) && (
+              <Button
+                className="flex-shrink-0"
+                onClick={() => {
+                  setPrefillData(null);
+                  setModalVisible(true);
+                }}
+                variant="secondary"
+              >
+                + Submit MCP Server
+              </Button>
             )}
           </div>
-          <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
-        <div className="flex items-center gap-2">
-          {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-              + Add New MCP Server
-            </Button>
-          )}
-          {!isAdminRole(userRole) && (
-            <Button
-              className="flex-shrink-0"
-              onClick={() => {
-                setPrefillData(null);
-                setModalVisible(true);
-              }}
-              variant="secondary"
-            >
-              + Submit MCP Server
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
       <MCPDiscovery
         isVisible={isDiscoveryVisible}
         onClose={() => setDiscoveryVisible(false)}
@@ -435,6 +485,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         }}
         accessToken={accessToken}
       />
+      {topTab === "templates" && (
+        <div className="mt-4">
+          <TemplatesTab
+            isAdmin={isAdminRole(userRole)}
+            userRole={userRole}
+            accessToken={accessToken}
+            availableAccessGroups={uniqueMcpAccessGroups}
+          />
+        </div>
+      )}
+
+      {topTab === "variables" && (
+        <div className="mt-4">
+          <VariablesTab userId={userID || ""} isAdmin={isAdminRole(userRole)} />
+        </div>
+      )}
+
+      {topTab === "instances" && (
       <TabGroup className="w-full h-full">
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
@@ -605,6 +673,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           )}
         </TabPanels>
       </TabGroup>
+      )}
 
       {byokModalServer && (
         <ByokCredentialModal
@@ -616,6 +685,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             setByokModalServer(null);
           }}
           accessToken={accessToken || ""}
+        />
+      )}
+
+      {/* PROTOTYPE: New Instance from Template */}
+      {accessToken && (
+        <InstanceFromTemplateModal
+          open={fromTemplateModalOpen}
+          onClose={() => setFromTemplateModalOpen(false)}
+          accessToken={accessToken}
+          onCreated={(server) => {
+            setFromTemplateModalOpen(false);
+            handleCreateSuccess(server);
+          }}
         />
       )}
 

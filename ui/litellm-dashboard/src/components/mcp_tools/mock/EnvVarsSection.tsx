@@ -12,7 +12,14 @@ import {
 
 const { Text } = Typography;
 
-const EnvVarsSection: React.FC = () => {
+interface EnvVarsSectionProps {
+  // When true, the value column is hidden — used by the Template modal where
+  // variables only declare name + scope. Instance creation (default) keeps
+  // the value column visible.
+  templateMode?: boolean;
+}
+
+const EnvVarsSection: React.FC<EnvVarsSectionProps> = ({ templateMode = false }) => {
   return (
     <div className="rounded-lg border border-dashed border-purple-300 bg-purple-50 p-4">
       <div className="flex items-center gap-2 mb-1">
@@ -38,11 +45,24 @@ const EnvVarsSection: React.FC = () => {
         </Tooltip>
       </div>
       <Text className="text-xs text-gray-600 block mb-3">
-        Reference these in Static Headers or Authentication as{" "}
-        <code>{"${VAR_NAME}"}</code>. For example:{" "}
-        <code className="bg-white px-1 rounded border border-gray-200">
-          {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
-        </code>
+        {templateMode ? (
+          <>
+            A template declares <i>which</i> variables exist, not what
+            they&apos;re set to. <b>Instance</b> values are entered when
+            someone creates an instance from this template; <b>per-user</b>{" "}
+            values come from each user&apos;s Variables tab at runtime.
+            Reference them with <code>{"${VAR_NAME}"}</code> in Static
+            Headers, URL, or Authentication.
+          </>
+        ) : (
+          <>
+            Reference these in Static Headers or Authentication as{" "}
+            <code>{"${VAR_NAME}"}</code>. For example:{" "}
+            <code className="bg-white px-1 rounded border border-gray-200">
+              {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
+            </code>
+          </>
+        )}
       </Text>
 
       <Form.List name="mock_env_vars">
@@ -51,7 +71,7 @@ const EnvVarsSection: React.FC = () => {
             {fields.length > 0 && (
               <div className="flex gap-3 px-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
                 <div style={{ flex: 1 }}>Variable Name</div>
-                <div style={{ flex: 1 }}>Value</div>
+                {!templateMode && <div style={{ flex: 1 }}>Value</div>}
                 <div style={{ width: 160 }}>Scope</div>
                 <div style={{ width: 24 }} />
               </div>
@@ -76,15 +96,17 @@ const EnvVarsSection: React.FC = () => {
                     className="rounded-md font-mono"
                   />
                 </Form.Item>
-                <Form.Item
-                  {...restField}
-                  name={[name, "value"]}
-                  className="mb-0"
-                  style={{ flex: 1 }}
-                  shouldUpdate
-                >
-                  <ValueField fieldName={name} />
-                </Form.Item>
+                {!templateMode && (
+                  <Form.Item
+                    {...restField}
+                    name={[name, "value"]}
+                    className="mb-0"
+                    style={{ flex: 1 }}
+                    shouldUpdate
+                  >
+                    <ValueField fieldName={name} />
+                  </Form.Item>
+                )}
                 <Form.Item
                   {...restField}
                   name={[name, "scope"]}
