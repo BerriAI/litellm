@@ -235,6 +235,51 @@ def test_redis_semantic_cache_set_cache_stores_cache_key_filter(monkeypatch):
         )
 
 
+def test_redis_semantic_cache_set_cache_stores_all_scope_filters(monkeypatch):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+        redis_semantic_cache.llmcache.store = MagicMock()
+
+        redis_semantic_cache.set_cache(
+            key="test_key",
+            value={"content": "Paris"},
+            messages=[{"content": "What is the capital of France?"}],
+            metadata={
+                "user_api_key_hash": "hashed-key",
+                "user_api_key_team_id": "team-123",
+                "user_id": "user-456",
+            },
+        )
+
+        redis_semantic_cache.llmcache.store.assert_called_once_with(
+            "What is the capital of France?",
+            "{'content': 'Paris'}",
+            filters={
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
+                RedisSemanticCache.API_KEY_HASH_FIELD_NAME: "hashed-key",
+                RedisSemanticCache.TEAM_ID_FIELD_NAME: "team-123",
+                RedisSemanticCache.USER_ID_FIELD_NAME: "user-456",
+            },
+        )
+
+
 def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
     fallback_cache_mock = MagicMock()
     semantic_cache_mock = MagicMock(
@@ -392,6 +437,40 @@ def test_redis_semantic_cache_rejects_pre_scope_hit_for_scoped_request():
     assert not redis_semantic_cache._cache_hit_matches_scope(
         cache_hit=cache_hit,
         metadata={"user_api_key_hash": "hashed-key"},
+    )
+
+
+def test_redis_semantic_cache_rejects_scoped_hit_for_unscoped_request():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    cache_hit = {
+        "prompt": "What is the capital of France?",
+        "response": '{"content": "Paris"}',
+        "vector_distance": 0.1,
+        RedisSemanticCache.TEAM_ID_FIELD_NAME: "team-123",
+    }
+
+    assert not redis_semantic_cache._cache_hit_matches_scope(
+        cache_hit=cache_hit,
+        metadata={},
+    )
+
+
+def test_redis_semantic_cache_matches_secondary_scope_on_multi_scope_hit():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    cache_hit = {
+        RedisSemanticCache.API_KEY_HASH_FIELD_NAME: "hashed-key",
+        RedisSemanticCache.TEAM_ID_FIELD_NAME: "team-123",
+    }
+
+    assert redis_semantic_cache._cache_hit_matches_scope(
+        cache_hit=cache_hit,
+        metadata={"user_api_key_team_id": "team-123"},
     )
 
 

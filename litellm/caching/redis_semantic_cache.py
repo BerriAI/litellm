@@ -215,19 +215,25 @@ class RedisSemanticCache(BaseCache):
 
         return metadata
 
-    def _get_scope_filter(self, **kwargs) -> Optional[Tuple[str, str]]:
+    def _get_scope_filters(self, **kwargs) -> List[Tuple[str, str]]:
         metadata = self._get_metadata_from_kwargs(kwargs)
+        filters: List[Tuple[str, str]] = []
+        seen_fields: set[str] = set()
         for field_name, metadata_key in self._SCOPE_FIELD_TO_METADATA_KEY:
             value = metadata.get(metadata_key)
-            if value:
-                return field_name, str(value)
-        return None
+            if value and field_name not in seen_fields:
+                filters.append((field_name, str(value)))
+                seen_fields.add(field_name)
+        return filters
+
+    def _get_scope_filter(self, **kwargs) -> Optional[Tuple[str, str]]:
+        filters = self._get_scope_filters(**kwargs)
+        return filters[0] if filters else None
 
     def _get_cache_filters(self, key: str, **kwargs) -> Dict[str, str]:
         filters = {self.CACHE_KEY_FIELD_NAME: str(key)}
-        scope_filter = self._get_scope_filter(**kwargs)
-        if scope_filter is not None:
-            filters[scope_filter[0]] = scope_filter[1]
+        for field_name, value in self._get_scope_filters(**kwargs):
+            filters[field_name] = value
         return filters
 
     def _get_scope_filter_expression(self, **kwargs) -> Any:
@@ -240,15 +246,34 @@ class RedisSemanticCache(BaseCache):
         return Tag(scope_filter[0]) == scope_filter[1]
 
     def _cache_hit_matches_scope(self, cache_hit: Dict[str, Any], **kwargs) -> bool:
-        scope_filter = self._get_scope_filter(**kwargs)
-        if scope_filter is None:
-            return True
+        scope_filters = self._get_scope_filters(**kwargs)
+        if not scope_filters:
+            return not any(
+                self._normalize_scope_value(cache_hit.get(field_name)) is not None
+                for field_name in self._scope_field_names()
+            )
 
-        field_name, expected_value = scope_filter
-        cached_value = cache_hit.get(field_name)
-        if isinstance(cached_value, bytes):
-            cached_value = cached_value.decode("utf-8")
-        return cached_value is not None and str(cached_value) == expected_value
+        for field_name, expected_value in scope_filters:
+            cached_value = self._normalize_scope_value(cache_hit.get(field_name))
+            if cached_value is not None and cached_value == expected_value:
+                return True
+        return False
+
+    @classmethod
+    def _scope_field_names(cls) -> Tuple[str, ...]:
+        return (
+            cls.API_KEY_HASH_FIELD_NAME,
+            cls.TEAM_ID_FIELD_NAME,
+            cls.USER_ID_FIELD_NAME,
+        )
+
+    @staticmethod
+    def _normalize_scope_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return str(value)
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
