@@ -3335,6 +3335,7 @@ class LlmProviders(str, Enum):
     GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
+    SILICONFLOW = "siliconflow"
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     HELICONE = "helicone"
