@@ -1411,6 +1411,177 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
 
 
 @pytest.mark.asyncio
+async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
+    """
+    A caller at the per-owner session cap should have its own oldest *idle*
+    session evicted to make room for a new one, but be rejected outright when
+    every one of its sessions is in flight (nothing safe to evict).
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    terminated = []
+
+    class FakeTransport:
+        def __init__(self, session_id):
+            self.session_id = session_id
+
+        async def terminate(self):
+            terminated.append(self.session_id)
+
+    instances = {f"s{i}": FakeTransport(f"s{i}") for i in range(3)}
+    owners = {f"s{i}": "owner-A" for i in range(3)}
+    last_seen = {"s0": 1.0, "s1": 2.0, "s2": 3.0}
+    contexts = {f"s{i}": MagicMock() for i in range(3)}
+
+    with (
+        patch.object(session_manager_stateful, "_server_instances", instances),
+        patch.object(mcp_server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", 3),
+        patch.dict(mcp_server._stateful_session_owners, owners, clear=True),
+        patch.dict(
+            mcp_server._stateful_session_auth_context_last_seen, last_seen, clear=True
+        ),
+        patch.dict(mcp_server._stateful_session_auth_contexts, contexts, clear=True),
+        patch.dict(mcp_server._stateful_session_active_request_counts, {}, clear=True),
+    ):
+        # All idle -> oldest (s0) is evicted, request may proceed.
+        allowed = await mcp_server._enforce_stateful_session_cap_for_owner("owner-A")
+        assert allowed is True
+        assert terminated == ["s0"]
+        assert "s0" not in instances
+        assert "s0" not in mcp_server._stateful_session_owners
+
+        # A different owner at the cap is unaffected by owner-A's sessions.
+        terminated.clear()
+        allowed_other = await mcp_server._enforce_stateful_session_cap_for_owner(
+            "owner-B"
+        )
+        assert allowed_other is True
+        assert terminated == []
+
+    # Now every session is in flight -> nothing evictable -> reject.
+    terminated.clear()
+    instances = {f"s{i}": FakeTransport(f"s{i}") for i in range(3)}
+    owners = {f"s{i}": "owner-A" for i in range(3)}
+    active = {f"s{i}": 1 for i in range(3)}
+
+    with (
+        patch.object(session_manager_stateful, "_server_instances", instances),
+        patch.object(mcp_server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", 3),
+        patch.dict(mcp_server._stateful_session_owners, owners, clear=True),
+        patch.dict(
+            mcp_server._stateful_session_auth_context_last_seen,
+            {f"s{i}": float(i) for i in range(3)},
+            clear=True,
+        ),
+        patch.dict(
+            mcp_server._stateful_session_active_request_counts, active, clear=True
+        ),
+    ):
+        rejected = await mcp_server._enforce_stateful_session_cap_for_owner("owner-A")
+        assert rejected is False
+        assert terminated == []
+        assert len(instances) == 3
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
+    """
+    A new ``initialize`` (no session id) must be rejected with 429 when the
+    caller already holds the maximum number of in-flight stateful sessions,
+    and must not reach the stateful session manager.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    cap = 2
+
+    class FakeTransport:
+        async def terminate(self):
+            pass
+
+    instances = {f"s{i}": FakeTransport() for i in range(cap)}
+    owners = {f"s{i}": "owner-X" for i in range(cap)}
+    active = {f"s{i}": 1 for i in range(cap)}  # all in flight -> cannot evict
+    contexts = {f"s{i}": MagicMock() for i in range(cap)}
+
+    init_body = (
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize",'
+        b'"params":{"protocolVersion":"2024-11-05"}}'
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/progress_test",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={"type": "http.request", "body": init_body, "more_body": False}
+    )
+    send = AsyncMock()
+
+    stateful_called = []
+
+    async def stateful_handle(s, r, se):
+        stateful_called.append(1)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(mcp_server, "_owner_fingerprint_for", return_value="owner-X"),
+        patch.object(mcp_server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", cap),
+        patch.object(
+            session_manager_stateful, "handle_request", side_effect=stateful_handle
+        ),
+        patch.object(session_manager_stateful, "_server_instances", instances),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.dict(mcp_server._stateful_session_owners, owners, clear=True),
+        patch.dict(
+            mcp_server._stateful_session_auth_context_last_seen,
+            {f"s{i}": float(i) for i in range(cap)},
+            clear=True,
+        ),
+        patch.dict(
+            mcp_server._stateful_session_active_request_counts, active, clear=True
+        ),
+        patch.dict(mcp_server._stateful_session_auth_contexts, contexts, clear=True),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert not stateful_called, "initialize at session cap must not reach the manager"
+    start_messages = [
+        call.args[0]
+        for call in send.call_args_list
+        if call.args and call.args[0].get("type") == "http.response.start"
+    ]
+    assert start_messages, "a response should have been sent"
+    assert start_messages[0]["status"] == 429
+
+
+@pytest.mark.asyncio
 async def test_stateful_mcp_requests_refresh_session_auth_context():
     """
     Stateful MCP sessions run callbacks in the initialize task's context; the

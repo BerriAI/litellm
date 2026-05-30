@@ -77,6 +77,13 @@ _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
+# Upper bound on concurrent stateful sessions a single caller may hold. Each
+# `initialize` creates a session that survives until the idle timeout, so
+# without a cap an authenticated client could spam `initialize` and exhaust
+# memory. The caller's own oldest idle sessions are evicted to make room; if
+# the cap is still hit (every session in flight), the new `initialize` is
+# rejected with 429.
+_MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # Maximum bytes to peek when sniffing the JSON-RPC method on a POST.
 # An `initialize` envelope is a few hundred bytes; capping the peek
 # prevents an authenticated client from forcing the proxy to buffer an
@@ -340,6 +347,45 @@ if MCP_AVAILABLE:
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
                 _remove_stateful_session_tracking(session_id)
+
+    async def _enforce_stateful_session_cap_for_owner(owner: str) -> bool:
+        """
+        Bound the number of concurrent stateful sessions a single caller holds
+        before routing a new ``initialize`` to the stateful manager.
+
+        Evicts the caller's *own* oldest idle sessions (no in-flight requests)
+        to make room, so a busy-but-legitimate client keeps its newest sessions
+        and other callers are never affected. Returns ``True`` if the new
+        session may proceed, or ``False`` when the caller is already at the cap
+        with every session in flight (the new ``initialize`` should be rejected).
+        """
+        server_instances = getattr(session_manager_stateful, "_server_instances", {})
+
+        def _owned_live_session_ids() -> List[str]:
+            return [
+                session_id
+                for session_id, session_owner in _stateful_session_owners.items()
+                if session_owner == owner and session_id in server_instances
+            ]
+
+        owned = _owned_live_session_ids()
+        if len(owned) < _MAX_STATEFUL_SESSIONS_PER_OWNER:
+            return True
+
+        for session_id in sorted(
+            owned,
+            key=lambda sid: _stateful_session_auth_context_last_seen.get(sid, 0.0),
+        ):
+            if len(_owned_live_session_ids()) < _MAX_STATEFUL_SESSIONS_PER_OWNER:
+                break
+            if _stateful_session_active_request_counts.get(session_id, 0) > 0:
+                continue
+            transport = server_instances.pop(session_id, None)
+            if transport is not None:
+                await transport.terminate()
+            _remove_stateful_session_tracking(session_id)
+
+        return len(_owned_live_session_ids()) < _MAX_STATEFUL_SESSIONS_PER_OWNER
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -3333,6 +3379,28 @@ if MCP_AVAILABLE:
                 + (f" (session={session_id[:8]}...)" if session_id else "")
                 + (" (initialize)" if is_initialize else "")
             )
+
+            # A new `initialize` (no session id) is about to create a stateful
+            # session. Cap how many a single caller can hold so an authenticated
+            # client cannot spam `initialize` and exhaust memory.
+            if is_initialize and not session_id:
+                request_owner = _owner_fingerprint_for(
+                    user_api_key_auth, oauth2_headers, _client_ip
+                )
+                if not await _enforce_stateful_session_cap_for_owner(request_owner):
+                    verbose_logger.warning(
+                        "Rejecting MCP initialize: caller already holds the maximum "
+                        "number of active stateful sessions."
+                    )
+                    too_many_response = JSONResponse(
+                        status_code=429,
+                        content={
+                            "error": "Too Many Requests",
+                            "details": "Too many active MCP sessions for this caller.",
+                        },
+                    )
+                    await too_many_response(scope, receive, send)
+                    return
 
             # Replay body messages if we consumed them for peeking
             original_receive = receive
