@@ -144,11 +144,16 @@ class PassThroughStreamingHandler:
                 end_time=end_time,
                 model=model,
             )
+            # Always reached from an async context (anthropic_messages,
+            # google_genai, and proxy pass-through stream tasks). prefer_async_handlers
+            # keeps async-only loggers running even when call_type isn't pass_through
+            # and litellm_params lacks an async flag (e.g. aanthropic_messages).
             await litellm_logging_obj.dispatch_success_handlers(
                 result=standard_logging_response_object,
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=False,
+                prefer_async_handlers=True,
                 **kwargs,
             )
         except Exception as e:
