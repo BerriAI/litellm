@@ -59,7 +59,18 @@ async def test_log_db_metrics_success():
         assert isinstance(call_args["duration"], float)
         assert isinstance(call_args["start_time"], datetime)
         assert isinstance(call_args["end_time"], datetime)
-        assert "function_name" in call_args["event_metadata"]
+        assert call_args["event_metadata"] is None
+
+        mock_proxy_logging.service_logging_obj.async_service_success_hook.reset_mock()
+        await sample_db_function(
+            parent_otel_span="test_span", table_name="LiteLLM_SpendLogs"
+        )
+        call_args = (
+            mock_proxy_logging.service_logging_obj.async_service_success_hook.call_args[
+                1
+            ]
+        )
+        assert call_args["event_metadata"] == {"table_name": "LiteLLM_SpendLogs"}
 
 
 @pytest.mark.asyncio
