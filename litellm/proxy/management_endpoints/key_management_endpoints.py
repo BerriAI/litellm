@@ -833,10 +833,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
-    await validate_key_mcp_servers_against_team(
+    normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
+        prisma_client=prisma_client,
     )
+    if normalized_object_permission is not None:
+        data_json["object_permission"] = normalized_object_permission
     await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
@@ -2112,7 +2115,7 @@ async def _validate_mcp_servers_for_key_update(
     existing_key_row: Any,
     prisma_client: Any,
     user_api_key_cache: Any,
-) -> None:
+) -> Optional[dict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
     # If team_id isn't being changed, resolve the existing key's team
@@ -2126,18 +2129,20 @@ async def _validate_mcp_servers_for_key_update(
     object_permission_dict: Optional[dict] = None
     if data.object_permission is not None:
         object_permission_dict = (
-            data.object_permission.model_dump()
+            data.object_permission.model_dump(exclude_unset=True)
             if hasattr(data.object_permission, "model_dump")
             else dict(data.object_permission)  # type: ignore[arg-type]
         )
-    await validate_key_mcp_servers_against_team(
+    normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
+        prisma_client=prisma_client,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
     )
+    return normalized_object_permission
 
 
 async def _validate_update_key_data(
@@ -2350,13 +2355,17 @@ async def _validate_update_key_data(
 
     # Validate MCP servers in object_permission against the effective team
     if data.object_permission is not None:
-        await _validate_mcp_servers_for_key_update(
+        normalized_object_permission = await _validate_mcp_servers_for_key_update(
             data=data,
             team_obj=team_obj,
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
+        if normalized_object_permission is not None:
+            data.object_permission = LiteLLM_ObjectPermissionBase(
+                **normalized_object_permission
+            )
 
 
 @router.post(
