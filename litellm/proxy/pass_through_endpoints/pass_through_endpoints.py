@@ -38,6 +38,9 @@ from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.base_llm.managed_resources.utils import (
+    resolve_passthrough_managed_id_provider,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
@@ -873,6 +876,130 @@ async def pass_through_request(  # noqa: PLR0915
             request.query_params
         )
 
+        ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
+        # Resolve managed IDs in path, query params, and body back to raw
+        # provider IDs before forwarding upstream.  Gated by feature flag and
+        # enterprise managed-files hook.  Runs after pre_call_hook so
+        # guardrails have already seen the managed IDs.
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+
+        _managed_id_provider = resolve_passthrough_managed_id_provider(
+            custom_llm_provider
+        )
+
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+        ):
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: managed-id input rewrite enabled for route=%s method=%s",
+                request.url.path,
+                request.method,
+            )
+            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook(
+                "managed_files"
+            )
+            if _passthrough_managed_hook is not None:
+                from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                    rewrite_body_ids,
+                    rewrite_path_ids,
+                    rewrite_query_ids,
+                )
+                from litellm.proxy.proxy_server import (
+                    prisma_client as _passthrough_prisma,
+                )
+
+                _original_path = url.path
+                _original_query_params = requested_query_params
+                _original_body = _parsed_body
+                _new_path = await rewrite_path_ids(
+                    url.path,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                if _new_path != url.path:
+                    url = url.copy_with(path=_new_path)
+                requested_query_params = await rewrite_query_ids(
+                    requested_query_params,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                _parsed_body = await rewrite_body_ids(
+                    _parsed_body,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id input rewrite results path_changed=%s query_changed=%s body_changed=%s route=%s method=%s",
+                    _new_path != _original_path,
+                    requested_query_params is not _original_query_params,
+                    _parsed_body is not _original_body,
+                    request.url.path,
+                    request.method,
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id input rewrite skipped (managed_files hook not available) route=%s method=%s",
+                    request.url.path,
+                    request.method,
+                )
+
+        ## PASSTHROUGH MANAGED LIST (DB-only response) ##
+        # For GET /v1/files and GET /v1/batches passthrough routes, serve the
+        # listing entirely from our DB so each caller only sees their own IDs.
+        # Admins / master-key callers see all rows.  Gated on the same
+        # conditions as INPUT/OUTPUT rewrite: feature flag, provider, AND
+        # the managed_files hook must be present.  Without the hook no managed
+        # IDs are ever minted or stored, so the DB is empty and intercepting
+        # the list would silently hide the caller's real upstream files/batches.
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+            and request.method == "GET"
+            and proxy_logging_obj.get_proxy_hook("managed_files") is not None
+        ):
+            from litellm.proxy.auth.auth_utils import get_request_route
+            from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                is_passthrough_list_route,
+                list_passthrough_ids_from_db,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client as _list_prisma,
+            )
+
+            if (
+                is_passthrough_list_route(
+                    _managed_id_provider, request.method, get_request_route(request)
+                )
+                and _list_prisma is not None
+            ):
+                _list_result = await list_passthrough_ids_from_db(
+                    provider=_managed_id_provider,
+                    route=get_request_route(request),
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=_list_prisma,
+                    query_params=dict(request.query_params),
+                )
+                if _list_result is not None:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: list served from DB route=%s count=%d",
+                        request.url.path,
+                        len(_list_result.get("data", [])),
+                    )
+                    return Response(
+                        content=json.dumps(_list_result),
+                        status_code=200,
+                        media_type="application/json",
+                    )
+
         requested_query_params_str = None
         if requested_query_params:
             requested_query_params_str = "&".join(
@@ -897,7 +1024,7 @@ async def pass_through_request(  # noqa: PLR0915
         )
         stream = (
             HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-                parsed_body=_parsed_body,
+                parsed_body=_parsed_body or {},
                 stream=stream,
             )
         )
@@ -1051,6 +1178,66 @@ async def pass_through_request(  # noqa: PLR0915
                 "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
             )
 
+        ## PASSTHROUGH MANAGED ID MINTING (OUTPUT) ##
+        # Mint managed IDs for raw provider IDs in the response body and swap
+        # them before the response reaches the client.  Runs after guardrails
+        # so guardrails see the raw IDs (cleaner) and the client receives the
+        # managed IDs.  Gated by feature flag and enterprise managed-files hook.
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+            and isinstance(response_body, dict)
+            and response.status_code < 300
+        ):
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: managed-id output rewrite enabled for route=%s method=%s status=%s",
+                request.url.path,
+                request.method,
+                response.status_code,
+            )
+            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook(
+                "managed_files"
+            )
+            if _passthrough_managed_hook is not None:
+                from litellm.proxy.auth.auth_utils import get_request_route
+                from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                    rewrite_response_ids,
+                )
+                from litellm.proxy.proxy_server import (
+                    prisma_client as _passthrough_prisma,
+                )
+
+                _new_body = await rewrite_response_ids(
+                    provider=_managed_id_provider,
+                    method=request.method,
+                    route=get_request_route(request),
+                    body=response_body,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=_passthrough_prisma,
+                    managed_files_hook=_passthrough_managed_hook,
+                )
+                if _new_body is not response_body:
+                    response_body = _new_body
+                    content = json.dumps(response_body).encode("utf-8")
+                    _content_modified = True
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: managed-id output rewrite applied route=%s method=%s",
+                        request.url.path,
+                        request.method,
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: managed-id output rewrite no-op route=%s method=%s",
+                        request.url.path,
+                        request.method,
+                    )
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id output rewrite skipped (managed_files hook not available) route=%s method=%s",
+                    request.url.path,
+                    request.method,
+                )
+
         ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
@@ -1064,7 +1251,7 @@ async def pass_through_request(  # noqa: PLR0915
                 end_time=end_time,
                 logging_obj=logging_obj,
                 cache_hit=False,
-                request_body=_parsed_body,
+                request_body=_parsed_body or {},
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
