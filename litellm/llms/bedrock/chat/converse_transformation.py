@@ -2003,8 +2003,8 @@ class AmazonConverseConfig(BaseConfig):
                         url_citation={
                             "start_index": content_offset + start,
                             "end_index": content_offset + end,
-                            "title": str(citation.get("title", "")),
-                            "url": str(citation.get("source", "")),
+                            "title": str(citation.get("title") or ""),
+                            "url": str(citation.get("source") or ""),
                         },
                     )
                 )
