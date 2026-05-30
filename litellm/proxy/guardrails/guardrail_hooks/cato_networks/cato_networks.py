@@ -138,14 +138,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
     @staticmethod
     def _inspection_messages(data: dict) -> list:
         """Flatten multimodal list ``content`` into plain text so Cato inspects
-        every text fragment, while keeping the list 1:1 with the request so
-        redacted results map back by index. Responses-API ``input`` requests
-        (no ``messages``) are lifted into synthetic messages instead."""
-        messages = data.get("messages")
-        if not messages:
-            return build_inspection_messages(data)
+        every text fragment. Chat ``messages`` stay 1:1 with the request so
+        redacted results map back by index, and Responses-API ``input`` text is
+        appended as synthetic messages so it is inspected even when ``messages``
+        is also present."""
         flattened = []
-        for message in messages:
+        for message in data.get("messages") or []:
             if isinstance(message, dict) and isinstance(message.get("content"), list):
                 parts = build_inspection_messages({"messages": [message]})
                 flattened.append(
@@ -153,6 +151,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 )
             else:
                 flattened.append(message)
+        flattened.extend(build_inspection_messages({"input": data.get("input")}))
         return flattened
 
     async def call_cato_guardrail(
@@ -219,6 +218,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
             )
             for idx, original in enumerate(original_messages)
         ]
+        input_redactions = redacted_messages[len(original_messages) :]
+        if input_redactions and data.get("input") is not None:
+            input_only = {"input": data["input"]}
+            apply_redacted_messages_back(input_only, input_redactions)
+            data["input"] = input_only["input"]
         return data
 
     async def call_cato_guardrail_on_output(
