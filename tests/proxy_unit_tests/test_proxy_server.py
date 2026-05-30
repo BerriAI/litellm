@@ -2856,8 +2856,10 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert otel_vars["OTEL_EXPORTER"] == "otlp"
         assert "OTEL_ENDPOINT" in otel_vars
         assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
+        # OTEL_HEADERS can carry bearer tokens, so it is masked for non-admins.
         assert "OTEL_HEADERS" in otel_vars
-        assert otel_vars["OTEL_HEADERS"] == "key=value"
+        assert otel_vars["OTEL_HEADERS"] != "key=value"
+        assert "*" in otel_vars["OTEL_HEADERS"]
 
 
 @pytest.mark.asyncio

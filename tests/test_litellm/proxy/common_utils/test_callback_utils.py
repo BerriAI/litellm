@@ -142,6 +142,27 @@ def test_process_callback_masks_url_embedded_credentials(mock_get_env_vars):
     assert "topsecretpw" not in result["variables"]["GENERIC_LOGGER_URL"]
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["OTEL_HEADERS", "OTEL_ENDPOINT"],
+)
+def test_process_callback_masks_headers_vars(mock_get_env_vars):
+    """*_HEADERS callback vars can carry bearer tokens, so they are masked even
+    though the name has no credential-looking segment; the endpoint stays clear."""
+    result = process_callback(
+        _callback="otel",
+        callback_type="success",
+        environment_variables={
+            "OTEL_HEADERS": "Authorization=Bearer sk-otel-secret-token",
+            "OTEL_ENDPOINT": "http://collector.internal:4317",
+        },
+        mask_sensitive=True,
+    )
+    assert "sk-otel-secret-token" not in result["variables"]["OTEL_HEADERS"]
+    assert "*" in result["variables"]["OTEL_HEADERS"]
+    assert result["variables"]["OTEL_ENDPOINT"] == "http://collector.internal:4317"
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []

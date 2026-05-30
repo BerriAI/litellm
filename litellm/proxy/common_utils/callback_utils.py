@@ -643,7 +643,14 @@ def process_callback(
         env_vars_dict[_var] = environment_variables.get(_var, None)
 
     if mask_sensitive:
-        sensitive_keys = {k for k in env_vars_dict if _is_sensitive_callback_var(k)}
+        # *_HEADERS callback vars (e.g. OTEL_HEADERS, GENERIC_LOGGER_HEADERS) can
+        # carry bearer tokens but have no credential-looking segment, so mask
+        # them alongside the segment-matched sensitive vars.
+        sensitive_keys = {
+            k
+            for k in env_vars_dict
+            if _is_sensitive_callback_var(k) or k.upper().endswith("_HEADERS")
+        }
         env_vars_dict = mask_sensitive_keys(env_vars_dict, sensitive_keys)
         env_vars_dict = {k: mask_url_credentials(v) for k, v in env_vars_dict.items()}
 

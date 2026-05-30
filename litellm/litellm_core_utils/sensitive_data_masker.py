@@ -203,9 +203,10 @@ def mask_url_credentials(value: Any) -> Any:
         return value
     if parts.password is None:
         return value
-    netloc = (
-        f"{parts.username or ''}:{_default_masker.mask_char * 4}@{parts.hostname or ''}"
-    )
+    host = parts.hostname or ""
+    if ":" in host:  # IPv6 literal needs its brackets back after urlsplit strips them
+        host = f"[{host}]"
+    netloc = f"{parts.username or ''}:{_default_masker.mask_char * 4}@{host}"
     if parts.port is not None:
         netloc += f":{parts.port}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))

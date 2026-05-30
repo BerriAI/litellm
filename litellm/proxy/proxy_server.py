@@ -14254,8 +14254,15 @@ async def update_config_general_settings(
 # general_settings fields that hold credentials. These must never be returned
 # verbatim through the read endpoint: it is reachable by PROXY_ADMIN_VIEW_ONLY,
 # and the master_key in particular would let a read-only caller mint a full
-# admin key.
-_SECRET_CONFIG_GENERAL_SETTINGS_FIELDS = {"master_key", "database_url"}
+# admin key. alert_to_webhook_url carries Slack webhook URLs and
+# pass_through_endpoints carries forwarded upstream auth headers, both of which
+# are otherwise masked on their dedicated endpoints.
+_SECRET_CONFIG_GENERAL_SETTINGS_FIELDS = {
+    "master_key",
+    "database_url",
+    "alert_to_webhook_url",
+    "pass_through_endpoints",
+}
 
 
 @router.get(

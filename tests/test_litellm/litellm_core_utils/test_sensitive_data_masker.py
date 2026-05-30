@@ -190,3 +190,10 @@ def test_mask_url_credentials_leaves_non_credentialed_values_untouched():
     assert mask_url_credentials("plain-secret-value") == "plain-secret-value"
     assert mask_url_credentials(None) is None
     assert mask_url_credentials(1234) == 1234
+
+
+def test_mask_url_credentials_preserves_ipv6_brackets():
+    """IPv6 hosts keep their brackets so the redacted URL stays well-formed."""
+    out = mask_url_credentials("redis://:supersecretpw@[::1]:6379")
+    assert out == "redis://:****@[::1]:6379"
+    assert "supersecretpw" not in out
