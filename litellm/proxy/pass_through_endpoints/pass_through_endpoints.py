@@ -538,7 +538,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         _metadata["user_api_key"] = user_api_key_dict.api_key
-        _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
         litellm_metadata = litellm_params_in_body.pop("litellm_metadata", None)
         metadata = litellm_params_in_body.pop("metadata", None)
@@ -551,6 +550,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             request=request,
             metadata=_metadata,
         )
+
+        # Set after merging client-supplied metadata so a request body that
+        # mirrors this internal key cannot clobber the real parent span.
+        _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
         kwargs = {
             "litellm_params": {

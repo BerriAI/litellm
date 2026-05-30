@@ -22,7 +22,7 @@ the litellm_request child is parented to the SERVER root.
 
 import asyncio
 from datetime import datetime
-from typing import Tuple
+from typing import Optional, Tuple
 
 import pytest
 from starlette.requests import Request
@@ -78,13 +78,15 @@ def _make_request() -> Request:
 
 
 def _build_logging_obj_wired_to_root(
-    root_span, *, stream: bool
+    root_span, *, stream: bool, extra_body: Optional[dict] = None
 ) -> Tuple[LiteLLMLoggingObj, dict, datetime]:
     """Mirror pass_through_endpoints.py: build the logging object and run the
     real _init_kwargs + update_environment_variables so the parent span lands
     on model_call_details exactly the way production wires it."""
     request = _make_request()
     body = {"model": MODEL, "messages": [{"role": "user", "content": "hi"}]}
+    if extra_body:
+        body.update(extra_body)
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=root_span)
     start_time = datetime.now()
     logging_obj = LiteLLMLoggingObj(
@@ -248,3 +250,38 @@ def test_streaming_passthrough_links_to_server_root(
     _assert_root_closed_and_no_orphan(exporter, root, where)
     if use_request_span:
         _assert_child_parented_to_root(exporter, root, where)
+
+
+def test_client_body_metadata_cannot_clobber_parent_span(
+    otel_success_callback,
+    server_span_factory,
+    monkeypatch,
+):
+    """A passthrough request body whose metadata mirrors the internal
+    litellm_parent_otel_span key must not override the real parent span. The
+    internal span is wired after the client-metadata merge, so the SERVER root
+    still links and closes. With the old ordering the JSON scalar would win and
+    the litellm_request span would orphan."""
+    monkeypatch.setenv("USE_OTEL_LITELLM_REQUEST_SPAN", "true")
+    _otel, exporter = otel_success_callback
+    root = server_span_factory("/anthropic/v1/messages")
+
+    logging_obj, kwargs, start_time = _build_logging_obj_wired_to_root(
+        root,
+        stream=False,
+        extra_body={"metadata": {"litellm_parent_otel_span": "not-a-real-span"}},
+    )
+    end_time = datetime.now()
+    asyncio.run(
+        logging_obj.async_success_handler(
+            result=_model_response(),
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
+    )
+
+    where = "client-metadata-clobber"
+    _assert_root_closed_and_no_orphan(exporter, root, where)
+    _assert_child_parented_to_root(exporter, root, where)
