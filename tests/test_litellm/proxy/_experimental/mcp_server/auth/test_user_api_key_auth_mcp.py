@@ -268,7 +268,7 @@ class TestMCPRequestHandler:
             # Test case 2: Authorization header present (fallback)
             (
                 [(b"authorization", b"Bearer test-auth-token")],
-                "Bearer test-auth-token",
+                "test-auth-token",
                 None,
                 {},
             ),
@@ -729,7 +729,9 @@ class TestMCPOAuth2AuthFlow:
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Should succeed with the LiteLLM key from Authorization header
-            assert auth_result.api_key == "Bearer sk-litellm-valid-key"
+            from litellm.proxy.utils import hash_token
+
+            assert auth_result.api_key == hash_token("sk-litellm-valid-key")
             mock_auth.assert_called_once()
 
     async def test_non_auth_http_exception_still_raises(self):
@@ -2324,7 +2326,11 @@ def test_mcp_path_based_server_segregation(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+        MagicMock(handle_request=dummy_handle_request),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
         MagicMock(handle_request=dummy_handle_request),
     )
     monkeypatch.setattr(

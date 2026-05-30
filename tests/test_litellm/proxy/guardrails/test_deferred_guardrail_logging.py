@@ -18,7 +18,7 @@ import asyncio
 import os
 import sys
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -36,6 +36,24 @@ from litellm.types.guardrails import GuardrailEventHooks
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
+    """Match production entrypoint: ``_run_deferred_stream_guardrails`` uses dispatch."""
+
+    async def dispatch_success_handlers(
+        result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+    ):
+        await async_success_fn(
+            result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
+
+    mock_logging_obj.dispatch_success_handlers = dispatch_success_handlers
+    mock_logging_obj.async_success_handler = async_success_fn
 
 
 class PostCallGuardrail(CustomGuardrail):
@@ -454,7 +472,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         tracking_guardrail = TrackingGuardrail()
         tracking_logger = TrackingLogger()
@@ -511,7 +529,7 @@ class TestDeferredStreamingClosure:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class ModifyingGuardrail(CustomGuardrail):
             def __init__(self):
@@ -573,7 +591,7 @@ class TestDeferredStreamingClosure:
             nonlocal logging_called
             logging_called = True
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = BlockingGuardrail()
 
@@ -621,7 +639,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = TransientErrorGuardrail()
 
@@ -656,7 +674,7 @@ class TestDeferredStreamingClosure:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class TestGuardrail(CustomGuardrail):
             def __init__(self):
@@ -739,7 +757,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = ApplyGuardrailType()
 
@@ -792,7 +810,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = IteratorHookGuardrail()
 
@@ -847,7 +865,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail = InspectingGuardrail()
 
@@ -914,7 +932,7 @@ class TestDeferredStreamingClosure:
         async def track_async_success(*args, **kwargs):
             pass
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         guardrail_a = TaggedGuardrail("guardrail-a")
         guardrail_b = TaggedGuardrail("guardrail-b")
@@ -962,7 +980,7 @@ class TestDeferredStreamingClosure:
             nonlocal logging_called
             logging_called = True
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         def exploding_merge(data, llm_router):
             raise RuntimeError("Simulated init failure")
@@ -985,6 +1003,67 @@ class TestDeferredStreamingClosure:
         assert (
             logging_called is True
         ), "Logging must fire even when guardrail initialization raises"
+
+    @pytest.mark.asyncio
+    async def test_deferred_logging_forces_async_for_sync_classified_call_type(self):
+        """
+        Regression: proxy deferred streaming logging must reach the async success
+        handler (which runs the async-only DB/spend logger) even when the call
+        type is classified as a sync SDK request by _is_sync_litellm_request.
+
+        Without prefer_async_handlers=True, an async proxy stream whose
+        litellm_params lacks a recognized async marker would enter the sync
+        branch of dispatch_success_handlers and silently skip spend tracking.
+
+        Uses the real dispatch_success_handlers via the production
+        _run_deferred_stream_guardrails entrypoint.
+        """
+        import time
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",  # not pass_through_endpoint
+            start_time=time.time(),
+            litellm_call_id="test-id",
+            function_id="fn",
+        )
+        # litellm_params with no recognized async marker -> classified sync.
+        logging_obj.model_call_details["litellm_params"] = {}
+        assert LiteLLMLoggingObj._is_sync_litellm_request({}) is True
+
+        with (
+            patch.object(
+                logging_obj, "async_success_handler", new_callable=AsyncMock
+            ) as mock_async,
+            patch.object(
+                logging_obj, "success_handler", new_callable=MagicMock
+            ) as mock_sync,
+            patch.object(
+                logging_obj,
+                "_should_run_sync_callbacks_for_async_calls",
+                return_value=False,
+            ),
+            patch("litellm.callbacks", [PostCallGuardrail()]),
+        ):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4o-mini", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        mock_async.assert_awaited_once()
+        mock_sync.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1054,7 +1133,7 @@ class TestFireDeferredStreamLogging:
             nonlocal logged_response
             logged_response = args[0] if args else None
 
-        mock_logging_obj.async_success_handler = track_async_success
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
 
         class InfoWritingGuardrail(CustomGuardrail):
             def __init__(self):
