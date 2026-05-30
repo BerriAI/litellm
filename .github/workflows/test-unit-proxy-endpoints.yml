@@ -33,6 +33,7 @@ jobs:
         tests/test_litellm/proxy/image_endpoints
         tests/test_litellm/proxy/vector_store_endpoints
         tests/test_litellm/proxy/agent_endpoints
+        tests/test_litellm/proxy/a2a
         tests/test_litellm/proxy/discovery_endpoints
         tests/test_litellm/proxy/health_endpoints
         tests/test_litellm/proxy/public_endpoints
