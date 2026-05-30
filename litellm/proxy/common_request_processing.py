@@ -1416,6 +1416,7 @@ class ProxyBaseLLMRequestProcessing:
                                 cache_hit=None,
                                 start_time=None,
                                 end_time=None,
+                                prefer_async_handlers=True,
                             )
                         )
                     except Exception as e:
@@ -1697,12 +1698,18 @@ class ProxyBaseLLMRequestProcessing:
             )
         finally:
             try:
+                # Proxy streaming always runs in async context and proxy spend
+                # logging is async-only; force async dispatch so DB/spend
+                # callbacks fire regardless of the call-type heuristic in
+                # _is_sync_litellm_request (which only recognizes a subset of
+                # async markers stored in litellm_params).
                 asyncio.create_task(
                     captured_logging_obj.dispatch_success_handlers(
                         _response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
+                        prefer_async_handlers=True,
                     )
                 )
             except Exception as e:
