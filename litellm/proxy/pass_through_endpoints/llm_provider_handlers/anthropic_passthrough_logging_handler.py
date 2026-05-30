@@ -19,6 +19,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
 
+
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
@@ -146,6 +147,7 @@ class AnthropicPassthroughLoggingHandler:
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
+                or logging_obj.model_call_details.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
                 user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
@@ -156,6 +158,11 @@ class AnthropicPassthroughLoggingHandler:
                     kwargs["litellm_params"].update(
                         {"proxy_server_request": {"body": {"user": user}}}
                     )
+
+                from .base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
+                BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+                    kwargs, passthrough_logging_payload
+                )
 
             # pretty print standard logging object
             verbose_proxy_logger.debug(
@@ -221,10 +228,11 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+        from .base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
-            kwargs={},
+            kwargs=BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(litellm_logging_obj),
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,

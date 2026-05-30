@@ -367,8 +367,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             kwargs["custom_llm_provider"] = custom_llm_provider
 
             # Extract user information for tracking
-            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
+            passthrough_logging_payload: Optional[
+                PassthroughStandardLoggingPayload
+            ] = (
                 kwargs.get("passthrough_logging_payload")
+                or logging_obj.model_call_details.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
@@ -378,6 +381,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     kwargs["litellm_params"].setdefault(
                         "proxy_server_request", {}
                     ).setdefault("body", {})["user"] = user
+
+                BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+                    kwargs, passthrough_logging_payload
+                )
 
             # Create standard logging object
             if litellm_model_response is not None:
@@ -569,6 +576,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     kwargs["litellm_params"].setdefault(
                         "proxy_server_request", {}
                     ).setdefault("body", {})["user"] = user
+
+                BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+                    kwargs, passthrough_logging_payload
+                )
 
             # Create standard logging object
             get_standard_logging_object_payload(
