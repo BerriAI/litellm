@@ -370,11 +370,15 @@ def test_litellm_get_model_info_uses_lemonade_api_base():
         "max_context_window": 262144,
     }
 
+    litellm.get_model_info.cache_clear()
     with patch.object(litellm.module_level_client, "get", return_value=response):
-        model_info = litellm.get_model_info(
-            model="lemonade/Qwen3.6-35B-A3B-GGUF",
-            api_base="http://lemonade.test/v1",
-        )
+        try:
+            model_info = litellm.get_model_info(
+                model="lemonade/Qwen3.6-35B-A3B-GGUF",
+                api_base="http://lemonade.test/v1",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
 
     assert model_info["max_input_tokens"] == 65536
     assert response.raise_for_status.called
