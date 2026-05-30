@@ -785,6 +785,64 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
         assert exc_info.value.status_code == 403
 
 
+def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
+    """Same-path pass-through routes must be checked against the request method."""
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/custom:GET": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["GET"],
+            "passthrough_params": {"dependencies": None},
+        },
+        "test-uuid-2:exact:/custom:POST": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["POST"],
+            "passthrough_params": {"dependencies": [object()]},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
+        )
+
+        get_request = MagicMock(spec=Request)
+        get_request.method = "GET"
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom",
+                valid_token=valid_token,
+                request=get_request,
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom",
+                valid_token=valid_token,
+                request=post_request,
+            )
+
+        assert exc_info.value.status_code == 403
+
+
 def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
     """Internal users must not bypass allowed_passthrough_routes via openai_routes."""
 

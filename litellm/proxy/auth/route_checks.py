@@ -121,7 +121,10 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        if RouteChecks.is_auth_enforced_pass_through_route(route=route):
+                        if RouteChecks.is_auth_enforced_pass_through_route(
+                            route=route,
+                            method=RouteChecks._get_request_method(request=request),
+                        ):
                             if RouteChecks.check_passthrough_route_access(
                                 route=route, user_api_key_dict=valid_token
                             ):
@@ -141,7 +144,8 @@ class RouteChecks:
                             route=route
                         ):
                             if RouteChecks.is_auth_enforced_pass_through_route(
-                                route=route
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
                             ):
                                 if RouteChecks.check_passthrough_route_access(
                                     route=route, user_api_key_dict=valid_token
@@ -242,7 +246,10 @@ class RouteChecks:
             route=route,
         )
 
-        if RouteChecks.is_auth_enforced_pass_through_route(route=route):
+        if RouteChecks.is_auth_enforced_pass_through_route(
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+        ):
             RouteChecks._require_auth_pass_through_access(
                 route=route, valid_token=valid_token
             )
@@ -643,7 +650,20 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def is_auth_enforced_pass_through_route(route: str) -> bool:
+    def _get_request_method(request: Optional[Request]) -> Optional[str]:
+        if request is None:
+            return None
+
+        method = getattr(request, "method", None)
+        if not isinstance(method, str):
+            return None
+
+        return method.upper()
+
+    @staticmethod
+    def is_auth_enforced_pass_through_route(
+        route: str, method: Optional[str] = None
+    ) -> bool:
         """
         True for config/DB pass-through endpoints registered with auth=true.
 
@@ -656,7 +676,7 @@ class RouteChecks:
         )
 
         route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-            route=route
+            route=route, method=method
         )
         if route_info is None:
             return False
