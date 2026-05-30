@@ -32,6 +32,24 @@
     }
   },
   "providers": {
+    "kluster_ai": {
+      "display_name": "Kluster AI (`kluster_ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/kluster_ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "a2a": {
       "display_name": "A2A (Agent-to-Agent) (`a2a`)",
       "url": "https://docs.litellm.ai/docs/providers/a2a",

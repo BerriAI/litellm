@@ -51,7 +51,13 @@ class TestKlusterAIConfig:
             assert KlusterAIConfig.API_BASE_URL == "https://api.kluster.ai/v1"
 
     def test_get_openai_compatible_provider_info(self):
-        with patch.dict(os.environ, {"KLUSTER_AI_API_KEY": "sk-secret"}, clear=False):
+        def fake_secret(name, *args, **kwargs):
+            return "sk-secret" if name == "KLUSTER_AI_API_KEY" else None
+
+        with patch(
+            "litellm.llms.kluster_ai.chat.transformation.get_secret_str",
+            side_effect=fake_secret,
+        ):
             api_base, api_key = self.config._get_openai_compatible_provider_info(
                 api_base=None, api_key=None
             )

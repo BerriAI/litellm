@@ -40,10 +40,13 @@ class KlusterAIConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         return [
             "max_tokens",
+            "max_completion_tokens",
             "n",
             "temperature",
             "top_p",
+            "seed",
             "stream",
+            "stream_options",
             "logprobs",
             "top_logprobs",
             "frequency_penalty",
@@ -53,4 +56,6 @@ class KlusterAIConfig(OpenAIGPTConfig):
             "logit_bias",
             "tools",
             "tool_choice",
+            "parallel_tool_calls",
+            "user",
         ]
