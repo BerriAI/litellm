@@ -1337,7 +1337,13 @@ def create_pass_through_route(
                     route=path, method=request.method
                 )
             )
-            if passthrough_params is None:
+            if (
+                passthrough_params is None
+                and InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                    route=path
+                )
+                is not None
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
                     detail=f"Method {request.method} is not allowed for pass-through endpoint {path}.",
