@@ -12,6 +12,7 @@ from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _resolve_embedding_config,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
 )
@@ -574,6 +575,11 @@ async def index_create(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    assert_proxy_admin_for_vector_store_index_management(
+        user_api_key_dict,
+        operation="create",
+    )
 
     if prisma_client is None:
         raise HTTPException(
