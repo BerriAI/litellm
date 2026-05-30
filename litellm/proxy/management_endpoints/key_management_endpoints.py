@@ -325,6 +325,14 @@ def _team_key_generation_check(
         _team_key_generation.get("required_params"),
     )
 
+    # Field-level opt-in: non-admin members may only assign access groups when
+    # the team has enabled KEY_ACCESS_GROUP_ASSIGNMENT.
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_table,
+        access_group_ids=data.access_group_ids,
+    )
+
     return True
 
 
@@ -2261,6 +2269,14 @@ async def _validate_update_key_data(
                 status_code=400,
                 detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
             )
+
+        # Field-level opt-in: non-admin members may only assign access groups when
+        # the team has enabled KEY_ACCESS_GROUP_ASSIGNMENT.
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=user_api_key_dict,
+            team_table=team_obj,
+            access_group_ids=data.access_group_ids,
+        )
 
         if team_obj is not None:
             await _check_team_key_limits(
