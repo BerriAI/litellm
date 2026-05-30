@@ -79,10 +79,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     @staticmethod
     async def _cancel_background_task(task: asyncio.Task) -> None:
-        if not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
+            await task
 
     async def async_pre_call_hook(
         self,

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -1100,6 +1101,46 @@ async def test_streaming_iterator_raises_on_blocking_message():
             async for _ in guard.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=_mock_llm_stream(),
+                request_data={},
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_block_survives_sender_connection_closed():
+    """A blocking signal must propagate even if the sender raises ConnectionClosed on teardown."""
+    guard = _make_guardrail()
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    class FlakyWebSocket:
+        async def recv(self):
+            await asyncio.sleep(0)  # let the sender task park inside send()
+            return json.dumps({"blocking_message": "blocked by policy"})
+
+        async def send(self, _chunk):
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                raise ConnectionClosed(None, None)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def _stream():
+        yield {"choices": [{"delta": {"content": "hi"}}]}
+        await asyncio.sleep(3600)
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=FlakyWebSocket(),
+    ):
+        with pytest.raises(StreamingCallbackError, match="blocked by policy"):
+            async for _ in guard.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_stream(),
                 request_data={},
             ):
                 pass

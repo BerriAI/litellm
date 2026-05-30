@@ -314,6 +314,37 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {}
 
+    def test_litellm_get_model_info_forwards_explicit_api_key_to_provided_base(
+        self, monkeypatch
+    ):
+        """An explicit api_key passed to litellm.get_model_info must reach the provided base."""
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_headers.append(headers)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        try:
+            model_info = litellm.get_model_info(
+                "ollama/unknown-model",
+                api_base="https://ollama.example",
+                api_key="explicit-api-key",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+        assert model_info["max_input_tokens"] == 32768
+        assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
+
     def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
         """When completion passes the final generate URL, model info should use the server base."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig

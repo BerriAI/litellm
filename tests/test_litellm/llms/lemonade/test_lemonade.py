@@ -309,6 +309,39 @@ def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
     assert mock_get.call_args.kwargs["headers"] == {}
 
 
+def test_litellm_get_model_info_forwards_explicit_lemonade_key_to_custom_base(
+    monkeypatch,
+):
+    """Top-level model info must forward an explicit api_key to the supplied base."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "id": "Qwen3.6-35B-A3B-GGUF",
+        "max_input_tokens": 65536,
+    }
+
+    litellm.get_model_info.cache_clear()
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
+        try:
+            model_info = litellm.get_model_info(
+                model="lemonade/Qwen3.6-35B-A3B-GGUF",
+                api_base="https://lemonade.example/v1",
+                api_key="explicit-lemonade-key",
+            )
+        finally:
+            litellm.get_model_info.cache_clear()
+
+    assert model_info["max_input_tokens"] == 65536
+    assert mock_get.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer explicit-lemonade-key"
+    }
+
+
 def test_litellm_get_model_info_uses_lemonade_api_base():
     """Test that LiteLLM model info is wired to Lemonade's model metadata API."""
     response = MagicMock()

@@ -5673,6 +5673,7 @@ def _cached_get_model_info_helper(
     model: str,
     custom_llm_provider: Optional[str],
     api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
@@ -5680,7 +5681,10 @@ def _cached_get_model_info_helper(
     Speed Optimization to hit high RPS
     """
     return _get_model_info_helper(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
     )
 
 
@@ -5720,6 +5724,7 @@ def _get_model_info_helper(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -5766,6 +5771,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     provider_model_info = get_model_info(
                         model=model,
                         api_base=api_base,
+                        api_key=api_key,
                     )
                     if provider_model_info is not None:
                         return provider_model_info
@@ -6083,6 +6089,7 @@ def get_model_info(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -6162,6 +6169,7 @@ def get_model_info(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        api_key=api_key,
     )
 
     provider_info = get_provider_info(
