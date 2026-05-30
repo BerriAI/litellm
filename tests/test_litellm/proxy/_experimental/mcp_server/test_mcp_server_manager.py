@@ -132,6 +132,31 @@ class TestMCPServerManager:
         assert client.stdio_config["env"]["NODE_ENV"] == "test"
         assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
 
+    def test_build_mcp_server_table_preserves_tool_overrides(self):
+        """Bug #12: the list endpoint's converter must carry the saved
+        tool_name_to_display_name / tool_name_to_description overrides so the
+        edit UI pre-populates them instead of always showing the upstream values."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="override-server",
+            name="override_server",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+            tool_name_to_display_name={"read_wiki_structure": "browse_docs"},
+            tool_name_to_description={
+                "read_wiki_structure": "Browse repository docs"
+            },
+        )
+
+        table = manager._build_mcp_server_table(server)
+
+        assert table.tool_name_to_display_name == {
+            "read_wiki_structure": "browse_docs"
+        }
+        assert table.tool_name_to_description == {
+            "read_wiki_structure": "Browse repository docs"
+        }
+
     async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
         """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
         and preserves user-provided NPM_CONFIG_CACHE when present."""
