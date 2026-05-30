@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
-
 OMIT = object()
 
 
@@ -22,6 +21,7 @@ class ModelEntry:
     extra_params: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
     required_env: FrozenSet[str] = field(default_factory=frozenset)
     caps: FrozenSet[str] = field(default_factory=frozenset)
+    unavailable_error: Optional[str] = None
     bedrock_effort_ceiling: Optional[str] = None
 
     def params(self) -> Dict[str, str]:
@@ -234,6 +234,7 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         extra_params=(("aws_region_name", "us-east-1"),),
         required_env=_BEDROCK_REQ,
         caps=_CAPS_OPUS_4_7,
+        unavailable_error="is not available for this account",
     ),
     ModelEntry(
         alias="bedrock-claude-opus-4-6",
