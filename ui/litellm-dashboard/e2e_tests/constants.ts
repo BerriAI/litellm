@@ -18,5 +18,6 @@ export const E2E_TEAM_CRUD_ALIAS = "E2E Team CRUD";
 export const E2E_TEAM_DELETE_ID = "e2e-team-delete";
 export const E2E_TEAM_DELETE_ALIAS = "E2E Team Delete";
 export const E2E_TEAM_ORG_ID = "e2e-team-org";
+export const E2E_TEAM_ORG_ALIAS = "E2E Team In Org";
 export const E2E_TEAM_NO_ADMIN_ID = "e2e-team-no-admin";
 export const E2E_TEAM_NO_ADMIN_ALIAS = "E2E Team No Admin";
