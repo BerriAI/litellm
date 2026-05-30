@@ -157,8 +157,10 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
 
-    # Mock execute_raw to return deleted counts
-    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0])
+    # Mock execute_raw to return deleted counts for BOTH the SpendLogs batched
+    # delete (3 calls: 1000, 500, 0) AND the SpendLogToolIndex batched delete
+    # that runs right after (also 3 calls in this fixture). See #29342.
+    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0, 100, 50, 0])
 
     # Wire up mocks
     mock_prisma_client.db = mock_db
@@ -177,16 +179,18 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     assert cleaner._should_delete_spend_logs() is True
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    # Validate batching and deletion via raw SQL
-    assert mock_db.execute_raw.call_count == 3
+    # Validate batching and deletion via raw SQL across both tables.
+    assert mock_db.execute_raw.call_count == 6
 
     # Check the first call argument
     call_args_sql = mock_db.execute_raw.call_args_list[0][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogs"' in call_args_sql
-    # must match on the full composite identity: on a partitioned table
-    # request_id alone is not unique, and deleting by it would let a client
-    # reusing x-litellm-call-id take out a fresh row alongside the expired one
     assert 'WHERE ("request_id", "startTime") IN' in call_args_sql
+
+    # SpendLogToolIndex is pruned on the same cutoff.
+    tool_index_sql = mock_db.execute_raw.call_args_list[3][0][0]
+    assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in tool_index_sql
+    assert '"start_time" <' in tool_index_sql
 
 
 @pytest.mark.asyncio
@@ -628,3 +632,81 @@ def test_cleanup_batch_size_env_var(monkeypatch):
     monkeypatch.delenv("SPEND_LOG_CLEANUP_BATCH_SIZE", raising=False)
     importlib.reload(constants_module)
     importlib.reload(cleanup_module)
+
+
+@pytest.mark.asyncio
+async def test_tool_index_pruned_alongside_spend_logs():
+    """Regression for #29342 — `LiteLLM_SpendLogToolIndex` has no FK / cascade
+    to `LiteLLM_SpendLogs`, so it must be pruned by its own batched delete on
+    the same cutoff. Both DELETE statements must hit the DB on every cleanup."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+
+    # 2 batches for SpendLogs (1000, 0) + 2 batches for SpendLogToolIndex (200, 0).
+    mock_db.execute_raw = AsyncMock(side_effect=[1000, 0, 200, 0])
+    mock_prisma_client.db = mock_db
+
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = MagicMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "30d"}
+    )
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    assert mock_db.execute_raw.call_count == 4
+
+    sqls = [call[0][0] for call in mock_db.execute_raw.call_args_list]
+    assert 'DELETE FROM "LiteLLM_SpendLogs"' in sqls[0]
+    assert 'DELETE FROM "LiteLLM_SpendLogs"' in sqls[1]
+    assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in sqls[2]
+    assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in sqls[3]
+
+    # Cutoff date must be the SAME for both tables (single retention window).
+    cutoffs = [call[0][1] for call in mock_db.execute_raw.call_args_list]
+    assert all(c == cutoffs[0] for c in cutoffs), f"cutoff drift: {cutoffs!r}"
+
+
+@pytest.mark.asyncio
+async def test_tool_index_cleanup_batch_failure_does_not_abort_spend_log_cleanup():
+    """A single batch-level DB failure in the tool-index loop must not propagate
+    out; we recover the same way `_delete_old_logs` does."""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch_failures = 5  # > max so the loop aborts cleanly
+    cleanup_module.SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = (
+        monkeypatch_failures
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+
+    # SpendLogs: 1 successful batch then "done". Tool-index: 1 transient failure
+    # then a successful 100, then "done".
+    mock_db.execute_raw = AsyncMock(side_effect=[500, 0, TimeoutError("flake"), 100, 0])
+    mock_prisma_client.db = mock_db
+
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = MagicMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    # Patch backoff sleep to 0 so the test doesn't actually sleep.
+    cleanup_module.SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = 0.0
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "1d"}
+    )
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    # Must complete without re-raising the TimeoutError.
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    # All 5 calls should have been made (SpendLogs x2 + ToolIndex x3 incl. retry).
+    assert mock_db.execute_raw.call_count == 5
