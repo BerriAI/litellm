@@ -24,6 +24,22 @@ else:
     UserAPIKeyAuth = Any
 
 
+def _get_otel_v2_class() -> Optional[type]:
+    """Return the ``OpenTelemetryV2`` class, or ``None`` if the OTel SDK is absent.
+
+    Imported lazily: ``litellm.integrations.otel.logger`` imports the OpenTelemetry
+    SDK at module scope, so importing it eagerly would break installs without the
+    SDK. The V2 logger only exists when ``LITELLM_OTEL_V2`` is enabled (which
+    requires the SDK), so a failed import simply means "no V2 logger in play".
+    """
+    try:
+        from litellm.integrations.otel.logger import OpenTelemetryV2
+
+        return OpenTelemetryV2
+    except Exception:
+        return None
+
+
 class ServiceLogging(CustomLogger):
     """
     Separate class used for monitoring health of litellm-adjacent services (redis/postgres).
@@ -37,6 +53,37 @@ class ServiceLogging(CustomLogger):
         self.mock_testing_async_failure_hook = 0
         if "prometheus_system" in litellm.service_callback:
             self.prometheusServicesLogger = PrometheusServicesLogger()
+
+    def _resolve_otel_service_logger(self, callback: Any) -> Optional[Any]:
+        """Resolve the OTel logger (legacy or V2) to emit a service span on.
+
+        Returns the logger instance whose ``async_service_*_hook`` should fire for
+        this ``callback``, or ``None`` when ``callback`` is not an OTel callback.
+
+        The V2 ``OpenTelemetryV2`` logger is a plain ``CustomLogger`` and is NOT a
+        subclass of the legacy ``OpenTelemetry``, so the legacy ``isinstance``
+        check alone misses it — which is why redis/postgres service spans never
+        showed up under ``LITELLM_OTEL_V2``. Match both the legacy and V2 types,
+        whether the callback is the logger instance itself or the ``"otel"`` string
+        (which routes to the proxy's registered ``open_telemetry_logger``).
+        """
+        otel_v2_cls = _get_otel_v2_class()
+
+        def _is_otel_logger(obj: Any) -> bool:
+            if isinstance(obj, OpenTelemetry):
+                return True
+            return otel_v2_cls is not None and isinstance(obj, otel_v2_cls)
+
+        if _is_otel_logger(callback):
+            return callback
+        if callback == "otel":
+            from litellm.proxy.proxy_server import open_telemetry_logger
+
+            if open_telemetry_logger is not None and _is_otel_logger(
+                open_telemetry_logger
+            ):
+                return open_telemetry_logger
+        return None
 
     def service_success_hook(
         self,
@@ -129,6 +176,13 @@ class ServiceLogging(CustomLogger):
             event_metadata=event_metadata,
         )
 
+        # OTel loggers already fired this event. ``service_callback`` can hold more
+        # than one reference that resolves to the *same* logger — the ``"otel"``
+        # string AND the registered instance both map to ``open_telemetry_logger``
+        # (the V2 logger self-registers its instance even when the string is
+        # present, unlike V1). Without this guard each such reference emits its own
+        # span, so a single DB call shows up as duplicate ``postgres ...`` spans.
+        emitted_otel_logger_ids: set = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -144,19 +198,18 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                _otel_logger_to_use: Optional[OpenTelemetry] = None
-                if isinstance(callback, OpenTelemetry):
-                    _otel_logger_to_use = callback
-                else:
-                    from litellm.proxy.proxy_server import open_telemetry_logger
-
-                    if open_telemetry_logger is not None and isinstance(
-                        open_telemetry_logger, OpenTelemetry
-                    ):
-                        _otel_logger_to_use = open_telemetry_logger
-
-                if _otel_logger_to_use is not None and parent_otel_span is not None:
+            else:
+                _otel_logger_to_use = self._resolve_otel_service_logger(callback)
+                # No ``parent_otel_span is not None`` gate: a background service
+                # call (no request on the stack) has no parent, and dropping it
+                # here is what hid those calls from traces entirely. The OTel
+                # logger decides what to do with a missing parent — legacy V1
+                # no-ops, V2 emits a root span (and skips metrics-only pings).
+                if (
+                    _otel_logger_to_use is not None
+                    and id(_otel_logger_to_use) not in emitted_otel_logger_ids
+                ):
+                    emitted_otel_logger_ids.add(id(_otel_logger_to_use))
                     await _otel_logger_to_use.async_service_success_hook(
                         payload=payload,
                         parent_otel_span=parent_otel_span,
@@ -238,6 +291,9 @@ class ServiceLogging(CustomLogger):
             event_metadata=event_metadata,
         )
 
+        # Dedupe OTel loggers per event — see ``async_service_success_hook`` for why
+        # the same logger can be referenced twice in ``service_callback``.
+        emitted_otel_logger_ids: set = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -255,22 +311,19 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel" or isinstance(callback, OpenTelemetry):
-                _otel_logger_to_use: Optional[OpenTelemetry] = None
-                if isinstance(callback, OpenTelemetry):
-                    _otel_logger_to_use = callback
-                else:
-                    from litellm.proxy.proxy_server import open_telemetry_logger
-
-                    if open_telemetry_logger is not None and isinstance(
-                        open_telemetry_logger, OpenTelemetry
-                    ):
-                        _otel_logger_to_use = open_telemetry_logger
+            else:
+                _otel_logger_to_use = self._resolve_otel_service_logger(callback)
 
                 if not isinstance(error, str):
                     error = str(error)
 
-                if _otel_logger_to_use is not None and parent_otel_span is not None:
+                # See the success hook: no parent gate, so background failures
+                # are traced too. V1 no-ops without a parent; V2 emits a root.
+                if (
+                    _otel_logger_to_use is not None
+                    and id(_otel_logger_to_use) not in emitted_otel_logger_ids
+                ):
+                    emitted_otel_logger_ids.add(id(_otel_logger_to_use))
                     await _otel_logger_to_use.async_service_failure_hook(
                         payload=payload,
                         error=error,

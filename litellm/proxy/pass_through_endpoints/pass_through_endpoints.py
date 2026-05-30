@@ -801,9 +801,14 @@ async def pass_through_request(  # noqa: PLR0915
             )
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
+        # Surface the requested model (when the body carries one) so logging/spans
+        # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
+        passthrough_model = (
+            _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        ) or "unknown"
         start_time = datetime.now()
         logging_obj = Logging(
-            model="unknown",
+            model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             stream=False,
             call_type="pass_through_endpoint",
@@ -855,7 +860,7 @@ async def pass_through_request(  # noqa: PLR0915
 
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
-            model="unknown",
+            model=passthrough_model,
             user="unknown",
             optional_params={},
             litellm_params=kwargs["litellm_params"],
