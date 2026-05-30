@@ -1689,6 +1689,51 @@ async def test_mcp_manager_merges_public_and_restricted_servers():
 
 
 @pytest.mark.asyncio
+async def test_mcp_manager_surfaces_servers_to_their_submitter():
+    """Bug #16: an internal user who submits a server keeps visibility of it
+    after approval, even with no access group and allow_all_keys=false; an
+    unrelated non-admin must not see it."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    submitted_server = MCPServer(
+        server_id="submitted",
+        name="submitted",
+        transport=MCPTransport.http,
+        allow_all_keys=False,
+        submitted_by="submitter-user",
+    )
+    manager.registry = {submitted_server.server_id: submitted_server}
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        submitter_allowed = await manager.get_allowed_mcp_servers(
+            UserAPIKeyAuth(user_id="submitter-user")
+        )
+        other_allowed = await manager.get_allowed_mcp_servers(
+            UserAPIKeyAuth(user_id="someone-else")
+        )
+
+    assert submitter_allowed == ["submitted"]
+    assert other_allowed == []
+
+
+@pytest.mark.asyncio
 async def test_call_mcp_tool_user_unauthorized_access():
     """Test that a user cannot call a tool from a server they don't have access to"""
     from fastapi import HTTPException
