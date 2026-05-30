@@ -5294,9 +5294,9 @@ def test_reasoning_effort_accepts_dict_shape_on_bedrock_converse(model):
         drop_params=False,
     )
 
-    assert "thinking" in optional_params, (
-        f"reasoning_effort dict was dropped on {model}: {optional_params!r}"
-    )
+    assert (
+        "thinking" in optional_params
+    ), f"reasoning_effort dict was dropped on {model}: {optional_params!r}"
     # Adaptive Claude 4.6 / 4.7: dict effort should drive output_config too.
     assert optional_params.get("output_config") == {"effort": "low"}
 
