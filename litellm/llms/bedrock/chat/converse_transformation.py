@@ -2201,12 +2201,14 @@ class AmazonConverseConfig(BaseConfig):
         )
         citations_included_in_content = False
         if citations_text:
-            if not content_str:
+            stripped_content = content_str.strip()
+            if not stripped_content:
                 content_str = citations_text
                 citations_included_in_content = True
-            elif content_str.strip() == ".":
+            elif not any(char.isalnum() for char in stripped_content):
                 # Bedrock may emit the cited sentence in citationsContent and only
-                # punctuation in text blocks; stitch them for user-facing content.
+                # punctuation in the text blocks; stitch citations_text in front so
+                # its annotation span indices stay aligned with the final content.
                 content_str = citations_text + content_str
                 citations_included_in_content = True
         if annotations and citations_included_in_content:

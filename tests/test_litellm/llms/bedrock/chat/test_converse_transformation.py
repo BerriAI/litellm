@@ -4776,6 +4776,84 @@ def test_transform_response_citations_content_maps_to_annotations():
     assert annotation["url_citation"]["url"] == "https://www.apptio.com/about"
 
 
+def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": " ."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == 0
+    assert message.annotations[0]["url_citation"]["end_index"] == 42
+
+
 def test_bedrock_tool_message_openai_file_pdf_becomes_document():
     """
     OpenAI Chat Completions `{type: "file", file: {file_data: "data:application/pdf;...", filename}}`
