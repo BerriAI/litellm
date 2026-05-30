@@ -96,9 +96,7 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         dual_cache: DualCache,
         provider_budget_config: Optional[dict],
-        model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
@@ -854,9 +852,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _init_deployment_budgets(
         self,
-        model_list: Optional[
-            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
-        ] = None,
+        model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         if model_list is None:
             return
@@ -886,6 +882,22 @@ class RouterBudgetLimiting(CustomLogger):
         verbose_router_logger.debug(
             f"Initialized Deployment Budget Config: {self.deployment_budget_config}"
         )
+
+    def register_deployment_budget(
+        self,
+        deployment: Union[Dict[str, Any], DeploymentTypedDict],
+    ) -> None:
+        """
+        Register or refresh deployment-level budget config for a runtime-added deployment.
+        """
+        self._init_deployment_budgets(model_list=[deployment])
+
+    def unregister_deployment_budget(self, model_id: str) -> None:
+        if self.deployment_budget_config is None:
+            return
+        self.deployment_budget_config.pop(model_id, None)
+        if len(self.deployment_budget_config) == 0:
+            self.deployment_budget_config = None
 
     def _init_tag_budgets(self):
         if litellm.tag_budget_config is None:
