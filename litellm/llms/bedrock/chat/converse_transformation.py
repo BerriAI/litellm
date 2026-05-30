@@ -6,7 +6,7 @@ import copy
 import json
 import time
 import types
-from typing import List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -946,9 +946,23 @@ class AmazonConverseConfig(BaseConfig):
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
+            elif param == "reasoning_effort" and value is not None:
+                # Accept both string ("low") and dict ({"effort": "low",
+                # "summary": "concise"}). The Responses->Chat parser keeps the
+                # full dict when `summary` is set (see #25359 / #28196), so a
+                # dict here is the standard shape Otto/OpenAI-Responses-Bridge
+                # callers send. Same coercion the direct Anthropic path at
+                # `litellm/llms/anthropic/chat/transformation.py:_map_openai_params`
+                # already implements.
+                effort_value: Any = value
+                if isinstance(effort_value, dict):
+                    effort_value = effort_value.get("effort")
+                if not isinstance(effort_value, str):
+                    continue
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model,
+                    reasoning_effort=effort_value,
+                    optional_params=optional_params,
                 )
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
