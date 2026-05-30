@@ -38,6 +38,9 @@ from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.base_llm.managed_resources.utils import (
+    resolve_passthrough_managed_id_provider,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
@@ -882,21 +885,13 @@ async def pass_through_request(  # noqa: PLR0915
             general_settings as proxy_general_settings,
         )
 
-        # Determine which provider label to use for managed-ID scoping.
-        _provider_value = getattr(custom_llm_provider, "value", custom_llm_provider)
-        _provider_value_str = str(_provider_value).lower() if _provider_value else ""
-        _is_azure_provider = _provider_value_str in ("azure", "azure_ai") or (
-            _provider_value_str.endswith(".azure")
-            or _provider_value_str.endswith(".azure_ai")
+        _managed_id_provider = resolve_passthrough_managed_id_provider(
+            custom_llm_provider
         )
-        _is_managed_id_provider = (
-            endpoint_type == EndpointType.OPENAI or _is_azure_provider
-        )
-        _managed_id_provider = "azure" if _is_azure_provider else "openai"
 
         if (
             proxy_general_settings.get("passthrough_managed_object_ids", False)
-            and _is_managed_id_provider
+            and _managed_id_provider is not None
         ):
             verbose_proxy_logger.debug(
                 "pass_through_endpoint: managed-id input rewrite enabled for route=%s method=%s",
@@ -967,7 +962,7 @@ async def pass_through_request(  # noqa: PLR0915
         # the list would silently hide the caller's real upstream files/batches.
         if (
             proxy_general_settings.get("passthrough_managed_object_ids", False)
-            and _is_managed_id_provider
+            and _managed_id_provider is not None
             and request.method == "GET"
             and proxy_logging_obj.get_proxy_hook("managed_files") is not None
         ):
@@ -1190,7 +1185,7 @@ async def pass_through_request(  # noqa: PLR0915
         # managed IDs.  Gated by feature flag and enterprise managed-files hook.
         if (
             proxy_general_settings.get("passthrough_managed_object_ids", False)
-            and _is_managed_id_provider
+            and _managed_id_provider is not None
             and isinstance(response_body, dict)
             and response.status_code < 300
         ):

@@ -27,6 +27,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm
+from litellm.llms.base_llm.managed_resources.utils import (
+    resolve_passthrough_managed_id_provider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.managed_id_codec import (
     decode,
@@ -148,6 +152,63 @@ class TestCodec:
             mid = encode("openai", "u", raw)
             p = decode(mid)
             assert p is not None and p.raw_provider_id == raw
+
+
+# ---------------------------------------------------------------------------
+# resolve_passthrough_managed_id_provider — provider scope mapping
+# ---------------------------------------------------------------------------
+
+
+class TestManagedIdProviderScope:
+    """Managed-ID scoping is keyed on the explicit forwarded provider, and both
+    azure and azure_ai must collapse to a single 'azure' scope so an ID minted
+    while routing as one resolves while routing as the other."""
+
+    def test_openai_scope(self):
+        assert resolve_passthrough_managed_id_provider("openai") == "openai"
+        assert (
+            resolve_passthrough_managed_id_provider(litellm.LlmProviders.OPENAI)
+            == "openai"
+        )
+
+    def test_azure_scope(self):
+        assert resolve_passthrough_managed_id_provider("azure") == "azure"
+        assert (
+            resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE)
+            == "azure"
+        )
+
+    def test_azure_ai_collapses_to_azure(self):
+        assert resolve_passthrough_managed_id_provider("azure_ai") == "azure"
+        assert (
+            resolve_passthrough_managed_id_provider(litellm.LlmProviders.AZURE_AI)
+            == "azure"
+        )
+
+    def test_azure_ai_id_resolves_on_azure_route(self):
+        """End-to-end consequence of the collapse: an ID whose scope was
+        resolved from azure_ai shares the 'azure' namespace, so decoding +
+        cross-route checks line up with an azure-scoped ID."""
+        azure_ai_scope = resolve_passthrough_managed_id_provider("azure_ai")
+        azure_scope = resolve_passthrough_managed_id_provider("azure")
+        managed = new_managed_id(azure_ai_scope, "file-shared")
+        assert decode(managed).provider == azure_scope
+
+    def test_case_insensitive(self):
+        assert resolve_passthrough_managed_id_provider("AZURE") == "azure"
+        assert resolve_passthrough_managed_id_provider("OpenAI") == "openai"
+
+    def test_namespaced_provider_suffix(self):
+        assert resolve_passthrough_managed_id_provider("foo.azure") == "azure"
+        assert resolve_passthrough_managed_id_provider("foo.azure_ai") == "azure"
+        assert resolve_passthrough_managed_id_provider("foo.openai") == "openai"
+
+    def test_non_openai_azure_providers_not_scoped(self):
+        """Managed IDs only apply to explicit openai/azure pass-through; any
+        other provider (or a missing one) must return None so a third-party
+        OpenAI-compatible endpoint never triggers managed-ID minting."""
+        for provider in (None, "", "cohere", "vllm", "anthropic", "gemini", "bedrock"):
+            assert resolve_passthrough_managed_id_provider(provider) is None
 
 
 # ---------------------------------------------------------------------------
