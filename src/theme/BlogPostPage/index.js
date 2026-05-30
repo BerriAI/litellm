@@ -1,5 +1,6 @@
 import React, {useEffect} from 'react';
 import OriginalBlogPostPage from '@theme-original/BlogPostPage';
+import SubscribeForm from '@site/src/components/SubscribeForm';
 import styles from './styles.module.css';
 
 function BackLink() {
@@ -15,6 +16,18 @@ function BackLink() {
   );
 }
 
+function SubscribeCTA() {
+  return (
+    <div className={styles.ctaOuter}>
+      <div className={styles.cta}>
+        <p className={styles.ctaEyebrow}>Newsletter</p>
+        <p className={styles.ctaTitle}>Get new posts in your inbox</p>
+        <SubscribeForm />
+      </div>
+    </div>
+  );
+}
+
 export default function BlogPostPage(props) {
   // Add body class so CSS can hide the sidebar
   useEffect(() => {
@@ -26,6 +39,7 @@ export default function BlogPostPage(props) {
     <>
       <BackLink />
       <OriginalBlogPostPage {...props} />
+      <SubscribeCTA />
     </>
   );
 }

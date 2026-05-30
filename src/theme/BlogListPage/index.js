@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
+import SubscribeForm from '@site/src/components/SubscribeForm';
 import styles from './styles.module.css';
 
 const TABS = [
@@ -143,6 +144,10 @@ export default function BlogListPage(props) {
           <a href="https://jobs.ashbyhq.com/litellm" target="_blank" rel="noopener noreferrer" className={styles.hiringBtn}>
             We're hiring!
           </a>
+          <div className={styles.subscribeSection}>
+            <p className={styles.subscribeLabel}>Get new posts in your inbox</p>
+            <SubscribeForm />
+          </div>
         </header>
 
         <ProviderMarquee />

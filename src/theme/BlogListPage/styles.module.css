@@ -43,6 +43,19 @@
   margin: 0 0 1.25rem;
 }
 
+.subscribeSection {
+  margin-top: 1.5rem;
+}
+
+.subscribeLabel {
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  margin: 0 0 0.75rem;
+}
+
 .hiringBtn {
   display: inline-block;
   background: #111827;
@@ -53,6 +66,7 @@
   border-radius: 6px;
   text-decoration: none !important;
   transition: background 0.15s;
+  margin-top: 1rem;
 }
 
 .hiringBtn:hover {
@@ -345,7 +359,8 @@
 
 [data-theme='dark'] .heroSub,
 [data-theme='dark'] .desc,
-[data-theme='dark'] .date {
+[data-theme='dark'] .date,
+[data-theme='dark'] .subscribeLabel {
   color: #9ca3af;
 }
 
