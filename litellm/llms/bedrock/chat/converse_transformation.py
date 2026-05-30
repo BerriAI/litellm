@@ -1951,6 +1951,7 @@ class AmazonConverseConfig(BaseConfig):
         message: Message,
         tools: Optional[List[ToolBlock]] = None,
         initial_finish_reason: Optional[str] = None,
+        enable_text_tool_call_parser: bool = False,
     ) -> Tuple[Message, Optional[str]]:
         """
         Apply tool call transformation to a message.
@@ -1979,6 +1980,8 @@ class AmazonConverseConfig(BaseConfig):
                     message.content = None
                     returned_finish_reason = "tool_calls"
             except Exception:
+                if not enable_text_tool_call_parser:
+                    return message, returned_finish_reason
                 if message.content is not None:
                     tool_call = self._text_content_tool_call_transformation(
                         message.content, tools
@@ -2301,6 +2304,9 @@ class AmazonConverseConfig(BaseConfig):
             message=_message,
             tools=text_tool_call_tools,
             initial_finish_reason=initial_finish_reason,
+            enable_text_tool_call_parser=optional_params.get(
+                "enable_text_tool_call_parser", False
+            ),
         )
         model_response.choices = [
             litellm.Choices(

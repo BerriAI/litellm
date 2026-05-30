@@ -259,7 +259,10 @@ def test_apply_tool_call_transformation_parses_function_parameter_text():
 
     transformed_message, finish_reason = (
         config.apply_tool_call_transformation_if_needed(
-            message, _read_file_tool(), initial_finish_reason="stop"
+            message,
+            _read_file_tool(),
+            initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -283,7 +286,10 @@ def test_apply_tool_call_transformation_parses_tool_use_xml_text():
 
     transformed_message, finish_reason = (
         config.apply_tool_call_transformation_if_needed(
-            message, _read_file_tool(), initial_finish_reason="stop"
+            message,
+            _read_file_tool(),
+            initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -304,7 +310,10 @@ def test_apply_tool_call_transformation_parses_bare_tool_name_json_text():
 
     transformed_message, finish_reason = (
         config.apply_tool_call_transformation_if_needed(
-            message, _read_file_tool(), initial_finish_reason="stop"
+            message,
+            _read_file_tool(),
+            initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -319,7 +328,10 @@ def test_apply_tool_call_transformation_parses_bare_zero_arg_tool_call():
 
     transformed_message, finish_reason = (
         config.apply_tool_call_transformation_if_needed(
-            message, _read_file_tool(), initial_finish_reason="stop"
+            message,
+            _read_file_tool(),
+            initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -345,7 +357,10 @@ def test_apply_tool_call_transformation_parses_tool_call_json_tag_text():
 
     transformed_message, finish_reason = (
         config.apply_tool_call_transformation_if_needed(
-            message, _read_file_tool(), initial_finish_reason="stop"
+            message,
+            _read_file_tool(),
+            initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -369,6 +384,7 @@ def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
                 }
             ],
             initial_finish_reason="stop",
+            enable_text_tool_call_parser=True,
         )
     )
 
@@ -377,7 +393,24 @@ def test_apply_tool_call_transformation_ignores_text_for_unknown_tool_name():
     assert transformed_message.tool_calls is None
 
 
-def test_transform_response_uses_bedrock_tool_config_for_text_tool_calls():
+def test_apply_tool_call_transformation_does_not_promote_text_by_default():
+    from litellm.types.utils import Message
+
+    config = AmazonConverseConfig()
+    original_content = "\nread_file\n{}"
+    message = Message(role="assistant", content=original_content)
+
+    transformed_message, finish_reason = (
+        config.apply_tool_call_transformation_if_needed(
+            message, _read_file_tool(), initial_finish_reason="stop"
+        )
+    )
+
+    assert finish_reason == "stop"
+    assert transformed_message.content == original_content
+    assert transformed_message.tool_calls is None
+
+def test_transform_response_does_not_promote_text_tool_calls_by_default():
     import httpx
 
     config = AmazonConverseConfig()
@@ -413,6 +446,67 @@ def test_transform_response_uses_bedrock_tool_config_for_text_tool_calls():
         stream=False,
         logging_obj=None,
         optional_params={},
+        api_key=None,
+        data=json.dumps(
+            {
+                "toolConfig": {
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": "read_file",
+                                "inputSchema": {"json": {}},
+                            }
+                        }
+                    ]
+                }
+            }
+        ),
+        messages=[],
+        encoding=None,
+    )
+
+    choice = model_response.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content is not None
+    assert choice.message.tool_calls is None
+
+
+def test_transform_response_uses_opt_in_text_tool_call_parser():
+    import httpx
+
+    config = AmazonConverseConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "text": (
+                                "\n<function>\n"
+                                '<parameter name="command">read_file</parameter>\n'
+                                '<parameter name="path">C:\\Projects\\redaigo\\scripts\\run_etf_v13.py</parameter>\n'
+                                '<parameter name="offset">0</parameter>\n'
+                                '<parameter name="length">3000</parameter>\n'
+                                "</function>"
+                            )
+                        }
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+    )
+
+    model_response = config._transform_response(
+        model="bedrock/converse/claude-opus-4.6",
+        response=raw_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={"enable_text_tool_call_parser": True},
         api_key=None,
         data=json.dumps(
             {
