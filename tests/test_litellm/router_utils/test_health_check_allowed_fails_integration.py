@@ -245,6 +245,29 @@ class TestHealthCheckCooldownIntegration:
         )
         assert result is True
 
+    def test_zero_policy_threshold_triggers_cooldown_before_default_allowed_fails(self):
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(InternalServerErrorAllowedFails=0),
+            allowed_fails=3,
+        )
+        internal_error = litellm.InternalServerError(
+            message="server error", model="gpt-4", llm_provider="openai"
+        )
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=internal_error,
+        )
+
+        assert result is True
+        assert router.failed_calls.get_cache(key="deploy-1") is None
+
     def test_healthy_endpoints_do_not_trigger_cooldown(self):
         """Healthy endpoints should not increment any failure counters."""
         router = Router(
