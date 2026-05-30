@@ -70,12 +70,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     @staticmethod
     def _resolve_cato_user_email(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
-        """Use proxy-authenticated identity only; request headers are spoofable."""
-        if user_api_key_dict.user_email:
-            return user_api_key_dict.user_email
-        if user_api_key_dict.end_user_id:
-            return str(user_api_key_dict.end_user_id)
-        return None
+        """Only the key/JWT-bound user email is trusted. ``end_user_id`` is derived from
+        caller-supplied request fields (OpenAI ``user``, headers, metadata) and is spoofable,
+        so it must never be forwarded as the Cato user identity."""
+        return user_api_key_dict.user_email
 
     @staticmethod
     async def _cancel_background_task(task: asyncio.Task) -> None:

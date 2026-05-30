@@ -656,7 +656,7 @@ async def test_call_cato_guardrail_ignores_spoofable_metadata_user_email():
 
 
 @pytest.mark.asyncio
-async def test_resolve_cato_user_email_prefers_user_email_over_end_user_id():
+async def test_resolve_cato_user_email_ignores_spoofable_end_user_id():
     assert (
         CatoNetworksGuardrail._resolve_cato_user_email(
             UserAPIKeyAuth(user_email="user@example.com", end_user_id="end-1")
@@ -665,11 +665,32 @@ async def test_resolve_cato_user_email_prefers_user_email_over_end_user_id():
     )
     assert (
         CatoNetworksGuardrail._resolve_cato_user_email(
-            UserAPIKeyAuth(end_user_id="end-1")
+            UserAPIKeyAuth(end_user_id="victim@example.com")
         )
-        == "end-1"
+        is None
     )
     assert CatoNetworksGuardrail._resolve_cato_user_email(UserAPIKeyAuth()) is None
+
+
+@pytest.mark.asyncio
+async def test_call_cato_guardrail_omits_user_email_for_spoofable_end_user_id():
+    guard = _make_guardrail()
+    data = {"messages": [{"role": "user", "content": "hi"}]}
+    response = _make_response(
+        {"analysis_result": {"policy_drill_down": {}}, "required_action": None}
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ) as mock_post:
+        await guard.async_pre_call_hook(
+            data=data,
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(end_user_id="victim@example.com"),
+            call_type="completion",
+        )
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert "x-cato-user-email" not in sent_headers
 
 
 # -----------------------------------------------------------------------------
