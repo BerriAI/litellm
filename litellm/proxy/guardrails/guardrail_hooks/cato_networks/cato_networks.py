@@ -140,9 +140,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         """Flatten multimodal list ``content`` into plain text so Cato inspects
         every text fragment. Chat ``messages`` stay 1:1 with the request so
         redacted results map back by index, and every other field the proxy
-        forwards to the model (Responses-API ``input``/``instructions`` and
-        legacy completion ``prompt``) is appended as synthetic messages so blocked
-        text cannot bypass inspection by hiding in one of them."""
+        forwards to the model (Responses-API ``input``/``instructions``, legacy
+        completion ``prompt`` and ``tools[].function.description``) is appended as
+        synthetic messages so blocked text cannot bypass inspection by hiding in
+        one of them."""
         flattened = []
         for message in data.get("messages") or []:
             if isinstance(message, dict) and isinstance(message.get("content"), list):
@@ -170,12 +171,28 @@ class CatoNetworksGuardrail(CustomGuardrail):
             ]
         return []
 
+    @staticmethod
+    def _iter_tool_function_descriptions(data: dict):
+        """Yield the ``function`` dict of every request tool carrying a non-empty
+        string ``description``. Descriptions are forwarded to the model, so blocked
+        text placed there must be inspected and redacted like any other prompt."""
+        for tool in data.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if not isinstance(function, dict):
+                continue
+            description = function.get("description")
+            if isinstance(description, str) and description:
+                yield function
+
     @classmethod
     def _extra_inspection_sources(cls, data: dict) -> list:
         """Text the proxy forwards to the model outside chat ``messages``:
-        Responses-API ``input`` and ``instructions``, and legacy completion
-        ``prompt``. Returned as ``(field, messages)`` in a fixed order so the
-        anonymize path can slice redactions back to the field they came from."""
+        Responses-API ``input`` and ``instructions``, legacy completion
+        ``prompt`` and ``tools[].function.description``. Returned as
+        ``(field, messages)`` in a fixed order so the anonymize path can slice
+        redactions back to the field they came from."""
         sources: list = []
         input_messages = build_inspection_messages({"input": data.get("input")})
         if input_messages:
@@ -188,6 +205,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
         prompt_messages = cls._prompt_inspection_messages(data.get("prompt"))
         if prompt_messages:
             sources.append(("prompt", prompt_messages))
+        tool_descriptions = [
+            {"role": "system", "content": function["description"]}
+            for function in cls._iter_tool_function_descriptions(data)
+        ]
+        if tool_descriptions:
+            sources.append(("tools", tool_descriptions))
         return sources
 
     async def call_cato_guardrail(
@@ -272,6 +295,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
+        elif field == "tools":
+            cls._apply_tool_redaction(data, redacted)
+
+    @classmethod
+    def _apply_tool_redaction(cls, data: dict, redacted: list) -> None:
+        redactions = iter(redacted)
+        for function in cls._iter_tool_function_descriptions(data):
+            replacement = next(redactions, None)
+            if replacement is not None and replacement.get("content") is not None:
+                function["description"] = replacement["content"]
 
     @staticmethod
     def _apply_prompt_redaction(data: dict, redacted: list) -> None:
@@ -375,6 +408,31 @@ class CatoNetworksGuardrail(CustomGuardrail):
             )
         )
 
+    @staticmethod
+    def _output_fragments(message: Any) -> list:
+        """Assistant text the proxy returns to the caller: ``content`` plus every
+        ``tool_calls[].function.arguments`` string, each tagged with where a
+        redaction must be written back. ``content`` is only included when present
+        so a tool-call-only choice keeps its ``None`` content (the text-vs-tool-call
+        signal downstream consumers rely on) while its arguments are still inspected."""
+        fragments: list = []
+        if message.content is not None:
+            fragments.append((("content", None), message.content))
+        for idx, tool_call in enumerate(message.tool_calls or []):
+            function = getattr(tool_call, "function", None)
+            arguments = getattr(function, "arguments", None)
+            if isinstance(arguments, str) and arguments:
+                fragments.append((("tool_call", idx), arguments))
+        return fragments
+
+    @staticmethod
+    def _apply_output_fragment(message: Any, target: tuple, redacted: str) -> None:
+        kind, idx = target
+        if kind == "content":
+            message.content = redacted
+        else:
+            message.tool_calls[idx].function.arguments = redacted
+
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -386,30 +444,35 @@ class CatoNetworksGuardrail(CustomGuardrail):
             for choice in response.choices:
                 if not isinstance(choice, Choices):
                     continue
-                if choice.message.content is None:
-                    continue
-                content = choice.message.content
-                cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
-                    data,
-                    content,
-                    hook="output",
-                    key_alias=user_api_key_dict.key_alias,
-                    user_email=user_email,
-                )
-                if cato_output_guardrail_result and cato_output_guardrail_result.get(
-                    "detection_message"
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=cato_output_guardrail_result.get("detection_message"),
+                for target, text in self._output_fragments(choice.message):
+                    cato_output_guardrail_result = (
+                        await self.call_cato_guardrail_on_output(
+                            data,
+                            text,
+                            hook="output",
+                            key_alias=user_api_key_dict.key_alias,
+                            user_email=user_email,
+                        )
                     )
-                redacted_output = (
-                    cato_output_guardrail_result.get("redacted_output")
-                    if cato_output_guardrail_result
-                    else None
-                )
-                if redacted_output is not None:
-                    choice.message.content = redacted_output
+                    if (
+                        cato_output_guardrail_result
+                        and cato_output_guardrail_result.get("detection_message")
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=cato_output_guardrail_result.get(
+                                "detection_message"
+                            ),
+                        )
+                    redacted_output = (
+                        cato_output_guardrail_result.get("redacted_output")
+                        if cato_output_guardrail_result
+                        else None
+                    )
+                    if redacted_output is not None:
+                        self._apply_output_fragment(
+                            choice.message, target, redacted_output
+                        )
         return response
 
     async def async_post_call_streaming_iterator_hook(
