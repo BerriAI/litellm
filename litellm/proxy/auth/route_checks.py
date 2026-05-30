@@ -188,9 +188,7 @@ class RouteChecks:
                 return True
 
         if denied_auth_enforced_pass_through_route:
-            RouteChecks._require_auth_pass_through_access(
-                route=route, valid_token=valid_token
-            )
+            raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -700,6 +698,16 @@ class RouteChecks:
         return dependencies is not None
 
     @staticmethod
+    def _auth_pass_through_denied_exception(route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team not allowed to access passthrough route {route}. "
+                "Configure `allowed_passthrough_routes` on the team or key."
+            ),
+        )
+
+    @staticmethod
     def _require_auth_pass_through_access(
         route: str,
         valid_token: UserAPIKeyAuth,
@@ -711,13 +719,7 @@ class RouteChecks:
             route=route, user_api_key_dict=valid_token
         ):
             return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Key/team not allowed to access passthrough route {route}. "
-                "Configure `allowed_passthrough_routes` on the team or key."
-            ),
-        )
+        raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
     @staticmethod
     def check_passthrough_route_access(
