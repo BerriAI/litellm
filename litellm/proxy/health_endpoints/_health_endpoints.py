@@ -1849,7 +1849,11 @@ async def test_model_connection(
         )
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info if resolved_model_info is not None else (model_info or {}),
+            model_info=(
+                resolved_model_info
+                if resolved_model_info is not None
+                else (model_info or {})
+            ),
             litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
