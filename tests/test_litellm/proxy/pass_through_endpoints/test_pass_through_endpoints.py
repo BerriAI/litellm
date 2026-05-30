@@ -520,6 +520,63 @@ def test_add_subpath_route():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_handler_rejects_unregistered_method():
+    """
+    Stale FastAPI routes can remain after an endpoint is updated from all methods
+    to a restricted method list. The handler must enforce the current registry.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    endpoint_func = create_pass_through_route(
+        endpoint="/test/path",
+        target="http://example.com",
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_utils.get_request_route",
+            return_value="/test/path",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type",
+            new_callable=AsyncMock,
+            return_value=({}, {}, None, False),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            {
+                "test-endpoint-id:exact:/test/path:POST": {
+                    "endpoint_id": "test-endpoint-id",
+                    "path": "/test/path",
+                    "type": "exact",
+                    "methods": ["POST"],
+                    "passthrough_params": {
+                        "target": "http://example.com",
+                        "custom_headers": {},
+                        "forward_headers": False,
+                        "merge_query_params": False,
+                    },
+                }
+            },
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoint_func(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 405
+
+
+@pytest.mark.asyncio
 async def test_initialize_pass_through_endpoints_with_include_subpath():
     """
     Test that initialize_pass_through_endpoints adds wildcard routes when include_subpath is True

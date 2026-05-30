@@ -161,7 +161,7 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
         patch(
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
-        ),
+        ) as mock_is_auth_enforced_pass_through_route,
         patch(
             "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
             return_value=False,
@@ -172,6 +172,7 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
                 team_ids={"team-a"},
                 requested_model="gpt-4",
                 route="/my-pass-through",
+                request_method="POST",
                 jwt_handler=jwt_handler,
                 prisma_client=None,
                 user_api_key_cache=MagicMock(),
@@ -182,6 +183,9 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
     assert "requested model" not in exc_info.value.detail
+    mock_is_auth_enforced_pass_through_route.assert_called_once_with(
+        route="/my-pass-through", method="POST"
+    )
 
     user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
     assert user_api_key_dict.metadata == {}

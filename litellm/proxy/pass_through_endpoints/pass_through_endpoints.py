@@ -1337,6 +1337,11 @@ def create_pass_through_route(
                     route=path, method=request.method
                 )
             )
+            if passthrough_params is None:
+                raise HTTPException(
+                    status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                    detail=f"Method {request.method} is not allowed for pass-through endpoint {path}.",
+                )
             target_params = {
                 "target": target,
                 "custom_headers": custom_headers,

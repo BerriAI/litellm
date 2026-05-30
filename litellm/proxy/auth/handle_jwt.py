@@ -1756,6 +1756,7 @@ class JWTAuthManager:
                 team_ids=all_team_ids,
                 requested_model=request_data.get("model"),
                 route=route,
+                request_method=request_method,
                 jwt_handler=jwt_handler,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
