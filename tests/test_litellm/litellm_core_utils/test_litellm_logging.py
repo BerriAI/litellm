@@ -787,9 +787,61 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def _logging_obj_with_call_type(call_type: str) -> LitellmLogging:
+    return LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+
+
 def test_is_sync_litellm_request():
-    assert LitellmLogging._is_sync_litellm_request({}) is True
-    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+    """Sync/async classification mixes call_type and litellm_params flags.
+
+    get_litellm_params only stores acompletion/aembedding, so those are detected
+    via the litellm_params flags. aresponses/atranscription/aimage_generation/
+    atext_completion have no stored flag and were therefore misclassified as
+    sync; they are now detected from call_type (the SDK function name).
+    """
+    # Sync SDK entrypoints with no flag -> True.
+    for sync_call_type in (
+        "completion",
+        "text_completion",
+        "embedding",
+        "image_generation",
+        "transcription",
+        "responses",
+    ):
+        obj = _logging_obj_with_call_type(sync_call_type)
+        assert obj._is_sync_litellm_request({}) is True, sync_call_type
+
+    # Async-only call types (no flag stored by get_litellm_params) -> False,
+    # detected from call_type. This is the previously-misclassified gap.
+    for async_call_type in (
+        "aresponses",
+        "atranscription",
+        "aimage_generation",
+        "atext_completion",
+    ):
+        obj = _logging_obj_with_call_type(async_call_type)
+        assert obj._is_sync_litellm_request({}) is False, async_call_type
+
+    # "a"-prefixed but sync call type must not be misread as async.
+    assert (
+        _logging_obj_with_call_type("anthropic_messages")._is_sync_litellm_request({})
+        is True
+    )
+
+    # acompletion/aembedding are detected from the stored litellm_params flags,
+    # not call_type (matching get_litellm_params behavior).
+    sync_obj = _logging_obj_with_call_type("completion")
+    assert sync_obj._is_sync_litellm_request({"acompletion": True}) is False
+    assert sync_obj._is_sync_litellm_request({"aembedding": True}) is False
+    assert sync_obj._is_sync_litellm_request({"aresponses": True}) is False
 
 
 @pytest.mark.asyncio
