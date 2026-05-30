@@ -302,19 +302,20 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         model_from_file_id = decode_model_from_file_id(file_id)
         if model_from_file_id:
-            try:
-                credentials = get_credentials_for_model(
-                    llm_router=llm_router,
-                    model_id=model_from_file_id,
-                    operation_context="batch input file read (rate limiting)",
-                )
-                fetch_kwargs.update(_extract_file_access_credentials(credentials))
-                fetch_kwargs["model"] = model_from_file_id
-                provider = credentials.get("custom_llm_provider")
-                if provider:
-                    fetch_kwargs["custom_llm_provider"] = provider
-            except HTTPException:
-                pass
+            if llm_router is not None:
+                try:
+                    credentials = get_credentials_for_model(
+                        llm_router=llm_router,
+                        model_id=model_from_file_id,
+                        operation_context="batch input file read (rate limiting)",
+                    )
+                    fetch_kwargs.update(_extract_file_access_credentials(credentials))
+                    fetch_kwargs["model"] = model_from_file_id
+                    provider = credentials.get("custom_llm_provider")
+                    if provider:
+                        fetch_kwargs["custom_llm_provider"] = provider
+                except HTTPException:
+                    pass
             return get_original_file_id(file_id), fetch_kwargs
 
         request_model = data.get("model")
