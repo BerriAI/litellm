@@ -392,6 +392,47 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
+    def test_litellm_get_model_info_does_not_cache_on_api_key(self, monkeypatch):
+        """Regression: api_key must not be part of the get_model_info cache key.
+
+        Distinct api_keys for the same (model, api_base) must not each create their
+        own cache entry (which would churn the shared LRU cache), and every explicit
+        key must still reach the backend rather than be served from a result cached
+        with a different key.
+        """
+        from litellm.utils import _cached_get_model_info
+
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_headers.append(headers)
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 32768},
+                },
+                status_code=200,
+            )
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        litellm.get_model_info.cache_clear()
+        try:
+            for api_key in ("key-one", "key-two", "key-three"):
+                litellm.get_model_info(
+                    "ollama/unknown-model",
+                    api_base="https://ollama.example",
+                    api_key=api_key,
+                )
+
+            assert _cached_get_model_info.cache_info().currsize <= 1
+            assert captured_headers == [
+                {"Authorization": "Bearer key-one"},
+                {"Authorization": "Bearer key-two"},
+                {"Authorization": "Bearer key-three"},
+            ]
+        finally:
+            litellm.get_model_info.cache_clear()
+
     def test_get_model_info_normalizes_generate_api_base(self, monkeypatch):
         """When completion passes the final generate URL, model info should use the server base."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig

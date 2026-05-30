@@ -5443,7 +5443,7 @@ def _invalidate_model_cost_lowercase_map() -> None:
     _model_cost_mutation_generation += 1
 
     # Clear LRU caches that depend on model_cost data
-    get_model_info.cache_clear()
+    _cached_get_model_info.cache_clear()
     _cached_get_model_info_helper.cache_clear()
 
 
@@ -6083,6 +6083,41 @@ def _get_model_info_helper(  # noqa: PLR0915
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _cached_get_model_info(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> ModelInfo:
+    supported_openai_params = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    _model_info = _get_model_info_helper(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    if provider_info:
+        for key, value in provider_info.items():
+            if value is not None:
+                _model_info[key] = value  # type: ignore
+
+    # if verbose_logger.isEnabledFor(logging.DEBUG):
+    # verbose_logger.debug(f"model_info: {_model_info}")
+
+    returned_model_info = ModelInfo(
+        **_model_info, supported_openai_params=supported_openai_params
+    )
+
+    return returned_model_info
+
+
 def get_model_info(
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -6159,33 +6194,16 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    supported_openai_params = litellm.get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    # api_key is a per-caller credential, not part of the model identity, so it is
+    # kept out of the cache key; explicit keys bypass the cache.
+    if api_key is not None:
+        return _cached_get_model_info.__wrapped__(
+            model, custom_llm_provider, api_base, api_key
+        )
+    return _cached_get_model_info(model, custom_llm_provider, api_base)
 
-    _model_info = _get_model_info_helper(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
-        api_key=api_key,
-    )
 
-    provider_info = get_provider_info(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
-    if provider_info:
-        for key, value in provider_info.items():
-            if value is not None:
-                _model_info[key] = value  # type: ignore
-
-    # if verbose_logger.isEnabledFor(logging.DEBUG):
-    # verbose_logger.debug(f"model_info: {_model_info}")
-
-    returned_model_info = ModelInfo(
-        **_model_info, supported_openai_params=supported_openai_params
-    )
-
-    return returned_model_info
+get_model_info.cache_clear = _cached_get_model_info.cache_clear  # type: ignore[attr-defined]
 
 
 def json_schema_type(python_type_name: str):
