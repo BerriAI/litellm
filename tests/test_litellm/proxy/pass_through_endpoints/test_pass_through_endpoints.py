@@ -1405,6 +1405,81 @@ async def test_update_pass_through_endpoint_auth_true_enforces_allowlist():
 
 
 @pytest.mark.asyncio
+async def test_update_pass_through_endpoint_preserves_auth_false():
+    """
+    Regression: editing an unrelated field on an auth=false pass-through must not
+    silently flip it to auth=true. auth defaults to True on the request model, so a
+    naive exclude_none merge would overwrite the stored auth=false and start
+    rejecting every team/key that lacks allowed_passthrough_routes.
+    """
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+    existing_endpoint_id = "public-forwarder-123"
+    existing_endpoints = [
+        {
+            "id": existing_endpoint_id,
+            "path": "/public-passthrough",
+            "target": "http://example.com/api",
+            "auth": False,
+            "methods": ["POST"],
+        }
+    ]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch(
+            "litellm.proxy.proxy_server.update_config_general_settings"
+        ) as mock_update_config,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=existing_endpoints
+        )
+
+        update_data = PassThroughGenericEndpoint(
+            path="/public-passthrough",
+            target="http://newapi.com/v2",
+            methods=["POST"],
+        )
+        result = await update_pass_through_endpoints(
+            endpoint_id=existing_endpoint_id,
+            data=update_data,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert result.endpoints[0].auth is False
+
+        persisted = mock_update_config.call_args[1]["data"].field_value[0]
+        assert persisted["auth"] is False
+
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/public-passthrough", method="POST"
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_pass_through_endpoint_not_found():
     """
     Test updating a non-existent pass-through endpoint raises HTTPException
