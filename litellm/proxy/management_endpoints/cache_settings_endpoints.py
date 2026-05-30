@@ -19,7 +19,10 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    mask_sensitive_keys,
+    mask_url_credentials,
+)
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     LiteLLM_AuditLogs,
@@ -301,10 +304,16 @@ async def get_cache_settings(
                         decrypted_settings["redis_type"] = "node"
 
                 # Mask credential fields so the GET response never carries
-                # plaintext Redis / Sentinel passwords off the server.
+                # plaintext Redis / Sentinel passwords off the server. Also
+                # redact passwords smuggled inside connection-URL fields
+                # (e.g. a `url` value like redis://:password@host), which
+                # exact-name field masking does not catch.
                 current_values = mask_sensitive_keys(
                     decrypted_settings, _CACHE_SENSITIVE_FIELDS
                 )
+                current_values = {
+                    k: mask_url_credentials(v) for k, v in current_values.items()
+                }
 
         # Update field values with current values
         for field in cache_fields:

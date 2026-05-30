@@ -5,7 +5,11 @@ import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    SensitiveDataMasker,
+    mask_sensitive_keys,
+    mask_url_credentials,
+)
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -621,18 +625,27 @@ def add_guardrail_response_to_standard_logging_object(
 
 
 def process_callback(
-    _callback: str, callback_type: str, environment_variables: dict
+    _callback: str,
+    callback_type: str,
+    environment_variables: dict,
+    mask_sensitive: bool = False,
 ) -> dict:
-    """Process a single callback and return its data with environment variables"""
+    """Process a single callback and return its data with environment variables.
+
+    When ``mask_sensitive`` is set, credential-bearing variables are redacted so
+    the response never hands decrypted callback secrets (provider API keys,
+    webhook URLs) to a caller who is not a full proxy admin.
+    """
     env_vars = CustomLogger.get_callback_env_vars(_callback)
 
     env_vars_dict: dict[str, str | None] = {}
     for _var in env_vars:
-        env_variable = environment_variables.get(_var, None)
-        if env_variable is None:
-            env_vars_dict[_var] = None
-        else:
-            env_vars_dict[_var] = env_variable
+        env_vars_dict[_var] = environment_variables.get(_var, None)
+
+    if mask_sensitive:
+        sensitive_keys = {k for k in env_vars_dict if _is_sensitive_callback_var(k)}
+        env_vars_dict = mask_sensitive_keys(env_vars_dict, sensitive_keys)
+        env_vars_dict = {k: mask_url_credentials(v) for k, v in env_vars_dict.items()}
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 

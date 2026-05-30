@@ -82,6 +82,66 @@ def test_process_callback_with_no_required_env_vars(mock_get_env_vars):
     assert result["variables"] == {}
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_process_callback_masks_secrets_when_requested(mock_get_env_vars):
+    """With mask_sensitive=True the credential-bearing var is redacted while a
+    non-secret routing var (host) is returned verbatim."""
+    environment_variables = {
+        "LANGFUSE_SECRET_KEY": "sk-langfuse-supersecret-value",
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+    }
+
+    result = process_callback(
+        _callback="langfuse",
+        callback_type="success",
+        environment_variables=environment_variables,
+        mask_sensitive=True,
+    )
+
+    masked_secret = result["variables"]["LANGFUSE_SECRET_KEY"]
+    assert masked_secret != "sk-langfuse-supersecret-value"
+    assert "supersecret" not in masked_secret
+    assert "*" in masked_secret
+    # Non-credential routing field is left intact.
+    assert result["variables"]["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY"],
+)
+def test_process_callback_returns_plaintext_without_masking(mock_get_env_vars):
+    """Default (mask_sensitive=False) preserves the prior plaintext behaviour so
+    a full admin can still read/edit the value."""
+    result = process_callback(
+        _callback="langfuse",
+        callback_type="success",
+        environment_variables={"LANGFUSE_SECRET_KEY": "sk-langfuse-supersecret-value"},
+    )
+    assert result["variables"]["LANGFUSE_SECRET_KEY"] == "sk-langfuse-supersecret-value"
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["GENERIC_LOGGER_URL"],
+)
+def test_process_callback_masks_url_embedded_credentials(mock_get_env_vars):
+    """A password smuggled into a connection-URL callback var is redacted even
+    though the field name itself is not credential-like."""
+    result = process_callback(
+        _callback="generic",
+        callback_type="success",
+        environment_variables={
+            "GENERIC_LOGGER_URL": "https://user:topsecretpw@logs.example.com/ingest"
+        },
+        mask_sensitive=True,
+    )
+    assert "topsecretpw" not in result["variables"]["GENERIC_LOGGER_URL"]
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []

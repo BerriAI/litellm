@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -167,7 +167,7 @@ async def memory_usage_in_mem_cache(
 
 @router.get("/memory-usage-in-mem-cache-items", include_in_schema=False)
 async def memory_usage_in_mem_cache_items(
-    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     # returns the size of all in-memory caches on the proxy server
     """
@@ -176,6 +176,15 @@ async def memory_usage_in_mem_cache_items(
     3. proxy_logging_cache
     4. internal_usage_cache
     """
+    # The response dumps raw cache contents, including the user_api_key_cache
+    # which holds validated auth objects. Restrict to full PROXY_ADMIN so a
+    # read-only admin (or any authenticated key) cannot harvest them.
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admin can access this endpoint."},
+        )
+
     from litellm.proxy.proxy_server import (
         llm_router,
         proxy_logging_obj,

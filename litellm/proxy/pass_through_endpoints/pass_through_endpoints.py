@@ -38,12 +38,14 @@ from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
     LiteLLMRoutes,
+    LitellmUserRoles,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
     ProxyException,
@@ -2632,6 +2634,21 @@ async def _filter_endpoints_by_team_allowed_routes(
     return pass_through_endpoints
 
 
+def _mask_pass_through_endpoint_headers(
+    endpoint: PassThroughGenericEndpoint,
+) -> PassThroughGenericEndpoint:
+    """Return a copy of the endpoint with forwarded header values masked.
+
+    Header names stay visible so a read-only caller can still see which headers
+    are configured; the values (which carry upstream credentials) are redacted.
+    """
+    if not endpoint.headers:
+        return endpoint
+    masked = endpoint.model_copy(deep=True)
+    masked.headers = mask_sensitive_keys(masked.headers, set(masked.headers.keys()))
+    return masked
+
+
 @router.get(
     "/config/pass_through_endpoint",
     dependencies=[Depends(user_api_key_auth)],
@@ -2684,6 +2701,15 @@ async def get_pass_through_endpoints(
             pass_through_endpoints=pass_through_endpoints,
             prisma_client=prisma_client,
         )
+
+    # Forwarded headers carry upstream credentials (Authorization, x-api-key).
+    # A full proxy admin can edit them and needs the plaintext; everyone else
+    # (read-only admin, team callers) gets the values masked.
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        pass_through_endpoints = [
+            _mask_pass_through_endpoint_headers(endpoint)
+            for endpoint in pass_through_endpoints
+        ]
 
     return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
 

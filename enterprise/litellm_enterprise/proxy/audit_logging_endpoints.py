@@ -7,6 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 #### AUDIT LOGGING ####
@@ -16,10 +17,42 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
     PaginatedAuditLogResponse,
 )
 
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+_AUDIT_VALUE_MASKER = SensitiveDataMasker()
+
+
+def _redact_audit_log_values(audit_log_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Mask credentials inside the ``before_value`` / ``updated_values`` row
+    snapshots before they leave the server.
+
+    Audit rows snapshot whole table rows, so they can carry provider
+    credentials (``client_secret``, ``vertex_credentials``, ``token``,
+    ``password``) that the write-time ``LiteLLM_AuditLogs`` masker — which only
+    targets ``key``-named fields — leaves untouched. These columns are an
+    informational change-record, never a place to read a secret back from, so
+    they are masked here for every caller (this also covers rows written before
+    this masking existed). Input type is preserved (dict in -> dict out) so the
+    response shape does not change.
+    """
+    for field in ("before_value", "updated_values"):
+        raw = audit_log_dict.get(field)
+        if isinstance(raw, dict):
+            audit_log_dict[field] = _AUDIT_VALUE_MASKER.mask_dict(raw)
+        elif isinstance(raw, str) and raw:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                audit_log_dict[field] = json.dumps(
+                    _AUDIT_VALUE_MASKER.mask_dict(parsed), default=str
+                )
+    return audit_log_dict
 
 
 def _build_json_field_or_condition(json_key: str, value: str) -> Dict[str, Any]:
@@ -153,11 +186,14 @@ async def get_audit_logs(
 
     # Return paginated response
     return PaginatedAuditLogResponse(
-        audit_logs=[
-            AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs
-        ]
-        if audit_logs
-        else [],
+        audit_logs=(
+            [
+                AuditLogResponse(**_redact_audit_log_values(audit_log.model_dump()))
+                for audit_log in audit_logs
+            ]
+            if audit_logs
+            else []
+        ),
         total=total_count,
         page=page,
         page_size=page_size,
@@ -207,4 +243,4 @@ async def get_audit_log_by_id(
         )
 
     # Convert to response model
-    return AuditLogResponse(**audit_log.model_dump())
+    return AuditLogResponse(**_redact_audit_log_values(audit_log.model_dump()))

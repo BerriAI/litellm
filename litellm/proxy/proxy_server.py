@@ -14251,6 +14251,13 @@ async def update_config_general_settings(
     return response
 
 
+# general_settings fields that hold credentials. These must never be returned
+# verbatim through the read endpoint: it is reachable by PROXY_ADMIN_VIEW_ONLY,
+# and the master_key in particular would let a read-only caller mint a full
+# admin key.
+_SECRET_CONFIG_GENERAL_SETTINGS_FIELDS = {"master_key", "database_url"}
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -14286,6 +14293,16 @@ async def get_config_general_settings(
         raise HTTPException(
             status_code=400,
             detail={"error": "Invalid field={} passed in.".format(field_name)},
+        )
+
+    if field_name in _SECRET_CONFIG_GENERAL_SETTINGS_FIELDS:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Field={} holds a credential and cannot be retrieved through this endpoint.".format(
+                    field_name
+                )
+            },
         )
 
     ## get general settings from db
@@ -14634,7 +14651,9 @@ async def delete_callback(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():  # noqa: PLR0915
+async def get_config(  # noqa: PLR0915
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback
@@ -14645,6 +14664,13 @@ async def get_config():  # noqa: PLR0915
         import base64
 
         all_available_callbacks = AllCallbacks()
+
+        # Callback variables are decrypted config secrets (provider keys, webhook
+        # URLs). Only a full proxy admin (who can also edit them) sees plaintext;
+        # a read-only admin gets them masked.
+        mask_callback_secrets = (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        )
 
         config_data = await proxy_config.get_config()
         _litellm_settings = config_data.get("litellm_settings", {})
@@ -14685,22 +14711,20 @@ async def get_config():  # noqa: PLR0915
 
         """
 
-        for _callback in _success_callbacks:
-            _data_to_return.append(
-                process_callback(_callback, "success", environment_variables)
-            )
-
-        for _callback in _failure_callbacks:
-            _data_to_return.append(
-                process_callback(_callback, "failure", environment_variables)
-            )
-
-        for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(
-                process_callback(
-                    _callback, "success_and_failure", environment_variables
+        for _callbacks, _callback_type in (
+            (_success_callbacks, "success"),
+            (_failure_callbacks, "failure"),
+            (_success_and_failure_callbacks, "success_and_failure"),
+        ):
+            for _callback in _callbacks:
+                _data_to_return.append(
+                    process_callback(
+                        _callback,
+                        _callback_type,
+                        environment_variables,
+                        mask_sensitive=mask_callback_secrets,
+                    )
                 )
-            )
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])

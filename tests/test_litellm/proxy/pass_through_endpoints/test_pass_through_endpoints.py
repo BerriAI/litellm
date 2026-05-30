@@ -1374,6 +1374,7 @@ async def test_get_pass_through_endpoints_includes_config_and_db():
     DB endpoints have is_from_config=False. When same path exists in both, DB overrides.
     """
     from litellm.proxy._types import (
+        LitellmUserRoles,
         PassThroughEndpointResponse,
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
@@ -1436,7 +1437,7 @@ async def test_get_pass_through_endpoints_includes_config_and_db():
                 mock_get_db.return_value = db_objects
                 mock_get_config.return_value = config_objects
 
-                mock_user = MagicMock(spec=UserAPIKeyAuth)
+                mock_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
                 result = await get_pass_through_endpoints(
                     endpoint_id=None,

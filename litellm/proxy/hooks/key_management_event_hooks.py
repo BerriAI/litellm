@@ -23,6 +23,20 @@ from litellm.proxy._types import (
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
 
+def _audit_values_without_plaintext_key(response: GenerateKeyResponse) -> str:
+    """Serialize a key response for the audit log with the plaintext key removed.
+
+    ``GenerateKeyResponse.key`` is the usable virtual key (sk-...); persisting it
+    verbatim turns the audit log into a credential store that any audit reader
+    can harvest. The object_id / token_id still record which key the event is
+    about, so the change-record stays meaningful without the secret.
+    """
+    data = response.model_dump(exclude_none=True)
+    if data.get("key"):
+        data["key"] = "***REDACTED***"
+    return json.dumps(data, default=str)
+
+
 class KeyManagementEventHooks:
     @staticmethod
     async def async_key_generated_hook(
@@ -56,7 +70,7 @@ class KeyManagementEventHooks:
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = response.model_dump_json(exclude_none=True)
+            _updated_values = _audit_values_without_plaintext_key(response)
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -205,7 +219,7 @@ class KeyManagementEventHooks:
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=existing_key_row.token,
                         action="rotated",
-                        updated_values=response.model_dump_json(exclude_none=True),
+                        updated_values=_audit_values_without_plaintext_key(response),
                         before_value=existing_key_row.model_dump_json(
                             exclude_none=True
                         ),
