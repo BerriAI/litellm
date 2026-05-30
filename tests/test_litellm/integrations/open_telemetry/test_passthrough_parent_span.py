@@ -285,3 +285,49 @@ def test_client_body_metadata_cannot_clobber_parent_span(
     where = "client-metadata-clobber"
     _assert_root_closed_and_no_orphan(exporter, root, where)
     _assert_child_parented_to_root(exporter, root, where)
+
+
+def test_init_kwargs_internal_keys_resist_client_metadata(server_span_factory):
+    """Deterministic contract test on _init_kwargs_for_pass_through_endpoint:
+    a request body whose metadata mirrors the internal user_api_key and
+    litellm_parent_otel_span keys must not override the authenticated values.
+    Pure dict assertion, no async or OTEL execution. Fails on the old ordering
+    where the client values were merged in last."""
+    real_span = server_span_factory("/anthropic/v1/messages")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-real-key", parent_otel_span=real_span
+    )
+    body = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "user_api_key": "sk-SPOOFED",
+            "litellm_parent_otel_span": "not-a-real-span",
+        },
+    }
+    logging_obj = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="lit-3443-clobber",
+        function_id="1245",
+    )
+    payload = PassthroughStandardLoggingPayload(
+        url=URL_ROUTE, request_body=body, request_method="POST"
+    )
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=_make_request(),
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=payload,
+        logging_obj=logging_obj,
+        _parsed_body=body,
+        litellm_call_id="lit-3443-clobber",
+    )
+    md = kwargs["litellm_params"]["metadata"]
+    # api_key is stored hashed on the auth object; the authenticated value must
+    # win over the client-supplied spoof.
+    assert md["user_api_key"] == user_api_key_dict.api_key
+    assert md["user_api_key"] != "sk-SPOOFED"
+    assert md["litellm_parent_otel_span"] is real_span
