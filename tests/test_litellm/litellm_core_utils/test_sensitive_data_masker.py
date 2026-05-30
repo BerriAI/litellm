@@ -197,3 +197,15 @@ def test_mask_url_credentials_preserves_ipv6_brackets():
     out = mask_url_credentials("redis://:supersecretpw@[::1]:6379")
     assert out == "redis://:****@[::1]:6379"
     assert "supersecretpw" not in out
+
+
+def test_fully_redacting_masker_masks_short_secret_values():
+    """A masker configured with no visible prefix/suffix (as used on the audit
+    read path) fully masks even short secrets, which the default partial-reveal
+    masker would otherwise return verbatim."""
+    masker = SensitiveDataMasker(visible_prefix=0, visible_suffix=0)
+    masked = masker.mask_dict({"api_key": "sk12", "password": "x", "port": 6379})
+    assert masked["api_key"] != "sk12"
+    assert set(masked["api_key"]) == {"*"}
+    assert masked["password"] == "*"
+    assert masked["port"] == 6379

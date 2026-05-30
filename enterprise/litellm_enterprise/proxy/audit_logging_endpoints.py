@@ -23,7 +23,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
-_AUDIT_VALUE_MASKER = SensitiveDataMasker()
+# Fully redact (no prefix/suffix reveal) so even short secrets in an audit
+# snapshot are masked; the audit log is a change record, not a place to read a
+# secret back from, so there is no value in revealing any of it.
+_AUDIT_VALUE_MASKER = SensitiveDataMasker(visible_prefix=0, visible_suffix=0)
 
 
 def _redact_audit_log_values(audit_log_dict: Dict[str, Any]) -> Dict[str, Any]:

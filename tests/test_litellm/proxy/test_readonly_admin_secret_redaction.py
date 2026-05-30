@@ -97,6 +97,18 @@ def test_redact_audit_log_values_handles_string_and_non_dict_input():
     )
 
 
+def test_redact_audit_log_values_masks_short_secrets():
+    """A short secret in an audit snapshot must still be masked, not returned
+    verbatim because it falls under the masker's partial-reveal length."""
+    from litellm_enterprise.proxy.audit_logging_endpoints import (
+        _redact_audit_log_values,
+    )
+
+    out = _redact_audit_log_values({"updated_values": {"api_key": "sk12"}})
+    assert out["updated_values"]["api_key"] != "sk12"
+    assert set(out["updated_values"]["api_key"]) == {"*"}
+
+
 # --------------------------------------------------------------------------- #
 # Pass-through endpoint header masking
 # --------------------------------------------------------------------------- #
