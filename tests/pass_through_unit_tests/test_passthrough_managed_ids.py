@@ -1188,6 +1188,160 @@ class TestRewriteBodyIds:
 
 
 # ---------------------------------------------------------------------------
+# Raw-provider-ID input guard — a raw ID recovered by decoding another tenant's
+# managed ID must NOT be forwarded upstream when it maps to a managed resource
+# the caller does not own (otherwise a DELETE / cancel runs upstream before the
+# response-side ownership check).
+# ---------------------------------------------------------------------------
+
+
+class TestRawProviderIdInputGuard:
+    @staticmethod
+    def _victim_file_row() -> MagicMock:
+        row = MagicMock()
+        row.created_by = "victim"
+        row.team_id = "victim-team"
+        row.unified_file_id = encode("openai", "victim", "file-victim")
+        return row
+
+    @staticmethod
+    def _victim_object_row() -> MagicMock:
+        row = MagicMock()
+        row.created_by = "victim"
+        row.team_id = "victim-team"
+        row.unified_object_id = encode("openai", "victim", "batch_victim")
+        return row
+
+    @pytest.mark.asyncio
+    async def test_raw_file_path_for_other_owner_denied(self):
+        """DELETE /openai/v1/files/file-victim with a raw ID that belongs to
+        another tenant's managed file is rejected (404) before forwarding."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[self._victim_file_row()]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_path_ids(
+                "/openai/v1/files/file-victim",
+                "openai",
+                _user("attacker", "attacker-team"),
+                pc,
+                _managed_files_hook(),
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_raw_batch_cancel_path_for_other_owner_denied(self):
+        """POST /openai/v1/batches/batch_victim/cancel with another tenant's raw
+        batch ID is rejected (404) before the upstream cancel runs."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=self._victim_object_row()
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_path_ids(
+                "/openai/v1/batches/batch_victim/cancel",
+                "openai",
+                _user("attacker", "attacker-team"),
+                pc,
+                _managed_files_hook(),
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_raw_file_query_for_other_owner_denied(self):
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[self._victim_file_row()]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_query_ids(
+                {"file_id": "file-victim"},
+                "openai",
+                _user("attacker", "attacker-team"),
+                pc,
+                _managed_files_hook(),
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_raw_file_body_for_other_owner_denied(self):
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[self._victim_file_row()]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_body_ids(
+                {"input_file_id": "file-victim"},
+                "openai",
+                _user("attacker", "attacker-team"),
+                pc,
+                _managed_files_hook(),
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_raw_file_owned_by_caller_passes_through(self):
+        """A raw ID the caller does own is left untouched and forwarded — the
+        guard must not block legitimate raw-ID usage."""
+        pc = _prisma_client()
+        own_row = MagicMock()
+        own_row.created_by = "user-1"
+        own_row.team_id = "team-1"
+        own_row.unified_file_id = encode("openai", "u", "file-mine")
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[own_row])
+        result = await rewrite_path_ids(
+            "/openai/v1/files/file-mine",
+            "openai",
+            _user("user-1", "team-1"),
+            pc,
+            _managed_files_hook(),
+        )
+        assert result == "/openai/v1/files/file-mine"
+
+    @pytest.mark.asyncio
+    async def test_unmanaged_raw_id_passes_through(self):
+        """A raw ID with no managed row at all is a genuine opt-out and is
+        forwarded unchanged."""
+        pc = _prisma_client()
+        result = await rewrite_path_ids(
+            "/openai/v1/files/file-never-managed",
+            "openai",
+            _user("attacker", "attacker-team"),
+            pc,
+            _managed_files_hook(),
+        )
+        assert result == "/openai/v1/files/file-never-managed"
+
+    @pytest.mark.asyncio
+    async def test_cross_provider_raw_file_not_blocked(self):
+        """A raw ID whose only managed row belongs to a different provider is not
+        this provider's resource, so the guard does not deny it."""
+        pc = _prisma_client()
+        azure_row = MagicMock()
+        azure_row.created_by = "victim"
+        azure_row.team_id = "victim-team"
+        azure_row.unified_file_id = encode("azure", "victim", "file-victim")
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[azure_row])
+        result = await rewrite_path_ids(
+            "/openai/v1/files/file-victim",
+            "openai",
+            _user("attacker", "attacker-team"),
+            pc,
+            _managed_files_hook(),
+        )
+        assert result == "/openai/v1/files/file-victim"
+
+
+# ---------------------------------------------------------------------------
 # Flag-off: behaviour unchanged when passthrough_managed_object_ids is False
 # ---------------------------------------------------------------------------
 

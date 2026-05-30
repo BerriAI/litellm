@@ -144,6 +144,9 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
 # Prefixes that live in the *file* table rather than the object table.
 _FILE_PREFIXES: FrozenSet[str] = frozenset({"file-"})
 
+# Raw provider-ID prefixes that live in the object table (batches, responses).
+_OBJECT_PREFIXES: FrozenSet[str] = frozenset({"batch_", "resp_"})
+
 # Guards request-body rewriting against stack exhaustion from adversarially
 # deep payloads. Real OpenAI files/batches bodies nest only a few levels.
 _MAX_BODY_REWRITE_DEPTH = 64
@@ -329,6 +332,71 @@ async def _resolve_one(
         )
 
     return payload.raw_provider_id
+
+
+async def _guard_raw_provider_id(
+    raw_id: str,
+    provider: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+) -> None:
+    """Deny a raw provider ID that maps to a managed resource the caller does
+    not own, before it is forwarded upstream.
+
+    Clients only ever receive managed IDs (response bodies are rewritten), so a
+    raw provider ID for another tenant's managed resource can only have been
+    recovered by decoding that tenant's managed ID.  Raw IDs are otherwise
+    forwarded untouched (deliberate opt-out), which on a retrieve / cancel /
+    delete would execute upstream before the response-side ownership check ever
+    runs.  Resolving the access check here, on input, keeps the raw fallback
+    from becoming a cross-tenant bypass.  Genuinely unmanaged raw IDs (no DB
+    row) are left untouched; ``HTTPException(404)`` mirrors the managed-ID
+    resolver so callers cannot probe which raw IDs exist.
+    """
+    if prisma_client is None:
+        return
+
+    if any(raw_id.startswith(p) for p in _FILE_PREFIXES):
+        # File rows have no provider column, so fetch every row holding this raw
+        # id and scope to the current provider in the application layer (same as
+        # _mint_or_reuse_file's dedup).
+        try:
+            candidates = await prisma_client.db.litellm_managedfiletable.find_many(
+                where={"flat_model_file_ids": {"has": raw_id}},
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: raw file-id guard lookup failed", exc_info=True
+            )
+            return
+        provider_rows = [
+            row
+            for row in (candidates or [])
+            if _managed_id_matches_provider(row.unified_file_id, provider)
+        ]
+        if provider_rows and not any(
+            can_access_resource(user_api_key_dict, row.created_by, row.team_id)
+            for row in provider_rows
+        ):
+            raise HTTPException(status_code=404, detail="Managed resource not found.")
+        return
+
+    if any(raw_id.startswith(p) for p in _OBJECT_PREFIXES):
+        # Object rows store model_object_id as "passthrough:{provider}:{raw}", so
+        # the lookup is exact and already provider-scoped.
+        try:
+            existing = await prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: raw object-id guard lookup failed", exc_info=True
+            )
+            return
+        if existing is not None and not can_access_resource(
+            user_api_key_dict, existing.created_by, existing.team_id
+        ):
+            raise HTTPException(status_code=404, detail="Managed resource not found.")
 
 
 # ---------------------------------------------------------------------------
@@ -979,6 +1047,9 @@ async def rewrite_path_ids(
             new_segments.append(quote(raw, safe="-_.~"))
             changed = True
         else:
+            await _guard_raw_provider_id(
+                decoded_seg, provider, user_api_key_dict, prisma_client
+            )
             new_segments.append(seg)
     if changed:
         verbose_proxy_logger.debug(
@@ -1003,11 +1074,16 @@ async def rewrite_query_ids(
     mutated = dict(params)
     changed = False
     for key, val in list(mutated.items()):
-        if isinstance(val, str) and is_managed(val):
-            mutated[key] = await _resolve_one(
-                val, provider, user_api_key_dict, prisma_client, managed_files_hook
-            )
-            changed = True
+        if isinstance(val, str):
+            if is_managed(val):
+                mutated[key] = await _resolve_one(
+                    val, provider, user_api_key_dict, prisma_client, managed_files_hook
+                )
+                changed = True
+            else:
+                await _guard_raw_provider_id(
+                    val, provider, user_api_key_dict, prisma_client
+                )
     if changed:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: query ids rewritten provider=%s keys=%s",
@@ -1053,10 +1129,15 @@ async def rewrite_body_ids(
             if any(n is not o for n, o in zip(new_list, node)):
                 return new_list
             return node
-        elif isinstance(node, str) and is_managed(node):
-            return await _resolve_one(
-                node, provider, user_api_key_dict, prisma_client, managed_files_hook
+        elif isinstance(node, str):
+            if is_managed(node):
+                return await _resolve_one(
+                    node, provider, user_api_key_dict, prisma_client, managed_files_hook
+                )
+            await _guard_raw_provider_id(
+                node, provider, user_api_key_dict, prisma_client
             )
+            return node
         return node
 
     rewritten = await _walk(body, 0)
