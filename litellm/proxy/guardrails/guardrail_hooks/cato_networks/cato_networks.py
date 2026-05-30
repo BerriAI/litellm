@@ -163,12 +163,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
         redacted_chat = res.get("redacted_chat")
         if not redacted_chat:
             return data
+        original_messages = data.get("messages") or []
+        redacted_messages = redacted_chat.get("all_redacted_messages") or []
         data["messages"] = [
-            {
-                "role": message["role"],
-                "content": message["content"],
-            }
-            for message in redacted_chat.get("all_redacted_messages") or []
+            {**original, "content": redacted["content"]}
+            for original, redacted in zip(original_messages, redacted_messages)
         ]
         return data
 

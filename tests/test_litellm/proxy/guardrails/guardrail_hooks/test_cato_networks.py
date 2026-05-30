@@ -461,6 +461,61 @@ async def test_call_cato_guardrail_monitor_action_returns_data_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_anonymize_action_preserves_non_text_message_fields():
+    guard = _make_guardrail()
+    data = {
+        "messages": [
+            {"role": "user", "content": "Call a tool for Brian"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Brian result"},
+        ]
+    }
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Call a tool for [NAME_1]"},
+                    {"role": "assistant", "content": None},
+                    {"role": "tool", "content": "[NAME_1] result"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+    assert result["messages"] == [
+        {"role": "user", "content": "Call a tool for [NAME_1]"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "[NAME_1] result"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_call_cato_guardrail_no_required_action_returns_data_unchanged():
     guard = _make_guardrail()
     data = {"messages": [{"role": "user", "content": "hi"}]}
