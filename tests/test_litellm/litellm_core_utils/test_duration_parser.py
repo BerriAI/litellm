@@ -385,5 +385,20 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertIn("garbage", mock_warning.call_args.args)
 
 
+class TestDurationInSeconds(unittest.TestCase):
+    def test_valid_durations(self):
+        self.assertEqual(duration_in_seconds("30s"), 30)
+        self.assertEqual(duration_in_seconds("10m"), 600)
+        self.assertEqual(duration_in_seconds("2h"), 7200)
+        self.assertEqual(duration_in_seconds("3d"), 259200)
+
+    def test_malformed_durations_raise(self):
+        # Trailing characters after a valid unit must be rejected, not silently
+        # dropped: "10mb" previously parsed as 10 minutes.
+        for bad in ["10mb", "5days", "30x", "abc", "10 m"]:
+            with self.assertRaises(ValueError):
+                duration_in_seconds(bad)
+
+
 if __name__ == "__main__":
     unittest.main()

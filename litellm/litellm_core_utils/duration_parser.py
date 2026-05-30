@@ -27,7 +27,9 @@ def _normalize_duration(duration: str) -> str:
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    # Use fullmatch so trailing characters after a valid unit are rejected
+    # rather than silently dropped (e.g. "10mb" must not parse as 10 minutes).
+    match = re.fullmatch(r"(\d+)(mo|[smhdw]?)", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
