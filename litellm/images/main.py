@@ -112,7 +112,9 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
+            model=model,
+            custom_llm_provider=kwargs.get("custom_llm_provider", None),
+            api_base=kwargs.get("api_base", None),
         )
 
         # Await normally

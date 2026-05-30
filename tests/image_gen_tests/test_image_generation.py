@@ -443,6 +443,22 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
 
 @pytest.mark.asyncio
+async def test_aimage_generation_respects_custom_provider_for_unknown_model():
+    """Custom OpenAI-compatible image models should not fail provider lookup."""
+    from litellm import aimage_generation
+
+    response = await aimage_generation(
+        model="Qwen-Image",
+        custom_llm_provider="openai",
+        prompt="test prompt",
+        mock_response="https://example.com/image.png",
+    )
+
+    assert response.data is not None
+    assert response.data[0].url == "https://example.com/image.png"
+
+
+@pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
     """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
