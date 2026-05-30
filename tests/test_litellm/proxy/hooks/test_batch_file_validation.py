@@ -293,22 +293,76 @@ async def test_pre_call_skips_file_fetch_for_configured_provider():
         parallel_request_limiter=MagicMock(),
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
+    data = {"input_file_id": "file-abc123", "model": "my-vllm-model"}
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "hosted_vllm"},
+        ),
+        patch("litellm.afile_content", new=AsyncMock()) as mock_afile_content,
     ):
         result = await rate_limiter.async_pre_call_hook(
             user_api_key_dict=user,
             cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result == data
+    # A real skip must short-circuit before any file download or rate-limit
+    # work — assert the skip happened rather than the hook's error-recovery
+    # path (which also returns data unchanged).
+    mock_afile_content.assert_not_awaited()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_does_not_skip_for_spoofed_provider():
+    """The provider skip is resolved from trusted deployment credentials, so a
+    user-supplied ``custom_llm_provider`` that is not backed by the routing
+    deployment must not trigger a skip."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = (
+        []
+    )
+    user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "openai"},
+        ),
+    ):
+        await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=user,
+            cache=MagicMock(),
             data={
                 "input_file_id": "file-abc123",
+                "model": "my-openai-model",
                 "custom_llm_provider": "hosted_vllm",
             },
             call_type="acreate_batch",
         )
 
-    assert result["custom_llm_provider"] == "hosted_vllm"
+    # Reaching descriptor evaluation proves the spoofed provider did not
+    # short-circuit the skip decision via the provider allow-list.
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_called_once()
 
 
 @pytest.mark.asyncio

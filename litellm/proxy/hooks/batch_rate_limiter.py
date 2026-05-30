@@ -127,6 +127,36 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return None
 
+    def _resolve_batch_provider(self, batch_model: Optional[str]) -> Optional[str]:
+        """Resolve the provider from the deployment that serves ``batch_model``.
+
+        The provider is read from trusted router credentials rather than the
+        user-supplied ``custom_llm_provider`` request field, so a caller cannot
+        spoof a skip-listed provider to bypass batch rate limiting.
+        """
+        if not batch_model:
+            return None
+
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            get_credentials_for_model,
+        )
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            return None
+
+        try:
+            credentials = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=batch_model,
+                operation_context="batch input file read (rate limiting)",
+            )
+        except HTTPException:
+            return None
+
+        provider = credentials.get("custom_llm_provider")
+        return provider if isinstance(provider, str) and provider else None
+
     def _matches_skip_list(self, value: str, skip_list: List[str]) -> bool:
         if not skip_list:
             return False
@@ -164,8 +194,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         ``_enforce_batch_file_model_access`` can validate every ``body.model``
         entry. Otherwise a restricted key could smuggle unauthorized models
         into the file via an admin-configured skip (global disable,
-        per-model, per-provider) or via the user-controlled
-        ``custom_llm_provider`` field.
+        per-model, per-provider).
 
         Returns ``(should_skip, descriptors)`` where ``descriptors`` is the
         rate-limit descriptor list computed for the no-limits check, so the
@@ -197,16 +226,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             general_settings.get("skip_batch_input_file_rate_limiting_for_providers")
             or []
         )
-        custom_llm_provider = data.get("custom_llm_provider")
-        if (
-            isinstance(custom_llm_provider, str)
-            and custom_llm_provider in skip_providers
-        ):
-            verbose_proxy_logger.debug(
-                "Skipping batch input file processing for "
-                f"custom_llm_provider={custom_llm_provider}"
-            )
-            return True, None
+        if skip_providers:
+            batch_provider = self._resolve_batch_provider(batch_model)
+            if batch_provider and batch_provider in skip_providers:
+                verbose_proxy_logger.debug(
+                    f"Skipping batch input file processing for provider={batch_provider}"
+                )
+                return True, None
 
         descriptors = self._create_batch_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
