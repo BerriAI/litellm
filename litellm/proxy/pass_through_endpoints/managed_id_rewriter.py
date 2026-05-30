@@ -1080,25 +1080,25 @@ async def rewrite_query_ids(
     if not params:
         return params
     mutated = dict(params)
-    changed = False
+    rewritten_keys: List[str] = []
     for key, val in list(mutated.items()):
         if isinstance(val, str):
             if is_managed(val):
                 mutated[key] = await _resolve_one(
                     val, provider, user_api_key_dict, prisma_client, managed_files_hook
                 )
-                changed = True
+                rewritten_keys.append(key)
             else:
                 await _guard_raw_provider_id(
                     val, provider, user_api_key_dict, prisma_client
                 )
-    if changed:
+    if rewritten_keys:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: query ids rewritten provider=%s keys=%s",
             provider,
-            [k for k, v in mutated.items() if isinstance(v, str)],
+            rewritten_keys,
         )
-    return mutated if changed else params
+    return mutated if rewritten_keys else params
 
 
 async def rewrite_body_ids(
