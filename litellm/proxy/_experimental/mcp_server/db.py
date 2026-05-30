@@ -30,6 +30,8 @@ from litellm.types.mcp import MCPCredentials
 
 def _prepare_mcp_server_data(
     data: Union[NewMCPServerRequest, UpdateMCPServerRequest],
+    exclude_unset: bool = False,
+    fields_set: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Helper function to prepare MCP server data for database operations.
@@ -37,17 +39,39 @@ def _prepare_mcp_server_data(
 
     Args:
         data: NewMCPServerRequest or UpdateMCPServerRequest object
+        exclude_unset: When True, only fields the caller explicitly provided are
+            included. Used for partial updates (PUT /v1/mcp/server) so omitted
+            fields keep their existing DB value instead of being silently reset
+            to a Pydantic schema default. ``exclude_none`` is not enough here:
+            non-Optional fields (e.g. ``transport=MCPTransport.sse``,
+            ``mcp_access_groups=[]``, ``allow_all_keys=False``) are backfilled
+            with their default when omitted, and a non-None default survives the
+            ``exclude_none`` filter and overwrites the row.
 
     Returns:
         Dict with properly serialized JSON fields
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Convert model to dict
-    data_dict = data.model_dump(exclude_none=True)
-    # Ensure alias is always present in the dict (even if None)
-    if "alias" not in data_dict:
-        data_dict["alias"] = getattr(data, "alias", None)
+    # Convert model to dict.
+    # - Partial update (exclude_unset): only caller-provided keys are emitted, so
+    #   omitted fields are never written and keep their existing DB value.
+    # - Create (exclude_none): drop None-valued fields and let DB defaults apply.
+    if exclude_unset:
+        if fields_set is None:
+            fields_set = data.fields_set()
+        data_dict = data.model_dump(exclude_unset=True)
+        # ``validate_and_normalize_mcp_server_payload`` always assigns ``alias``
+        # on the payload, which marks it as set even when the caller omitted it.
+        # Drop it only when the original request omitted alias; an explicit
+        # ``alias=None`` is a valid request to clear the stored alias.
+        if data_dict.get("alias") is None and "alias" not in fields_set:
+            data_dict.pop("alias", None)
+    else:
+        data_dict = data.model_dump(exclude_none=True)
+        # Ensure alias is always present in the dict (even if None)
+        if "alias" not in data_dict:
+            data_dict["alias"] = getattr(data, "alias", None)
 
     # Handle credentials serialization
     credentials = data_dict.get("credentials")
@@ -57,33 +81,33 @@ def _prepare_mcp_server_data(
         )
         data_dict["credentials"] = safe_dumps(data_dict["credentials"])
 
-    # Handle static_headers serialization
-    if data.static_headers is not None:
-        data_dict["static_headers"] = safe_dumps(data.static_headers)
+    # Serialize JSON fields from ``data_dict`` (not ``data``) so the
+    # exclude_unset filter is respected. Reading back from ``data`` would
+    # reintroduce defaults (e.g. ``env={}``) for fields the caller never set.
+    if data_dict.get("static_headers") is not None:
+        data_dict["static_headers"] = safe_dumps(data_dict["static_headers"])
 
-    # Handle mcp_info serialization
-    if data.mcp_info is not None:
-        data_dict["mcp_info"] = safe_dumps(data.mcp_info)
+    if data_dict.get("mcp_info") is not None:
+        data_dict["mcp_info"] = safe_dumps(data_dict["mcp_info"])
 
-    # Handle env serialization
-    if data.env is not None:
-        data_dict["env"] = safe_dumps(data.env)
+    if data_dict.get("env") is not None:
+        data_dict["env"] = safe_dumps(data_dict["env"])
 
-    # Handle tool name override serialization
-    if data.tool_name_to_display_name is not None:
+    if data_dict.get("tool_name_to_display_name") is not None:
         data_dict["tool_name_to_display_name"] = safe_dumps(
-            data.tool_name_to_display_name
+            data_dict["tool_name_to_display_name"]
         )
-    if data.tool_name_to_description is not None:
+    if data_dict.get("tool_name_to_description") is not None:
         data_dict["tool_name_to_description"] = safe_dumps(
-            data.tool_name_to_description
+            data_dict["tool_name_to_description"]
         )
 
     # mcp_access_groups is already List[str], no serialization needed
 
-    # Force include is_byok even when False (exclude_none=True would not drop it,
-    # but be explicit to ensure a False value is always written to the DB).
-    data_dict["is_byok"] = getattr(data, "is_byok", False)
+    # On create, force is_byok so a False value is always written to the DB. On
+    # partial update, only write it when the caller explicitly provided it.
+    if not exclude_unset:
+        data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     return data_dict
 
@@ -398,7 +422,10 @@ async def create_mcp_server(
 
 
 async def update_mcp_server(
-    prisma_client: PrismaClient, data: UpdateMCPServerRequest, touched_by: str
+    prisma_client: PrismaClient,
+    data: UpdateMCPServerRequest,
+    touched_by: str,
+    fields_set: Optional[Set[str]] = None,
 ) -> LiteLLM_MCPServerTable:
     """
     Update a new mcp server record in the db
@@ -407,8 +434,13 @@ async def update_mcp_server(
 
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    # Use helper to prepare data with proper JSON serialization
-    data_dict = _prepare_mcp_server_data(data)
+    # Use helper to prepare data with proper JSON serialization.
+    # exclude_unset=True makes this a true partial update: fields the caller did
+    # not provide are not written, so they keep their existing DB value instead
+    # of being reset to a schema default (transport=sse, allow_all_keys=False...).
+    data_dict = _prepare_mcp_server_data(
+        data, exclude_unset=True, fields_set=fields_set
+    )
 
     # Pre-fetch existing record once if we need it for auth_type or credential logic
     existing = None
