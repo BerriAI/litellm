@@ -586,6 +586,9 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+
+        if base_model.startswith("anthropic"):
+            supported_params.append("context_management")
         return supported_params
 
     def map_tool_choice_values(
@@ -947,10 +950,10 @@ class AmazonConverseConfig(BaseConfig):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
                 )
+            elif param == "context_management" and isinstance(value, (dict, list)):
+                self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
-                if value is not None and isinstance(value, dict):
-                    self._validate_request_metadata(value)  # type: ignore
-                    optional_params["requestMetadata"] = value
+                self._map_request_metadata_param(value, optional_params)
             if param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
 
@@ -982,6 +985,32 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 
         return optional_params
+
+    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+        if value is not None and isinstance(value, dict):
+            self._validate_request_metadata(value)  # type: ignore
+            optional_params["requestMetadata"] = value
+
+    def _map_context_management_param(
+        self, value: Union[dict, list], optional_params: dict
+    ) -> None:
+        # Match the dispatcher's ``_normalize_spec`` behavior: only run the
+        # OpenAI→Anthropic mapper for list inputs. Dict inputs are already in
+        # Anthropic-native shape (``{"edits": [...]}``) and should pass
+        # through unchanged so an Anthropic-format ``context_management``
+        # value isn't silently dropped when the mapper can't classify it.
+        if isinstance(value, list):
+            mapped = AnthropicConfig.map_openai_context_management_to_anthropic(
+                cast(Union[dict, list], value)
+            )
+        else:
+            mapped = value
+        # Skip when the mapper returned None for malformed input — leaving the
+        # key out is safer than passing `context_management: null` downstream,
+        # which Bedrock would reject and which can confuse intermediate checks
+        # before the final _filter_context_management_for_bedrock_converse step.
+        if mapped is not None:
+            optional_params["context_management"] = mapped
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
         """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
@@ -1488,12 +1517,53 @@ class AmazonConverseConfig(BaseConfig):
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
 
+            # Bedrock Converse: compact_20260112 edits only (+ beta header).
+            AmazonConverseConfig._filter_context_management_for_bedrock_converse(
+                additional_request_params, anthropic_beta_list
+            )
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         if anthropic_beta_list and base_model.startswith("anthropic"):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
+
+    @staticmethod
+    def _filter_context_management_for_bedrock_converse(
+        additional_request_params: dict,
+        anthropic_beta_list: list,
+    ) -> None:
+        """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
+        from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+            COMPACT_EDIT_TYPE,
+        )
+        from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+
+        cm = additional_request_params.get("context_management")
+        if not isinstance(cm, dict):
+            additional_request_params.pop("context_management", None)
+            return
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            additional_request_params.pop("context_management", None)
+            return
+
+        compact_edits = [
+            e
+            for e in edits
+            if isinstance(e, dict) and e.get("type") == COMPACT_EDIT_TYPE
+        ]
+        if compact_edits:
+            compact_beta = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
+            if compact_beta not in anthropic_beta_list:
+                anthropic_beta_list.append(compact_beta)
+            additional_request_params["context_management"] = {
+                **cm,
+                "edits": compact_edits,
+            }
+        else:
+            additional_request_params.pop("context_management", None)
 
     def _transform_request_helper(
         self,
