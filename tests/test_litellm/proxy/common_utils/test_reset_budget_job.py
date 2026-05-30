@@ -1301,13 +1301,12 @@ def test_reset_does_not_zero_counter_when_db_write_fails(monkeypatch):
 
     asyncio.run(job.reset_budget_for_litellm_keys())
 
-    # CRITICAL: counter invalidation must NOT have been called for the
-    # failing key, because the DB write raised before the post-write loop.
-    for call in counter_cache.in_memory_cache.set_cache.call_args_list:
-        assert call.kwargs.get("key") != "spend:key:sk-failing", (
-            "Counter was zeroed for sk-failing despite the DB write failing — "
-            "this re-opens the bypass window the fix is supposed to close."
-        )
+    # CRITICAL: counter invalidation must NOT have been called at all —
+    # the DB write raised before the post-write invalidation loop. Using
+    # assert_not_called() instead of iterating call_args_list, because the
+    # latter is vacuously true when the list is empty (would pass even if
+    # the bypass were re-introduced via a different code path).
+    counter_cache.in_memory_cache.set_cache.assert_not_called()
 
 
 def test_reset_budget_for_keys_writes_only_spend_and_reset_at(reset_budget_job, mock_prisma_client):

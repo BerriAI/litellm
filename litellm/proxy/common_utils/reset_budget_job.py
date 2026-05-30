@@ -380,6 +380,13 @@ class ResetBudgetJob:
     async def _write_user_reset_updates(
         self, updated_users: List[LiteLLM_UserTable]
     ) -> None:
+        """
+        Write per-row {spend, budget_reset_at} updates for users.
+
+        Mirrors _write_key_reset_updates — avoids the full-model update path
+        that trips Prisma's DataError on rows carrying unrecognised fields
+        (see #27730).
+        """
         batcher = self.prisma_client.db.batch_()
         for u in updated_users:
             user_id = getattr(u, "user_id", None)
@@ -394,6 +401,13 @@ class ResetBudgetJob:
     async def _write_team_reset_updates(
         self, updated_teams: List[LiteLLM_TeamTable]
     ) -> None:
+        """
+        Write per-row {spend, budget_reset_at} updates for teams.
+
+        Mirrors _write_key_reset_updates — avoids the full-model update path
+        that trips Prisma's DataError on rows carrying unrecognised fields
+        (see #27730).
+        """
         batcher = self.prisma_client.db.batch_()
         for t in updated_teams:
             team_id = getattr(t, "team_id", None)
