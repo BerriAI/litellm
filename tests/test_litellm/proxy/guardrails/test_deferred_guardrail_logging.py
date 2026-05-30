@@ -1033,9 +1033,9 @@ class TestDeferredStreamingClosure:
             litellm_call_id="test-id",
             function_id="fn",
         )
-        # call_type "completion" with no async marker -> classified sync.
+        # litellm_params with no recognized async marker -> classified sync.
         logging_obj.model_call_details["litellm_params"] = {}
-        assert logging_obj._is_sync_litellm_request({}) is True
+        assert LiteLLMLoggingObj._is_sync_litellm_request({}) is True
 
         with (
             patch.object(

@@ -16,9 +16,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ClassVar,
     Dict,
-    FrozenSet,
     List,
     Literal,
     Optional,
@@ -1614,35 +1612,9 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> Optional[float]:
         return self._response_cost_calculator(result=result, cache_hit=cache_hit)
 
-    # Async completion-family call types whose async flag is NOT stored in
-    # ``litellm_params`` by ``get_litellm_params`` (which only stores
-    # ``acompletion``/``aembedding``). Without this set they fall through to the
-    # flag checks below and are misclassified as sync. ``call_type`` is
-    # ``original_function.__name__`` (set in ``function_setup``), so these carry
-    # the async-prefixed name; listed explicitly rather than tested by an "a"
-    # prefix because not every "a"-prefixed call_type is async (e.g.
-    # ``anthropic_messages``).
-    _ASYNC_ONLY_CALL_TYPES: ClassVar[FrozenSet[str]] = frozenset(
-        {
-            CallTypes.aresponses.value,
-            CallTypes.atranscription.value,
-            CallTypes.aimage_generation.value,
-            CallTypes.atext_completion.value,
-        }
-    )
-
-    def _is_sync_litellm_request(self, litellm_params: dict) -> bool:
-        """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.).
-
-        ``acompletion``/``aembedding`` are detected from the ``litellm_params``
-        flags that ``get_litellm_params`` stores. The remaining async
-        completion-family call types (``aresponses``, ``atranscription``,
-        ``aimage_generation``, ``atext_completion``) have no stored flag, so
-        they are detected from ``call_type`` — otherwise they would be
-        misclassified as sync and skip the async-only success/failure callbacks.
-        """
-        if self.call_type in self._ASYNC_ONLY_CALL_TYPES:
-            return False
+    @staticmethod
+    def _is_sync_litellm_request(litellm_params: dict) -> bool:
+        """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.)."""
         return (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
             and litellm_params.get(CallTypes.aresponses.value, False) is not True
