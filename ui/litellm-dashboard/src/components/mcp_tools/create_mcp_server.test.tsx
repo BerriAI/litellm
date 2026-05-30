@@ -476,6 +476,63 @@ describe("CreateMCPServer", () => {
         expect(inlineError !== null || notCalled).toBe(true);
       });
     });
+
+    const DELEGATE_LABEL = "Delegate auth to upstream (PKCE passthrough)";
+
+    it("shows the delegate auth toggle for the interactive flow", async () => {
+      await setupOAuthInteractive();
+      expect(screen.getByText(DELEGATE_LABEL)).toBeInTheDocument();
+    });
+
+    it("hides the delegate auth toggle when the M2M flow is selected", async () => {
+      await setupOAuthInteractive();
+      await selectAntOption("OAuth Flow Type", "Machine-to-Machine");
+      await waitFor(() => {
+        expect(screen.queryByText(DELEGATE_LABEL)).not.toBeInTheDocument();
+      });
+    });
+
+    it("sends delegate_auth_to_upstream=true when the toggle is on for interactive OAuth", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("switch"));
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.delegate_auth_to_upstream).toBe(true);
+    });
   });
 
   describe("when modal is cancelled", () => {

@@ -43,7 +43,7 @@ vi.mock("./mcp_tool_configuration", () => ({
 const interactiveOAuthServer = {
   server_id: "oauth_server_1",
   server_name: "OAuthServer",
-  alias: "oauth_server",   // underscores: hyphens fail validateMCPServerName
+  alias: "oauth_server", // underscores: hyphens fail validateMCPServerName
   description: "Interactive OAuth MCP server",
   transport: "http",
   url: "https://example.com/mcp",
@@ -215,6 +215,56 @@ describe("MCPServerEdit (delegate auth)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.auth_type).toBe("none");
     expect(payload.delegate_auth_to_upstream).toBe(false);
+  });
+
+  const saveAndGetPayload = async () => {
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+    return vi.mocked(networking.updateMCPServer).mock.calls[0][1];
+  };
+
+  it("renders the toggle checked for an interactive OAuth server and keeps it true on save", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, delegate_auth_to_upstream: true }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.getByText("Delegate auth to upstream (PKCE passthrough)")).toBeInTheDocument();
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+
+    expect((await saveAndGetPayload()).delegate_auth_to_upstream).toBe(true);
+  });
+
+  it("persists delegation turned off", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, delegate_auth_to_upstream: true }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch"));
+    });
+
+    expect((await saveAndGetPayload()).delegate_auth_to_upstream).toBe(false);
   });
 });
 
