@@ -1051,11 +1051,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
-                # Handle both single part and list of parts (for Computer Use with images)
-                if isinstance(_part, list):
-                    tool_call_responses.extend(_part)
-                else:
-                    tool_call_responses.append(_part)
+                tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
