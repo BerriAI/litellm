@@ -603,6 +603,38 @@ async def test_anonymize_action_fewer_redacted_messages_preserves_remaining():
 
 
 @pytest.mark.asyncio
+async def test_anonymize_action_missing_content_key_preserves_original_message():
+    guard = _make_guardrail()
+    data = {
+        "messages": [
+            {"role": "user", "content": "Hi my name is Brian"},
+            {"role": "assistant", "content": "Hello Brian"},
+        ]
+    }
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Hi my name is [NAME_1]"},
+                    {"role": "assistant"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+    assert result["messages"] == [
+        {"role": "user", "content": "Hi my name is [NAME_1]"},
+        {"role": "assistant", "content": "Hello Brian"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_call_cato_guardrail_forwards_user_email_from_auth():
     guard = _make_guardrail()
     data = {

@@ -166,6 +166,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             (
                 {**original, "content": redacted_messages[idx]["content"]}
                 if idx < len(redacted_messages)
+                and redacted_messages[idx].get("content") is not None
                 else original
             )
             for idx, original in enumerate(original_messages)
