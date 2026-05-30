@@ -1,6 +1,6 @@
 ---
-title: "v1.86.0rc1 - Weighted-Routing Failover, Native Web-Search Citations & OTel-Standard Tracing"
-slug: "v1-86-0-rc-1"
+title: "v1.86.0 - Weighted-Routing Failover, Native Web-Search Citations & OTel-Standard Tracing"
+slug: "v1-86-0"
 date: 2026-05-16T00:00:00
 authors:
   - name: Krrish Dholakia
@@ -31,14 +31,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:1.86.0-rc.1
+docker.litellm.ai/berriai/litellm:1.86.0
 ```
 
 </TabItem>
 <TabItem value="pip" label="Pip">
 
 ```bash
-pip install litellm==1.86.0rc1
+pip install litellm==1.86.0
 ```
 
 </TabItem>
@@ -172,11 +172,11 @@ Testing, CI & build hardening:
 
 - @vladpolevoi made their first contribution in [#27648](https://github.com/BerriAI/litellm/pull/27648)
 
-**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.85.0-rc.2...v1.86.0-rc.1
+**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.85.0...v1.86.0
 
 ---
 
-## 05/16/2026 (`v1.86.0rc1`)
+## 05/16/2026 (`v1.86.0`)
 
 * New Models / Updated Models: 2
 * LLM API Endpoints: 3

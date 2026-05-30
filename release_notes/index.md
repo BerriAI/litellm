@@ -10,11 +10,21 @@ LiteLLM ships new releases regularly with new provider support, performance impr
 
 ## Latest Release
 
-### [v1.85.1 — Gemini 3.5 Flash & Reliability Fixes](/release_notes/v1.85.1/v1-85-1)
+### [v1.86.0 — Weighted-Routing Failover, Native Web-Search Citations & OTel-Standard Tracing](/release_notes/v1.86.0/v1-86-0)
 
-_May 20, 2026_
+_May 16, 2026_
 
-A patch release on top of [v1.85.0](/release_notes/v1.85.0/v1-85-0): day-0 support for Gemini 3.5 Flash on Google AI Studio and Vertex AI, a Vertex AI tool-calling fix that resolves Gemini 3.5+ HTTP 400 `Unknown name "id"` errors, and a cross-pod spend-counter fix that stops team budgets from double-counting after a Redis cache miss. The same fixes are also shipped for the 1.84 line as [v1.84.1](/release_notes/v1.84.1/v1-84-1).
+Weighted-Routing Failover (retry the same model group on a different deployment while still respecting configured weights), native `web_search_tool_result` blocks for Anthropic clients so Claude Desktop and Cowork render web-search citations correctly, OTel-standard server-span attributes (`http.response.status_code`, `http.route`, `url.path`, `litellm.preprocessing.duration_ms`) plus opt-in OTEL GenAI semconv support, an additive componentized deployment scaffold (`gateway` / `backend` / `ui` Dockerfiles + Helm chart + Terraform stacks), and a critical fix for the v3 rate limiter that was leaking internal reservation keys into upstream provider request bodies on every virtual key with a `tpm_limit` or `rpm_limit` set.
+
+---
+
+## Latest Release Candidate
+
+### [v1.87.0rc1 — OCI Generative AI Provider, Gemini 3.5 Flash Day-0, MCP UI for OAuth Servers](/release_notes/v1.87.0rc1/v1-87-0-rc-1)
+
+_May 23, 2026_
+
+OCI Generative AI as a first-class provider (chat, embeddings, streaming, reasoning, tool use across Cohere, Llama, Grok, Gemini, and GPT-5 on OCI with full pricing catalog), Gemini 3.5 Flash and Gemini 3.1 Flash-Lite day-0 on Vertex AI / Google AI Studio / OpenRouter, MCP UI for OAuth-protected tool calls plus Cursor MCP OAuth, Codex CLI JWT team-alias and SSO form-URL auth hardening, and a hot-path Anthropic `/v1/messages` streaming rewrite with byte-identical wire output and ~90% lower TTFT overhead measured on a real 4-pod deployment.
 
 ---
 
@@ -22,6 +32,7 @@ A patch release on top of [v1.85.0](/release_notes/v1.85.0/v1-85-0): day-0 suppo
 
 | Version                             | Date         | Highlights                                                 |
 | ----------------------------------- | ------------ | ---------------------------------------------------------- |
+| [v1.86.0](/release_notes/v1.86.0/v1-86-0)   | May 16, 2026 | Weighted-Routing Failover, native Anthropic web-search citations, OTel-standard server spans |
 | [v1.85.1](/release_notes/v1.85.1/v1-85-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |
 | [v1.84.1](/release_notes/v1.84.1/v1-84-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |
 | [v1.85.0](/release_notes/v1.85.0/v1-85-0)   | May 16, 2026 | Realtime GA, MCP Gateway expansion & hardened multi-tenancy |
