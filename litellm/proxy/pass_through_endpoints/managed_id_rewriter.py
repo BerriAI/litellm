@@ -522,11 +522,15 @@ async def _mint_or_reuse_file(
                 user_api_key_dict=user_api_key_dict,
             )
         except Exception:
+            # No row backs the minted ID, so every later resolve would 404. Fall
+            # back to the raw id (as when no persistence is available) to keep the
+            # caller's freshly-created resource reachable rather than orphaned.
             verbose_proxy_logger.warning(
                 "managed_id_rewriter: could not persist file row; "
-                "ID minted but not stored",
+                "leaving raw id unmanaged",
                 exc_info=True,
             )
+            return raw_id
     return managed_id
 
 
@@ -634,11 +638,15 @@ async def _mint_or_reuse_object(
             },
         )
     except Exception:
+        # No row backs the minted ID, so every later resolve would 404. Fall
+        # back to the raw id (as when no persistence is available) to keep the
+        # caller's freshly-created resource reachable rather than orphaned.
         verbose_proxy_logger.warning(
             "managed_id_rewriter: could not persist object row; "
-            "ID minted but not stored",
+            "leaving raw id unmanaged",
             exc_info=True,
         )
+        return raw_id
     return managed_id
 
 

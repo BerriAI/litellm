@@ -367,6 +367,27 @@ class TestRewriteResponseIds:
         hook.store_unified_file_id.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_file_create_persist_failure_leaves_raw_id(self):
+        """If the DB write fails, the response must keep the raw provider ID
+        (which still resolves upstream) rather than swap in a managed ID that no
+        DB row backs and that would 404 on every later resolve."""
+        pc = _prisma_client()
+        hook = _managed_files_hook(store_side_effect=Exception("db down"))
+        body = {"id": "file-abc123", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        hook.store_unified_file_id.assert_awaited_once()
+        assert result["id"] == "file-abc123"
+        assert decode(result["id"]) is None
+
+    @pytest.mark.asyncio
     async def test_batch_create_mints_id_and_input_file_id(self):
         pc = _prisma_client()
         hook = _managed_files_hook()
@@ -763,6 +784,30 @@ class TestRewriteResponseIds:
         assert (
             call_data["create"]["model_object_id"] == "passthrough:azure:batch_shared"
         )
+
+    @pytest.mark.asyncio
+    async def test_batch_create_persist_failure_leaves_raw_id(self):
+        """If the object upsert fails, the batch response must keep the raw
+        provider ID rather than return a managed ID with no backing DB row that
+        would 404 on every subsequent resolve."""
+        pc = _prisma_client()
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(
+            side_effect=Exception("db down")
+        )
+        body = {"id": "batch_xyz", "object": "batch", "input_file_id": None}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/batches",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+        pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+        assert result["id"] == "batch_xyz"
+        assert decode(result["id"]) is None
 
     @pytest.mark.asyncio
     async def test_cross_provider_batch_collision_dedup_uses_namespaced_key(self):
