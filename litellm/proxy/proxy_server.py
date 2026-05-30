@@ -14262,6 +14262,7 @@ _SECRET_CONFIG_GENERAL_SETTINGS_FIELDS = {
     "database_url",
     "alert_to_webhook_url",
     "pass_through_endpoints",
+    "database_args",  # DynamoDBArgs carries aws_web_identity_token
 }
 
 

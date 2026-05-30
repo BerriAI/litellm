@@ -173,7 +173,13 @@ async def test_pass_through_get_masks_headers_for_non_admin_only():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field_name",
-    ["master_key", "database_url", "alert_to_webhook_url", "pass_through_endpoints"],
+    [
+        "master_key",
+        "database_url",
+        "alert_to_webhook_url",
+        "pass_through_endpoints",
+        "database_args",
+    ],
 )
 async def test_config_field_info_blocks_secret_fields(field_name):
     from litellm.proxy.proxy_server import get_config_general_settings
