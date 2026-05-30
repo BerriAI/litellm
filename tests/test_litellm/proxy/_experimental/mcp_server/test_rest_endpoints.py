@@ -544,6 +544,165 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    async def test_mcp_server_name_scopes_to_single_server(self, monkeypatch):
+        """Bug #9: mcp_server_name must scope the listing to that one server
+        instead of being silently dropped and listing every server's tools."""
+
+        class StubTool:
+            def __init__(self, name):
+                self.name = name
+
+        class StubServer:
+            def __init__(self, server_id):
+                self.server_id = server_id
+                self.alias = server_id
+                self.server_name = server_id
+                self.name = server_id
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": server_id}
+                self.available_on_public_internet = True
+
+        servers = {"server-a": StubServer("server-a"), "server-b": StubServer("server-b")}
+        server_tools = {"server-a": ["a_tool"], "server-b": ["b_tool"]}
+        queried = []
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-a", "server-b"]
+
+        async def fake_get_tools(
+            server, server_auth_header, raw_headers=None,
+            user_api_key_auth=None, extra_headers=None,
+        ):
+            queried.append(server.server_id)
+            return [StubTool(n) for n in server_tools[server.server_id]]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers", fake_get_allowed_mcp_servers, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id", lambda sid: servers.get(sid), raising=False)
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            mcp_server_name="server-a",
+            toolset_name=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["error"] is None
+        assert [t.name for t in result["tools"]] == ["a_tool"]
+        # server-b must never be queried when a single server is requested.
+        assert queried == ["server-a"]
+
+    async def test_filters_tools_by_toolset_name(self, monkeypatch):
+        """Bug #9: toolset_name must scope the listing to the toolset's servers
+        and tools, reusing resolve_toolset_tool_permissions like the streamable
+        HTTP /toolset/{name}/mcp path. Without a filter, all tools are returned."""
+
+        class StubTool:
+            def __init__(self, name):
+                self.name = name
+
+        class StubServer:
+            def __init__(self, server_id):
+                self.server_id = server_id
+                self.alias = server_id
+                self.server_name = server_id
+                self.name = server_id
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": server_id}
+                self.available_on_public_internet = True
+
+        servers = {"server-a": StubServer("server-a"), "server-b": StubServer("server-b")}
+        server_tools = {"server-a": ["tool1", "tool2"], "server-b": ["tool3", "tool4"]}
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-a", "server-b"]
+
+        async def fake_get_tools(
+            server, server_auth_header, raw_headers=None,
+            user_api_key_auth=None, extra_headers=None,
+        ):
+            return [StubTool(n) for n in server_tools[server.server_id]]
+
+        class StubToolset:
+            toolset_id = "toolset-xyz"
+
+        async def fake_get_toolset_by_name_cached(prisma_client, name):
+            return StubToolset() if name == "my-toolset" else None
+
+        async def fake_resolve_toolset_tool_permissions(toolset_ids):
+            assert toolset_ids == ["toolset-xyz"]
+            # Grant only tool2 on server-a; server-b is excluded entirely.
+            return {"server-a": ["tool2"]}
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers", fake_get_allowed_mcp_servers, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id", lambda sid: servers.get(sid), raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_toolset_by_name_cached", fake_get_toolset_by_name_cached, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "resolve_toolset_tool_permissions", fake_resolve_toolset_tool_permissions, raising=False)
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+        monkeypatch.setattr("litellm.proxy.utils.get_prisma_client_or_throw", lambda *a, **k: object(), raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+
+        all_result = await rest_endpoints.list_tool_rest_api(
+            request, server_id=None, mcp_server_name=None, toolset_name=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        assert all_result["error"] is None
+        assert sorted(t.name for t in all_result["tools"]) == ["tool1", "tool2", "tool3", "tool4"]
+
+        scoped = await rest_endpoints.list_tool_rest_api(
+            request, server_id=None, mcp_server_name=None, toolset_name="my-toolset",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        assert scoped["error"] is None
+        assert [t.name for t in scoped["tools"]] == ["tool2"]
+
+    async def test_unknown_toolset_name_returns_not_found(self, monkeypatch):
+        """Bug #9: an unknown toolset_name surfaces toolset_not_found rather than
+        silently returning every tool."""
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-a"]
+
+        async def fake_get_toolset_by_name_cached(prisma_client, name):
+            return None
+
+        class StubServer:
+            server_id = "server-a"
+            alias = "server-a"
+            server_name = "server-a"
+            name = "server-a"
+            allowed_tools = None
+            mcp_info = {"server_name": "server-a"}
+            available_on_public_internet = True
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers", fake_get_allowed_mcp_servers, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id", lambda sid: StubServer() if sid == "server-a" else None, raising=False)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_toolset_by_name_cached", fake_get_toolset_by_name_cached, raising=False)
+        monkeypatch.setattr("litellm.proxy.utils.get_prisma_client_or_throw", lambda *a, **k: object(), raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request, server_id=None, mcp_server_name=None, toolset_name="does-not-exist",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        assert result["tools"] == []
+        assert "toolset_not_found" in result["message"]
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""

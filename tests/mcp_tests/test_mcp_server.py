@@ -2186,6 +2186,8 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     result = await list_tool_rest_api(
                         request=mock_request,
                         server_id=None,
+                        mcp_server_name=None,
+                        toolset_name=None,
                         user_api_key_dict=mock_user_api_key_dict,
                     )
 
