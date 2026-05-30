@@ -1066,6 +1066,55 @@ async def test_post_call_success_hook_skips_non_model_response():
     assert result is not_a_model_response
 
 
+@pytest.mark.asyncio
+async def test_post_call_success_hook_tool_call_only_choice_keeps_none_content():
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": ""},
+                ]
+            },
+        }
+    )
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = anonymize_response
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=llm_response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    mock_post.assert_not_called()
+    assert result.choices[0].message.content is None
+
+
 # -----------------------------------------------------------------------------
 # get_config_model
 # -----------------------------------------------------------------------------

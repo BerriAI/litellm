@@ -268,7 +268,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
             for choice in response.choices:
                 if not isinstance(choice, Choices):
                     continue
-                content = choice.message.content or ""
+                if choice.message.content is None:
+                    continue
+                content = choice.message.content
                 cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
                     data,
                     content,
