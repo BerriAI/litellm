@@ -5,6 +5,12 @@ export const INTERNAL_USER_STORAGE_PATH = "internalUser.storageState.json";
 export const INTERNAL_VIEWER_STORAGE_PATH = "internalViewer.storageState.json";
 export const TEAM_ADMIN_STORAGE_PATH = "teamAdmin.storageState.json";
 
+// Seeded user identities (match seed.sql)
+export const E2E_PROXY_ADMIN_USER_ID = "e2e-proxy-admin";
+export const E2E_PROXY_ADMIN_EMAIL = "admin@test.local";
+export const E2E_INTERNAL_USER_ID = "e2e-internal-user";
+export const E2E_INTERNAL_USER_EMAIL = "internal@test.local";
+
 // Key aliases for seeded test keys (match seed.sql)
 export const E2E_UPDATE_LIMITS_KEY_ALIAS = "e2eUpdateLimitsKey";
 export const E2E_DELETE_KEY_ALIAS = "e2eDeleteKey";

@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { INTERNAL_USER_STORAGE_PATH } from "../../constants";
+import {
+  E2E_INTERNAL_USER_EMAIL,
+  E2E_INTERNAL_USER_ID,
+  E2E_PROXY_ADMIN_EMAIL,
+  E2E_PROXY_ADMIN_USER_ID,
+  INTERNAL_USER_STORAGE_PATH,
+} from "../../constants";
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test.describe("Navbar identity scoping", () => {
   test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
@@ -14,24 +22,27 @@ test.describe("Navbar identity scoping", () => {
     await expect(accountButton).toHaveAttribute("aria-label", /Internal User/, { timeout: 5_000 });
     await expect(accountButton).toHaveAttribute(
       "aria-label",
-      /signed in as internal@test\.local|signed in as e2e-internal-user/,
+      new RegExp(
+        `signed in as (${escapeRegExp(E2E_INTERNAL_USER_EMAIL)}|${escapeRegExp(E2E_INTERNAL_USER_ID)})`,
+      ),
       { timeout: 5_000 },
     );
 
     // Open the dropdown (UserDropdown configures trigger=["click"]).
     await accountButton.click();
 
-    const popup = page.locator(".ant-dropdown:visible").filter({
-      has: page.locator(".bg-white.rounded-lg.shadow-lg"),
-    }).first();
+    // Locate the panel by its test id (data-testid on the popupRender div in
+    // UserDropdown.tsx) rather than Ant/Tailwind class names, so styling
+    // refactors don't silently break the identity-scoping assertions below.
+    const popup = page.getByTestId("user-dropdown-panel");
     await expect(popup).toBeVisible({ timeout: 5_000 });
 
     // The popup must show the internal user's identity — not the seeded
     // proxy admin's email/id, which would indicate a session/scope leak.
-    await expect(popup.getByText("internal@test.local")).toBeVisible({ timeout: 5_000 });
-    await expect(popup.getByText("e2e-internal-user")).toBeVisible({ timeout: 5_000 });
+    await expect(popup.getByText(E2E_INTERNAL_USER_EMAIL)).toBeVisible({ timeout: 5_000 });
+    await expect(popup.getByText(E2E_INTERNAL_USER_ID)).toBeVisible({ timeout: 5_000 });
     await expect(popup.getByText("Internal User", { exact: true })).toBeVisible({ timeout: 5_000 });
-    await expect(popup.getByText("admin@test.local")).toHaveCount(0);
-    await expect(popup.getByText("e2e-proxy-admin")).toHaveCount(0);
+    await expect(popup.getByText(E2E_PROXY_ADMIN_EMAIL)).toHaveCount(0);
+    await expect(popup.getByText(E2E_PROXY_ADMIN_USER_ID)).toHaveCount(0);
   });
 });
