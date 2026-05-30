@@ -80,6 +80,23 @@ def _managed_files_hook(store_side_effect: Any = None) -> MagicMock:
     return hook
 
 
+def _owner_scoped_file_find_first(row: Any):
+    """Return a ``find_first`` that mimics Prisma owner-scoping for the managed
+    file table: an owner-scoped query (one carrying ``created_by`` / ``team_id``
+    / ``OR``) returns ``None`` because the caller does not own *row*, while an
+    unscoped (global) query returns *row*. This reproduces the cross-tenant
+    bypass that a caller-scoped dedup lookup allowed (the scoped query misses the
+    other tenant's row, so a fresh managed ID gets minted for the attacker)."""
+
+    async def _impl(*args: Any, where: Any = None, **kwargs: Any) -> Any:
+        where = where or {}
+        if "created_by" in where or "team_id" in where or "OR" in where:
+            return None
+        return row
+
+    return _impl
+
+
 # ---------------------------------------------------------------------------
 # managed_id_codec — unit tests
 # ---------------------------------------------------------------------------
@@ -353,6 +370,8 @@ class TestRewriteResponseIds:
         existing_managed_id = new_managed_id("openai", "file-abc")
         existing_row = MagicMock()
         existing_row.unified_file_id = existing_managed_id
+        existing_row.created_by = "user-1"
+        existing_row.team_id = "team-1"
 
         pc = _prisma_client()
         # Dedup lookup finds existing row
@@ -402,6 +421,127 @@ class TestRewriteResponseIds:
         assert decode(result["id"]).raw_provider_id == "file-abc"
         assert result["id"] != azure_managed_id
         hook.store_unified_file_id.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cross_owner_file_retrieve_raises_404(self):
+        """
+        A caller who fetches another tenant's raw ``file-...`` ID through
+        GET /openai/v1/files/{file_id} (which bypasses the managed-ID input gate)
+        must be denied with a 404 — the response path must NOT mint a fresh
+        managed ID for that file under the attacker.
+        """
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "victim"
+        other_owner_row.team_id = "victim-team"
+        other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
+        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+            other_owner_row
+        )
+        hook = _managed_files_hook()
+
+        body = {"id": "file-victim", "object": "file"}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_response_ids(
+                provider="openai",
+                method="GET",
+                route="/openai/v1/files/file-victim",
+                body=body,
+                user_api_key_dict=_user("attacker", "attacker-team"),
+                prisma_client=pc,
+                managed_files_hook=hook,
+            )
+        assert exc_info.value.status_code == 404
+        # Must not mint / persist a managed ID for the attacker.
+        hook.store_unified_file_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cross_owner_file_delete_raises_404(self):
+        """DELETE is also a non-create route: cross-owner raw file IDs are denied."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "victim"
+        other_owner_row.team_id = "victim-team"
+        other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
+        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+            other_owner_row
+        )
+        hook = _managed_files_hook()
+
+        body = {"id": "file-victim", "object": "file", "deleted": True}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_response_ids(
+                provider="openai",
+                method="DELETE",
+                route="/openai/v1/files/file-victim",
+                body=body,
+                user_api_key_dict=_user("attacker", "attacker-team"),
+                prisma_client=pc,
+                managed_files_hook=hook,
+            )
+        assert exc_info.value.status_code == 404
+        hook.store_unified_file_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cross_owner_file_create_leaves_raw_id(self):
+        """
+        On the create (POST /v1/files) path a cross-owner dedup hit must NOT 404
+        the caller's own successful upload; leave the raw ID unmanaged instead
+        (mirrors the batch/response create behaviour).
+        """
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "victim"
+        other_owner_row.team_id = "victim-team"
+        other_owner_row.unified_file_id = encode("openai", "victim", "file-shared")
+        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+            other_owner_row
+        )
+        hook = _managed_files_hook()
+
+        body = {"id": "file-shared", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/files",
+            body=body,
+            user_api_key_dict=_user("uploader", "uploader-team"),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert result["id"] == "file-shared"
+        hook.store_unified_file_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_team_member_reuses_shared_file_row(self):
+        """A teammate of the file owner can reuse the existing managed file row
+        (the cross-tenant guard scopes by team, not just the creating user)."""
+        existing_managed_id = new_managed_id("openai", "file-team")
+        existing_row = MagicMock()
+        existing_row.unified_file_id = existing_managed_id
+        existing_row.created_by = "owner-user"
+        existing_row.team_id = "shared-team"
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        hook = _managed_files_hook()
+
+        body = {"id": "file-team", "object": "file"}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="GET",
+            route="/openai/v1/files/file-team",
+            body=body,
+            user_api_key_dict=_user("teammate", "shared-team"),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert result["id"] == existing_managed_id
+        hook.store_unified_file_id.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_openai_passthrough_prefix_normalised(self):

@@ -353,39 +353,57 @@ async def _mint_or_reuse_file(
     prisma_client: Any,
     managed_files_hook: Any,
     file_object_snapshot: Optional[Dict[str, Any]] = None,
+    is_create_route: bool = True,
 ) -> str:
     """Return an existing managed file ID or mint + store a new one."""
     if prisma_client is None and managed_files_hook is None:
         return raw_id  # no persistence available; leave raw
 
-    # Dedup: look for an existing passthrough row for this raw_id scoped to
-    # this caller.  Uses flat_model_file_ids array containment (no index, but
-    # acceptable at the scale where managed-file features are used).
-    owner_filter = build_owner_filter(user_api_key_dict)
-    if owner_filter is not None and prisma_client is not None:
-        where: dict = {"flat_model_file_ids": {"has": raw_id}}
-        if owner_filter:  # non-empty = add scoping clause
-            where.update(owner_filter)
+    # Dedup + cross-tenant guard.  Look up any existing passthrough row for this
+    # raw id WITHOUT scoping to the caller, so a raw file id that belongs to a
+    # different tenant is denied rather than re-minted under the caller.  A raw
+    # id only reaches this OUTPUT path by skipping the managed-id input gate (raw
+    # provider ids are opt-out), so a row owned by someone else means the caller
+    # is touching another tenant's upstream file.  flat_model_file_ids uses array
+    # containment (no index, acceptable at the scale managed-file features run).
+    if prisma_client is not None:
         try:
             existing = await prisma_client.db.litellm_managedfiletable.find_first(
-                where=where
+                where={"flat_model_file_ids": {"has": raw_id}}
             )
-            if existing is not None:
-                if _managed_id_matches_provider(existing.unified_file_id, provider):
-                    verbose_proxy_logger.debug(
-                        "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
-                        raw_id.split("-", 1)[0],
-                    )
-                    return existing.unified_file_id
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: dedup hit wrong provider for raw prefix=%s expected=%s",
-                    raw_id.split("-", 1)[0],
-                    provider,
-                )
         except Exception:
+            existing = None
             verbose_proxy_logger.debug(
                 "managed_id_rewriter: file dedup lookup failed", exc_info=True
             )
+        if existing is not None and _managed_id_matches_provider(
+            existing.unified_file_id, provider
+        ):
+            if can_access_resource(
+                user_api_key_dict, existing.created_by, existing.team_id
+            ):
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
+                    raw_id.split("-", 1)[0],
+                )
+                return existing.unified_file_id
+            if not is_create_route:
+                # Retrieve / delete: the caller supplied another owner's raw file
+                # id, so deny instead of minting a fresh managed id that would
+                # grant them cross-tenant access.
+                raise HTTPException(
+                    status_code=404,
+                    detail="Managed resource not found.",
+                )
+            # Create only: the caller's own upstream upload reused a raw id a
+            # different owner already holds (two upstream accounts under one
+            # provider name); the file is the caller's, so leave it unmanaged.
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: file dedup hit different owner on create; "
+                "leaving raw id unmanaged for prefix=%s",
+                raw_id.split("-", 1)[0],
+            )
+            return raw_id
 
     # No existing row — mint a new managed ID and store it.
     managed_id = new_managed_id(provider, raw_id)
@@ -595,6 +613,7 @@ async def rewrite_response_ids(
             # The file's own ``id`` carries the full upstream metadata; nested
             # references do not, so only the former is persisted as a snapshot.
             file_object_snapshot=body if field_name == "id" else None,
+            is_create_route=is_create_route,
         )
         _record(field_name, raw_value, managed_id)
 
