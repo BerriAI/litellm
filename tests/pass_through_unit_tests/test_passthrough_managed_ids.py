@@ -239,6 +239,25 @@ class TestCanonicalPath:
     def test_strips_azure_openai_responses(self):
         assert _canonical_path("/azure/openai/responses") == "/v1/responses"
 
+    def test_strips_azure_ai_openai_prefix(self):
+        assert _canonical_path("/azure_ai/openai/files") == "/v1/files"
+
+    def test_strips_azure_ai_openai_batch_cancel(self):
+        assert (
+            _canonical_path("/azure_ai/openai/batches/batch_abc/cancel")
+            == "/v1/batches/batch_abc/cancel"
+        )
+
+    def test_azure_path_already_carrying_v1_is_not_doubled(self):
+        assert _canonical_path("/azure/openai/v1/files") == "/v1/files"
+        assert (
+            _canonical_path("/azure/openai/v1/batches/batch_abc")
+            == "/v1/batches/batch_abc"
+        )
+
+    def test_strips_azure_openai_file_with_id(self):
+        assert _canonical_path("/azure/openai/files/file-abc") == "/v1/files/file-abc"
+
 
 # ---------------------------------------------------------------------------
 # _resolve_one
@@ -1484,6 +1503,26 @@ class TestListPassthroughIdsFromDb:
         # GET /v1/files/{file_id} is not a list route
         assert (
             is_passthrough_list_route("openai", "GET", "/openai/v1/files/file-abc")
+            is False
+        )
+
+    def test_is_passthrough_list_route_azure_ai_prefix(self):
+        assert (
+            is_passthrough_list_route("azure", "GET", "/azure_ai/openai/files") is True
+        )
+
+    def test_is_passthrough_list_route_azure_path_already_carrying_v1(self):
+        assert (
+            is_passthrough_list_route("azure", "GET", "/azure/openai/v1/files") is True
+        )
+        assert (
+            is_passthrough_list_route("azure", "GET", "/azure/openai/v1/batches")
+            is True
+        )
+
+    def test_is_passthrough_list_route_not_for_azure_single_resource(self):
+        assert (
+            is_passthrough_list_route("azure", "GET", "/azure/openai/files/file-abc")
             is False
         )
 
