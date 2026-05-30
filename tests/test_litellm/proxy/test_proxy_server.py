@@ -605,9 +605,7 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
 
 
 def test_admin_ui_export_serves_nested_extensionless_routes():
-    out_dir = (
-        Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
-    )
+    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
 
     nested_html_offenders = [
@@ -619,8 +617,7 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
         and "litellm-asset-prefix" not in path.parts
     ]
     assert not nested_html_offenders, (
-        "Nested routes must be named index.html. Offenders: "
-        f"{nested_html_offenders}"
+        "Nested routes must be named index.html. Offenders: " f"{nested_html_offenders}"
     )
 
     callback_index = out_dir / "mcp" / "oauth" / "callback" / "index.html"
@@ -630,9 +627,7 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
     )
 
     fastapi_app = FastAPI()
-    fastapi_app.mount(
-        "/ui", StaticFiles(directory=str(out_dir), html=True), name="ui"
-    )
+    fastapi_app.mount("/ui", StaticFiles(directory=str(out_dir), html=True), name="ui")
     client = TestClient(fastapi_app)
 
     redirect = client.get(
@@ -640,7 +635,9 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
         follow_redirects=False,
     )
     assert redirect.status_code == 307
-    assert redirect.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz")
+    assert redirect.headers["location"].endswith(
+        "/ui/mcp/oauth/callback/?code=abc&state=xyz"
+    )
 
     landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
     assert landed.status_code == 200
@@ -854,10 +851,12 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     )
 
     assert custom_cb is not None
-    assert custom_cb["variables"] == {
-        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
-        "GENERIC_LOGGER_HEADERS": "Auth: token",
-    }
+    # Non-admin caller: the *_HEADERS var (can carry bearer tokens) is masked,
+    # while the non-secret endpoint URL is returned as-is.
+    variables = custom_cb["variables"]
+    assert variables["GENERIC_LOGGER_ENDPOINT"] == "https://callback.example.com"
+    assert variables["GENERIC_LOGGER_HEADERS"] != "Auth: token"
+    assert "*" in variables["GENERIC_LOGGER_HEADERS"]
 
 
 # Mock Prisma
@@ -5902,15 +5901,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
