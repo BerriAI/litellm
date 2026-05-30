@@ -637,8 +637,15 @@ def test_should_skip_returns_false_when_key_needs_model_access_check():
     assert descriptors is None
 
 
-def test_should_skip_honors_litellm_metadata_flag():
+def test_should_skip_ignores_client_supplied_metadata_flag():
+    """A caller must not be able to bypass batch rate limits by setting
+    ``litellm_metadata.skip_batch_input_file_rate_limiting`` in the request
+    body. The skip decision is server-controlled only, so with applicable rate
+    limits the JSONL is still processed despite the client flag."""
     rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         should_skip, descriptors = (
@@ -650,8 +657,7 @@ def test_should_skip_honors_litellm_metadata_flag():
                 user_api_key_dict=user,
             )
         )
-    assert should_skip is True
-    assert descriptors is None
+    assert should_skip is False
 
 
 def test_should_skip_honors_per_model_skip_list():

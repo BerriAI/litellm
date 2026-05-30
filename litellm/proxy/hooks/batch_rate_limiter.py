@@ -208,10 +208,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
             return True, None
 
-        litellm_metadata = data.get("litellm_metadata") or {}
-        if litellm_metadata.get("skip_batch_input_file_rate_limiting") is True:
-            return True, None
-
         batch_model = self._get_batch_routing_model(data)
         skip_models = (
             general_settings.get("skip_batch_input_file_rate_limiting_for_models") or []
