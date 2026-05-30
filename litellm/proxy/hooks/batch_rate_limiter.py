@@ -308,9 +308,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:
+            # body.model may be the provider id after replace_model_in_jsonl; map to proxy model_name for auth.
+            model_to_check = model
+            if llm_router is not None:
+                proxy_model_name = llm_router.resolve_model_name_from_model_id(model)
+                if proxy_model_name is not None:
+                    model_to_check = proxy_model_name
             try:
                 await can_key_call_model(
-                    model=model,
+                    model=model_to_check,
                     llm_model_list=llm_model_list,
                     valid_token=user_api_key_dict,
                     llm_router=llm_router,
@@ -326,7 +332,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     detail={
                         "error": (
                             "Batch input file references a model the caller is "
-                            f"not authorized to use: model={model}, reason={str(e)}"
+                            f"not authorized to use: model={model_to_check}, reason={str(e)}"
                         )
                     },
                 )
