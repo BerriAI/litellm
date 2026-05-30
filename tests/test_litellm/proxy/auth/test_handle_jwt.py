@@ -1,6 +1,7 @@
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 import pytest
 
 from litellm.proxy._types import (
@@ -130,6 +131,61 @@ async def test_map_user_to_teams_null_inputs():
 
     # Test with both null
     await JWTAuthManager.map_user_to_teams(user_object=None, team_object=None)
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_reports_passthrough_allowlist_denial():
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    team = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["gpt-4"],
+        metadata={},
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
+            return_value=False,
+        ) as mock_passthrough_check,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_team_with_model_access(
+                team_ids={"team-a"},
+                requested_model="gpt-4",
+                route="/my-pass-through",
+                jwt_handler=jwt_handler,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+    assert "requested model" not in exc_info.value.detail
+
+    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
+    assert user_api_key_dict.metadata == {}
+    assert user_api_key_dict.team_metadata == {}
 
 
 @pytest.mark.asyncio
