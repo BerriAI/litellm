@@ -137,11 +137,24 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 return True
         return False
 
+    def _create_batch_rate_limit_descriptors(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Dict,
+    ) -> List["RateLimitDescriptor"]:
+        return self.parallel_request_limiter._create_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            rpm_limit_type=None,
+            tpm_limit_type=None,
+            model_has_failures=False,
+        )
+
     def _should_skip_batch_input_file_processing(
         self,
         data: Dict,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[List["RateLimitDescriptor"]]]:
         """
         Skip downloading batch input files when configured or when there is
         nothing to enforce (no applicable rate limits and no model allowlist).
@@ -153,18 +166,22 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         into the file via an admin-configured skip (global disable,
         per-model, per-provider) or via the user-controlled
         ``custom_llm_provider`` field.
+
+        Returns ``(should_skip, descriptors)`` where ``descriptors`` is the
+        rate-limit descriptor list computed for the no-limits check, so the
+        caller can reuse it for counter enforcement without recomputing.
         """
         if self._key_requires_batch_model_access_check(user_api_key_dict):
-            return False
+            return False, None
 
         from litellm.proxy.proxy_server import general_settings
 
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
-            return True
+            return True, None
 
         litellm_metadata = data.get("litellm_metadata") or {}
         if litellm_metadata.get("skip_batch_input_file_rate_limiting") is True:
-            return True
+            return True, None
 
         batch_model = self._get_batch_routing_model(data)
         skip_models = (
@@ -174,7 +191,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             verbose_proxy_logger.debug(
                 f"Skipping batch input file processing for model={batch_model}"
             )
-            return True
+            return True, None
 
         skip_providers = (
             general_settings.get("skip_batch_input_file_rate_limiting_for_providers")
@@ -189,22 +206,19 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 "Skipping batch input file processing for "
                 f"custom_llm_provider={custom_llm_provider}"
             )
-            return True
+            return True, None
 
-        descriptors = self.parallel_request_limiter._create_rate_limit_descriptors(
+        descriptors = self._create_batch_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
-            rpm_limit_type=None,
-            tpm_limit_type=None,
-            model_has_failures=False,
         )
         if not self._has_applicable_batch_rate_limits(descriptors):
             verbose_proxy_logger.debug(
                 "Skipping batch input file processing: no rate limits configured"
             )
-            return True
+            return True, None
 
-        return False
+        return False, descriptors
 
     @staticmethod
     def _key_requires_batch_model_access_check(
@@ -360,6 +374,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         data: Dict,
         batch_usage: BatchFileUsage,
+        descriptors: Optional[List["RateLimitDescriptor"]] = None,
     ) -> None:
         """
         Atomically check + increment rate-limit counters by the batch amounts.
@@ -368,14 +383,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         case no counter is modified. Backed by `atomic_check_and_increment_by_n`
         which uses a Redis Lua script when available (multi-process atomic) and
         falls back to a per-process asyncio.Lock + in-memory operation.
+
+        ``descriptors`` may be passed in by the pre-call hook to reuse the list
+        already computed when deciding whether to skip file processing.
         """
-        descriptors = self.parallel_request_limiter._create_rate_limit_descriptors(
-            user_api_key_dict=user_api_key_dict,
-            data=data,
-            rpm_limit_type=None,
-            tpm_limit_type=None,
-            model_has_failures=False,
-        )
+        if descriptors is None:
+            descriptors = self._create_batch_rate_limit_descriptors(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+            )
 
         increment: Dict[Literal["requests", "tokens"], int] = {
             "requests": batch_usage.request_count,
@@ -646,9 +662,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 )
                 return data
 
-            if self._should_skip_batch_input_file_processing(
-                data=data, user_api_key_dict=user_api_key_dict
-            ):
+            should_skip, batch_rate_limit_descriptors = (
+                self._should_skip_batch_input_file_processing(
+                    data=data, user_api_key_dict=user_api_key_dict
+                )
+            )
+            if should_skip:
                 return data
 
             # Get custom_llm_provider for token counting
@@ -680,6 +699,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 data=data,
                 batch_usage=batch_usage,
+                descriptors=batch_rate_limit_descriptors,
             )
 
             verbose_proxy_logger.debug(
