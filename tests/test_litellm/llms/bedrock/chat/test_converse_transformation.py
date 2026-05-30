@@ -4453,6 +4453,26 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
     assert result.choices[0].finish_reason == "stop"
 
 
+
+def test_client_metadata_not_in_additional_model_request_fields():
+    """client_metadata from Responses API clients (e.g. Codex) must not leak into additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "Hello"}]
+
+    optional_params = {"client_metadata": {"client": "codex", "version": "0.121.0"}}
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "client_metadata" not in additional
+
 def test_bedrock_tool_message_openai_file_pdf_becomes_document():
     """
     OpenAI Chat Completions `{type: "file", file: {file_data: "data:application/pdf;...", filename}}`

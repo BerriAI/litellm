@@ -1322,6 +1322,8 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params
         )
 
+        additional_request_params.pop("client_metadata", None)
+
         if anthropic_output_config is not None and isinstance(
             anthropic_output_config, dict
         ):
