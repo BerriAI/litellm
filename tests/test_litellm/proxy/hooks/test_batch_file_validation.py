@@ -849,9 +849,15 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     )
     encoded_file_id = f"file-{encoded}"
 
-    with patch(
-        "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
-        side_effect=HTTPException(status_code=404, detail="no creds"),
+    get_credentials = MagicMock(
+        side_effect=HTTPException(status_code=404, detail="no creds")
+    )
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            get_credentials,
+        ),
     ):
         provider_file_id, fetch_kwargs = (
             rate_limiter._resolve_batch_input_file_fetch_params(
@@ -860,6 +866,7 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
                 data={},
             )
         )
+    get_credentials.assert_called_once()
     assert provider_file_id == "file-orig"
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
