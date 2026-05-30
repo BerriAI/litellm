@@ -80,7 +80,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     @staticmethod
     async def _cancel_background_task(task: asyncio.Task) -> None:
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, ConnectionClosed):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
 
     async def async_pre_call_hook(
@@ -316,26 +316,42 @@ class CatoNetworksGuardrail(CustomGuardrail):
             )
             try:
                 while True:
-                    try:
-                        raw_message = await websocket.recv()
-                    except ConnectionClosed as exc:
-                        raise StreamingCallbackError(
-                            "Cato guardrail connection closed unexpectedly"
-                        ) from exc
+                    raw_message = await self._await_cato_message(websocket, sender)
                     result = json.loads(raw_message)
                     if verified_chunk := result.get("verified_chunk"):
                         yield ModelResponseStream.model_validate(verified_chunk)
-                    else:
-                        if result.get("done"):
-                            return
-                        if blocking_message := result.get("blocking_message"):
-                            raise StreamingCallbackError(blocking_message)
-                        verbose_proxy_logger.error(
-                            f"Unknown message received from Cato: {result}"
-                        )
+                        continue
+                    if result.get("done"):
                         return
+                    if blocking_message := result.get("blocking_message"):
+                        raise StreamingCallbackError(blocking_message)
+                    verbose_proxy_logger.error(
+                        f"Unknown message received from Cato: {result}"
+                    )
+                    return
             finally:
                 await self._cancel_background_task(sender)
+
+    async def _await_cato_message(
+        self, websocket: ClientConnection, sender: asyncio.Task
+    ) -> Any:
+        """Wait for the next Cato message, surfacing a dead forwarding task instead of blocking."""
+        from litellm.proxy.proxy_server import StreamingCallbackError
+
+        recv_task = asyncio.ensure_future(websocket.recv())
+        pending = {recv_task, sender} if not sender.done() else {recv_task}
+        await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        if sender.done() and (sender_exc := sender.exception()) is not None:
+            await self._cancel_background_task(recv_task)
+            raise StreamingCallbackError(
+                "Cato guardrail upstream stream failed"
+            ) from sender_exc
+        try:
+            return await recv_task
+        except ConnectionClosed as exc:
+            raise StreamingCallbackError(
+                "Cato guardrail connection closed unexpectedly"
+            ) from exc
 
     async def forward_the_stream_to_cato(
         self,

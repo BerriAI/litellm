@@ -1147,6 +1147,45 @@ async def test_streaming_iterator_block_survives_sender_connection_closed():
 
 
 @pytest.mark.asyncio
+async def test_streaming_iterator_surfaces_sender_stream_error():
+    """A mid-stream LLM failure must surface immediately, not block on recv() until Cato times out."""
+    guard = _make_guardrail()
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    class HangingWebSocket:
+        async def recv(self):
+            await asyncio.sleep(3600)
+
+        async def send(self, _chunk):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    async def _failing_stream():
+        yield {"choices": [{"delta": {"content": "hi"}}]}
+        raise RuntimeError("llm boom")
+
+    async def _consume():
+        async for _ in guard.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_failing_stream(),
+            request_data={},
+        ):
+            pass
+
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=HangingWebSocket(),
+    ):
+        with pytest.raises(StreamingCallbackError, match="upstream stream failed"):
+            await asyncio.wait_for(_consume(), timeout=5)
+
+
+@pytest.mark.asyncio
 async def test_forward_the_stream_to_cato_serializes_chunks():
     guard = _make_guardrail()
     websocket = MagicMock()
