@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+import litellm.llms.custom_httpx.http_handler as http_handler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
@@ -453,7 +453,9 @@ def test_async_delete_responses_omits_body_for_azure():
     fake_async_delete, _ = _build_delete_response_mock(captured)
 
     async def run():
-        with patch.object(AsyncHTTPHandler, "delete", new=fake_async_delete):
+        with patch.object(
+            http_handler.AsyncHTTPHandler, "delete", new=fake_async_delete
+        ):
             await litellm.adelete_responses(
                 response_id="resp_xyz",
                 custom_llm_provider="azure",
@@ -475,7 +477,7 @@ def test_sync_delete_responses_omits_body_for_azure():
     captured: dict = {}
     _, fake_sync_delete = _build_delete_response_mock(captured)
 
-    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
+    with patch.object(http_handler.HTTPHandler, "delete", new=fake_sync_delete):
         litellm.delete_responses(
             response_id="resp_xyz",
             custom_llm_provider="azure",

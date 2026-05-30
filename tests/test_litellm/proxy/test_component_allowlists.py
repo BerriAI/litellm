@@ -21,10 +21,8 @@ import os
 import sys
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
-# reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
-# runners don't set these. We pin throwaway values before the import so the
-# test never depends on a live database or master key.
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# reads ``LITELLM_MASTER_KEY``. Tier-zero CI runners don't set this. We pin a
+# throwaway value before the import so the test never depends on host config.
 os.environ.setdefault("LITELLM_MASTER_KEY", "sk-test-component-allowlist")
 
 from fastapi.routing import Mount

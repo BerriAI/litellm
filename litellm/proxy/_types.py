@@ -2275,6 +2275,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
+    mode: Literal["standard", "raw"] = Field(
+        default="standard",
+        description="Pass-through forwarding mode. 'standard' preserves existing LiteLLM parsing, hooks, guardrails, and JSON forwarding. 'raw' forwards the original request body bytes and forwarded request headers without body parsing or mutation.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):

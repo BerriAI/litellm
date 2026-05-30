@@ -1,13 +1,14 @@
 import json
 import os
 import sys
+import asyncio
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -17,7 +18,10 @@ sys.path.insert(
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _register_pass_through_endpoint,
+    create_pass_through_route,
     pass_through_request,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -26,6 +30,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 
 # Test is_multipart
@@ -993,6 +998,616 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
 
 
 @pytest.mark.asyncio
+async def test_raw_pass_through_request_forwards_exact_body_bytes_and_sanitized_headers():
+    raw_body = (
+        b'{\n  "model": "claude",\n  "messages": [{"role": "user", "content": "hi"}]\n}'
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers(
+        {
+            "authorization": "Bearer claude-oauth-token",
+            "anthropic-beta": "context-1m-2025-08-07",
+            "x-custom-client": "custom-value",
+            "content-type": "application/json",
+            "content-length": "999",
+            "host": "proxy.example.com",
+            "connection": "keep-alive",
+            "transfer-encoding": "chunked",
+        }
+    )
+    mock_request.query_params = QueryParams({})
+    mock_user_api_key_dict = MagicMock()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "application/json"})
+    mock_response.aread = AsyncMock(return_value=b'{"ok": true}')
+    mock_response.raise_for_status = MagicMock()
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body"
+        ) as mock_read_request_body,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_client = MagicMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.pre_call_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://upstream.example.com/v1/messages",
+            custom_headers={"x-configured": "configured-value"},
+            user_api_key_dict=mock_user_api_key_dict,
+            forward_headers=True,
+            mode="raw",
+        )
+
+    mock_read_request_body.assert_not_called()
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+    mock_client.request.assert_awaited_once()
+    sent_kwargs = mock_client.request.call_args.kwargs
+    assert sent_kwargs["content"] == raw_body
+    assert "json" not in sent_kwargs
+
+    sent_headers = sent_kwargs["headers"]
+    assert sent_headers["authorization"] == "Bearer claude-oauth-token"
+    assert sent_headers["anthropic-beta"] == "context-1m-2025-08-07"
+    assert sent_headers["x-custom-client"] == "custom-value"
+    assert sent_headers["content-type"] == "application/json"
+    assert sent_headers["x-configured"] == "configured-value"
+    assert "content-length" not in sent_headers
+    assert "host" not in sent_headers
+    assert "connection" not in sent_headers
+    assert "transfer-encoding" not in sent_headers
+    assert response.body == b'{"ok": true}'
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_request_rejects_passthrough_guardrails():
+    mock_request = MagicMock(spec=Request)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pass_through_request(
+            request=mock_request,
+            target="https://upstream.example.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            guardrails_config={"test-guardrail": None},
+            mode="raw",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "cannot be used with passthrough guardrails" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_streaming_uses_raw_content_in_built_request():
+    raw_body = b'{"stream":true,"messages":[{"role":"user","content":"hi"}]}'
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "text/event-stream"})
+    mock_response.raise_for_status = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_client = MagicMock()
+        mock_built_request = MagicMock()
+        mock_client.build_request.return_value = mock_built_request
+        mock_client.send = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://upstream.example.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            forward_headers=True,
+            stream=True,
+            mode="raw",
+        )
+
+    mock_client.build_request.assert_called_once()
+    build_kwargs = mock_client.build_request.call_args.kwargs
+    assert build_kwargs["content"] == raw_body
+    assert "json" not in build_kwargs
+    mock_client.send.assert_awaited_once_with(mock_built_request, stream=True)
+    assert response.status_code == 200
+    assert response.body_iterator.__name__ == "_raw_response_bytes"
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_streaming_logs_on_completion():
+    raw_body = (
+        b'{"stream":true,"model":"claude","messages":[{"role":"user","content":"hi"}]}'
+    )
+    chunks = [
+        b'event: message_start\ndata: {"type":"message_start","message":{"model":"claude"}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    async def _aiter_bytes():
+        for chunk in chunks:
+            yield chunk
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "text/event-stream"})
+    mock_response.raise_for_status = MagicMock()
+    mock_response.aiter_bytes = _aiter_bytes
+    mock_response.aclose = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ) as mock_route_logging,
+    ):
+        mock_client = MagicMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://api.anthropic.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            forward_headers=True,
+            stream=True,
+            mode="raw",
+        )
+
+        received = []
+        async for chunk in response.body_iterator:
+            received.append(chunk)
+        await asyncio.sleep(0)
+
+    assert received == chunks
+    mock_route_logging.assert_called_once()
+    call_kwargs = mock_route_logging.call_args.kwargs
+    assert call_kwargs["raw_bytes"] == chunks
+    assert call_kwargs["endpoint_type"] == EndpointType.ANTHROPIC
+    assert call_kwargs["request_body"]["model"] == "claude"
+    assert call_kwargs["url_route"] == "https://api.anthropic.com/v1/messages"
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_streaming_logs_on_client_disconnect():
+    raw_body = (
+        b'{"stream":true,"model":"claude","messages":[{"role":"user","content":"hi"}]}'
+    )
+    chunks = [
+        b'event: message_start\ndata: {"type":"message_start","message":{"model":"claude"}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    async def _aiter_bytes():
+        for chunk in chunks:
+            yield chunk
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "text/event-stream"})
+    mock_response.raise_for_status = MagicMock()
+    mock_response.aiter_bytes = _aiter_bytes
+    mock_response.aclose = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ) as mock_route_logging,
+    ):
+        mock_client = MagicMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://api.anthropic.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            forward_headers=True,
+            stream=True,
+            mode="raw",
+        )
+
+        first_chunk = await response.body_iterator.__anext__()
+        await response.body_iterator.aclose()
+        await asyncio.sleep(0)
+
+    assert first_chunk == chunks[0]
+    mock_route_logging.assert_called_once()
+    call_kwargs = mock_route_logging.call_args.kwargs
+    assert call_kwargs["raw_bytes"] == [chunks[0]]
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_streaming_logs_empty_response():
+    raw_body = (
+        b'{"stream":true,"model":"claude","messages":[{"role":"user","content":"hi"}]}'
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    async def _aiter_bytes():
+        if False:
+            yield b""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "text/event-stream"})
+    mock_response.raise_for_status = MagicMock()
+    mock_response.aiter_bytes = _aiter_bytes
+    mock_response.aclose = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ) as mock_route_logging,
+    ):
+        mock_client = MagicMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://api.anthropic.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            forward_headers=True,
+            stream=True,
+            mode="raw",
+        )
+
+        received = []
+        async for chunk in response.body_iterator:
+            received.append(chunk)
+        await asyncio.sleep(0)
+
+    assert received == []
+    mock_route_logging.assert_called_once()
+    call_kwargs = mock_route_logging.call_args.kwargs
+    assert call_kwargs["raw_bytes"] == []
+    assert call_kwargs["endpoint_type"] == EndpointType.ANTHROPIC
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_streaming_uses_custom_provider_for_logging():
+    raw_body = (
+        b'{"stream":true,"model":"claude","messages":[{"role":"user","content":"hi"}]}'
+    )
+    chunks = [
+        b'event: message_start\ndata: {"type":"message_start","message":{"model":"claude"}}\n\n',
+    ]
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://test-proxy.com/anthropic/v1/messages"
+    mock_request.body = AsyncMock(return_value=raw_body)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    async def _aiter_bytes():
+        for chunk in chunks:
+            yield chunk
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = Headers({"content-type": "text/event-stream"})
+    mock_response.raise_for_status = MagicMock()
+    mock_response.aiter_bytes = _aiter_bytes
+    mock_response.aclose = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ) as mock_route_logging,
+    ):
+        mock_client = MagicMock()
+        mock_client.build_request.return_value = MagicMock()
+        mock_client.send = AsyncMock(return_value=mock_response)
+        mock_client_obj = MagicMock()
+        mock_client_obj.client = mock_client
+        mock_get_client.return_value = mock_client_obj
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://anthropic-compatible.example.com/v1/messages",
+            custom_headers={},
+            user_api_key_dict=MagicMock(),
+            forward_headers=True,
+            stream=True,
+            mode="raw",
+            custom_llm_provider="anthropic",
+        )
+
+        async for _ in response.body_iterator:
+            pass
+        await asyncio.sleep(0)
+
+    mock_route_logging.assert_called_once()
+    call_kwargs = mock_route_logging.call_args.kwargs
+    assert call_kwargs["endpoint_type"] == EndpointType.ANTHROPIC
+
+
+def test_pass_through_endpoint_model_accepts_raw_mode():
+    from litellm.proxy._types import PassThroughGenericEndpoint
+
+    endpoint = PassThroughGenericEndpoint(
+        path="/anthropic",
+        target="https://upstream.example.com",
+        include_subpath=True,
+        mode="raw",
+    )
+
+    assert endpoint.mode == "raw"
+
+
+def test_route_registration_stores_raw_mode_in_passthrough_params():
+    endpoint_id = "raw-mode-test-endpoint"
+    path = "/raw-mode-test"
+    route_key = f"{endpoint_id}:exact:{path}:POST"
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pte
+
+    pte._registered_pass_through_routes.pop(route_key, None)
+    mock_app = MagicMock()
+
+    try:
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=mock_app,
+            path=path,
+            target="https://upstream.example.com",
+            custom_headers={},
+            forward_headers=True,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=0,
+            endpoint_id=endpoint_id,
+            methods=["POST"],
+            mode="raw",
+        )
+
+        route_params = pte._registered_pass_through_routes[route_key][
+            "passthrough_params"
+        ]
+        assert route_params["mode"] == "raw"
+    finally:
+        pte._registered_pass_through_routes.pop(route_key, None)
+
+
+@pytest.mark.asyncio
+async def test_raw_pass_through_route_skips_request_body_parser():
+    path = "/raw-route-parser-test"
+    endpoint_func = create_pass_through_route(
+        endpoint=path,
+        target="https://upstream.example.com/v1/messages",
+        custom_headers={},
+        _forward_headers=True,
+        mode="raw",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
+        mock_pass_through.return_value = MagicMock()
+        mock_is_registered.return_value = True
+        mock_get_registered.return_value = {
+            "passthrough_params": {
+                "target": "https://upstream.example.com/v1/messages",
+                "custom_headers": {},
+                "forward_headers": True,
+                "mode": "raw",
+            }
+        }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = MagicMock()
+        mock_request.url.path = path
+        mock_request.path_params = {}
+        mock_request.query_params = QueryParams({"beta": "true"})
+        mock_request.state = SimpleNamespace()
+
+        await endpoint_func(
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        mock_parse_request.assert_not_called()
+        mock_pass_through.assert_called_once()
+        call_kwargs = mock_pass_through.call_args.kwargs
+        assert call_kwargs["mode"] == "raw"
+        assert call_kwargs["custom_body"] is None
+        assert call_kwargs["query_params"] == {"beta": "true"}
+
+
+@pytest.mark.asyncio
+async def test_raw_mode_from_registry_skips_request_body_parser():
+    path = "/raw-route-registry-mode-test"
+    endpoint_func = create_pass_through_route(
+        endpoint=path,
+        target="https://old-upstream.example.com/v1/messages",
+        custom_headers={},
+        _forward_headers=True,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
+        mock_pass_through.return_value = MagicMock()
+        mock_is_registered.return_value = True
+        mock_get_registered.return_value = {
+            "passthrough_params": {
+                "target": "https://new-upstream.example.com/v1/messages",
+                "custom_headers": {},
+                "forward_headers": True,
+                "mode": "raw",
+            }
+        }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = MagicMock()
+        mock_request.url.path = path
+        mock_request.path_params = {}
+        mock_request.query_params = QueryParams({})
+        mock_request.state = SimpleNamespace()
+
+        await endpoint_func(
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        mock_parse_request.assert_not_called()
+        call_kwargs = mock_pass_through.call_args.kwargs
+        assert call_kwargs["mode"] == "raw"
+        assert call_kwargs["target"] == "https://new-upstream.example.com/v1/messages"
+
+
+@pytest.mark.asyncio
+async def test_register_raw_pass_through_endpoint_stores_mode_for_exact_and_subpath_routes():
+    from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pte
+
+    endpoint_id = "raw-mode-register-test"
+    path = "/raw-register-test"
+    exact_key = f"{endpoint_id}:exact:{path}:POST"
+    subpath_key = f"{endpoint_id}:subpath:{path}:POST"
+    pte._registered_pass_through_routes.pop(exact_key, None)
+    pte._registered_pass_through_routes.pop(subpath_key, None)
+
+    try:
+        await _register_pass_through_endpoint(
+            endpoint={
+                "id": endpoint_id,
+                "path": path,
+                "target": "https://upstream.example.com",
+                "headers": {},
+                "forward_headers": True,
+                "include_subpath": True,
+                "auth": False,
+                "methods": ["POST"],
+                "mode": "raw",
+            },
+            app=MagicMock(),
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+
+        assert (
+            pte._registered_pass_through_routes[exact_key]["passthrough_params"]["mode"]
+            == "raw"
+        )
+        assert (
+            pte._registered_pass_through_routes[subpath_key]["passthrough_params"][
+                "mode"
+            ]
+            == "raw"
+        )
+    finally:
+        pte._registered_pass_through_routes.pop(exact_key, None)
+        pte._registered_pass_through_routes.pop(subpath_key, None)
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_endpoint():
     """
     Test creating a new pass-through endpoint
@@ -1068,6 +1683,48 @@ async def test_create_pass_through_endpoint():
             assert len(update_call_args["data"].field_value) == 1
             assert update_call_args["data"].field_value[0]["path"] == "/test/endpoint"
             assert update_call_args["data"].field_value[0]["id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_endpoint_registers_raw_mode():
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_subpath_route"
+        ) as mock_add_subpath_route,
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=[]
+        )
+        test_endpoint = PassThroughGenericEndpoint(
+            path="/raw/create",
+            target="http://example.com/api",
+            headers={},
+            include_subpath=True,
+            mode="raw",
+        )
+
+        result = await create_pass_through_endpoints(
+            data=test_endpoint,
+            request=SimpleNamespace(app=MagicMock()),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+    assert result.endpoints[0].mode == "raw"
+    mock_add_subpath_route.assert_called_once()
+    assert mock_add_subpath_route.call_args.kwargs["mode"] == "raw"
 
 
 @pytest.mark.asyncio
@@ -1169,6 +1826,69 @@ async def test_update_pass_through_endpoint():
             assert updated_data["id"] == existing_endpoint_id
             assert updated_data["target"] == "http://newapi.com/v2"
             assert updated_data["cost_per_request"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_registers_raw_mode():
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    existing_endpoint_id = "raw-update-endpoint"
+    existing_endpoints = [
+        {
+            "id": existing_endpoint_id,
+            "path": "/raw/update",
+            "target": "http://example.com/api",
+            "headers": {},
+            "include_subpath": False,
+            "cost_per_request": 0.0,
+            "mode": "standard",
+        }
+    ]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch(
+            "litellm.proxy.proxy_server.update_config_general_settings"
+        ) as mock_update_config,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.remove_endpoint_routes"
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.add_exact_path_route"
+        ) as mock_add_exact_route,
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=existing_endpoints
+        )
+        update_data = PassThroughGenericEndpoint(
+            path="/raw/update",
+            target="http://newapi.com/v2",
+            headers={},
+            include_subpath=False,
+            mode="raw",
+        )
+
+        result = await update_pass_through_endpoints(
+            endpoint_id=existing_endpoint_id,
+            data=update_data,
+            request=SimpleNamespace(app=MagicMock()),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+    assert result.endpoints[0].mode == "raw"
+    updated_endpoint = mock_update_config.call_args.kwargs["data"].field_value[0]
+    assert updated_endpoint["mode"] == "raw"
+    mock_add_exact_route.assert_called_once()
+    assert mock_add_exact_route.call_args.kwargs["mode"] == "raw"
 
 
 @pytest.mark.asyncio
@@ -2620,7 +3340,7 @@ def test_get_registered_pass_through_route_with_custom_root():
     _registered_pass_through_routes.clear()
 
 
-def test_mapped_pass_through_routes_with_server_root_path():
+def test_mapped_pass_through_routes_with_server_root_path(monkeypatch):
     """
     Mapped passthrough routes (vertex_ai, bedrock, etc) should match
     even when SERVER_ROOT_PATH is set and the incoming route is prefixed.
@@ -2631,30 +3351,29 @@ def test_mapped_pass_through_routes_with_server_root_path():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.utils.get_server_root_path") as mock_get_root:
-        mock_get_root.return_value = "/litellm"
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/litellm")
 
-        # prefixed route should match mapped routes like /vertex_ai
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/litellm/vertex_ai/v1/projects/foo"
-            )
-            is True
+    # prefixed route should match mapped routes like /vertex_ai
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/vertex_ai/v1/projects/foo"
         )
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/litellm/bedrock/model/invoke"
-            )
-            is True
+        is True
+    )
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/bedrock/model/invoke"
         )
+        is True
+    )
 
-        # bare route without prefix should not match when root is set
-        assert (
-            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                "/vertex_ai/v1/projects/foo"
-            )
-            is False
+    # bare route without prefix should not match when root is set
+    assert (
+        InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/foo"
         )
+        is False
+    )
 
 
 @pytest.mark.asyncio

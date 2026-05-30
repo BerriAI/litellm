@@ -83,7 +83,7 @@ def _assert_not_role_blocked(response) -> None:
         body = response.json()
         detail = body.get("detail", body)
         if isinstance(detail, dict):
-            err = detail.get("error", "")
+            err = str(detail.get("error", ""))
         else:
             err = str(detail)
         err_lower = err.lower()

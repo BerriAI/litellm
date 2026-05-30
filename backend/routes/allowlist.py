@@ -39,6 +39,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/model_access_group/",
     "/model_hub/",
     "/v1/access_group",
+    "/v1/unified_access_group",
     "/access_group/",
     "/router/",
     "/router_settings",
@@ -95,6 +96,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Debug / config / profiling
     "/debug/",
     "/config/",
+    "/config_overrides/",
     "/memory-usage-in-mem-cache",
     "/otel-spans",
     "/lazy/",
