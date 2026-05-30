@@ -4527,6 +4527,23 @@ async def regenerate_key_fn(  # noqa: PLR0915
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
+        # Gate access_group_ids on regenerate, same as /key/generate and
+        # /key/update. Use the existing key's team since the body may omit it.
+        if data is not None and data.access_group_ids:
+            regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+            if _key_in_db.team_id is not None:
+                regenerate_team_table = await get_team_object(
+                    team_id=_key_in_db.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+                user_api_key_dict=user_api_key_dict,
+                team_table=regenerate_team_table,
+                access_group_ids=data.access_group_ids,
+            )
+
         verbose_proxy_logger.info(
             "Key regeneration requested: key_alias=%s",
             getattr(_key_in_db, "key_alias", None),
