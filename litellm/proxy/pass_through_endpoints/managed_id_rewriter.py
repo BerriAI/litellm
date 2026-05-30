@@ -420,6 +420,7 @@ async def _mint_or_reuse_object(
     body_snapshot: dict,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
+    is_create_route: bool,
 ) -> str:
     """Return an existing managed object ID (batch/response) or mint + store one."""
     if prisma_client is None:
@@ -439,47 +440,57 @@ async def _mint_or_reuse_object(
         existing = await prisma_client.db.litellm_managedobjecttable.find_first(
             where={"model_object_id": namespaced_model_object_id}
         )
-        if existing is not None:
-            if not can_access_resource(
-                user_api_key_dict, existing.created_by, existing.team_id
-            ):
-                # OUTPUT (mint) path only: a different owner already holds this
-                # namespaced key (e.g. two upstream accounts under one provider
-                # name issued the same raw id). The caller's upstream create
-                # succeeded, so leave their raw id unmanaged rather than 404 a
-                # successful response; a new row can't be minted here because
-                # model_object_id is @unique.
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: object dedup hit different owner; "
-                    "leaving raw id unmanaged for prefix=%s",
-                    raw_id.split("_", 1)[0],
-                )
-                return raw_id
-            # Refresh the stored snapshot so DB-served list responses reflect
-            # the batch's latest state (e.g. output_file_id / error_file_id that
-            # were null at creation but populated once the batch completed).
-            try:
-                await prisma_client.db.litellm_managedobjecttable.update(
-                    where={"unified_object_id": existing.unified_object_id},
-                    data={
-                        "file_object": json.dumps(body_snapshot),
-                        "updated_by": user_api_key_dict.user_id,
-                    },
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: object snapshot refresh failed",
-                    exc_info=True,
-                )
-            verbose_proxy_logger.debug(
-                "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
-                raw_id.split("_", 1)[0],
-            )
-            return existing.unified_object_id
     except Exception:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: object dedup lookup failed", exc_info=True
         )
+        existing = None
+
+    if existing is not None:
+        if not can_access_resource(
+            user_api_key_dict, existing.created_by, existing.team_id
+        ):
+            if not is_create_route:
+                # Retrieve / cancel / delete: the caller supplied a raw ID whose
+                # managed row belongs to someone else.  A raw ID only reaches the
+                # upstream by bypassing the managed-ID input gate, so deny here
+                # instead of echoing another owner's object back to the caller.
+                raise HTTPException(
+                    status_code=404,
+                    detail="Managed resource not found.",
+                )
+            # Create only: the caller's upstream create just succeeded under a
+            # raw id a different owner already holds (two upstream accounts under
+            # one provider name). The object is the caller's own, so leave the raw
+            # id unmanaged rather than 404 a successful create; a new row can't be
+            # minted because model_object_id is @unique.
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: object dedup hit different owner on create; "
+                "leaving raw id unmanaged for prefix=%s",
+                raw_id.split("_", 1)[0],
+            )
+            return raw_id
+        # Refresh the stored snapshot so DB-served list responses reflect
+        # the batch's latest state (e.g. output_file_id / error_file_id that
+        # were null at creation but populated once the batch completed).
+        try:
+            await prisma_client.db.litellm_managedobjecttable.update(
+                where={"unified_object_id": existing.unified_object_id},
+                data={
+                    "file_object": json.dumps(body_snapshot),
+                    "updated_by": user_api_key_dict.user_id,
+                },
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: object snapshot refresh failed",
+                exc_info=True,
+            )
+        verbose_proxy_logger.debug(
+            "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
+            raw_id.split("_", 1)[0],
+        )
+        return existing.unified_object_id
 
     # No existing row — mint and upsert.
     managed_id = new_managed_id(provider, raw_id)
@@ -546,6 +557,11 @@ async def rewrite_response_ids(
         )
         return body
 
+    # Collection endpoints (POST /v1/batches, /v1/responses) carry no resource
+    # id in the path; everything else (retrieve / cancel / delete) does.  Only
+    # creates may degrade to a raw id on a cross-owner collision.
+    is_create_route = "{" not in canonical
+
     mutated = dict(body)  # shallow copy; only return if something changed
     changed = False
 
@@ -596,6 +612,7 @@ async def rewrite_response_ids(
             mutated,
             user_api_key_dict,
             prisma_client,
+            is_create_route,
         )
         _record(field_name, raw_value, managed_id)
 

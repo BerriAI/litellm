@@ -568,6 +568,66 @@ class TestRewriteResponseIds:
         pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_cross_owner_object_retrieve_raises_404(self):
+        """
+        On a retrieve route, a caller who supplies another owner's raw batch ID
+        (which bypasses the managed-ID input gate) must be denied with a 404 —
+        the upstream object must NOT be echoed back with its raw ID.
+        """
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "other-user"
+        other_owner_row.team_id = "other-team"
+        other_owner_row.unified_object_id = encode("openai", "other-user", "batch_xyz")
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=other_owner_row
+        )
+
+        body = {"id": "batch_xyz", "object": "batch", "input_file_id": None}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_response_ids(
+                provider="openai",
+                method="GET",
+                route="/openai/v1/batches/batch_xyz",
+                body=body,
+                user_api_key_dict=_user("attacker", "attacker-team"),
+                prisma_client=pc,
+                managed_files_hook=None,
+            )
+        assert exc_info.value.status_code == 404
+        # Must not silently mint a row for the attacker either.
+        pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cross_owner_response_delete_raises_404(self):
+        """A delete route is also a non-create route: cross-owner access is denied."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "other-user"
+        other_owner_row.team_id = "other-team"
+        other_owner_row.unified_object_id = encode("openai", "other-user", "resp_abc")
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=other_owner_row
+        )
+
+        body = {"id": "resp_abc", "object": "response"}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_response_ids(
+                provider="openai",
+                method="DELETE",
+                route="/openai/v1/responses/resp_abc",
+                body=body,
+                user_api_key_dict=_user("attacker", "attacker-team"),
+                prisma_client=pc,
+                managed_files_hook=None,
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_batch_retrieve_swaps_output_file_id(self):
         pc = _prisma_client()
         hook = _managed_files_hook()
