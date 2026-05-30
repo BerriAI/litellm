@@ -2129,7 +2129,7 @@ async def _validate_mcp_servers_for_key_update(
     object_permission_dict: Optional[dict] = None
     if data.object_permission is not None:
         object_permission_dict = (
-            data.object_permission.model_dump()
+            data.object_permission.model_dump(exclude_unset=True)
             if hasattr(data.object_permission, "model_dump")
             else dict(data.object_permission)  # type: ignore[arg-type]
         )
