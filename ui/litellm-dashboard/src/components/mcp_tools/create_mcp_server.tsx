@@ -78,12 +78,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
+  const isAdmin = isAdminRole(userRole);
+
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
+  // The tool preview hits the admin-only /mcp_server/test/tools/list endpoint, so only
+  // enable it for admins; non-admin submitters would otherwise get a 403 on every change.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
     accessToken,
     oauthAccessToken,
     formValues,
-    enabled: true,
+    enabled: isAdmin,
   });
 
   const authType = formValues.auth_type as string | undefined;
@@ -529,8 +533,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setFormValues({});
     }
   }, [isModalVisible]);
-
-  const isAdmin = isAdminRole(userRole);
 
   // rendering
   return (
