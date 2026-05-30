@@ -2748,10 +2748,8 @@ class UserAPIKeyAuth(
         2. JWT tokens used for connecting to LiteLLM API
         """
         normalized = api_key
-        for prefix in ("Bearer ", "bearer "):
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix):]
-                break
+        if normalized[:7].lower() == "bearer ":
+            normalized = normalized[7:]
         if normalized.startswith("sk-"):
             return hash_token(normalized)
         from litellm.proxy.auth.handle_jwt import JWTHandler
