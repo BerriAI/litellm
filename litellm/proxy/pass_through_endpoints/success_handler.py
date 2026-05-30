@@ -94,6 +94,13 @@ class PassThroughEndpointLogging:
         **kwargs,
     ):
         """Log pass-through success via the shared async dispatch path."""
+        # Always reached from pass_through_async_success_handler, which runs in
+        # an async context. call_type is "pass_through_endpoint" here, so the
+        # passthrough guard in dispatch_success_handlers already forces the
+        # async handler to run; pass prefer_async_handlers explicitly to match
+        # the streaming sibling (_route_streaming_logging_to_handler) and keep
+        # async-only loggers (e.g. the proxy spend logger) firing regardless of
+        # how the call-type classification evolves.
         await logging_obj.dispatch_success_handlers(
             result=(
                 json.dumps(result)
@@ -103,6 +110,7 @@ class PassThroughEndpointLogging:
             start_time=start_time,
             end_time=end_time,
             cache_hit=False,
+            prefer_async_handlers=True,
             **kwargs,
         )
 
