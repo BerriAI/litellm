@@ -455,6 +455,22 @@ async def _mint_or_reuse_object(
                     raw_id.split("_", 1)[0],
                 )
                 return raw_id
+            # Refresh the stored snapshot so DB-served list responses reflect
+            # the batch's latest state (e.g. output_file_id / error_file_id that
+            # were null at creation but populated once the batch completed).
+            try:
+                await prisma_client.db.litellm_managedobjecttable.update(
+                    where={"unified_object_id": existing.unified_object_id},
+                    data={
+                        "file_object": json.dumps(body_snapshot),
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: object snapshot refresh failed",
+                    exc_info=True,
+                )
             verbose_proxy_logger.debug(
                 "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
                 raw_id.split("_", 1)[0],

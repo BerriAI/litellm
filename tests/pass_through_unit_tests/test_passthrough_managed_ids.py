@@ -17,6 +17,7 @@ Tests cover:
 from __future__ import annotations
 
 import base64
+import json
 import sys
 import os
 from typing import Any
@@ -68,6 +69,7 @@ def _prisma_client() -> MagicMock:
     pc.db.litellm_managedobjecttable = MagicMock()
     pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
     pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+    pc.db.litellm_managedobjecttable.update = AsyncMock(return_value=None)
     return pc
 
 
@@ -417,6 +419,52 @@ class TestRewriteResponseIds:
             managed_files_hook=hook,
         )
         assert decode(result["id"]).raw_provider_id == "file-abc"  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_batch_reuse_refreshes_stored_snapshot(self):
+        """Retrieving a completed batch must refresh the stored snapshot so the
+        DB-served list reflects fields (e.g. output_file_id) that were null at
+        creation time. The dedup-reuse path must update file_object, not just
+        return the existing id with a stale snapshot."""
+        existing_managed_id = new_managed_id("openai", "batch_done")
+        existing_row = MagicMock()
+        existing_row.unified_object_id = existing_managed_id
+        existing_row.created_by = "user-1"
+        existing_row.team_id = "team-1"
+
+        pc = _prisma_client()
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=existing_row
+        )
+
+        completed_body = {
+            "id": "batch_done",
+            "object": "batch",
+            "status": "completed",
+            "output_file_id": "file-out",
+            "error_file_id": None,
+        }
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="GET",
+            route="/openai/v1/batches/batch_done",
+            body=completed_body,
+            user_api_key_dict=_user("user-1", "team-1"),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+
+        # Reuses the existing managed id (no new row minted)
+        assert result["id"] == existing_managed_id
+        pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+        # The stored snapshot is refreshed with the completed batch body
+        pc.db.litellm_managedobjecttable.update.assert_awaited_once()
+        update_kwargs = pc.db.litellm_managedobjecttable.update.call_args.kwargs
+        assert update_kwargs["where"] == {"unified_object_id": existing_managed_id}
+        stored = json.loads(update_kwargs["data"]["file_object"])
+        assert stored["status"] == "completed"
+        # output_file_id is itself rewritten to a managed id wrapping the raw id
+        assert decode(stored["output_file_id"]).raw_provider_id == "file-out"
 
     @pytest.mark.asyncio
     async def test_cross_provider_batch_collision_mints_new_id(self):
