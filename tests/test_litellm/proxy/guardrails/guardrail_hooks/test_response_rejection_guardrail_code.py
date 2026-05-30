@@ -9,6 +9,11 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
 )
 
 
+@pytest.fixture(autouse=True)
+def enable_custom_code_guardrails(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS", "true")
+
+
 @pytest.fixture
 def response_rejection_guardrail():
     """Guardrail instance using the response-rejection custom code."""
