@@ -24,6 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
+    build_inspection_messages,
+)
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
@@ -127,7 +131,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": data.get("messages", [])},
+            json={"messages": data.get("messages") or build_inspection_messages(data)},
         )
         response.raise_for_status()
         res = response.json()
@@ -160,8 +164,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
         redacted_chat = res.get("redacted_chat")
         if not redacted_chat:
             return data
-        original_messages = data.get("messages") or []
         redacted_messages = redacted_chat.get("all_redacted_messages") or []
+        original_messages = data.get("messages")
+        if not original_messages:
+            apply_redacted_messages_back(data, redacted_messages)
+            return data
         data["messages"] = [
             (
                 {**original, "content": redacted_messages[idx]["content"]}
@@ -191,7 +198,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
-                "messages": request_data.get("messages", [])
+                "messages": (
+                    request_data.get("messages")
+                    or build_inspection_messages(request_data)
+                )
                 + [{"role": "assistant", "content": output}]
             },
         )
