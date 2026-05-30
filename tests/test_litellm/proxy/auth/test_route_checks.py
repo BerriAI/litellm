@@ -772,6 +772,66 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
         )
 
 
+def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoints():
+    """
+    Virtual keys with llm_api_routes can access registered pass-through endpoints that
+    are NOT auth-enforced (no FastAPI dependencies) without configuring
+    allowed_passthrough_routes. This is the original behaviour and must not regress.
+    """
+
+    mock_registered_routes = {
+        "test-uuid-1:exact:/azure-assistant:DELETE,GET,PATCH,POST,PUT": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/azure-assistant",
+            "type": "exact",
+            "passthrough_params": {"dependencies": None},
+        },
+        "test-uuid-2:subpath:/custom-endpoint:DELETE,GET,PATCH,POST,PUT": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom-endpoint",
+            "type": "subpath",
+            "passthrough_params": {"dependencies": None},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
+        )
+
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/azure-assistant",
+                valid_token=valid_token,
+            )
+            is True
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint/openai/assistants",
+                valid_token=valid_token,
+            )
+            is True
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/custom-endpoint",
+                valid_token=valid_token,
+            )
+            is True
+        )
+
+
 def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist():
     """auth=true pass-through must not be reachable via llm_api_routes alone."""
 
