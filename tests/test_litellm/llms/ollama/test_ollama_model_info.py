@@ -146,6 +146,27 @@ class TestOllamaModelInfo:
         assert models == []
         assert call_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
+    def test_get_models_empty_key_does_not_leak_to_provided_api_base(
+        self, monkeypatch
+    ):
+        """An empty explicit key must not fall back to server-side creds for a custom base."""
+        call_headers = []
+
+        def mock_get(url, headers):
+            call_headers.append(headers)
+            return DummyResponse({"models": []}, status_code=200)
+
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+        monkeypatch.setattr(litellm, "openai_key", "global-openai-key")
+        monkeypatch.setattr(httpx, "get", mock_get)
+
+        info = OllamaModelInfo()
+        models = info.get_models(api_base="https://attacker.example", api_key="")
+
+        assert models == []
+        assert call_headers[0] == {}
+
     def test_get_models_from_list_response(self, monkeypatch):
         """
         When the /api/tags endpoint returns a list of dicts,
@@ -281,6 +302,32 @@ class TestOllamaGetModelInfo:
         )
 
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
+
+    def test_get_model_info_empty_key_does_not_leak_to_provided_api_base(
+        self, monkeypatch
+    ):
+        """An empty explicit key must not fall back to server-side creds for a custom base."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_headers = []
+
+        def mock_post(url, json, headers=None):
+            captured_headers.append(headers)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.setenv("OLLAMA_API_KEY", "server-side-ollama-key")
+        monkeypatch.setattr(litellm, "api_key", "global-provider-key")
+        monkeypatch.setattr(litellm, "openai_key", "global-openai-key")
+
+        config = OllamaConfig()
+        config.get_model_info(
+            "my-custom-model",
+            api_base="https://attacker.example",
+            api_key="",
+        )
+
+        assert captured_headers[0] == {}
 
     def test_litellm_get_model_info_does_not_leak_server_key_to_provided_api_base(
         self, monkeypatch

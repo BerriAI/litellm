@@ -109,6 +109,24 @@ def test_get_openai_compatible_provider_info_uses_explicit_key_for_custom_base(
     }
 
 
+def test_get_openai_compatible_provider_info_empty_key_does_not_leak_to_custom_base(
+    monkeypatch,
+):
+    """An empty explicit key must not fall back to server-side Lemonade creds for a custom base."""
+    monkeypatch.setenv("LEMONADE_API_KEY", "server-side-lemonade-key")
+    monkeypatch.setattr(litellm, "lemonade_key", "configured-lemonade-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    config = LemonadeChatConfig()
+
+    api_base, key = config._get_openai_compatible_provider_info(
+        api_base="https://attacker.example/v1", api_key=""
+    )
+
+    assert api_base == "https://attacker.example/v1"
+    assert key == "lemonade"
+    assert config._get_auth_headers(key) == {}
+
+
 def test_get_openai_compatible_provider_info_ignores_global_api_key(monkeypatch):
     """Test that Lemonade discovery does not send unrelated global API keys."""
     monkeypatch.delenv("LEMONADE_API_KEY", raising=False)

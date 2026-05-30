@@ -217,7 +217,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             or "http://localhost:8000/api/v1"
         )  # type: ignore
         key = self._DEFAULT_API_KEY
-        if api_key is not None or passed_api_base is None:
+        if passed_api_base is None or api_key:
             key = (
                 api_key
                 or litellm.lemonade_key

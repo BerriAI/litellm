@@ -102,9 +102,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         passed_api_base = api_base
         base = self.get_server_api_base(api_base)
         api_key = (
-            self.get_api_key(api_key)
-            if api_key is not None or passed_api_base is None
-            else None
+            self.get_api_key(api_key) if passed_api_base is None or api_key else None
         )
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -193,9 +191,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         passed_api_base = api_base
         api_base = self.get_server_api_base(api_base)
         api_key = (
-            self.get_api_key(api_key)
-            if api_key is not None or passed_api_base is None
-            else None
+            self.get_api_key(api_key) if passed_api_base is None or api_key else None
         )
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
