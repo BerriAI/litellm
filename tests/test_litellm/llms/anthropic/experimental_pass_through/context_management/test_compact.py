@@ -1782,6 +1782,94 @@ async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     assert not result.applied_edits[0].get("error")
 
 
+async def test_scoped_budget_metadata_propagated_to_summary_call():
+    """The end-user/project scope identifiers and the end-user budget the post-call
+    spend and rate-limit hooks key on are forwarded to the summary subrequest, and
+    the end-user id is also passed as the top-level ``user`` kwarg the legacy
+    limiter hooks read, so the summary tokens debit those scoped budgets/counters."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>Summary</summary>")
+    parent_litellm_metadata = {
+        "user_api_key": "sk-test",
+        "user_api_key_end_user_id": "customer-1",
+        "user_api_end_user_max_budget": 10,
+        "user_api_key_project_id": "project-9",
+    }
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_call,
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            litellm_metadata=parent_litellm_metadata,
+        )
+
+    propagated = mock_call.call_args.kwargs["metadata"]
+    assert propagated["user_api_key_end_user_id"] == "customer-1"
+    assert propagated["user_api_end_user_max_budget"] == 10
+    assert propagated["user_api_key_project_id"] == "project-9"
+
+
+async def test_summary_call_passes_end_user_id_as_top_level_user():
+    """``_call_summary_model`` forwards the propagated end-user id as the top-level
+    ``user`` kwarg that legacy limiter / prometheus end-user tracking reads."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={"user_api_key_end_user_id": "customer-1"},
+        llm_router=_FakeRouter(),
+    )
+
+    assert captured_kwargs.get("user") == "customer-1"
+
+
+async def test_summary_call_omits_user_when_no_end_user_id():
+    """No end-user id on the parent request means no ``user`` kwarg is sent."""
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _call_summary_model,
+    )
+
+    captured_kwargs: dict = {}
+
+    class _FakeRouter:
+        async def acompletion(self, **kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_mock_response("<summary>x</summary>")
+
+    await _call_summary_model(
+        summary_model="claude-haiku-4-5",
+        summary_messages=[{"role": "user", "content": "hi"}],
+        metadata={},
+        llm_router=_FakeRouter(),
+    )
+
+    assert "user" not in captured_kwargs
+
+
 async def test_model_budget_metadata_propagated_to_summary_call():
     """The per-model budget metadata the spend caches rely on is forwarded to the
     summary subrequest so its spend counts against the caller's model budget."""

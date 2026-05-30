@@ -39,13 +39,17 @@ from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
 
 # Auth metadata fields propagated from the parent request to the summary call
-# so the summary's spend is attributed to the same team/key. The list mirrors
-# the fields populated by
+# so the summary's spend is attributed to the same scopes. The list mirrors the
+# fields populated by
 # ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``.
 # ``user_api_key_model_max_budget`` / ``user_api_key_end_user_model_max_budget``
 # are what ``_PROXY_VirtualKeyModelMaxBudgetLimiter`` reads post-call to update
 # the per-model spend caches, so without them the summary spend would never
-# count against the caller's model budget.
+# count against the caller's model budget. ``user_api_key_end_user_id`` /
+# ``user_api_key_project_id`` are the scope identifiers the post-call spend hook
+# and rate limiter key their counters on, and ``user_api_end_user_max_budget``
+# is the end-user budget the cost callback enforces — without these the summary
+# tokens escape the caller's end-user/project budgets and counters.
 _PROPAGATED_METADATA_KEYS = (
     "user_api_key",
     "user_api_key_alias",
@@ -54,6 +58,9 @@ _PROPAGATED_METADATA_KEYS = (
     "user_api_key_user_id",
     "user_api_key_user_email",
     "user_api_key_org_id",
+    "user_api_key_project_id",
+    "user_api_key_end_user_id",
+    "user_api_end_user_max_budget",
     "user_api_key_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
@@ -871,6 +878,13 @@ async def _call_summary_model(
         "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
         "litellm_metadata": metadata,
     }
+    # The end-user id must also travel as the top-level ``user`` kwarg: legacy
+    # limiter hooks and prometheus end-user tracking read it from there rather
+    # than from ``litellm_metadata``, so without it the summary tokens would not
+    # debit the caller's end-user counters.
+    end_user_id = metadata.get("user_api_key_end_user_id")
+    if end_user_id:
+        call_kwargs["user"] = end_user_id
     if allowed_model_region is not None:
         call_kwargs["allowed_model_region"] = allowed_model_region
     if llm_router is not None and hasattr(llm_router, "acompletion"):
