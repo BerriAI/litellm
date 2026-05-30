@@ -708,6 +708,57 @@ def test_should_not_skip_for_skip_listed_top_level_model():
     assert should_skip is False
 
 
+def test_warns_once_for_unsupported_model_skip_setting():
+    """Operators who set the no-op per-model skip key get a single warning so a
+    misconfigured deployment does not silently leave batch limits unenforced."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
+        ),
+        patch(
+            "litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger"
+        ) as mock_logger,
+    ):
+        for _ in range(3):
+            rate_limiter._should_skip_batch_input_file_processing(
+                data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
+                user_api_key_dict=user,
+            )
+    assert mock_logger.warning.call_count == 1
+    assert (
+        "skip_batch_input_file_rate_limiting_for_models"
+        in mock_logger.warning.call_args[0][0]
+    )
+
+
+def test_no_warning_when_model_skip_setting_absent():
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["openai"]},
+        ),
+        patch(
+            "litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger"
+        ) as mock_logger,
+    ):
+        rate_limiter._should_skip_batch_input_file_processing(
+            data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
+            user_api_key_dict=user,
+        )
+    mock_logger.warning.assert_not_called()
+
+
 def test_should_skip_when_no_rate_limits_configured():
     rate_limiter = _make_rate_limiter()
     rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [

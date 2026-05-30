@@ -98,6 +98,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """
         self.internal_usage_cache = internal_usage_cache
         self.parallel_request_limiter = parallel_request_limiter
+        self._warned_unsupported_model_skip = False
 
     def _get_file_bound_batch_model(self, data: Dict) -> Optional[str]:
         """Resolve the model bound to the batch input file ID.
@@ -209,10 +210,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         rate-limit descriptor list computed for the no-limits check, so the
         caller can reuse it for counter enforcement without recomputing.
         """
+        from litellm.proxy.proxy_server import general_settings
+
+        self._warn_if_unsupported_model_skip_configured(general_settings)
+
         if self._key_requires_batch_model_access_check(user_api_key_dict):
             return False, None
-
-        from litellm.proxy.proxy_server import general_settings
 
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
             return True, None
@@ -242,6 +245,26 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return True, None
 
         return False, descriptors
+
+    def _warn_if_unsupported_model_skip_configured(
+        self, general_settings: Dict
+    ) -> None:
+        """Warn once that ``skip_batch_input_file_rate_limiting_for_models`` is a no-op.
+
+        A per-model skip is intentionally not honored because the model a batch
+        runs on is caller-influenced and can be pointed at a skip-listed
+        deployment while the JSONL routes a different, rate-limited model.
+        """
+        if self._warned_unsupported_model_skip:
+            return
+        if general_settings.get("skip_batch_input_file_rate_limiting_for_models"):
+            self._warned_unsupported_model_skip = True
+            verbose_proxy_logger.warning(
+                "general_settings.skip_batch_input_file_rate_limiting_for_models is not "
+                "supported and has no effect. Use "
+                "skip_batch_input_file_rate_limiting_for_providers or "
+                "disable_batch_input_file_rate_limiting instead."
+            )
 
     @staticmethod
     def _key_requires_batch_model_access_check(
