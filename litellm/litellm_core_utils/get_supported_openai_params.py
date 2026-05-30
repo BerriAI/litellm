@@ -261,6 +261,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.PerplexityChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nscale":
         return litellm.NscaleConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "kluster_ai":
+        return litellm.KlusterAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anyscale":
         return [
             "temperature",
