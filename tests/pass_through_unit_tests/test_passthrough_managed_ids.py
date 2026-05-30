@@ -39,6 +39,7 @@ from litellm.proxy.pass_through_endpoints.managed_id_codec import (
     new_managed_id,
 )
 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+    _MAX_RAW_ID_GUARD_LOOKUPS,
     _canonical_path,
     _passthrough_provider_marker,
     _resolve_one,
@@ -1476,6 +1477,76 @@ class TestRawProviderIdInputGuard:
             _managed_files_hook(),
         )
         assert result == "/openai/v1/files/file-victim"
+
+
+# ---------------------------------------------------------------------------
+# Raw-provider-ID guard amplification — a body packed with id-shaped strings
+# must not fan out into one (unindexed) DB scan per string. The guard de-dupes
+# repeats and caps the distinct lookups per request, failing closed instead of
+# skipping the guard.
+# ---------------------------------------------------------------------------
+
+
+class TestRawProviderIdGuardBudget:
+    @pytest.mark.asyncio
+    async def test_many_distinct_raw_ids_capped(self):
+        """A body with more distinct raw file IDs than the per-request budget is
+        rejected with 400, and the number of (unindexed) DB scans never exceeds
+        the cap."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        body = {"ids": [f"file-{i}" for i in range(_MAX_RAW_ID_GUARD_LOOKUPS + 25)]}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_body_ids(
+                body, "openai", _user("attacker", "attacker-team"), pc, None
+            )
+        assert exc_info.value.status_code == 400
+        assert (
+            pc.db.litellm_managedfiletable.find_many.call_count
+            == _MAX_RAW_ID_GUARD_LOOKUPS
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeated_raw_id_deduped(self):
+        """The same raw ID repeated many times issues exactly one DB lookup."""
+        pc = _prisma_client()
+        body = {"ids": ["file-dup"] * (_MAX_RAW_ID_GUARD_LOOKUPS * 5)}
+        result = await rewrite_body_ids(
+            body, "openai", _user("attacker", "attacker-team"), pc, None
+        )
+        assert result is body
+        assert pc.db.litellm_managedfiletable.find_many.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_distinct_ids_under_cap_not_rejected(self):
+        """A realistically-sized body (few distinct raw IDs) is never rejected and
+        each distinct ID is guarded once."""
+        pc = _prisma_client()
+        body = {"ids": [f"file-{i}" for i in range(5)]}
+        result = await rewrite_body_ids(
+            body, "openai", _user("user-1", "team-1"), pc, None
+        )
+        assert result is body
+        assert pc.db.litellm_managedfiletable.find_many.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_budget_is_per_input_surface(self):
+        """Each input surface (path / query / body) gets its own budget, so a
+        request distributing IDs across them is still bounded per surface."""
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        params = {f"k{i}": f"file-{i}" for i in range(_MAX_RAW_ID_GUARD_LOOKUPS + 5)}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_query_ids(
+                params, "openai", _user("attacker", "attacker-team"), pc, None
+            )
+        assert exc_info.value.status_code == 400
+        assert (
+            pc.db.litellm_managedfiletable.find_many.call_count
+            == _MAX_RAW_ID_GUARD_LOOKUPS
+        )
 
 
 # ---------------------------------------------------------------------------

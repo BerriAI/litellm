@@ -151,6 +151,41 @@ _OBJECT_PREFIXES: FrozenSet[str] = frozenset({"batch_", "resp_"})
 # deep payloads. Real OpenAI files/batches bodies nest only a few levels.
 _MAX_BODY_REWRITE_DEPTH = 64
 
+# Caps the distinct raw-provider-id guard lookups issued per request. A raw
+# file-id guard is an unindexed array-containment scan over
+# LiteLLM_ManagedFileTable (flat_model_file_ids has no index), so a body packed
+# with id-shaped strings could otherwise amplify one request into thousands of
+# full-table scans. Legitimate callers reference managed IDs (resolved via an
+# indexed lookup, never the guard), so guarding more raw ids than this only
+# happens under abuse; the request is rejected rather than skipping the guard.
+_MAX_RAW_ID_GUARD_LOOKUPS = 100
+
+
+class _RawIdGuardBudget:
+    """Per-request de-dupe + cap for raw-provider-id guard DB lookups."""
+
+    __slots__ = ("_remaining", "_seen")
+
+    def __init__(self, limit: int = _MAX_RAW_ID_GUARD_LOOKUPS) -> None:
+        self._remaining = limit
+        self._seen: set = set()
+
+    def reserve(self, raw_id: str) -> bool:
+        """Return True when a guard lookup for *raw_id* should run. Returns
+        False for a raw id already checked this request (de-dupe). Raises
+        ``HTTPException(400)`` once the per-request lookup budget is exhausted."""
+        if raw_id in self._seen:
+            return False
+        if self._remaining <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Too many resource identifiers in request.",
+            )
+        self._remaining -= 1
+        self._seen.add(raw_id)
+        return True
+
+
 # ---------------------------------------------------------------------------
 # List routes — GET requests that return a paginated {object:"list", data:[…]}
 # These are intercepted and served entirely from the DB rather than forwarded
@@ -339,6 +374,7 @@ async def _guard_raw_provider_id(
     provider: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Any,
+    budget: Optional[_RawIdGuardBudget] = None,
 ) -> None:
     """Deny a raw provider ID that maps to a managed resource the caller does
     not own, before it is forwarded upstream.
@@ -357,6 +393,8 @@ async def _guard_raw_provider_id(
         return
 
     if any(raw_id.startswith(p) for p in _FILE_PREFIXES):
+        if budget is not None and not budget.reserve(raw_id):
+            return
         # File rows have no provider column, so fetch every row holding this raw
         # id and scope to the current provider in the application layer (same as
         # _mint_or_reuse_file's dedup).
@@ -382,6 +420,8 @@ async def _guard_raw_provider_id(
         return
 
     if any(raw_id.startswith(p) for p in _OBJECT_PREFIXES):
+        if budget is not None and not budget.reserve(raw_id):
+            return
         # Object rows store model_object_id as "passthrough:{provider}:{raw}", so
         # the lookup is exact and already provider-scoped.
         try:
@@ -1073,6 +1113,7 @@ async def rewrite_path_ids(
     Walk URL path segments and resolve any passthrough managed IDs to raw
     provider IDs.  Returns *path* unchanged when no managed IDs are found.
     """
+    budget = _RawIdGuardBudget()
     segments = path.split("/")
     new_segments: List[str] = []
     changed = False
@@ -1090,7 +1131,7 @@ async def rewrite_path_ids(
             changed = True
         else:
             await _guard_raw_provider_id(
-                decoded_seg, provider, user_api_key_dict, prisma_client
+                decoded_seg, provider, user_api_key_dict, prisma_client, budget
             )
             new_segments.append(seg)
     if changed:
@@ -1113,6 +1154,7 @@ async def rewrite_query_ids(
     """
     if not params:
         return params
+    budget = _RawIdGuardBudget()
     mutated = dict(params)
     rewritten_keys: List[str] = []
     for key, val in list(mutated.items()):
@@ -1124,7 +1166,7 @@ async def rewrite_query_ids(
                 rewritten_keys.append(key)
             else:
                 await _guard_raw_provider_id(
-                    val, provider, user_api_key_dict, prisma_client
+                    val, provider, user_api_key_dict, prisma_client, budget
                 )
     if rewritten_keys:
         verbose_proxy_logger.debug(
@@ -1149,6 +1191,8 @@ async def rewrite_body_ids(
     """
     if not body:
         return body
+
+    budget = _RawIdGuardBudget()
 
     async def _walk(node: Any, depth: int) -> Any:
         if depth >= _MAX_BODY_REWRITE_DEPTH:
@@ -1177,7 +1221,7 @@ async def rewrite_body_ids(
                     node, provider, user_api_key_dict, prisma_client, managed_files_hook
                 )
             await _guard_raw_provider_id(
-                node, provider, user_api_key_dict, prisma_client
+                node, provider, user_api_key_dict, prisma_client, budget
             )
             return node
         return node
