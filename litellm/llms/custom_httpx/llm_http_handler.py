@@ -6560,6 +6560,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6642,6 +6643,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6734,6 +6736,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6805,6 +6808,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6888,6 +6892,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6945,6 +6950,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7021,6 +7027,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7031,27 +7038,49 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, data = video_provider_config.transform_video_edit_request(
-            prompt=prompt,
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
-            extra_body=extra_body,
         )
-
-        logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-                "video_id": video_id,
-            },
-        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
+                prefetch_resp = sync_httpx_client.post(
+                    url=prefetch_url,
+                    headers=headers,
+                    json=prefetch_body,
+                    timeout=timeout,
+                )
+                prefetch_resp.raise_for_status()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
         try:
+            url, data = video_provider_config.transform_video_edit_request(
+                prompt=prompt,
+                video_id=video_id,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+                extra_body=extra_body,
+                prefetched_source_data=prefetched_source_data,
+            )
+
+            logging_obj.pre_call(
+                input=prompt,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": url,
+                    "headers": headers,
+                    "video_id": video_id,
+                },
+            )
+
             response = sync_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -7063,6 +7092,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
@@ -7093,6 +7123,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7103,27 +7134,49 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, data = video_provider_config.transform_video_edit_request(
-            prompt=prompt,
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
-            extra_body=extra_body,
         )
-
-        logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-                "video_id": video_id,
-            },
-        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
+                prefetch_resp = await async_httpx_client.post(
+                    url=prefetch_url,
+                    headers=headers,
+                    json=prefetch_body,
+                    timeout=timeout,
+                )
+                prefetch_resp.raise_for_status()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
         try:
+            url, data = video_provider_config.transform_video_edit_request(
+                prompt=prompt,
+                video_id=video_id,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+                extra_body=extra_body,
+                prefetched_source_data=prefetched_source_data,
+            )
+
+            logging_obj.pre_call(
+                input=prompt,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": url,
+                    "headers": headers,
+                    "video_id": video_id,
+                },
+            )
+
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -7135,6 +7188,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
@@ -7182,6 +7236,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7256,6 +7311,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7467,6 +7523,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
