@@ -4,6 +4,7 @@ import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from 
 import { Badge, Spin, Checkbox, Input, Radio } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 import McpCrudPermissionPanel from "./McpCrudPermissionPanel";
+import { isValidToolDisplayName, TOOL_DISPLAY_NAME_ERROR } from "./utils";
 
 interface KeyTool {
   name: string;
@@ -118,12 +119,17 @@ const ToolRow: React.FC<ToolRowProps> = ({
           <Text className="text-xs font-medium text-gray-600 mb-1 block">Display Name</Text>
           <Input
             placeholder={tool.name}
+            status={isValidToolDisplayName(toolNameToDisplayName[tool.name] || "") ? undefined : "error"}
             value={toolNameToDisplayName[tool.name] || ""}
             onChange={(e) => onDisplayNameChange(tool.name, e.target.value)}
           />
-          <Text className="text-xs text-gray-400 mt-1 block">
-            Override how this tool&apos;s name appears to users. Leave blank to use original.
-          </Text>
+          {isValidToolDisplayName(toolNameToDisplayName[tool.name] || "") ? (
+            <Text className="text-xs text-gray-400 mt-1 block">
+              Override how this tool&apos;s name appears to users. Leave blank to use original.
+            </Text>
+          ) : (
+            <Text className="text-xs text-red-500 mt-1 block">{TOOL_DISPLAY_NAME_ERROR}</Text>
+          )}
         </div>
         <div>
           <Text className="text-xs font-medium text-gray-600 mb-1 block">Description</Text>

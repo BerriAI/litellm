@@ -5,6 +5,8 @@ import {
   getMaskedAndFullUrl,
   validateMCPServerUrl,
   validateMCPServerName,
+  isValidToolDisplayName,
+  findInvalidToolDisplayName,
 } from "./utils";
 
 describe("extractMCPToken", () => {
@@ -71,5 +73,39 @@ describe("validateMCPServerName", () => {
 
   it("should reject names containing spaces", async () => {
     await expect(validateMCPServerName("my server")).rejects.toBeDefined();
+  });
+});
+
+describe("isValidToolDisplayName (Bug #10)", () => {
+  it("accepts names matching [a-zA-Z0-9_-]+", () => {
+    expect(isValidToolDisplayName("browse_repo_docs")).toBe(true);
+    expect(isValidToolDisplayName("Browse-Repo-Docs-123")).toBe(true);
+  });
+
+  it("treats empty string as valid (means 'use original')", () => {
+    expect(isValidToolDisplayName("")).toBe(true);
+  });
+
+  it("rejects spaces (Bedrock pattern violation)", () => {
+    expect(isValidToolDisplayName("Browse Repo Docs")).toBe(false);
+  });
+
+  it("rejects special characters", () => {
+    expect(isValidToolDisplayName("browse.repo")).toBe(false);
+    expect(isValidToolDisplayName("browse/repo")).toBe(false);
+    expect(isValidToolDisplayName("emoji😀")).toBe(false);
+  });
+});
+
+describe("findInvalidToolDisplayName (Bug #10)", () => {
+  it("returns null when all display names are valid", () => {
+    expect(findInvalidToolDisplayName({ tool_a: "Alias_A", tool_b: "" })).toBeNull();
+  });
+
+  it("returns the offending tool/name when a display name is invalid", () => {
+    expect(findInvalidToolDisplayName({ tool_a: "ok_name", tool_b: "Bad Name" })).toEqual({
+      toolName: "tool_b",
+      displayName: "Bad Name",
+    });
   });
 });
