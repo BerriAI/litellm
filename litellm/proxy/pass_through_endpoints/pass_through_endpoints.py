@@ -38,7 +38,10 @@ from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    mask_sensitive_keys,
+    mask_url_credentials,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
@@ -2634,18 +2637,26 @@ async def _filter_endpoints_by_team_allowed_routes(
     return pass_through_endpoints
 
 
-def _mask_pass_through_endpoint_headers(
+def _mask_pass_through_endpoint_secrets(
     endpoint: PassThroughGenericEndpoint,
 ) -> PassThroughGenericEndpoint:
-    """Return a copy of the endpoint with forwarded header values masked.
+    """Return a copy of the endpoint with forwarded credentials masked.
 
-    Header names stay visible so a read-only caller can still see which headers
-    are configured; the values (which carry upstream credentials) are redacted.
+    A pass-through endpoint carries upstream credentials in three places: the
+    forwarded ``headers``, the ``default_query_params`` (an API key is often
+    passed as a query param), and the ``target`` URL userinfo. Names/structure
+    stay visible so a read-only caller can still see what is configured; the
+    values are redacted.
     """
-    if not endpoint.headers:
-        return endpoint
     masked = endpoint.model_copy(deep=True)
-    masked.headers = mask_sensitive_keys(masked.headers, set(masked.headers.keys()))
+    if masked.headers:
+        masked.headers = mask_sensitive_keys(masked.headers, set(masked.headers.keys()))
+    if masked.default_query_params:
+        masked.default_query_params = mask_sensitive_keys(
+            masked.default_query_params, set(masked.default_query_params.keys())
+        )
+    if masked.target:
+        masked.target = mask_url_credentials(masked.target)
     return masked
 
 
@@ -2707,7 +2718,7 @@ async def get_pass_through_endpoints(
     # (read-only admin, team callers) gets the values masked.
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         pass_through_endpoints = [
-            _mask_pass_through_endpoint_headers(endpoint)
+            _mask_pass_through_endpoint_secrets(endpoint)
             for endpoint in pass_through_endpoints
         ]
 

@@ -114,35 +114,58 @@ def test_redact_audit_log_values_masks_short_secrets():
 # --------------------------------------------------------------------------- #
 
 
-def _make_endpoint(headers):
+def _make_endpoint(
+    headers=None,
+    default_query_params=None,
+    target="https://upstream.example.com",
+):
     from litellm.proxy._types import PassThroughGenericEndpoint
 
     return PassThroughGenericEndpoint(
-        path="/foo", target="https://upstream.example.com", headers=headers
+        path="/foo",
+        target=target,
+        headers=headers or {},
+        default_query_params=default_query_params or {},
     )
 
 
-def test_mask_pass_through_endpoint_headers_redacts_values_keeps_names():
+def test_mask_pass_through_endpoint_secrets_redacts_all_credential_fields():
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        _mask_pass_through_endpoint_headers,
+        _mask_pass_through_endpoint_secrets,
     )
 
-    ep = _make_endpoint({"Authorization": "Bearer sk-upstream-secret-token"})
-    masked = _mask_pass_through_endpoint_headers(ep)
+    ep = _make_endpoint(
+        headers={"Authorization": "Bearer sk-upstream-secret-token"},
+        default_query_params={"api_key": "qp-secret-key-value"},
+        target="https://user:targetpw@upstream.example.com/v1",
+    )
+    masked = _mask_pass_through_endpoint_secrets(ep)
 
-    assert "Authorization" in masked.headers  # name preserved
-    assert masked.headers["Authorization"] != "Bearer sk-upstream-secret-token"
+    # Header value masked, name preserved.
+    assert "Authorization" in masked.headers
     assert "sk-upstream-secret-token" not in masked.headers["Authorization"]
+    # default_query_params value masked, name preserved.
+    assert "api_key" in masked.default_query_params
+    assert "qp-secret-key-value" not in masked.default_query_params["api_key"]
+    # target URL userinfo password redacted.
+    assert "targetpw" not in masked.target
     # Original object is not mutated.
     assert ep.headers["Authorization"] == "Bearer sk-upstream-secret-token"
+    assert ep.default_query_params["api_key"] == "qp-secret-key-value"
 
 
 @pytest.mark.asyncio
-async def test_pass_through_get_masks_headers_for_non_admin_only():
+async def test_pass_through_get_masks_secrets_for_non_admin_only():
     import litellm.proxy.pass_through_endpoints.pass_through_endpoints as pt
 
-    secret = "Bearer sk-upstream-secret-token"
-    endpoints = [_make_endpoint({"Authorization": secret})]
+    header_secret = "Bearer sk-upstream-secret-token"
+    qp_secret = "qp-secret-key-value"
+    endpoints = [
+        _make_endpoint(
+            headers={"Authorization": header_secret},
+            default_query_params={"api_key": qp_secret},
+        )
+    ]
 
     with (
         patch.object(
@@ -160,9 +183,12 @@ async def test_pass_through_get_masks_headers_for_non_admin_only():
             user_api_key_dict=_user(LitellmUserRoles.PROXY_ADMIN)
         )
 
-    assert secret not in json.dumps(viewer_resp.endpoints[0].headers)
-    # Full admin can still read the plaintext header (it is editable for them).
-    assert admin_resp.endpoints[0].headers["Authorization"] == secret
+    viewer_blob = json.dumps([e.model_dump() for e in viewer_resp.endpoints])
+    assert header_secret not in viewer_blob
+    assert qp_secret not in viewer_blob
+    # Full admin still reads plaintext (the endpoint is editable for them).
+    assert admin_resp.endpoints[0].headers["Authorization"] == header_secret
+    assert admin_resp.endpoints[0].default_query_params["api_key"] == qp_secret
 
 
 # --------------------------------------------------------------------------- #
