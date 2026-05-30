@@ -14775,7 +14775,7 @@ async def get_config(  # noqa: PLR0915
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {}
+        _email_env_vars: Dict[str, Any] = {}
         for _var in _email_vars:
             env_variable = environment_variables.get(_var, None)
             if env_variable is None:

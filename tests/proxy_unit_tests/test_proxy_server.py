@@ -2788,7 +2788,9 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type. Values are returned as-is from the config (no decryption).
+    for each callback type. The caller here is not a full proxy admin, so
+    credential-bearing variables come back masked while non-secret routing
+    variables (host, endpoint) are returned as-is.
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -2830,12 +2832,15 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
 
-        # Verify langfuse env vars are present (values returned as-is, no decryption)
+        # Credential-bearing vars are masked for this non-admin caller; the
+        # non-secret host is returned as-is.
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] != "test-public-key"
+        assert "*" in langfuse_vars["LANGFUSE_PUBLIC_KEY"]
         assert "LANGFUSE_SECRET_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] != "test-secret-key"
+        assert "*" in langfuse_vars["LANGFUSE_SECRET_KEY"]
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
 
