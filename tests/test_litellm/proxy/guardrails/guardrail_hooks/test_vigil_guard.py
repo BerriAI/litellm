@@ -129,19 +129,23 @@ def test_unknown_fallback_defaults_to_fail_closed():
     assert g.unreachable_fallback == "fail_closed"
 
 
-async def test_allowed_returns_texts_only_and_does_not_mutate_inputs():
+async def test_allowed_preserves_full_input_shape_and_logs_allow():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
     structured = [{"role": "user", "content": "hello"}]
     inputs = {"texts": ["hello"], "structured_messages": structured, "model": "gpt-4o"}
+    request_data = {"metadata": {}}
     out = await g.apply_guardrail(
-        inputs=inputs, request_data={}, input_type="request", logging_obj=None
+        inputs=inputs, request_data=request_data, input_type="request", logging_obj=None
     )
     assert out["texts"] == ["hello"]
-    assert "structured_messages" not in out
-    assert "model" not in out
+    assert out["structured_messages"] is structured
+    assert out["model"] == "gpt-4o"
+    assert out is not inputs
     assert inputs["structured_messages"] is structured
     assert len(handler.calls) == 1
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[0]["guardrail_response"] == "allow"
 
 
 async def test_sanitized_replaces_text():
@@ -303,22 +307,30 @@ async def test_response_source_is_model_output():
     assert handler.calls[0].json["source"] == "model_output"
 
 
-async def test_only_texts_images_tools_returned_others_dropped():
-    handler = FakeHandler([_resp({"decision": "ALLOWED"})])
+async def test_sanitized_returns_canonical_shape_and_logs_mask():
+    handler = FakeHandler(
+        [_resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"})]
+    )
     g = _make_guardrail(handler)
     tools = [{"type": "function", "function": {"name": "f"}}]
     inputs = {
-        "texts": ["x"],
+        "texts": ["my ssn is 123"],
         "images": ["img1"],
         "tools": tools,
         "tool_calls": [{"id": "1"}],
-        "structured_messages": [{"role": "user", "content": "x"}],
+        "structured_messages": [{"role": "user", "content": "my ssn is 123"}],
         "model": "gpt-4o",
     }
-    out = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    request_data = {"metadata": {}}
+    out = await g.apply_guardrail(
+        inputs=inputs, request_data=request_data, input_type="request"
+    )
+    assert out["texts"] == ["[REDACTED]"]
     assert out["images"] == ["img1"]
     assert out["tools"] == tools
     assert set(out.keys()) == {"texts", "images", "tools"}
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[0]["guardrail_response"] == "mask"
 
 
 async def test_empty_images_and_tools_are_preserved_when_present():
@@ -452,9 +464,10 @@ async def test_fail_open_returns_inputs_unchanged_on_backend_error(caplog):
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
     structured = [{"role": "user", "content": "x"}]
     inputs = {"texts": ["x"], "structured_messages": structured}
+    request_data = {"metadata": {}}
     with caplog.at_level(logging.ERROR):
         out = await g.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
+            inputs=inputs, request_data=request_data, input_type="request"
         )
     assert out is not inputs
     assert out["texts"] == ["x"]
@@ -462,6 +475,8 @@ async def test_fail_open_returns_inputs_unchanged_on_backend_error(caplog):
     assert len(handler.calls) == 2
     assert any("fail_open" in record.message for record in caplog.records)
     assert any("vigil-guard" in record.message for record in caplog.records)
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[0]["guardrail_response"] == "allow"
 
 
 @pytest.mark.parametrize("exc", [ssl.SSLError("tls failed"), OSError("network down")])
@@ -526,13 +541,16 @@ async def test_fail_open_multi_text_preserves_earlier_sanitization():
         ]
     )
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
+    request_data = {"metadata": {}}
     out = await g.apply_guardrail(
         inputs={"texts": ["my ssn is 123", "second"]},
-        request_data={},
+        request_data=request_data,
         input_type="request",
     )
     assert out["texts"] == ["[REDACTED]", "second"]
     assert len(handler.calls) == 3
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert entries[0]["guardrail_response"] == "mask"
 
 
 async def test_metadata_allowlist_and_clamping():

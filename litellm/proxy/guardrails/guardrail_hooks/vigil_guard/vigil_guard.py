@@ -173,8 +173,8 @@ class VigilGuardGuardrail(CustomGuardrail):
                     decision,
                 )
                 if self.unreachable_fallback == "fail_open":
-                    return self._fail_open_passthrough(
-                        inputs, result_texts, texts[index:]
+                    return self._build_output(
+                        inputs, result_texts + list(texts[index:])
                     )
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
@@ -194,12 +194,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             else:
                 result_texts.append(text)
 
-        guardrailed: GenericGuardrailAPIInputs = {"texts": result_texts}
-        if "images" in inputs:
-            guardrailed["images"] = inputs["images"]
-        if "tools" in inputs:
-            guardrailed["tools"] = inputs["tools"]
-        return guardrailed
+        return self._build_output(inputs, result_texts)
 
     def _handle_backend_failure(
         self,
@@ -217,7 +212,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 source,
                 str(exc),
             )
-            return self._fail_open_passthrough(inputs, scanned, remaining)
+            return self._build_output(inputs, list(scanned) + list(remaining))
         verbose_proxy_logger.error(
             "Vigil Guard backend failure with fail_closed; blocking request. "
             "guardrail_name=%s source=%s error=%s",
@@ -228,14 +223,21 @@ class VigilGuardGuardrail(CustomGuardrail):
         raise exc
 
     @staticmethod
-    def _fail_open_passthrough(
-        inputs: GenericGuardrailAPIInputs,
-        scanned: List[Any],
-        remaining: List[Any],
+    def _build_output(
+        inputs: GenericGuardrailAPIInputs, final_texts: List[Any]
     ) -> GenericGuardrailAPIInputs:
-        guardrailed = dict(inputs)
-        guardrailed["texts"] = list(scanned) + list(remaining)
-        return cast(GenericGuardrailAPIInputs, guardrailed)
+        # When the scanned texts are unchanged, return the input shape verbatim so
+        # the guardrail logs "allow" rather than "mask". When any text was changed
+        # (sanitized), return only the remap-relevant keys and drop structured_messages
+        # so a stale, unsanitized payload cannot reach the model.
+        if final_texts == (inputs.get("texts") or []):
+            return cast(GenericGuardrailAPIInputs, dict(inputs))
+        guardrailed: GenericGuardrailAPIInputs = {"texts": final_texts}
+        if "images" in inputs:
+            guardrailed["images"] = inputs["images"]
+        if "tools" in inputs:
+            guardrailed["tools"] = inputs["tools"]
+        return guardrailed
 
     async def _analyze(
         self, text: str, source: str, metadata: Dict[str, Any]
