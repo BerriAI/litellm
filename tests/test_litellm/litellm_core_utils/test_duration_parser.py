@@ -2,7 +2,10 @@ import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    get_next_standardized_reset_time,
+)
 
 
 class TestStandardizedResetTime(unittest.TestCase):
@@ -180,6 +183,21 @@ class TestStandardizedResetTime(unittest.TestCase):
         expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
+
+
+class TestDurationInSeconds(unittest.TestCase):
+    def test_valid_durations(self):
+        self.assertEqual(duration_in_seconds("30s"), 30)
+        self.assertEqual(duration_in_seconds("10m"), 600)
+        self.assertEqual(duration_in_seconds("2h"), 7200)
+        self.assertEqual(duration_in_seconds("3d"), 259200)
+
+    def test_malformed_durations_raise(self):
+        # Trailing characters after a valid unit must be rejected, not silently
+        # dropped: "10mb" previously parsed as 10 minutes.
+        for bad in ["10mb", "5days", "30x", "abc", "10 m"]:
+            with self.assertRaises(ValueError):
+                duration_in_seconds(bad)
 
 
 if __name__ == "__main__":
