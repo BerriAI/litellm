@@ -45,3 +45,25 @@ def test_openrouter_embedding():
     assert resp.data[0]["embedding"] is not None
     assert isinstance(resp.data[0]["embedding"], list)
     assert len(resp.data[0]["embedding"]) > 0
+
+
+def test_openrouter_qwen_cache_control_supported():
+    """
+    Validates that Qwen models routed through OpenRouter cleanly support 
+    cache_control and cache_control_injection_points parameters,
+    resolving issue #29322.
+    """
+    from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+    config = OpenrouterConfig()
+    qwen_model = "openrouter/qwen/qwen3.6-flash"
+    
+    # Retrieve the dynamically mapped parameters for the Qwen endpoint
+    supported_params = config.get_supported_openai_params(model=qwen_model)
+    
+    # Assertions to ensure the translation layer captures the caching parameters
+    assert "cache_control" in supported_params, f"cache_control missing from supported parameters for {qwen_model}"
+    assert "cache_control_injection_points" in supported_params, f"cache_control_injection_points missing from supported parameters for {qwen_model}"
+    print("✅ test_openrouter_qwen_cache_control_supported passed!")
+
+

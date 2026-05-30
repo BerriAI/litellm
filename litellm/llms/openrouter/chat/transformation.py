@@ -30,6 +30,7 @@ class CacheControlSupportedModels(str, Enum):
     MINIMAX = "minimax"
     GLM = "glm"
     ZAI = "z-ai"
+    QWEN = "qwen"
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -44,6 +45,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
             ) or litellm.supports_reasoning(model=model):
                 supported_params.append("reasoning_effort")
                 supported_params.append("thinking")
+
+            if "qwen" in model.lower():
+                supported_params.append("cache_control")
+                supported_params.append("cache_control_injection_points")
+
         except Exception:
             pass
         return list(dict.fromkeys(supported_params))
