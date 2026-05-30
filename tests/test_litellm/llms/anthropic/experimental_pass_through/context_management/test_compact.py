@@ -1155,10 +1155,20 @@ async def test_summary_call_sends_default_timeout():
 # ---------------------------------------------------------------------------
 
 
-def _fake_user_api_key_auth(*, key_models=None, team_models=None, team_id=None):
+def _fake_user_api_key_auth(
+    *,
+    key_models=None,
+    team_models=None,
+    team_id=None,
+    model_max_budget=None,
+    end_user_model_max_budget=None,
+    end_user_id=None,
+    token=None,
+):
     """Build a minimal stand-in for ``UserAPIKeyAuth`` with just the fields
-    consulted by ``_check_summary_model_access``. Avoids pulling the proxy
-    deps into this unit test."""
+    consulted by ``_check_summary_model_access`` and
+    ``_check_summary_model_budget``. Avoids pulling the proxy deps into this
+    unit test."""
 
     class _Auth:
         pass
@@ -1168,6 +1178,10 @@ def _fake_user_api_key_auth(*, key_models=None, team_models=None, team_id=None):
     auth.team_models = list(team_models) if team_models is not None else []
     auth.team_id = team_id
     auth.team_model_aliases = None
+    auth.model_max_budget = model_max_budget
+    auth.end_user_model_max_budget = end_user_model_max_budget
+    auth.end_user_id = end_user_id
+    auth.token = token
     return auth
 
 
@@ -1446,6 +1460,185 @@ async def test_summary_model_denied_when_team_member_scope_excludes_it():
 
     mock_call.assert_not_awaited()
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+
+
+async def test_summary_model_denied_when_key_over_model_budget():
+    """A caller whose per-model budget for the summary model is exhausted cannot
+    trigger the summary call via compaction."""
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_key_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    limiter.is_key_within_model_budget.assert_awaited_once()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+
+async def test_summary_model_denied_when_end_user_over_model_budget():
+    """End-user per-model budget is enforced for the summary subrequest too."""
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        end_user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        end_user_id="end-user-1",
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_end_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    limiter.is_end_user_within_model_budget.assert_awaited_once()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+
+async def test_summary_model_allowed_when_within_model_budget():
+    """When the per-model budget check passes, the summary call proceeds."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_end_user_within_model_budget = AsyncMock(return_value=True)
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_awaited_once()
+    limiter.is_key_within_model_budget.assert_awaited_once()
+    assert not result.applied_edits[0].get("error")
+
+
+async def test_model_budget_metadata_propagated_to_summary_call():
+    """The per-model budget metadata the spend caches rely on is forwarded to the
+    summary subrequest so its spend counts against the caller's model budget."""
+    messages = _simple_messages()
+    mock_response = _make_mock_response("<summary>Summary</summary>")
+    parent_litellm_metadata = {
+        "user_api_key": "sk-test",
+        "user_api_key_model_max_budget": {"claude-haiku-4-5": {"budget_limit": 5}},
+        "user_api_key_end_user_model_max_budget": {
+            "claude-haiku-4-5": {"budget_limit": 2}
+        },
+    }
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_call,
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            litellm_metadata=parent_litellm_metadata,
+        )
+
+    propagated = mock_call.call_args.kwargs["metadata"]
+    assert propagated["user_api_key_model_max_budget"] == {
+        "claude-haiku-4-5": {"budget_limit": 5}
+    }
+    assert propagated["user_api_key_end_user_model_max_budget"] == {
+        "claude-haiku-4-5": {"budget_limit": 2}
+    }
 
 
 async def test_summary_call_propagates_allowed_model_region():

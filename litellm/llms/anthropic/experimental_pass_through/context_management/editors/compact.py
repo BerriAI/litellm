@@ -42,6 +42,10 @@ from ..result import PolyfillResult
 # so the summary's spend is attributed to the same team/key. The list mirrors
 # the fields populated by
 # ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``.
+# ``user_api_key_model_max_budget`` / ``user_api_key_end_user_model_max_budget``
+# are what ``_PROXY_VirtualKeyModelMaxBudgetLimiter`` reads post-call to update
+# the per-model spend caches, so without them the summary spend would never
+# count against the caller's model budget.
 _PROPAGATED_METADATA_KEYS = (
     "user_api_key",
     "user_api_key_alias",
@@ -50,6 +54,8 @@ _PROPAGATED_METADATA_KEYS = (
     "user_api_key_user_id",
     "user_api_key_user_email",
     "user_api_key_org_id",
+    "user_api_key_model_max_budget",
+    "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",
 )
@@ -277,6 +283,76 @@ async def _check_summary_model_access(  # noqa: PLR0915
                     e,
                 )
                 return False
+
+    return True
+
+
+async def _check_summary_model_budget(
+    user_api_key_auth: Any,
+    summary_model: str,
+) -> bool:
+    """Return True when the caller is within their per-model budget for
+    ``summary_model``.
+
+    The summary subrequest never passes back through ``user_api_key_auth``, so
+    without this gate a caller whose ``model_max_budget`` for
+    ``context_management_summary_model`` is exhausted could keep consuming that
+    model via compaction. Mirrors the ``model_max_budget`` /
+    ``end_user_model_max_budget`` enforcement that ``user_api_key_auth`` runs for
+    the client-requested model. Returns True outside the proxy or when no
+    per-model budget is configured.
+    """
+    if user_api_key_auth is None:
+        return True
+    try:
+        from litellm.proxy.proxy_server import model_max_budget_limiter
+    except Exception:
+        return True
+
+    model_max_budget = getattr(user_api_key_auth, "model_max_budget", None)
+    token = getattr(user_api_key_auth, "token", None)
+    if isinstance(model_max_budget, dict) and model_max_budget and token is not None:
+        try:
+            await model_max_budget_limiter.is_key_within_model_budget(
+                user_api_key_dict=user_api_key_auth,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during key model-budget "
+                "check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
+
+    end_user_model_max_budget = getattr(
+        user_api_key_auth, "end_user_model_max_budget", None
+    )
+    end_user_id = getattr(user_api_key_auth, "end_user_id", None)
+    if (
+        isinstance(end_user_model_max_budget, dict)
+        and end_user_model_max_budget
+        and end_user_id is not None
+    ):
+        try:
+            await model_max_budget_limiter.is_end_user_within_model_budget(
+                end_user_id=end_user_id,
+                end_user_model_max_budget=end_user_model_max_budget,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during end-user model-budget "
+                "check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
 
     return True
 
@@ -918,6 +994,22 @@ async def apply_compact_20260112(  # noqa: PLR0915
             summary_model,
         )
         applied["error"] = "summary_model_access_denied"
+        return PolyfillResult(
+            messages=downstream_messages,
+            system=augmented_system,
+            applied_edits=[applied],
+        )
+
+    if not await _check_summary_model_budget(
+        user_api_key_auth=user_api_key_auth,
+        summary_model=summary_model,
+    ):
+        verbose_logger.warning(
+            "compact_20260112: caller over model budget for summary_model=%s; "
+            "skipping summary call",
+            summary_model,
+        )
+        applied["error"] = "summary_model_budget_exceeded"
         return PolyfillResult(
             messages=downstream_messages,
             system=augmented_system,
