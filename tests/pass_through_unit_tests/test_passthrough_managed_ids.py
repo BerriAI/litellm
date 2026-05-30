@@ -778,6 +778,41 @@ class TestRewriteBodyIds:
             )
         assert exc_info.value.status_code == 403
 
+    @pytest.mark.asyncio
+    async def test_deeply_nested_body_does_not_overflow_stack(self):
+        """A pathologically deep body must not blow the Python stack: rewriting
+        stops at the depth cap and returns the body unchanged instead of raising
+        RecursionError."""
+        node: Any = {"leaf": "raw-value"}
+        for _ in range(5000):
+            node = {"nested": node}
+
+        result = await rewrite_body_ids(node, "openai", _user(), None, None)
+        assert result is node
+
+    @pytest.mark.asyncio
+    async def test_managed_id_resolved_within_depth_cap(self):
+        """A managed ID nested well within the depth cap is still resolved, so
+        the cap never truncates legitimately-shaped bodies."""
+        mid = encode("openai", "u", "file-deep")
+        hook = _managed_files_hook()
+        file_row = MagicMock()
+        file_row.created_by = "user-1"
+        file_row.team_id = "team-1"
+        hook.get_unified_file_id = AsyncMock(return_value=file_row)
+
+        leaf = {"input_file_id": mid}
+        node: Any = leaf
+        for _ in range(20):
+            node = {"nested": node}
+
+        result = await rewrite_body_ids(node, "openai", _user(), None, hook)
+
+        cursor = result
+        for _ in range(20):
+            cursor = cursor["nested"]  # type: ignore[index]
+        assert cursor["input_file_id"] == "file-deep"  # type: ignore[index]
+
 
 # ---------------------------------------------------------------------------
 # Flag-off: behaviour unchanged when passthrough_managed_object_ids is False
@@ -1081,6 +1116,61 @@ class TestListPassthroughIdsFromDb:
         # No openai-matched rows, but scan cap was hit with a full last batch
         assert result["has_more"] is True
         assert result["data"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_ignores_cross_provider_cursor(self):
+        """An ``after`` cursor minted for a different provider must not shift the
+        created_at boundary: it would skip/repeat this provider's rows.  The
+        cursor is ignored and the unscoped first page is served."""
+        import datetime
+
+        azure_row = _fake_file_row(new_managed_id("azure", "file-azure"))
+        pc = _prisma_with_list(file_rows=[azure_row])
+
+        cursor_row = MagicMock()
+        cursor_row.created_at = datetime.datetime(
+            2025, 6, 1, tzinfo=datetime.timezone.utc
+        )
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=cursor_row)
+
+        result = await list_passthrough_ids_from_db(
+            provider="azure",
+            route="/azure/openai/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+            query_params={"after": new_managed_id("openai", "file-openai")},
+        )
+
+        assert result is not None
+        where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
+        assert "created_at" not in where
+
+    @pytest.mark.asyncio
+    async def test_list_applies_same_provider_cursor(self):
+        """An ``after`` cursor minted for the same provider shifts the created_at
+        boundary so pagination advances past the cursor row."""
+        import datetime
+
+        azure_row = _fake_file_row(new_managed_id("azure", "file-azure"))
+        pc = _prisma_with_list(file_rows=[azure_row])
+
+        cursor_row = MagicMock()
+        cursor_row.created_at = datetime.datetime(
+            2025, 6, 1, tzinfo=datetime.timezone.utc
+        )
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=cursor_row)
+
+        result = await list_passthrough_ids_from_db(
+            provider="azure",
+            route="/azure/openai/files",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+            query_params={"after": new_managed_id("azure", "file-cursor")},
+        )
+
+        assert result is not None
+        where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
+        assert where.get("created_at") == {"lt": cursor_row.created_at}
 
     @pytest.mark.asyncio
     async def test_list_files_filters_by_provider(self):

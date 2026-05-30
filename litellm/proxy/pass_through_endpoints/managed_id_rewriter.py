@@ -144,6 +144,10 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Dict[_MapKey, List[_FieldSpec]] = {
 # Prefixes that live in the *file* table rather than the object table.
 _FILE_PREFIXES: FrozenSet[str] = frozenset({"file-"})
 
+# Guards request-body rewriting against stack exhaustion from adversarially
+# deep payloads. Real OpenAI files/batches bodies nest only a few levels.
+_MAX_BODY_REWRITE_DEPTH = 64
+
 # ---------------------------------------------------------------------------
 # List routes — GET requests that return a paginated {object:"list", data:[…]}
 # These are intercepted and served entirely from the DB rather than forwarded
@@ -640,6 +644,7 @@ def _parse_list_limit(query_params: Optional[Dict[str, Any]]) -> Tuple[int, int]
 async def _build_list_where_with_cursor(
     prisma_client: Any,
     resource_kind: str,
+    provider: str,
     owner_filter: Dict[str, Any],
     query_params: Optional[Dict[str, Any]],
 ) -> Tuple[Dict[str, Any], str]:
@@ -651,7 +656,10 @@ async def _build_list_where_with_cursor(
     fetch_order = "desc"
 
     cursor_id = after_id or before_id
-    if not cursor_id:
+    # A cursor minted for a different provider would resolve to that provider's
+    # created_at boundary and silently skip/repeat this provider's rows, so
+    # ignore it and serve the unscoped first page instead.
+    if not cursor_id or not _managed_id_matches_provider(cursor_id, provider):
         return where, fetch_order
 
     cursor_table = (
@@ -851,7 +859,7 @@ async def list_passthrough_ids_from_db(
 
     raw_limit, fetch_limit = _parse_list_limit(query_params)
     where, fetch_order = await _build_list_where_with_cursor(
-        prisma_client, resource_kind, owner_filter, query_params
+        prisma_client, resource_kind, provider, owner_filter, query_params
     )
     page, has_more = await _fetch_provider_scoped_list_rows(
         prisma_client,
@@ -969,7 +977,9 @@ async def rewrite_body_ids(
     if not body:
         return body
 
-    async def _walk(node: Any) -> Any:
+    async def _walk(node: Any, depth: int) -> Any:
+        if depth >= _MAX_BODY_REWRITE_DEPTH:
+            return node
         if isinstance(node, dict):
             result: Dict[str, Any] = {}
             changed_inner = False
@@ -978,13 +988,13 @@ async def rewrite_body_ids(
                 if isinstance(k, str) and k.startswith("litellm_"):
                     result[k] = v
                     continue
-                new_v = await _walk(v)
+                new_v = await _walk(v, depth + 1)
                 result[k] = new_v
                 if new_v is not v:
                     changed_inner = True
             return result if changed_inner else node
         elif isinstance(node, list):
-            new_list = [await _walk(item) for item in node]
+            new_list = [await _walk(item, depth + 1) for item in node]
             if any(n is not o for n, o in zip(new_list, node)):
                 return new_list
             return node
@@ -994,7 +1004,7 @@ async def rewrite_body_ids(
             )
         return node
 
-    rewritten = await _walk(body)
+    rewritten = await _walk(body, 0)
     if rewritten is not body:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: body ids rewritten provider=%s", provider
