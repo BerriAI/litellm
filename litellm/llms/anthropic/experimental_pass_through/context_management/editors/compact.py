@@ -357,6 +357,87 @@ async def _check_summary_model_budget(
     return True
 
 
+async def _check_summary_model_rate_limit(
+    user_api_key_auth: Any,
+    summary_model: str,
+) -> bool:
+    """Return True when the caller is within their configured RPM/TPM limits
+    for ``summary_model``.
+
+    The summary subrequest never passes back through the proxy's pre-call
+    rate limiter, so without this gate a caller already at their key / team /
+    user RPM or TPM could still drive an extra summary-model completion per
+    allowed ``/v1/messages`` request. This mirrors the read side of
+    ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for the
+    summary model: it builds the same descriptor set and runs the check in
+    ``read_only`` mode so no counter is reserved or incremented — the summary
+    call's actual usage is still charged exactly once by the limiter's
+    post-call success hook (via the propagated ``litellm_metadata``).
+
+    Returns True (allow) outside the proxy, when the active limiter does not
+    expose the read-only descriptor check (legacy limiter), or when the
+    descriptor set cannot be built — the only deny signal is a definitive
+    ``OVER_LIMIT`` response, so an internal error here forwards the request
+    uncompacted rather than blocking every summary.
+    """
+    if user_api_key_auth is None:
+        return True
+    try:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+    except Exception:
+        return True
+
+    limiter = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    if (
+        limiter is None
+        or not hasattr(limiter, "should_rate_limit")
+        or not hasattr(limiter, "_create_rate_limit_descriptors")
+    ):
+        return True
+
+    try:
+        metadata = getattr(user_api_key_auth, "metadata", None) or {}
+        data = {"model": summary_model}
+        descriptors = limiter._create_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_auth,
+            data=data,
+            rpm_limit_type=metadata.get("rpm_limit_type"),
+            tpm_limit_type=metadata.get("tpm_limit_type"),
+            model_has_failures=False,
+        )
+        limiter._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_auth,
+            requested_model=summary_model,
+            descriptors=descriptors,
+        )
+        limiter._add_project_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_auth,
+            requested_model=summary_model,
+            descriptors=descriptors,
+        )
+        descriptors.extend(
+            limiter.create_organization_rate_limit_descriptor(
+                user_api_key_auth, summary_model
+            )
+        )
+        if not descriptors:
+            return True
+        response = await limiter.should_rate_limit(
+            descriptors=descriptors,
+            parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
+            read_only=True,
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "compact_20260112: unexpected error during rate-limit check for "
+            "summary_model=%s; allowing: %s",
+            summary_model,
+            e,
+        )
+        return True
+    return response.get("overall_code") != "OVER_LIMIT"
+
+
 def _find_latest_compaction_index(
     messages: List[Dict[str, Any]],
 ) -> Tuple[Optional[int], Optional[int]]:
@@ -1012,6 +1093,22 @@ async def apply_compact_20260112(  # noqa: PLR0915
             summary_model,
         )
         applied["error"] = "summary_model_budget_exceeded"
+        return PolyfillResult(
+            messages=downstream_messages,
+            system=augmented_system,
+            applied_edits=[applied],
+        )
+
+    if not await _check_summary_model_rate_limit(
+        user_api_key_auth=user_api_key_auth,
+        summary_model=summary_model,
+    ):
+        verbose_logger.warning(
+            "compact_20260112: caller over rate limit for summary_model=%s; "
+            "skipping summary call",
+            summary_model,
+        )
+        applied["error"] = "summary_model_rate_limit_exceeded"
         return PolyfillResult(
             messages=downstream_messages,
             system=augmented_system,
