@@ -359,34 +359,50 @@ async def _mint_or_reuse_file(
     if prisma_client is None and managed_files_hook is None:
         return raw_id  # no persistence available; leave raw
 
-    # Dedup + cross-tenant guard.  Look up any existing passthrough row for this
+    # Dedup + cross-tenant guard.  Look up existing passthrough rows for this
     # raw id WITHOUT scoping to the caller, so a raw file id that belongs to a
     # different tenant is denied rather than re-minted under the caller.  A raw
     # id only reaches this OUTPUT path by skipping the managed-id input gate (raw
     # provider ids are opt-out), so a row owned by someone else means the caller
     # is touching another tenant's upstream file.  flat_model_file_ids uses array
     # containment (no index, acceptable at the scale managed-file features run).
+    #
+    # The file table has no provider column, so the same raw id can map to one
+    # row per provider (OpenAI and Azure both use the ``file-`` format).  Fetch
+    # all matches and filter to this provider in the application layer, picking
+    # the oldest match deterministically so two providers issuing the same raw id
+    # reuse a stable row instead of minting duplicate rows on every call.
     if prisma_client is not None:
         try:
-            existing = await prisma_client.db.litellm_managedfiletable.find_first(
-                where={"flat_model_file_ids": {"has": raw_id}}
+            candidates = await prisma_client.db.litellm_managedfiletable.find_many(
+                where={"flat_model_file_ids": {"has": raw_id}},
+                order={"created_at": "asc"},
             )
         except Exception:
-            existing = None
+            candidates = []
             verbose_proxy_logger.debug(
                 "managed_id_rewriter: file dedup lookup failed", exc_info=True
             )
-        if existing is not None and _managed_id_matches_provider(
-            existing.unified_file_id, provider
-        ):
-            if can_access_resource(
-                user_api_key_dict, existing.created_by, existing.team_id
-            ):
-                verbose_proxy_logger.debug(
-                    "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
-                    raw_id.split("-", 1)[0],
-                )
-                return existing.unified_file_id
+        provider_rows = [
+            row
+            for row in (candidates or [])
+            if _managed_id_matches_provider(row.unified_file_id, provider)
+        ]
+        owned_row = next(
+            (
+                row
+                for row in provider_rows
+                if can_access_resource(user_api_key_dict, row.created_by, row.team_id)
+            ),
+            None,
+        )
+        if owned_row is not None:
+            verbose_proxy_logger.debug(
+                "managed_id_rewriter: reusing existing managed file id for raw prefix=%s",
+                raw_id.split("-", 1)[0],
+            )
+            return owned_row.unified_file_id
+        if provider_rows:
             if not is_create_route:
                 # Retrieve / delete: the caller supplied another owner's raw file
                 # id, so deny instead of minting a fresh managed id that would

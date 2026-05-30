@@ -65,6 +65,7 @@ def _prisma_client() -> MagicMock:
     pc.db = MagicMock()
     pc.db.litellm_managedfiletable = MagicMock()
     pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=[])
     pc.db.litellm_managedfiletable.create = AsyncMock(return_value=None)
     pc.db.litellm_managedobjecttable = MagicMock()
     pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
@@ -80,19 +81,19 @@ def _managed_files_hook(store_side_effect: Any = None) -> MagicMock:
     return hook
 
 
-def _owner_scoped_file_find_first(row: Any):
-    """Return a ``find_first`` that mimics Prisma owner-scoping for the managed
+def _owner_scoped_file_find_many(row: Any):
+    """Return a ``find_many`` that mimics Prisma owner-scoping for the managed
     file table: an owner-scoped query (one carrying ``created_by`` / ``team_id``
-    / ``OR``) returns ``None`` because the caller does not own *row*, while an
-    unscoped (global) query returns *row*. This reproduces the cross-tenant
+    / ``OR``) returns ``[]`` because the caller does not own *row*, while an
+    unscoped (global) query returns ``[row]``. This reproduces the cross-tenant
     bypass that a caller-scoped dedup lookup allowed (the scoped query misses the
     other tenant's row, so a fresh managed ID gets minted for the attacker)."""
 
     async def _impl(*args: Any, where: Any = None, **kwargs: Any) -> Any:
         where = where or {}
         if "created_by" in where or "team_id" in where or "OR" in where:
-            return None
-        return row
+            return []
+        return [row]
 
     return _impl
 
@@ -375,7 +376,9 @@ class TestRewriteResponseIds:
 
         pc = _prisma_client()
         # Dedup lookup finds existing row
-        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[existing_row]
+        )
         hook = _managed_files_hook()
         body = {
             "id": "batch_xyz",
@@ -405,7 +408,9 @@ class TestRewriteResponseIds:
         existing_row.unified_file_id = azure_managed_id
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[existing_row]
+        )
         hook = _managed_files_hook()
         body = {"id": "file-abc", "object": "file"}
         result = await rewrite_response_ids(
@@ -423,6 +428,42 @@ class TestRewriteResponseIds:
         hook.store_unified_file_id.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_dedup_reuses_same_provider_row_amid_collision(self):
+        """When OpenAI and Azure both issued the same raw file ID, an Azure call
+        must reuse the existing Azure managed row deterministically rather than
+        mint a duplicate, even when the cross-provider OpenAI row is returned
+        first by the DB."""
+        raw_id = "file-collision"
+        openai_row = MagicMock()
+        openai_row.unified_file_id = new_managed_id("openai", raw_id)
+        openai_row.created_by = "user-1"
+        openai_row.team_id = "team-1"
+        azure_managed_id = new_managed_id("azure", raw_id)
+        azure_row = MagicMock()
+        azure_row.unified_file_id = azure_managed_id
+        azure_row.created_by = "user-1"
+        azure_row.team_id = "team-1"
+
+        pc = _prisma_client()
+        # Cross-provider row listed first to expose any non-deterministic pick.
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[openai_row, azure_row]
+        )
+        hook = _managed_files_hook()
+        body = {"id": raw_id, "object": "file"}
+        result = await rewrite_response_ids(
+            provider="azure",
+            method="GET",
+            route=f"/azure/openai/files/{raw_id}",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        assert result["id"] == azure_managed_id
+        hook.store_unified_file_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_cross_owner_file_retrieve_raises_404(self):
         """
         A caller who fetches another tenant's raw ``file-...`` ID through
@@ -437,7 +478,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
-        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
             other_owner_row
         )
         hook = _managed_files_hook()
@@ -467,7 +508,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-victim")
-        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
             other_owner_row
         )
         hook = _managed_files_hook()
@@ -498,7 +539,7 @@ class TestRewriteResponseIds:
         other_owner_row.created_by = "victim"
         other_owner_row.team_id = "victim-team"
         other_owner_row.unified_file_id = encode("openai", "victim", "file-shared")
-        pc.db.litellm_managedfiletable.find_first = _owner_scoped_file_find_first(
+        pc.db.litellm_managedfiletable.find_many = _owner_scoped_file_find_many(
             other_owner_row
         )
         hook = _managed_files_hook()
@@ -527,7 +568,9 @@ class TestRewriteResponseIds:
         existing_row.team_id = "shared-team"
 
         pc = _prisma_client()
-        pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=existing_row)
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(
+            return_value=[existing_row]
+        )
         hook = _managed_files_hook()
 
         body = {"id": "file-team", "object": "file"}
