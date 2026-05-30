@@ -28,6 +28,7 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -280,6 +281,82 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_strips_alias_prefix_when_alias_differs_from_server_name(
+    monkeypatch,
+):
+    """Bug #8: tools/list prefixes tool names with the server alias. When the
+    alias differs from server_name, the prefix must still be stripped so the
+    upstream server receives the original tool name, not the alias-prefixed one.
+    """
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+
+    fake_server = types.SimpleNamespace(
+        alias="my_alias",
+        server_name="deepwiki_test",
+        server_id="srv-123",
+        short_prefix=None,
+        name="deepwiki_test",
+        mcp_info={},
+        tool_name_to_display_name=None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+        MagicMock(return_value=fake_server),
+    )
+
+    tool_name = "my_alias-read_wiki_structure"
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki_test"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+    assert call_tool_mock.await_args.kwargs["server_name"] == "deepwiki_test"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_reverse_maps_display_name_to_original(monkeypatch):
+    """Bug #11: when a tool has a display-name override, the model calls it by
+    the display name. _execute_tool_calls must reverse-map it to the original
+    upstream tool name before dispatching, matching the direct /mcp path.
+    """
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+
+    fake_server = types.SimpleNamespace(
+        alias="deepwiki",
+        server_name="deepwiki",
+        server_id="srv-9",
+        short_prefix=None,
+        name="deepwiki",
+        mcp_info={},
+        tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_name",
+        MagicMock(return_value=fake_server),
+    )
+
+    tool_name = "deepwiki-browse_repo_docs"
+    tool_calls = [{"id": "call-2", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+    assert call_tool_mock.await_args.kwargs["server_name"] == "deepwiki"
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkeypatch):
     """
     Regression test for ae4d92ad...:
@@ -288,7 +365,8 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook = _setup_proxy_logging(monkeypatch)
 
     fake_manager = types.SimpleNamespace(
-        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
+        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom")),
+        get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
