@@ -754,6 +754,74 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         assert result is True
 
+    def test_update_index_requires_admin_with_update_message(self):
+        """Non-admin users get an update-specific message for index replacement."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "PUT"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can update" in exc_info.value.detail
+
+    def test_index_name_prefix_does_not_match_lifecycle_request(self):
+        """An index name that is only a path prefix must not trigger lifecycle checks."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index-archive"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = None
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [],
+            "write": [],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins" not in exc_info.value.detail
+
     def test_team_metadata_permissions(self):
         """Test that team metadata permissions work."""
         # Mock request

@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import HTTPException, Request
@@ -40,7 +41,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def assert_proxy_admin_for_vector_store_index_management(
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    operation: Literal["create", "delete"] = "create",
+    operation: Literal["create", "delete", "update"] = "create",
 ) -> None:
     """Raise 403 unless the caller is a proxy admin."""
     if _is_proxy_admin(user_api_key_dict):
@@ -56,11 +57,10 @@ def assert_proxy_admin_for_vector_store_index_management(
 
 def _suffix_after_index_name(request_path: str, index_name: str) -> Optional[str]:
     """Return the path suffix after ``/indexes/{index_name}``, or None if absent."""
-    marker = f"/indexes/{index_name}"
-    marker_idx = request_path.find(marker)
-    if marker_idx == -1:
+    match = re.search(rf"/indexes/{re.escape(index_name)}(?=$|[/?])", request_path)
+    if match is None:
         return None
-    return request_path[marker_idx + len(marker) :]
+    return request_path[match.end() :]
 
 
 def _is_vector_store_index_lifecycle_request(
@@ -399,9 +399,14 @@ def is_allowed_to_call_vector_store_endpoint(
         request_path=request_route,
         index_name=index_name,
     ):
+        operation_label: Literal["create", "delete", "update"] = "create"
+        if request.method == "DELETE":
+            operation_label = "delete"
+        elif request.method in ("PUT", "PATCH"):
+            operation_label = "update"
         assert_proxy_admin_for_vector_store_index_management(
             user_api_key_dict,
-            operation="delete" if request.method == "DELETE" else "create",
+            operation=operation_label,
         )
         return True
 
