@@ -2269,7 +2269,11 @@ def test_mcp_path_based_server_segregation(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+        MagicMock(handle_request=dummy_handle_request),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
         MagicMock(handle_request=dummy_handle_request),
     )
     monkeypatch.setattr(
@@ -3641,3 +3645,150 @@ async def test_get_allowed_mcp_servers_includes_team_access_group_extras_end_to_
     ):
         result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert result == ["srv-stripe"]
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_ids_resolves_mcp_servers_ungated():
+    """A teamless key whose unified access_group_ids grant an MCP server sees it
+    even though the group lists the key in NEITHER assigned_key_ids NOR
+    assigned_team_ids — the group is attached to the key, so it grants the key's
+    own scope (ungated, mirroring can_key_call_model's fallback)."""
+    auth = UserAPIKeyAuth(
+        token="test-token-hash",
+        api_key="sk-test",
+        access_group_ids=["mcp-premium"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["srv-stripe"],
+        ) as mock_resolver,
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
+
+    assert result == ["srv-stripe"]
+    mock_resolver.assert_called_once()
+    assert mock_resolver.call_args.kwargs["access_group_ids"] == ["mcp-premium"]
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_ids_union_with_object_permission():
+    """When both legacy key.object_permission and unified key.access_group_ids
+    grant MCP servers, the final list is their union."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry["srv-direct"] = MCPServer(
+        server_id="srv-direct",
+        name="srv-direct",
+        server_name="srv-direct",
+        url="https://srv-direct.example.com",
+        transport=MCPTransport.http,
+    )
+    try:
+        perms = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-1",
+            mcp_servers=["srv-direct"],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        auth = UserAPIKeyAuth(
+            token="test-token-hash",
+            api_key="sk-test",
+            access_group_ids=["mcp-premium"],
+            object_permission=perms,
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["srv-stripe"],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
+
+        assert set(result) == {"srv-direct", "srv-stripe"}
+    finally:
+        global_mcp_server_manager.registry.pop("srv-direct", None)
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_ids_empty_returns_no_extras():
+    """Empty key.access_group_ids and no object_permission → resolver called with
+    [], short-circuits without DB access, returns []."""
+    auth = UserAPIKeyAuth(
+        token="test-token-hash",
+        api_key="sk-test",
+        access_group_ids=[],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_resolver,
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
+
+    assert result == []
+    mock_resolver.assert_called_once()
+    assert mock_resolver.call_args.kwargs["access_group_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_key_access_group_base_end_to_end():
+    """End-to-end bug repro: a teamless key has an MCP-granting access group on
+    its access_group_ids, but the group lists the key in NEITHER assigned_key_ids
+    NOR assigned_team_ids. The gated extras path returns [] (no override), yet the
+    ungated base key path grants the server → the key sees it through
+    get_allowed_mcp_servers."""
+    auth = UserAPIKeyAuth(
+        token="test-token",
+        api_key="sk-test",
+        access_group_ids=["mcp-group"],
+    )
+    # Group grants the server but admits neither this key nor its (absent) team.
+    fake_ag = _fake_mcp_access_group(
+        access_group_id="mcp-group",
+        access_mcp_server_ids=["srv-deepwiki"],
+        assigned_team_ids=[],
+        assigned_key_ids=[],
+    )
+
+    patches = _patch_proxy_server_globals_for_mcp() + [
+        # Ungated base resolver used by _get_allowed_mcp_servers_for_key.
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["srv-deepwiki"],
+        ),
+        # Gated path (_get_key_access_group_mcp_server_extras) resolves the group
+        # via get_access_object; empty assigned_* → it contributes nothing.
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    _start_patches(patches)
+    try:
+        # Sanity: the gated extras path alone denies (the old behavior).
+        extras = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
+        assert extras == []
+
+        # But the key now sees the server via the ungated base path.
+        result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert result == ["srv-deepwiki"]
+    finally:
+        _stop_patches(patches)

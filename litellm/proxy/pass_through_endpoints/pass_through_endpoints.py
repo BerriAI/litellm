@@ -344,7 +344,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if litellm_call_id:
             return_headers["x-litellm-call-id"] = litellm_call_id
         if custom_headers:
-            return_headers.update(custom_headers)
+            # Ensure custom headers don't override actual upstream response headers or let framework defaults (like content-length: 0) interfere.
+            sanitized_custom_headers = {
+                key: value
+                for key, value in custom_headers.items()
+                if key.lower() not in excluded_headers
+            }
+            return_headers.update(sanitized_custom_headers)
 
         return return_headers
 
