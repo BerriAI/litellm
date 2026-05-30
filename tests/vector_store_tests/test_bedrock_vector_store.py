@@ -22,7 +22,7 @@ class TestBedrockVectorStore(BaseVectorStoreTest):
 
     def get_base_request_args(self):
         return {
-            "vector_store_id": "LCYXFBR2TU",
+            "vector_store_id": "T37J8R4WTM",
             "custom_llm_provider": "bedrock",
             "query": "what happens after we add a model",
         }
@@ -106,7 +106,7 @@ async def test_bedrock_search_with_router():
     _router = Router(model_list=[])
     search_response = await _router.avector_store_search(
         query="what happens after we add a model",
-        vector_store_id="LCYXFBR2TU",
+        vector_store_id="T37J8R4WTM",
         custom_llm_provider="bedrock",
     )
     print(search_response)
@@ -150,7 +150,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
 
         # Create vector store with credential reference
         vector_store = LiteLLM_ManagedVectorStore(
-            vector_store_id="LCYXFBR2TU",
+            vector_store_id="T37J8R4WTM",
             custom_llm_provider="bedrock",
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
@@ -162,7 +162,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
         litellm.vector_store_registry = registry
 
         # Verify credentials can be retrieved from registry
-        retrieved_credentials = registry.get_credentials_for_vector_store("LCYXFBR2TU")
+        retrieved_credentials = registry.get_credentials_for_vector_store("T37J8R4WTM")
         assert retrieved_credentials, "Should retrieve credentials from registry"
         assert retrieved_credentials.get("aws_access_key_id") == "test_access_key"
         assert retrieved_credentials.get("aws_secret_access_key") == "test_secret_key"
@@ -194,7 +194,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
 
                 search_response = await _router.avector_store_search(
                     query="what happens after we add a model",
-                    vector_store_id="LCYXFBR2TU",
+                    vector_store_id="T37J8R4WTM",
                     custom_llm_provider="bedrock",
                 )
 
@@ -203,7 +203,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
                 call_kwargs = mock_handler.call_args[1]
 
                 # Verify that the credential accessor was called with the correct vector store ID
-                mock_get_creds.assert_called_with("LCYXFBR2TU")
+                mock_get_creds.assert_called_with("T37J8R4WTM")
 
                 # Verify the credentials were injected into the search call
                 litellm_params = call_kwargs.get("litellm_params", {})
@@ -224,7 +224,7 @@ async def test_bedrock_search_with_credentials_managed_registry():
                 assert search_response["data"][0]["id"] == "test_result"
 
                 print(
-                    f"✅ Test passed: Credential accessor was called with vector store ID: LCYXFBR2TU"
+                    f"✅ Test passed: Credential accessor was called with vector store ID: T37J8R4WTM"
                 )
                 print(f"✅ Retrieved credentials: {retrieved_credentials}")
                 print(f"✅ Credentials were injected into search call")
