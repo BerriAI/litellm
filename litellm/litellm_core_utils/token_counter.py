@@ -486,6 +486,14 @@ def _count_messages(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif key == "search_results" and isinstance(value, list):
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    extract_search_results_text,
+                )
+
+                search_results_text = extract_search_results_text(value)
+                if search_results_text:
+                    num_tokens += params.count_function(search_results_text)
             else:
                 # Skip unsupported keys instead of raising an error
                 continue

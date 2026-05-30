@@ -41,6 +41,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
@@ -78,6 +79,7 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_opus_output_config_effort,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -448,10 +450,20 @@ class AmazonConverseConfig(BaseConfig):
                             value=reasoning_effort,
                             llm_provider="bedrock_converse",
                         )
+                    existing_output_config = optional_params.get("output_config")
+                    if not isinstance(existing_output_config, dict):
+                        existing_output_config = {}
+                    existing_output_config.setdefault("effort", mapped_effort)
+                    normalize_bedrock_opus_output_config_effort(
+                        model=model,
+                        output_config=existing_output_config,
+                    )
+                    mapped_effort = existing_output_config["effort"]
                     self._validate_anthropic_adaptive_effort(
                         model=model, effort=mapped_effort
                     )
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    optional_params["output_config"] = existing_output_config
+                    optional_params["_output_config_normalized"] = True
 
     @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
@@ -1201,6 +1213,12 @@ class AmazonConverseConfig(BaseConfig):
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
         """Prepare and separate request parameters."""
+        # Consume the internal ``_output_config_normalized`` marker set by
+        # ``_handle_reasoning_effort_parameter`` so it does not linger on the
+        # caller's ``optional_params`` after the transformation returns.
+        anthropic_output_config_already_normalized = bool(
+            optional_params.pop("_output_config_normalized", False)
+        )
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
         cleaned_params = filter_exceptions_from_params(optional_params)
@@ -1219,8 +1237,17 @@ class AmazonConverseConfig(BaseConfig):
 
         # Anthropic-only ``output_config`` (snake_case) — re-attached to
         # ``additionalModelRequestFields`` for Anthropic models below. The
-        # Bedrock-native ``outputConfig`` (camelCase) is handled separately.
+        # structured-output ``format`` subfield is consumed into Bedrock's
+        # native ``outputConfig`` (camelCase), which is handled separately.
         anthropic_output_config = inference_params.pop("output_config", None)
+        output_config_format = None
+        if isinstance(anthropic_output_config, dict):
+            anthropic_output_config = dict(anthropic_output_config)
+            candidate_output_config_format = anthropic_output_config.pop("format", None)
+            if isinstance(candidate_output_config_format, dict):
+                output_config_format = candidate_output_config_format
+            if not anthropic_output_config:
+                anthropic_output_config = None
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
@@ -1230,6 +1257,30 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
+        base_model = BedrockModelInfo.get_base_model(model)
+        if (
+            output_config is None
+            and output_config_format is not None
+            and output_config_format.get("type") == "json_schema"
+            and base_model.startswith("anthropic")
+            and self._supports_native_structured_outputs(
+                model, self.custom_llm_provider
+            )
+        ):
+            output_config = self._create_output_config_for_response_format(
+                json_schema=output_config_format.get("schema"),
+                name=output_config_format.get("name"),
+                description=output_config_format.get("description"),
+            )
+        elif output_config is None and output_config_format is not None:
+            litellm.verbose_logger.warning(
+                "Bedrock Converse: dropping `output_config.format` for model=%s — "
+                "model does not advertise `supports_native_structured_output` in "
+                "model_prices_and_context_window.json. The schema will not be "
+                "enforced; pass `response_format` to use the synthetic tool-call "
+                "fallback.",
+                model,
+            )
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1275,7 +1326,6 @@ class AmazonConverseConfig(BaseConfig):
         if anthropic_output_config is not None and isinstance(
             anthropic_output_config, dict
         ):
-            base_model = BedrockModelInfo.get_base_model(model)
             if base_model.startswith("anthropic"):
                 if (
                     litellm.drop_params is True
@@ -1286,6 +1336,11 @@ class AmazonConverseConfig(BaseConfig):
                         model,
                     )
                 else:
+                    if not anthropic_output_config_already_normalized:
+                        normalize_bedrock_opus_output_config_effort(
+                            model=model,
+                            output_config=anthropic_output_config,
+                        )
                     effort = anthropic_output_config.get("effort")
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(
@@ -1891,6 +1946,75 @@ class AmazonConverseConfig(BaseConfig):
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
     @staticmethod
+    def _transform_citations_to_annotations(
+        citations_content_blocks: Optional[List[CitationsContentBlock]],
+    ) -> Tuple[Optional[str], Optional[List[ChatCompletionAnnotation]]]:
+        """
+        Convert Bedrock citationsContent blocks into OpenAI-style annotations.
+
+        Returns:
+            citations_text: concatenated text from citationsContent.content
+            annotations: OpenAI URL citation annotations
+        """
+        if not citations_content_blocks:
+            return None, None
+
+        annotations: List[ChatCompletionAnnotation] = []
+        citations_text_parts: List[str] = []
+        content_offset = 0
+
+        for citations_block in citations_content_blocks:
+            block_text = ""
+            raw_content = citations_block.get("content")
+            if isinstance(raw_content, list):
+                for content_part in raw_content:
+                    if isinstance(content_part, dict):
+                        _text = content_part.get("text")
+                        if isinstance(_text, str):
+                            block_text += _text
+
+            block_offset = content_offset
+            if block_text:
+                citations_text_parts.append(block_text)
+                content_offset += len(block_text)
+
+            raw_citations = citations_block.get("citations")
+            if not isinstance(raw_citations, list):
+                continue
+
+            for citation in raw_citations:
+                if not isinstance(citation, dict):
+                    continue
+
+                location = citation.get("location")
+                if not isinstance(location, dict):
+                    continue
+
+                search_location = location.get("searchResultLocation")
+                if not isinstance(search_location, dict):
+                    continue
+
+                start = search_location.get("start")
+                end = search_location.get("end")
+                if not isinstance(start, int) or not isinstance(end, int):
+                    continue
+
+                annotations.append(
+                    ChatCompletionAnnotation(
+                        type="url_citation",
+                        url_citation={
+                            "start_index": block_offset + start,
+                            "end_index": block_offset + end,
+                            "title": str(citation.get("title") or ""),
+                            "url": str(citation.get("source") or ""),
+                        },
+                    )
+                )
+
+        citations_text = "".join(citations_text_parts) if citations_text_parts else None
+        return citations_text, annotations or None
+
+    @staticmethod
     def _unwrap_bedrock_properties(json_str: str) -> str:
         """
         Unwrap Bedrock's response_format JSON structure.
@@ -2071,6 +2195,24 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = (
                 provider_specific_fields
             )
+
+        citations_text, annotations = self._transform_citations_to_annotations(
+            citationsContentBlocks
+        )
+        citations_included_in_content = False
+        if citations_text:
+            stripped_content = content_str.strip()
+            if not stripped_content:
+                content_str = citations_text
+                citations_included_in_content = True
+            elif not any(char.isalnum() for char in stripped_content):
+                # Bedrock may emit the cited sentence in citationsContent and only
+                # punctuation in the text blocks; stitch citations_text in front so
+                # its annotation span indices stay aligned with the final content.
+                content_str = citations_text + content_str
+                citations_included_in_content = True
+        if annotations and citations_included_in_content:
+            chat_completion_message["annotations"] = annotations
 
         if reasoningContentBlocks is not None:
             chat_completion_message["reasoning_content"] = (
