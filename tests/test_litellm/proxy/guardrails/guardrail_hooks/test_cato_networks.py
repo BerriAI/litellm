@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1261,6 +1262,73 @@ async def test_streaming_iterator_yields_verified_chunks_and_cancels_sender():
         ]
     assert len(chunks) == 1
     assert chunks[0].choices[0].delta.content == "hi"
+
+
+class _DoneWebSocket:
+    async def recv(self):
+        return json.dumps({"done": True})
+
+    async def send(self, _chunk):
+        return None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+async def _run_streaming_hook(guard):
+    with patch(
+        "litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks.connect",
+        return_value=_DoneWebSocket(),
+    ) as mock_connect:
+        async for _ in guard.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_email="stream@example.com"),
+            response=_mock_llm_stream(),
+            request_data={"litellm_call_id": "stream-call"},
+        ):
+            pass
+    return mock_connect
+
+
+@pytest.mark.asyncio
+async def test_streaming_connect_disables_ssl_verification_when_ssl_verify_false():
+    guard = _make_guardrail(
+        api_base="https://self-signed.example.com", ssl_verify=False
+    )
+    mock_connect = await _run_streaming_hook(guard)
+    ssl_ctx = mock_connect.call_args.kwargs["ssl"]
+    assert isinstance(ssl_ctx, ssl.SSLContext)
+    assert ssl_ctx.verify_mode == ssl.CERT_NONE
+    assert ssl_ctx.check_hostname is False
+
+
+@pytest.mark.asyncio
+async def test_streaming_connect_uses_verifying_context_for_ca_bundle():
+    import certifi
+
+    guard = _make_guardrail(
+        api_base="https://corp-cato.example.com", ssl_verify=certifi.where()
+    )
+    mock_connect = await _run_streaming_hook(guard)
+    ssl_ctx = mock_connect.call_args.kwargs["ssl"]
+    assert isinstance(ssl_ctx, ssl.SSLContext)
+    assert ssl_ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_streaming_connect_omits_ssl_when_not_configured():
+    guard = _make_guardrail(api_base="https://api.aisec.catonetworks.com")
+    mock_connect = await _run_streaming_hook(guard)
+    assert "ssl" not in mock_connect.call_args.kwargs
+
+
+def test_build_ws_ssl_kwargs_skips_insecure_ws_scheme():
+    assert (
+        CatoNetworksGuardrail._build_ws_ssl_kwargs(False, "ws://insecure.example.com")
+        == {}
+    )
 
 
 @pytest.mark.asyncio

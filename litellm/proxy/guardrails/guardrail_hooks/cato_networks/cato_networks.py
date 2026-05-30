@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import os
+import ssl
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
 
 from fastapi import HTTPException
@@ -21,6 +22,7 @@ from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    get_ssl_configuration,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -70,7 +72,26 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace(
             "https://", "wss://"
         )
+        self._ws_connect_ssl_kwargs = self._build_ws_ssl_kwargs(
+            ssl_verify, self.ws_api_base
+        )
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _build_ws_ssl_kwargs(
+        ssl_verify: Optional[Union[bool, str]], ws_api_base: str
+    ) -> dict:
+        """Resolve the ``ssl`` argument for ``websockets.connect``. Mirrors the
+        ``ssl_verify`` handling applied to the HTTP handler so a custom Cato instance
+        behind TLS honours the same verification settings for streaming."""
+        if ssl_verify is None or not ws_api_base.startswith("wss://"):
+            return {}
+        ssl_config = get_ssl_configuration(ssl_verify)
+        if ssl_config is False:
+            ssl_config = ssl.create_default_context()
+            ssl_config.check_hostname = False
+            ssl_config.verify_mode = ssl.CERT_NONE
+        return {"ssl": ssl_config}
 
     @staticmethod
     def _resolve_cato_user_email(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
@@ -322,6 +343,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 user_email=user_email,
                 litellm_call_id=call_id,
             ),
+            **self._ws_connect_ssl_kwargs,
         ) as websocket:
             sender = asyncio.create_task(
                 self.forward_the_stream_to_cato(websocket, response)
