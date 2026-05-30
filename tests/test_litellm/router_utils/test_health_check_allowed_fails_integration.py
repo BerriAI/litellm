@@ -123,6 +123,7 @@ class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
                 2,
             ),
             (litellm.BadRequestError, "BadRequestErrorAllowedFails", 7),
+            (litellm.InternalServerError, "InternalServerErrorAllowedFails", 4),
         ],
     )
     def test_policy_resolves_for_health_check_exception_types(
@@ -226,9 +227,6 @@ class TestHealthCheckCooldownIntegration:
             allowed_fails=1,
         )
 
-        # Use an exception that doesn't match TimeoutErrorAllowedFails
-        # InternalServerError is not checked by get_allowed_fails_from_policy
-        # so it will fall back to allowed_fails=1
         generic_exc = Exception("Some internal error")
 
         # Fail 1: should not cooldown (1 <= 1)
@@ -249,8 +247,6 @@ class TestHealthCheckCooldownIntegration:
 
     def test_healthy_endpoints_do_not_trigger_cooldown(self):
         """Healthy endpoints should not increment any failure counters."""
-        from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
-
         router = Router(
             model_list=[_make_model("deploy-1")],
             allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=1),
@@ -528,10 +524,6 @@ class TestAllDeploymentsInCooldownSafetyNet:
         """In the async routing path, all-in-cooldown with enable_health_check_routing
         returns the full list instead of empty (safety net)."""
         from unittest.mock import AsyncMock
-
-        from litellm.router_utils.cooldown_handlers import (
-            _async_get_cooldown_deployments,
-        )
 
         router = Router(
             model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],

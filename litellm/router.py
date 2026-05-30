@@ -12019,6 +12019,11 @@ class Router:
         ):
             return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
         if (
+            isinstance(exception, litellm.InternalServerError)
+            and allowed_fails_policy.InternalServerErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.InternalServerErrorAllowedFails
+        if (
             isinstance(exception, litellm.BadRequestError)
             and allowed_fails_policy.BadRequestErrorAllowedFails is not None
         ):
