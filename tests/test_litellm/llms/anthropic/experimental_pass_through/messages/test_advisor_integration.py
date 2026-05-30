@@ -9,7 +9,7 @@ interceptor detection, loop logic, and message assembly all run for real.
 """
 
 from typing import Dict
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -224,8 +224,6 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
     async def mock_handler(
         model, messages, tools, stream, max_tokens, custom_llm_provider, **kwargs
     ):
-        # First call is the executor sub-call (returns advisor tool_use).
-        # Capture its kwargs so we can assert the forwarded params.
         if not captured_executor_kwargs:
             captured_executor_kwargs.update(
                 {
@@ -240,7 +238,6 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
                 }
             )
             return _advisor_call_resp()
-        # Subsequent calls — terminate the loop.
         if tools is None:
             return _text_resp("Some advice.", model="claude-opus-4-6")
         return _text_resp("Final answer.")
@@ -267,11 +264,8 @@ async def test_named_params_forwarded_into_advisor_executor_subcall():
         )
 
     assert captured_executor_kwargs["thinking"] == {"type": "adaptive"}, (
-        "thinking must be forwarded into executor sub-call — see "
-        "anthropic_messages.handler interceptor invocation."
+        "thinking must be forwarded into executor sub-call"
     )
-    # The advisor enriches metadata with `advisor_sub_call` / `parent_request_id`,
-    # but the original caller fields must survive into the executor sub-call.
     assert isinstance(captured_executor_kwargs["metadata"], dict)
     assert captured_executor_kwargs["metadata"].get("caller_field") == "preserve_me"
     assert captured_executor_kwargs["system"] == "You are a helpful assistant."
@@ -323,11 +317,6 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
     async def fake_pre_request_hooks(
         model, messages, tools, stream, custom_llm_provider, **hook_kwargs
     ):
-        # Simulate a CustomLogger.async_pre_request_hook that overrides several
-        # named params on its way through. Without the request_kwargs.pop()
-        # extraction in handler.py, these would collide with the explicit
-        # kwargs passed to interceptor.handle() (TypeError: got multiple
-        # values for keyword argument).
         return {
             "tools": tools,
             "stream": stream,
@@ -347,7 +336,6 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
             side_effect=mock_handler,
         ),
     ):
-        # Should not raise TypeError.
         await anthropic_messages(
             model="openai/gpt-4o-mini",
             messages=MESSAGES,
@@ -360,7 +348,180 @@ async def test_pre_request_hook_override_does_not_collide_with_explicit_kwargs()
             temperature=0.9,
         )
 
-    # Hook overrides win and reach the executor sub-call.
     assert captured["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     assert captured["system"] == "Hook overrode the system prompt."
     assert captured["temperature"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# 6. Router routing: sub-calls go through the proxy router when available
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_handler_routes_through_router():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _call_messages_handler,
+    )
+
+    expected = _text_resp("Router response.")
+    mock_router = MagicMock()
+    mock_router.anthropic_messages = AsyncMock(return_value=expected)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        result = await _call_messages_handler(
+            model="claude-opus-4-7",
+            messages=MESSAGES,
+            tools=None,
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider=None,
+        )
+
+    mock_router.anthropic_messages.assert_called_once_with(
+        model="claude-opus-4-7",
+        messages=MESSAGES,
+        tools=None,
+        stream=False,
+        max_tokens=512,
+    )
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_call_handler_falls_back_without_router():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _call_messages_handler,
+    )
+
+    expected = _text_resp("Direct response.")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages",
+            new_callable=AsyncMock,
+            return_value=expected,
+        ) as mock_direct,
+    ):
+        result = await _call_messages_handler(
+            model="claude-opus-4-7",
+            messages=MESSAGES,
+            tools=None,
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="anthropic",
+        )
+
+    mock_direct.assert_called_once_with(
+        model="claude-opus-4-7",
+        messages=MESSAGES,
+        tools=None,
+        stream=False,
+        max_tokens=512,
+        custom_llm_provider="anthropic",
+    )
+    assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# 7. Advisor sub-call does not pass None api_key/api_base to the router
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_omits_none_credentials():
+    """When the advisor tool definition has no api_key/api_base, those keys
+    must not appear in the kwargs passed to _call_messages_handler. Otherwise
+    None would override the router's deployment credentials during merging."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-7")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert "api_key" not in captured_advisor_kwargs
+    assert "api_base" not in captured_advisor_kwargs
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_forwards_explicit_credentials():
+    """When the advisor tool definition includes api_key/api_base, those
+    values must be forwarded to the router call so they override deployment
+    credentials."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    advisor_tool_with_creds = {
+        **ADVISOR_TOOL,
+        "api_key": "sk-explicit-override",
+        "api_base": "https://custom.endpoint.com",
+    }
+
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-7")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[advisor_tool_with_creds],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert captured_advisor_kwargs["api_key"] == "sk-explicit-override"
+    assert captured_advisor_kwargs["api_base"] == "https://custom.endpoint.com"

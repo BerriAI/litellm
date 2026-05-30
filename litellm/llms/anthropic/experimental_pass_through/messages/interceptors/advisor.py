@@ -82,8 +82,6 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         max_uses: int = (
             ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         )
-        # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
-        # If not set in the tool definition, litellm resolves from env vars.
         advisor_api_key: Optional[str] = advisor_tool.get("api_key")
         advisor_api_base: Optional[str] = advisor_tool.get("api_base")
 
@@ -149,20 +147,28 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             )
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
+            # Only include api_key/api_base when explicitly set in the tool
+            # definition; passing None would override the router's deployment
+            # credentials during kwargs merging.
+            advisor_overrides: Dict = {}
+            if advisor_api_key is not None:
+                advisor_overrides["api_key"] = advisor_api_key
+            if advisor_api_base is not None:
+                advisor_overrides["api_base"] = advisor_api_base
+
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
                 model=advisor_model,
                 messages=advisor_messages,
                 tools=None,
                 stream=False,
                 max_tokens=max_tokens,
-                custom_llm_provider=None,  # let litellm resolve from model name
+                custom_llm_provider=None,
                 metadata={
                     **metadata_base,
                     "advisor_sub_call": True,
                     "parent_request_id": parent_request_id,
                 },
-                api_key=advisor_api_key,
-                api_base=advisor_api_base,
+                **advisor_overrides,
             )
 
             advisor_text = _extract_response_text(advisor_response)
@@ -322,6 +328,15 @@ def _inject_max_uses_error(
     ]
 
 
+def _get_llm_router():
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router
+    except ImportError:
+        return None
+
+
 async def _call_messages_handler(
     model: str,
     messages: List[Dict],
@@ -331,13 +346,19 @@ async def _call_messages_handler(
     custom_llm_provider: Optional[str],
     **kwargs,
 ) -> Any:
-    """
-    Call anthropic_messages() — the public async /messages entry point — for
-    orchestration sub-calls (executor or advisor).
+    """Route through the proxy's llm_router when available; fall back to
+    direct anthropic_messages() for standalone SDK usage."""
+    router = _get_llm_router()
+    if router is not None:
+        return await router.anthropic_messages(
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
 
-    Using the public function (decorated with @client) ensures logging, retries,
-    and provider resolution all work correctly, identical to a direct user call.
-    """
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         anthropic_messages,
     )
