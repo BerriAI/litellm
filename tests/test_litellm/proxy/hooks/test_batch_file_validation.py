@@ -326,28 +326,49 @@ async def test_pre_call_skips_file_fetch_for_configured_provider():
 async def test_pre_call_does_not_skip_for_spoofed_provider():
     """The provider skip is resolved from trusted deployment credentials, so a
     user-supplied ``custom_llm_provider`` that is not backed by the routing
-    deployment must not trigger a skip."""
+    deployment must not trigger a skip: the input file must still be fetched
+    and the rate-limit counters incremented."""
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
     rate_limiter = _PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=MagicMock(),
     )
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = (
-        []
+    # An applicable rate limit keeps the no-limits shortcut from firing, so the
+    # only thing that could prevent the fetch below is the provider skip. If the
+    # spoofed ``custom_llm_provider`` were honored, afile_content would never be
+    # awaited.
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 100}}
+    ]
+    rate_limiter.parallel_request_limiter.atomic_check_and_increment_by_n = AsyncMock(
+        return_value={"overall_code": "OK", "statuses": []}
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
+
+    mock_router = MagicMock()
+    mock_router.model_list = []
+    mock_router.resolve_model_name_from_model_id.return_value = "my-openai-model"
+
+    mock_content = MagicMock()
+    mock_content.content = (
+        b'{"body": {"model": "my-openai-model", '
+        b'"messages": [{"role": "user", "content": "hi"}]}}\n'
+    )
 
     with (
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
         ),
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch(
             "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
             return_value={"custom_llm_provider": "openai"},
         ),
+        patch(
+            "litellm.afile_content", new=AsyncMock(return_value=mock_content)
+        ) as mock_afile_content,
     ):
         await rate_limiter.async_pre_call_hook(
             user_api_key_dict=user,
@@ -360,9 +381,10 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
             call_type="acreate_batch",
         )
 
-    # Reaching descriptor evaluation proves the spoofed provider did not
-    # short-circuit the skip decision via the provider allow-list.
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_called_once()
+    # The spoofed provider did not short-circuit the skip decision: the file was
+    # fetched and the counters were incremented.
+    mock_afile_content.assert_awaited_once()
+    rate_limiter.parallel_request_limiter.atomic_check_and_increment_by_n.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -568,6 +590,31 @@ def test_key_requires_batch_model_access_check_branches():
     )
     assert check(UserAPIKeyAuth(api_key="sk", models=[])) is False
     assert check(UserAPIKeyAuth(api_key="sk", models=["gpt-4o-mini"])) is True
+    # Wildcard / all-proxy-models grant access to every model, so
+    # can_key_call_model passes any model regardless of access groups (which
+    # only ever widen access). Such keys must not be forced to download and
+    # validate the JSONL even when access_group_ids are also present.
+    assert (
+        check(UserAPIKeyAuth(api_key="sk", models=["*"], access_group_ids=["grp"]))
+        is False
+    )
+    assert (
+        check(
+            UserAPIKeyAuth(
+                api_key="sk", models=["all-proxy-models"], access_group_ids=["grp"]
+            )
+        )
+        is False
+    )
+    # A concrete model allowlist is still a subset even with access groups.
+    assert (
+        check(
+            UserAPIKeyAuth(
+                api_key="sk", models=["gpt-4o-mini"], access_group_ids=["grp"]
+            )
+        )
+        is True
+    )
 
 
 def test_has_applicable_batch_rate_limits():
