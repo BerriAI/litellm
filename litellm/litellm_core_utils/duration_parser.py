@@ -173,7 +173,7 @@ def _setup_timezone(
 
 def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
     """Parse the duration string into value and unit."""
-    match = re.match(r"(\d+)([a-z]+)", duration)
+    match = re.fullmatch(r"(\d+)(mo|[smhdw])", duration)
     if not match:
         return None, None
 
