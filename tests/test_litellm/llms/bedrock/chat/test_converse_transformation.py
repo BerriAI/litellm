@@ -1774,6 +1774,245 @@ async def test_tool_message_string_content_cache_control():
 
 
 @pytest.mark.asyncio
+async def test_tool_message_search_results_maps_to_bedrock_search_result_block():
+    """OpenAI tool message search_results should map to Bedrock searchResult blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What is Apptio?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+                    "type": "function",
+                    "function": {
+                        "name": "RAGRequest",
+                        "arguments": '{"query":"What is Apptio?"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+            "content": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM",
+            "search_results": [
+                {
+                    "source": "Great Source of Information About Apptio",
+                    "title": "12adbd74-46bd-4a88-88b2-0048755f6eb5",
+                    "content": [
+                        {
+                            "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                        }
+                    ],
+                    "citations": {"enabled": True},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_a4rBqeZNRTKj2lTskvaO4H"
+    assert tool_result["status"] == "success"
+    assert len(tool_result["content"]) == 1
+    assert "searchResult" in tool_result["content"][0]
+    assert (
+        tool_result["content"][0]["searchResult"]["title"]
+        == "12adbd74-46bd-4a88-88b2-0048755f6eb5"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_message_empty_search_results_falls_back_to_content():
+    """Empty search_results must not skip normal tool content processing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_empty_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_empty_search",
+            "content": "fallback tool text",
+            "search_results": [],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_empty_search"
+    assert "status" not in tool_result
+    assert len(tool_result["content"]) == 1
+    assert tool_result["content"][0]["text"] == "fallback tool text"
+
+
+def test_transform_response_omits_annotations_when_citations_not_stitched():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": "cited sentence only in citations"}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 5,
+                                        }
+                                    },
+                                    "source": "https://example.com",
+                                    "title": "Example",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "separate assistant answer"},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content == "separate assistant answer"
+    assert message.model_dump().get("annotations") is None
+
+
+def test_extract_search_results_text_counts_hidden_tool_payload():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+        extract_search_results_text,
+    )
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    hidden = "x" * 500
+    message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {
+                "source": "s",
+                "title": "t",
+                "content": [{"text": hidden}],
+            }
+        ],
+    }
+
+    extracted = extract_search_results_text(message["search_results"])
+    assert hidden in extracted
+    assert "st" in extracted
+    assert len(convert_content_list_to_str(message)) > len("small")
+
+    tokens_with_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[message],
+    )
+    tokens_without_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "tool", "content": "small"}],
+    )
+    assert tokens_with_search > tokens_without_search
+
+    huge_title = "y" * 500
+    title_only_message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {"source": "s", "title": huge_title, "content": []},
+        ],
+    }
+    assert len(extract_search_results_text(title_only_message["search_results"])) >= 500
+    tokens_title_bypass = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[title_only_message],
+    )
+    assert tokens_title_bypass > tokens_without_search
+
+
+@pytest.mark.asyncio
 async def test_assistant_tool_calls_cache_control():
     """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -4451,6 +4690,330 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_citations_content_maps_to_annotations():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    annotation = message.annotations[0]
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 42
+    assert annotation["url_citation"]["title"] == "About Apptio"
+    assert annotation["url_citation"]["url"] == "https://www.apptio.com/about"
+
+
+def test_transform_response_citation_null_source_title_become_empty_strings():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": None,
+                                    "title": None,
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    annotation = message.annotations[0]
+    assert annotation["url_citation"]["url"] == ""
+    assert annotation["url_citation"]["title"] == ""
+
+
+def test_transform_response_citations_offset_tracks_text_only_blocks():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    leading_text = "First sentence without a citation. "
+    cited_text = "Apptio is a company that makes calls to Bedrock"
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": leading_text}],
+                        }
+                    },
+                    {
+                        "citationsContent": {
+                            "content": [{"text": cited_text}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": len(cited_text),
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    expected_start = len(leading_text)
+    assert message.content == leading_text + cited_text
+    assert (
+        message.content[expected_start : expected_start + len(cited_text)] == cited_text
+    )
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == expected_start
+    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(
+        cited_text
+    )
+
+
+def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": " ."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == 0
+    assert message.annotations[0]["url_citation"]["end_index"] == 42
 
 
 def test_bedrock_tool_message_openai_file_pdf_becomes_document():
