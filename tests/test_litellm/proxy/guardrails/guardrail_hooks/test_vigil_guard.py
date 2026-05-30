@@ -553,6 +553,117 @@ async def test_fail_open_multi_text_preserves_earlier_sanitization():
     assert entries[0]["guardrail_response"] == "mask"
 
 
+def _tool_call(arguments, name="f", tc_id="1"):
+    return {
+        "id": tc_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+async def test_response_tool_call_arguments_allowed_unchanged():
+    handler = FakeHandler([_resp({"decision": "ALLOWED"})])
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"q": "weather"}')]
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
+    assert handler.calls[0].json["text"] == '{"q": "weather"}'
+    assert handler.calls[0].json["source"] == "model_output"
+    assert out["tool_calls"] == tcs
+
+
+async def test_response_tool_call_arguments_sanitized_in_place():
+    handler = FakeHandler(
+        [_resp({"decision": "SANITIZED", "sanitizedText": '{"email": "[EMAIL]"}'})]
+    )
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"email": "john@example.com"}', name="send_mail")]
+    inputs = {"texts": [], "tool_calls": tcs}
+    out = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
+    assert out["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL]"}'
+    assert out["tool_calls"][0]["function"]["name"] == "send_mail"
+    # original inputs are not mutated in place
+    assert inputs["tool_calls"][0]["function"]["arguments"] == (
+        '{"email": "john@example.com"}'
+    )
+
+
+async def test_response_tool_call_arguments_blocked_raises():
+    handler = FakeHandler(
+        [_resp({"decision": "BLOCKED", "blockMessage": "tool blocked"})]
+    )
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"x": "bad"}')]
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await g.apply_guardrail(
+            inputs={"texts": [], "tool_calls": tcs},
+            request_data={},
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == "tool blocked"
+
+
+async def test_request_tool_calls_are_not_scanned():
+    handler = FakeHandler([_resp({"decision": "ALLOWED"})])
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"x": "y"}')]
+    await g.apply_guardrail(
+        inputs={"texts": ["hello"], "tool_calls": tcs},
+        request_data={},
+        input_type="request",
+    )
+    assert len(handler.calls) == 1
+    assert handler.calls[0].json["text"] == "hello"
+
+
+async def test_tool_call_scan_backend_failure_fail_closed_raises():
+    handler = FakeHandler([_resp({}, status_code=503), _resp({}, status_code=503)])
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"x": "y"}')]
+    with pytest.raises(httpx.HTTPStatusError):
+        await g.apply_guardrail(
+            inputs={"texts": [], "tool_calls": tcs},
+            request_data={},
+            input_type="response",
+        )
+    assert len(handler.calls) == 2
+
+
+async def test_tool_call_scan_backend_failure_fail_open_passes_through():
+    handler = FakeHandler([_resp({}, status_code=503), _resp({}, status_code=503)])
+    g = _make_guardrail(handler, unreachable_fallback="fail_open")
+    tcs = [_tool_call('{"x": "y"}')]
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
+    assert out["tool_calls"] == tcs
+
+
+async def test_response_tool_call_unrecognized_decision_fail_closed_raises():
+    handler = FakeHandler([_resp({"decision": "MAYBE"})])
+    g = _make_guardrail(handler)
+    tcs = [_tool_call('{"x": "y"}')]
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await g.apply_guardrail(
+            inputs={"texts": [], "tool_calls": tcs},
+            request_data={},
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
+
+
+async def test_response_tool_call_unrecognized_decision_fail_open_passes_through():
+    handler = FakeHandler([_resp({"decision": "MAYBE"})])
+    g = _make_guardrail(handler, unreachable_fallback="fail_open")
+    tcs = [_tool_call('{"x": "y"}')]
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
+    assert out["tool_calls"] == tcs
+
+
 async def test_metadata_allowlist_and_clamping():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)

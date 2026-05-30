@@ -8,6 +8,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    Tuple,
     Type,
     cast,
 )
@@ -137,7 +138,13 @@ class VigilGuardGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         texts = inputs.get("texts") or []
-        if not any(isinstance(text, str) and text.strip() for text in texts):
+        has_text = any(isinstance(text, str) and text.strip() for text in texts)
+        tool_call_args = (
+            self._tool_call_arguments(inputs.get("tool_calls"))
+            if input_type == "response"
+            else []
+        )
+        if not has_text and not tool_call_args:
             return inputs
 
         source = "user_input" if input_type == "request" else "model_output"
@@ -160,7 +167,11 @@ class VigilGuardGuardrail(CustomGuardrail):
                 OSError,
             ) as exc:
                 return self._handle_backend_failure(
-                    exc, inputs, source, result_texts, texts[index:]
+                    exc,
+                    inputs,
+                    source,
+                    result_texts + list(texts[index:]),
+                    inputs.get("tool_calls"),
                 )
 
             decision = analysis.get("decision") if isinstance(analysis, dict) else None
@@ -174,7 +185,9 @@ class VigilGuardGuardrail(CustomGuardrail):
                 )
                 if self.unreachable_fallback == "fail_open":
                     return self._build_output(
-                        inputs, result_texts + list(texts[index:])
+                        inputs,
+                        result_texts + list(texts[index:]),
+                        inputs.get("tool_calls"),
                     )
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
@@ -194,15 +207,62 @@ class VigilGuardGuardrail(CustomGuardrail):
             else:
                 result_texts.append(text)
 
-        return self._build_output(inputs, result_texts)
+        result_tool_calls = inputs.get("tool_calls")
+        for tc_index, arguments in tool_call_args:
+            try:
+                analysis = await self._analyze(
+                    text=arguments, source=source, metadata=metadata
+                )
+            except (
+                httpx.HTTPError,
+                LiteLLMTimeout,
+                JSONDecodeError,
+                OSError,
+            ) as exc:
+                return self._handle_backend_failure(
+                    exc, inputs, source, result_texts, result_tool_calls
+                )
+
+            decision = analysis.get("decision") if isinstance(analysis, dict) else None
+            if decision not in _VALID_DECISIONS:
+                verbose_proxy_logger.error(
+                    "Vigil Guard unrecognized decision for guardrail_name=%s "
+                    "source=%s: %r",
+                    self.guardrail_name,
+                    source,
+                    decision,
+                )
+                if self.unreachable_fallback == "fail_open":
+                    return self._build_output(inputs, result_texts, result_tool_calls)
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message="Vigil Guard returned an unrecognized decision.",
+                    should_wrap_with_default_message=False,
+                )
+
+            if decision == "BLOCKED":
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=self._build_block_reason(analysis),
+                    should_wrap_with_default_message=False,
+                )
+
+            if decision == "SANITIZED":
+                result_tool_calls = self._set_tool_call_arguments(
+                    result_tool_calls,
+                    tc_index,
+                    self._resolve_sanitized_text(arguments, analysis),
+                )
+
+        return self._build_output(inputs, result_texts, result_tool_calls)
 
     def _handle_backend_failure(
         self,
         exc: Exception,
         inputs: GenericGuardrailAPIInputs,
         source: str,
-        scanned: List[Any],
-        remaining: List[Any],
+        final_texts: List[Any],
+        final_tool_calls: Any,
     ) -> GenericGuardrailAPIInputs:
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(
@@ -212,7 +272,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 source,
                 str(exc),
             )
-            return self._build_output(inputs, list(scanned) + list(remaining))
+            return self._build_output(inputs, final_texts, final_tool_calls)
         verbose_proxy_logger.error(
             "Vigil Guard backend failure with fail_closed; blocking request. "
             "guardrail_name=%s source=%s error=%s",
@@ -224,20 +284,53 @@ class VigilGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _build_output(
-        inputs: GenericGuardrailAPIInputs, final_texts: List[Any]
+        inputs: GenericGuardrailAPIInputs,
+        final_texts: List[Any],
+        final_tool_calls: Any,
     ) -> GenericGuardrailAPIInputs:
-        # When the scanned texts are unchanged, return the input shape verbatim so
-        # the guardrail logs "allow" rather than "mask". When any text was changed
-        # (sanitized), return only the remap-relevant keys and drop structured_messages
-        # so a stale, unsanitized payload cannot reach the model.
-        if final_texts == (inputs.get("texts") or []):
+        # When nothing was changed, return the input shape verbatim so the guardrail
+        # logs "allow" rather than "mask". When a text or a tool-call argument was
+        # changed (sanitized), return only the remap-relevant keys and drop
+        # structured_messages so a stale, unsanitized payload cannot reach the model.
+        texts_changed = final_texts != (inputs.get("texts") or [])
+        tool_calls_changed = final_tool_calls != inputs.get("tool_calls")
+        if not texts_changed and not tool_calls_changed:
             return cast(GenericGuardrailAPIInputs, dict(inputs))
         guardrailed: GenericGuardrailAPIInputs = {"texts": final_texts}
         if "images" in inputs:
             guardrailed["images"] = inputs["images"]
         if "tools" in inputs:
             guardrailed["tools"] = inputs["tools"]
+        if tool_calls_changed:
+            guardrailed["tool_calls"] = final_tool_calls
         return guardrailed
+
+    @staticmethod
+    def _tool_call_arguments(tool_calls: Any) -> List[Tuple[int, str]]:
+        pairs: List[Tuple[int, str]] = []
+        if isinstance(tool_calls, list):
+            for index, tool_call in enumerate(tool_calls):
+                function = (
+                    tool_call.get("function") if isinstance(tool_call, dict) else None
+                )
+                arguments = (
+                    function.get("arguments") if isinstance(function, dict) else None
+                )
+                if isinstance(arguments, str) and arguments.strip():
+                    pairs.append((index, arguments))
+        return pairs
+
+    @staticmethod
+    def _set_tool_call_arguments(
+        tool_calls: Any, index: int, arguments: str
+    ) -> List[Any]:
+        updated = list(tool_calls)
+        tool_call = dict(updated[index])
+        function = dict(tool_call.get("function") or {})
+        function["arguments"] = arguments
+        tool_call["function"] = function
+        updated[index] = tool_call
+        return updated
 
     async def _analyze(
         self, text: str, source: str, metadata: Dict[str, Any]
