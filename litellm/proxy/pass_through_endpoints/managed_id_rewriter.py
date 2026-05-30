@@ -837,10 +837,25 @@ async def _build_list_where_with_cursor(
         )
         if cursor_row is not None:
             if after_id:
-                where["created_at"] = {"lt": cursor_row.created_at}
+                op = "lt"
             else:
-                where["created_at"] = {"gt": cursor_row.created_at}
+                op = "gt"
                 fetch_order = "asc"
+            # created_at is not unique, so the boundary must also compare the
+            # unique id (the secondary sort key) to avoid skipping or repeating
+            # rows that share the cursor row's timestamp across a page boundary.
+            boundary = {
+                "OR": [
+                    {"created_at": {op: cursor_row.created_at}},
+                    {
+                        "AND": [
+                            {"created_at": cursor_row.created_at},
+                            {cursor_field: {op: cursor_id}},
+                        ]
+                    },
+                ]
+            }
+            where = {"AND": [where, boundary]} if where else boundary
     except Exception:
         pass
     return where, fetch_order

@@ -1785,11 +1785,13 @@ class TestListPassthroughIdsFromDb:
         assert result is not None
         where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
         assert "created_at" not in where
+        assert "OR" not in where and "AND" not in where
 
     @pytest.mark.asyncio
     async def test_list_applies_same_provider_cursor(self):
-        """An ``after`` cursor minted for the same provider shifts the created_at
-        boundary so pagination advances past the cursor row."""
+        """An ``after`` cursor minted for the same provider advances pagination
+        past the cursor row using a compound (created_at, id) boundary so rows
+        sharing the cursor row's timestamp are not skipped."""
         import datetime
 
         azure_row = _fake_file_row(new_managed_id("azure", "file-azure"))
@@ -1801,17 +1803,107 @@ class TestListPassthroughIdsFromDb:
         )
         pc.db.litellm_managedfiletable.find_first = AsyncMock(return_value=cursor_row)
 
+        cursor_id = new_managed_id("azure", "file-cursor")
         result = await list_passthrough_ids_from_db(
             provider="azure",
             route="/azure/openai/files",
             user_api_key_dict=_admin_user(),
             prisma_client=pc,
-            query_params={"after": new_managed_id("azure", "file-cursor")},
+            query_params={"after": cursor_id},
         )
 
         assert result is not None
         where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
-        assert where.get("created_at") == {"lt": cursor_row.created_at}
+        assert "created_at" not in where
+        assert where["OR"] == [
+            {"created_at": {"lt": cursor_row.created_at}},
+            {
+                "AND": [
+                    {"created_at": cursor_row.created_at},
+                    {"unified_file_id": {"lt": cursor_id}},
+                ]
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_list_cursor_does_not_drop_created_at_ties(self):
+        """Regression: paginating a pool whose rows all share one created_at must
+        return every row exactly once. A timestamp-only ``lt`` cursor boundary
+        would skip every tied row after the first page; the compound
+        (created_at, id) boundary keeps the walk complete."""
+        import datetime
+
+        shared_ts = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        rows = [_fake_file_row(new_managed_id("azure", f"file-{i}")) for i in range(5)]
+        for row in rows:
+            row.created_at = shared_ts
+        all_ids = {row.unified_file_id for row in rows}
+
+        def _matches(row, where):
+            for key, cond in where.items():
+                if key == "AND":
+                    if not all(_matches(row, c) for c in cond):
+                        return False
+                elif key == "OR":
+                    if not any(_matches(row, c) for c in cond):
+                        return False
+                elif key == "flat_model_file_ids":
+                    marker = (cond or {}).get("has")
+                    if marker not in (getattr(row, "flat_model_file_ids", None) or []):
+                        return False
+                else:
+                    actual = getattr(row, key, None)
+                    if isinstance(cond, dict):
+                        for op, val in cond.items():
+                            if op == "lt" and not (actual is not None and actual < val):
+                                return False
+                            if op == "gt" and not (actual is not None and actual > val):
+                                return False
+                            if op == "startswith" and not str(actual or "").startswith(
+                                val
+                            ):
+                                return False
+                    elif actual != cond:
+                        return False
+            return True
+
+        def _find_many(*_a, where=None, order=None, take=None, **_k):
+            matched = [r for r in rows if _matches(r, where or {})]
+            for spec in reversed(order or []):
+                ((field, direction),) = spec.items()
+                matched.sort(
+                    key=lambda r: getattr(r, field), reverse=(direction == "desc")
+                )
+            return matched if take is None else matched[:take]
+
+        def _find_first(*_a, where=None, **_k):
+            return next((r for r in rows if _matches(r, where or {})), None)
+
+        pc = _prisma_client()
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(side_effect=_find_many)
+        pc.db.litellm_managedfiletable.find_first = AsyncMock(side_effect=_find_first)
+
+        collected: list = []
+        after = None
+        for _ in range(len(rows) + 2):
+            params = {"limit": "2"}
+            if after is not None:
+                params["after"] = after
+            result = await list_passthrough_ids_from_db(
+                provider="azure",
+                route="/azure/openai/files",
+                user_api_key_dict=_admin_user(),
+                prisma_client=pc,
+                query_params=params,
+            )
+            assert result is not None
+            collected.extend(item["id"] for item in result["data"])
+            if not result["has_more"]:
+                break
+            after = result["last_id"]
+
+        assert sorted(collected) == sorted(all_ids)
+        assert len(collected) == len(set(collected))
 
     @pytest.mark.asyncio
     async def test_list_files_filters_by_provider(self):
