@@ -119,6 +119,14 @@ async def anthropic_response(  # noqa: PLR0915
 
         return _anthropic_response
     except AnthropicContextManagementError as e:
+        if e.status_code >= 500:
+            # Server-side polyfill failures hit the failure hook for spend/alert
+            # parity with the generic handler; 4xx validation errors do not.
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=data,
+            )
         body = AnthropicExceptionMapping.transform_to_anthropic_error(
             status_code=e.status_code,
             raw_message=e.message,

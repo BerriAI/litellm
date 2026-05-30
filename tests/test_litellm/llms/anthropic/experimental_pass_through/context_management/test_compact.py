@@ -1994,3 +1994,63 @@ def test_endpoint_returns_anthropic_400_on_context_management_error():
     assert body["type"] == "error"
     assert body["error"]["type"] == "invalid_request_error"
     assert "50000" in body["error"]["message"]
+
+
+def test_endpoint_runs_failure_hook_on_500_context_management_error():
+    """A 500-level AnthropicContextManagementError (internal polyfill failure)
+    must invoke post_call_failure_hook for spend/alerting parity, while still
+    returning the Anthropic-format error body."""
+    import sys
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    failure_hook = AsyncMock()
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.general_settings = {}
+    mock_proxy_server.llm_router = None
+    mock_proxy_server.proxy_config = MagicMock()
+    mock_proxy_server.proxy_logging_obj = MagicMock()
+    mock_proxy_server.proxy_logging_obj.post_call_failure_hook = failure_hook
+    mock_proxy_server.user_api_base = None
+    mock_proxy_server.user_max_tokens = None
+    mock_proxy_server.user_model = None
+    mock_proxy_server.user_request_timeout = None
+    mock_proxy_server.user_temperature = None
+    mock_proxy_server.version = "test"
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        with patch(
+            "litellm.proxy.anthropic_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
+        ) as mock_cls:
+            mock_instance = MagicMock()
+            mock_instance.base_process_llm_request = AsyncMock(
+                side_effect=AnthropicContextManagementError(
+                    status_code=500,
+                    message="context_management polyfill failed: boom",
+                )
+            )
+            mock_cls.return_value = mock_instance
+
+            app = FastAPI()
+            app.include_router(router)
+            app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.post(
+                "/v1/messages",
+                json={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["type"] == "error"
+    failure_hook.assert_awaited_once()
