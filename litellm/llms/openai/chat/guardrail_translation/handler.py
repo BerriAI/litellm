@@ -376,6 +376,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tool_calls: List[Dict[str, Any]] = (
+                cast(List[Dict[str, Any]], guardrailed_inputs.get("tool_calls"))
+                if "tool_calls" in guardrailed_inputs
+                else tool_calls_to_check
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             if guardrailed_texts and texts_to_check:
@@ -386,10 +391,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to response
-            if tool_calls_to_check:
+            if guardrailed_tool_calls:
                 await self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,
-                    tool_calls=tool_calls_to_check,
+                    tool_calls=guardrailed_tool_calls,
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -748,10 +753,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
-        Apply guardrailed tool calls back to output response.
+        Apply guardrailed tool calls back to the output response.
 
-        The guardrail may have modified the tool_calls list in place,
-        so we apply the modified tool calls back to the original response.
+        The guardrail may return updated tool calls (either mutated in place or as
+        a new list), so we apply the provided tool calls back to the original
+        response.
 
         Override this method to customize how tool call responses are applied.
         """

@@ -8,8 +8,7 @@ with guardrail transformations, including tool calls.
 import json
 import os
 import sys
-from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Literal, Optional
 
 import pytest
 
@@ -82,6 +81,31 @@ class MockGuardrail(CustomGuardrail):
         if "images" in inputs:
             result["images"] = inputs["images"]  # type: ignore
         return result
+
+
+class MockCopiedToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns copied tool calls instead of mutating inputs."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        copied_tool_calls = []
+        for tool_call in tool_calls:
+            copied = dict(tool_call)
+            function = dict(copied["function"])
+            function["arguments"] = json.dumps({"email": "[EMAIL]"})
+            copied["function"] = function
+            copied_tool_calls.append(copied)
+
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=copied_tool_calls,
+        )
 
 
 class TestOpenAIChatCompletionsHandlerToolsInput:
@@ -740,6 +764,45 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert response.model == "gpt-4o-mini"
         assert response.choices[0].finish_reason == "tool_calls"
 
+    @pytest.mark.asyncio
+    async def test_output_response_uses_returned_guardrailed_tool_calls(self):
+        """Test returned tool_calls are remapped even when guardrail does not mutate inputs."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockCopiedToolCallGuardrail(guardrail_name="test")
+
+        response = ModelResponse(
+            id="chatcmpl-tool-copy",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_email",
+                                type="function",
+                                function=Function(
+                                    name="send_email",
+                                    arguments=json.dumps({"email": "john@example.com"}),
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        response_tool_call = response.choices[0].message.tool_calls[0]
+        assert response_tool_call.function.name == "send_email"
+        assert json.loads(response_tool_call.function.arguments) == {"email": "[EMAIL]"}
+
 
 class MockPassThroughGuardrail(CustomGuardrail):
     """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
@@ -765,7 +828,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         This test verifies the fix for the bug where accessing chunk.choices[0]
         would raise IndexError when a streaming chunk has an empty choices list.
         """
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import ModelResponseStream
 
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockPassThroughGuardrail(guardrail_name="test")
