@@ -40,6 +40,29 @@ else:
     BaseLLMException = Any
 
 
+def _build_vertex_video_usage_from_request_data(
+    request_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build usage metadata (duration, resolution) for video cost calculation."""
+    usage_data: Dict[str, Any] = {}
+    if not request_data:
+        return usage_data
+
+    parameters = request_data.get("parameters", {})
+    duration = (
+        parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+    )
+    if duration is not None:
+        try:
+            usage_data["duration_seconds"] = float(duration)
+        except (ValueError, TypeError):
+            pass
+    res = parameters.get("resolution")
+    if res is not None and str(res).strip() != "":
+        usage_data["video_resolution"] = str(res).strip().lower()
+    return usage_data
+
+
 def _convert_image_to_vertex_format(image_file) -> Dict[str, str]:
     """
     Convert image file to Vertex AI format with base64 encoding and MIME type.
@@ -363,23 +386,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             id=video_id, object="video", status="processing", model=model
         )
 
-        usage_data: Dict[str, Any] = {}
-        if request_data:
-            parameters = request_data.get("parameters", {})
-            duration = (
-                parameters.get("durationSeconds")
-                or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
-            )
-            if duration is not None:
-                try:
-                    usage_data["duration_seconds"] = float(duration)
-                except (ValueError, TypeError):
-                    pass
-            res = parameters.get("resolution")
-            if res is not None and str(res).strip() != "":
-                usage_data["video_resolution"] = str(res).strip().lower()
-
-        video_obj.usage = usage_data
+        video_obj.usage = _build_vertex_video_usage_from_request_data(request_data)
         return video_obj
 
     def transform_video_status_retrieve_request(
@@ -647,15 +654,123 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def transform_video_get_character_response(self, raw_response, logging_obj):
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
+    def get_video_edit_prefetch_params(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Return the fetchPredictOperation URL and body needed to retrieve the source video."""
+        return self.transform_video_status_retrieve_request(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def transform_video_edit_request(
-        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
-    ):
-        raise NotImplementedError("video edit is not supported for Vertex AI")
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+        prefetched_source_data: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Build a predictLongRunning edit request from the pre-fetched source video.
+
+        The actual fetchPredictOperation HTTP call is hoisted into the handler so
+        it can use the shared async/sync httpx client instead of blocking the loop.
+        """
+        if prefetched_source_data is None:
+            raise ValueError(
+                "prefetched_source_data is required for Vertex AI video edit. "
+                "Ensure get_video_edit_prefetch_params is called by the handler."
+            )
+
+        if not prefetched_source_data.get("done", False):
+            raise ValueError(
+                "Source video generation is not complete yet. "
+                "Check the video status before editing."
+            )
+
+        videos = prefetched_source_data.get("response", {}).get("videos", [])
+        if not videos:
+            raise ValueError("No videos found in the completed operation. Cannot edit.")
+
+        source_video = videos[0]
+        video_input: Dict[str, Any] = {}
+        if "gcsUri" in source_video:
+            video_input["gcsUri"] = source_video["gcsUri"]
+        elif "bytesBase64Encoded" in source_video:
+            video_input["bytesBase64Encoded"] = source_video["bytesBase64Encoded"]
+            video_input["mimeType"] = source_video.get("mimeType", "video/mp4")
+        else:
+            raise ValueError(
+                "Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit."
+            )
+
+        operation_name = extract_original_video_id(video_id)
+        model = self.extract_model_from_operation_name(operation_name) or ""
+
+        instance_dict: Dict[str, Any] = {"prompt": prompt, "video": video_input}
+        request_data: Dict[str, Any] = {"instances": [instance_dict]}
+
+        if extra_body:
+            extra_body_copy = dict(extra_body)
+            nested_params = extra_body_copy.pop("parameters", None)
+            vertex_params: Dict[str, Any] = {}
+            if isinstance(nested_params, dict):
+                vertex_params.update(nested_params)
+            vertex_params.update(extra_body_copy)
+            if vertex_params:
+                request_data["parameters"] = vertex_params
+
+        edit_url = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
+        return edit_url, request_data
 
     def transform_video_edit_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
-    ):
-        raise NotImplementedError("video edit is not supported for Vertex AI")
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
+    ) -> VideoObject:
+        """
+        Transform the Veo video edit response.
+
+        Veo returns the same operation response as video generation:
+        {"name": "projects/.../operations/OPERATION_ID"}
+
+        usage includes duration_seconds and optional video_resolution from the
+        edit request parameters for cost calculation.
+        """
+        response_data = raw_response.json()
+
+        operation_name = response_data.get("name")
+        if not operation_name:
+            raise ValueError(f"No operation name in Veo edit response: {response_data}")
+
+        model = self.extract_model_from_operation_name(operation_name) or ""
+
+        if custom_llm_provider:
+            video_id = encode_video_id_with_provider(
+                operation_name, custom_llm_provider, model
+            )
+        else:
+            video_id = operation_name
+
+        video_obj = VideoObject(
+            id=video_id,
+            object="video",
+            status="processing",
+            model=model,
+        )
+        video_obj.usage = _build_vertex_video_usage_from_request_data(request_data)
+        return video_obj
 
     def transform_video_extension_request(
         self,

@@ -255,6 +255,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
+    SPEND_LOGS_V2 = "/spend/logs/v2"
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -481,6 +482,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1beta/interactions/{interaction_id}",
         "/interactions/{interaction_id}/cancel",
         "/v1beta/interactions/{interaction_id}/cancel",
+        # Google Managed Agents API
+        "/v1beta/agents",
+        "/v1beta/agents/{name}",
+        "/v1beta/agents/{name}/versions",
     ]
 
     apply_guardrail_routes = [
@@ -544,6 +549,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
+        KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
@@ -595,6 +601,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
         "/cost/estimate",
@@ -1060,6 +1067,7 @@ class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
+    disable_global_guardrails: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1825,6 +1833,7 @@ class NewTeamRequest(TeamBase):
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
+    disable_global_guardrails: Optional[bool] = None
     secret_manager_settings: Optional[dict] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     rpm_limit_type: Optional[
@@ -1893,6 +1902,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
@@ -2356,6 +2366,30 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     database_connection_timeout: Optional[float] = Field(
         60, description="default timeout for a connection to the database"
+    )
+    database_connect_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `connect_timeout` URL param (seconds). Bounds how long the "
+            "engine waits to establish a new connection before failing. Defaults "
+            "to Prisma's built-in value when unset."
+        ),
+    )
+    database_socket_timeout: Optional[float] = Field(
+        None,
+        description=(
+            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
+            "connection that has not produced data within this window is closed. "
+            "This is the main knob for capping idle DB connections from LiteLLM."
+        ),
+    )
+    database_extra_connection_params: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Escape hatch: extra key/value pairs appended verbatim to the Prisma "
+            "DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, "
+            "`statement_cache_size`). Keys here override any default LiteLLM sets."
+        ),
     )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
@@ -4250,6 +4284,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
+    "disable_global_guardrails",
     "guardrails",
     "policies",
     "tags",
@@ -4496,6 +4531,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
+        # ``config_file_path`` is a non-field kwarg threaded by the
+        # startup-load path so an operator-configured
+        # ``custom_validate: s3://bucket/module.fn`` resolves through
+        # the documented config-file flow. Pop before the invalid-keys
+        # check; the runtime gate in ``get_instance_fn`` refuses
+        # ``s3://`` / ``gcs://`` when this is None.
+        config_file_path = kwargs.pop("config_file_path", None)
+
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
@@ -4509,7 +4552,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         custom_validate = kwargs.get("custom_validate")
 
         if custom_validate is not None:
-            fn = get_instance_fn(custom_validate)
+            fn = get_instance_fn(custom_validate, config_file_path=config_file_path)
             validate_custom_validate_return_type(fn)
             kwargs["custom_validate"] = fn
 
@@ -4541,6 +4584,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
     litellm_params: str
     model_info: str
+    blocked: bool
     updated_at: str
     updated_by: str
 

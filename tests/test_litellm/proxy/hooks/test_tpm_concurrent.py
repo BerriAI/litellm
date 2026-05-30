@@ -23,6 +23,7 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    RATE_LIMIT_DESCRIPTORS_KEY,
     TPM_RESERVATION_RELEASED_KEY,
     TPM_RESERVED_MODEL_KEY,
     TPM_RESERVED_SCOPES_KEY,
@@ -606,9 +607,9 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
             data=data,
             call_type="",
         )
-        assert (
-            data.get(TPM_RESERVED_TOKENS_KEY) == 1
-        ), "Contentless request should reserve the floor of 1 token"
+        assert (data.get("metadata") or {}).get(
+            TPM_RESERVED_TOKENS_KEY
+        ) == 1, "Contentless request should reserve the floor of 1 token"
 
     counter_after_two = int(
         await cache.async_get_cache(key=counter_key, local_only=True) or 0
@@ -701,7 +702,7 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         data=data,
         call_type="",
     )
-    reserved = data[TPM_RESERVED_TOKENS_KEY]
+    reserved = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
     assert reserved > 0
 
     counter_key = handler.create_rate_limit_keys(
@@ -726,9 +727,9 @@ async def test_reservation_released_on_proxy_rejection(rate_limiter):
         f"Reservation leaked: counter={counter_after_release} after "
         f"proxy-level rejection refund (expected 0)."
     )
-    assert data.get(TPM_RESERVATION_RELEASED_KEY) is True, (
-        "Released marker must be stamped to prevent async_log_failure_event "
-        "from double-refunding."
+    assert (data.get("metadata") or {}).get(TPM_RESERVATION_RELEASED_KEY) is True, (
+        "Released marker must be stamped to prevent "
+        "async_log_failure_event from double-refunding."
     )
 
 
@@ -760,18 +761,17 @@ async def test_reservation_release_idempotent(rate_limiter):
     shared_metadata = {
         "user_api_key_hash": api_key,
         TPM_RESERVED_TOKENS_KEY: 100,
-    }
-
-    request_data = {
-        "metadata": shared_metadata,
-        TPM_RESERVED_TOKENS_KEY: 100,
-        "_litellm_rate_limit_descriptors": [
+        RATE_LIMIT_DESCRIPTORS_KEY: [
             {
                 "key": "api_key",
                 "value": api_key,
                 "rate_limit": {"tokens_per_unit": 10000, "window_size": 60},
             }
         ],
+    }
+
+    request_data = {
+        "metadata": shared_metadata,
     }
 
     await handler.async_post_call_failure_hook(

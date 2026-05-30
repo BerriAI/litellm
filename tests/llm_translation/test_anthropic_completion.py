@@ -1379,7 +1379,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         ]
 
     params = {
-        "model": "anthropic/claude-sonnet-4-20250514",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
         "tools": tools,
     }
@@ -1392,7 +1392,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
 
 @pytest.mark.parametrize(
-    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"]
+    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5-20250929"]
 )
 @pytest.mark.skipif(
     os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
@@ -1506,8 +1506,8 @@ def test_anthropic_tool_cache_control():
         }
     ]
 
-    vertex_ai_model = "vertex_ai/claude-sonnet-4@20250514"
-    anthropic_api_model = "claude-sonnet-4-20250514"
+    vertex_ai_model = "vertex_ai/claude-sonnet-4-5@20250929"
+    anthropic_api_model = "claude-sonnet-4-5-20250929"
     result = return_raw_request(
         endpoint=CallTypes.completion,
         kwargs={

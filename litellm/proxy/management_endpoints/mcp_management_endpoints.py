@@ -1568,6 +1568,9 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
 
             server_id = request.path_params.get("server_id", "")
             if server_id:
@@ -1578,14 +1581,13 @@ if MCP_AVAILABLE:
                     _s
                     and getattr(_s, "auth_type", None) == MCPAuth.oauth2
                     and getattr(_s, "delegate_auth_to_upstream", False) is True
-                    and getattr(_s, "available_on_public_internet", True)
                     # M2M servers fetch tokens with stored credentials; never
                     # expose their /authorize or /token endpoints anonymously.
                     and not _s.has_client_credentials
                 ):
                     # For /token, require PKCE authorization_code; refresh_token
                     # grants must NOT bypass auth (see comment above).
-                    path_lower = (request.url.path or "").rstrip("/").lower()
+                    path_lower = get_request_route(request).rstrip("/").lower()
                     if path_lower.endswith("/token"):
                         body_data = await _read_request_body(request=request)
                         grant_type = (body_data or {}).get("grant_type", "")

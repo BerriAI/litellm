@@ -1622,6 +1622,29 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_output_config_format_preservation_and_beta_header():
+    """Test that output_config.format is preserved and treated as structured output."""
+    config = AnthropicConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+    optional_params = {"output_config": {"format": output_format, "effort": "xhigh"}}
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    headers = config.update_headers_with_optional_anthropic_beta({}, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1648,7 +1671,7 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
@@ -2474,6 +2497,122 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         assert (
             "output_config" not in result
         ), f"output_config should not be set for {model}"
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort_value",
+    [
+        # String shape — what callers send when using `reasoning_effort="low"` directly.
+        "low",
+        # Dict shape with `effort` only — what the Responses->Chat parser produces
+        # when `reasoning={"effort": "low"}` is set without `summary`.
+        {"effort": "low"},
+        # Dict shape with `effort` AND `summary` — what the Responses->Chat parser
+        # produces when callers send `Reasoning(effort="low", summary="concise")`.
+        # PR #25359 added the dict-keeping branch for this case, but the Anthropic
+        # transformation must coerce the dict back to a string before mapping.
+        {"effort": "low", "summary": "concise"},
+        {"effort": "low", "summary": "detailed"},
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort_value):
+    """
+    Adaptive-thinking (Claude 4.6+) branch: dict-shape reasoning_effort must
+    map to ``thinking.type='adaptive'`` + ``output_config.effort``.
+
+    Regression test for the dict-shape ``reasoning_effort`` produced by the
+    Responses->Chat parser when ``summary`` is set on the request's
+    ``reasoning`` field. Before this fix, the Anthropic transformation guarded
+    on ``isinstance(value, str)`` and silently dropped the param — disabling
+    extended thinking entirely.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort_value},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    # thinking must be set (adaptive for 4.6+)
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
+    assert result["thinking"]["type"] == "adaptive"
+    # output_config must carry the mapped effort
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
+    assert result["output_config"]["effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort_value",
+    [
+        "low",
+        {"effort": "low"},
+        {"effort": "low", "summary": "concise"},
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
+    """
+    Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
+    to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
+    NOT be set on these models.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort_value},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
+    assert result["thinking"]["type"] == "enabled"
+    assert "budget_tokens" in result["thinking"]
+    assert result["thinking"]["budget_tokens"] > 0
+    # Older models must not get adaptive-thinking output_config
+    assert "output_config" not in result, (
+        f"output_config should not be set for non-adaptive model "
+        f"(reasoning_effort={reasoning_effort_value!r})"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        {"summary": "concise"},  # missing effort
+        {"effort": None},  # explicit None effort
+        {"effort": 123},  # non-string effort
+    ],
+)
+def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
+    """
+    A dict shape that doesn't carry a usable ``effort`` key (e.g. only
+    ``summary`` is set, or the value is some other unexpected type) should be
+    silently dropped — not crash, not partially apply.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": bad_value},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
