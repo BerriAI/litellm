@@ -62,6 +62,14 @@ _request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
     contextvars.ContextVar("_request_extra_headers", default=None)
 )
 
+# Per-request user-field headers resolved from MCPServer.user_fields and the
+# calling user's stored values. Set this ContextVar before calling a local
+# tool handler so admin-declared per-user values reach the upstream API even
+# when the tool dispatch goes through the OpenAPI/local registry path.
+_request_user_field_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
+    contextvars.ContextVar("_request_user_field_headers", default=None)
+)
+
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
@@ -311,29 +319,40 @@ def _merge_openapi_tool_request_headers(
 
     Precedence (highest to lowest):
         1. ``_request_auth_header`` — BYOK override of ``Authorization``
-        2. ``static_headers`` — operator-configured headers baked into the
+        2. ``_request_user_field_headers`` — admin-declared per-user values
+           resolved from ``MCPServer.user_fields`` and the calling user's
+           stored values
+        3. ``static_headers`` — operator-configured headers baked into the
            tool closure at registration time
-        3. ``_request_extra_headers`` — per-request headers forwarded from
+        4. ``_request_extra_headers`` — per-request headers forwarded from
            the MCP caller (allowlisted by ``MCPServer.extra_headers``)
 
-    This matches the existing MCP invariant in
-    :func:`litellm.proxy._experimental.mcp_server.utils.merge_mcp_headers`
-    and the managed MCP path, where ``static_headers`` always wins over
-    caller-forwarded headers. Keeping the same precedence here prevents an
-    authenticated caller from overriding an operator-configured value
-    (e.g. a tenant id or upstream API key) by sending the same header name.
+    User-field headers win over ``static_headers`` because the admin
+    explicitly declared a field requiring a per-user value for that header
+    name. This matches the managed MCP dispatch path
+    (:meth:`MCPServerManager._call_regular_mcp_tool`), where user-field
+    headers are merged after ``static_headers``.
 
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
     request_extra = _request_extra_headers.get() or {}
     static = static_headers or {}
+    user_field = _request_user_field_headers.get() or {}
 
     static_lower_names = {k.lower() for k in static}
     effective_headers: Dict[str, str] = {
         k: v for k, v in request_extra.items() if k.lower() not in static_lower_names
     }
     effective_headers.update(static)
+
+    if user_field:
+        existing_lower_names = {k.lower(): k for k in effective_headers}
+        for header_name, value in user_field.items():
+            collision = existing_lower_names.get(header_name.lower())
+            if collision is not None and collision != header_name:
+                del effective_headers[collision]
+            effective_headers[header_name] = value
 
     override_auth = _request_auth_header.get()
     if override_auth:

@@ -5,6 +5,7 @@ MCP server tools.
 """
 
 from datetime import datetime, timezone
+from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -157,6 +158,102 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     assert exc.value.status_code == 403
     pre_call.assert_awaited_once()
     handle_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_openapi_local_tool_injects_user_field_headers():
+    """OpenAPI/local-tool dispatch must inject the calling user's stored
+    user-field values via `_request_user_field_headers` so upstream calls
+    see them. Pre-fix this path validated the values at enforcement time
+    but never set the ContextVar, so the upstream request went out without
+    them and the user saw "missing credential" errors after configuring
+    the dashboard.
+    """
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_user_field_headers,
+    )
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_server = MagicMock()
+    fake_server.name = "openapi-petstore"
+    fake_server.is_byok = False
+    fake_server.auth_type = None
+    fake_server.mcp_info = None
+    fake_server.server_id = "srv-1"
+    fake_server.server_name = "openapi-petstore"
+    fake_server.user_fields = [
+        {
+            "field_key": "API_KEY",
+            "display_name": "API Key",
+            "header_name": "X-Api-Key",
+            "required": True,
+        }
+    ]
+    fake_server.extra_headers = None
+    fake_server.has_client_credentials = False
+
+    fake_tool = MagicMock()
+    fake_tool.name = "list_pets"
+
+    captured: Dict[str, Optional[Dict[str, str]]] = {"headers": None}
+
+    async def fake_handle_local(name, arguments):
+        captured["headers"] = _request_user_field_headers.get()
+        return []
+
+    pre_call = AsyncMock(return_value={})
+
+    # Simulate "user has saved their values" by seeding the in-memory cache
+    # the enforcement / dispatch path consult.
+    mcp_module._user_fields_cache.clear()
+    mcp_module._user_fields_cache[("alice", "srv-1")] = (
+        {"API_KEY": "secret-token"},
+        1e18,
+    )
+
+    try:
+        with (
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "_get_mcp_server_from_tool_name",
+                return_value=fake_server,
+            ),
+            patch.object(
+                mcp_module.global_mcp_server_manager,
+                "pre_call_tool_check",
+                new=pre_call,
+            ),
+            patch.object(
+                mcp_module.global_mcp_tool_registry,
+                "get_tool",
+                return_value=fake_tool,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+                new=fake_handle_local,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+                return_value=True,
+            ),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="list_pets",
+                arguments={},
+                allowed_mcp_servers=[fake_server],
+                start_time=datetime.now(timezone.utc),
+                user_api_key_auth=user,
+            )
+    finally:
+        mcp_module._user_fields_cache.clear()
+
+    assert captured["headers"] == {"X-Api-Key": "secret-token"}
 
 
 @pytest.mark.asyncio

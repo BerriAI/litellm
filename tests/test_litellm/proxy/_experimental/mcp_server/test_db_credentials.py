@@ -36,9 +36,13 @@ def _set_salt_key(monkeypatch):
 
 def _make_prisma_with_existing(row):
     """Build a MagicMock prisma_client whose user-credentials table returns ``row``
-    for find_unique and behaves async-correctly for upsert/find_many."""
+    for find_unique and behaves async-correctly for the CAS write paths."""
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_mcpusercredentials.create = AsyncMock()
+    # ``update_many`` returns the number of affected rows for CAS — 1 means
+    # the swap succeeded so the production loop exits.
+    prisma.db.litellm_mcpusercredentials.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_mcpusercredentials.upsert = AsyncMock()
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
     return prisma
@@ -55,7 +59,20 @@ def _legacy_row(payload: str):
 
 
 def _stored_value(prisma) -> str:
-    """Pull the credential_b64 value passed to the most recent upsert call."""
+    """Pull the credential_b64 value passed to the most recent write.
+
+    The production code uses ``create`` when no row exists and
+    ``update_many`` (CAS) when a row already exists. Walk both call histories
+    and return the most recent ``credential_b64`` written.
+    """
+    create_mock = prisma.db.litellm_mcpusercredentials.create
+    update_many_mock = prisma.db.litellm_mcpusercredentials.update_many
+
+    if update_many_mock.call_args is not None:
+        return update_many_mock.call_args.kwargs["data"]["credential_b64"]
+    if create_mock.call_args is not None:
+        return create_mock.call_args.kwargs["data"]["credential_b64"]
+    # Fall back to the legacy upsert path for any tests that still rely on it.
     call = prisma.db.litellm_mcpusercredentials.upsert.call_args
     data = call.kwargs["data"]
     create_value = data["create"]["credential_b64"]

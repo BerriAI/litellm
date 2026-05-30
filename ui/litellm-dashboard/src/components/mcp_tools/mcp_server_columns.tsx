@@ -92,6 +92,7 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  onUserFieldsConnect?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -266,6 +267,71 @@ export const mcpServerColumns = (
     header: "Credential",
     cell: ({ row }) => {
       const server = row.original;
+      // User-fields take priority over BYOK display because the most
+      // critical feedback for the user is "you still need to fill this in".
+      const declaredUserFields = server.user_fields ?? [];
+      const hasUserFields = declaredUserFields.length > 0;
+      if (hasUserFields) {
+        // missing_user_field_keys is populated by the proxy for the calling
+        // user on the list endpoint. Distinguish `null`/`undefined`
+        // (annotation never ran — e.g. no user_id, no DB) from `[]`
+        // (annotation ran and all required fields are satisfied): rendering
+        // a green "Ready" badge for the unannotated case would lie to the
+        // user, since the actual tool call would still 401 on missing fields.
+        const missing = server.missing_user_field_keys;
+        if (missing && missing.length > 0) {
+          return onUserFieldsConnect ? (
+            <button
+              className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors"
+              onClick={() => onUserFieldsConnect(server)}
+              title={`Missing ${missing.length} required field${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              {missing.length} missing field{missing.length === 1 ? "" : "s"}
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-red-50 text-red-700 border border-red-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              {missing.length} missing field{missing.length === 1 ? "" : "s"}
+            </span>
+          );
+        }
+        if (missing == null) {
+          return onUserFieldsConnect ? (
+            <button
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+              onClick={() => onUserFieldsConnect(server)}
+              title="Per-user field status is unavailable. Open to configure."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              Not verified
+            </button>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-md bg-gray-50 text-gray-600 border border-gray-200"
+              title="Per-user field status is unavailable."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              Not verified
+            </span>
+          );
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+              <CheckOutlined style={{ fontSize: 10 }} /> Ready
+            </span>
+            {onUserFieldsConnect && (
+              <button
+                className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
+                onClick={() => onUserFieldsConnect(server)}
+              >
+                Update
+              </button>
+            )}
+          </div>
+        );
+      }
       if (!server.is_byok) {
         return <span className="text-gray-300 text-xs">—</span>;
       }

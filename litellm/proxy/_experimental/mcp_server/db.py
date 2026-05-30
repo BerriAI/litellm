@@ -1,8 +1,11 @@
+import asyncio
 import base64
 import binascii
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Union, cast
+
+from prisma.errors import RecordNotFoundError, UniqueViolationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -84,6 +87,13 @@ def _prepare_mcp_server_data(
     # Force include is_byok even when False (exclude_none=True would not drop it,
     # but be explicit to ensure a False value is always written to the DB).
     data_dict["is_byok"] = getattr(data, "is_byok", False)
+
+    # user_fields is a list of MCPUserField models. exclude_none=True will
+    # already have dict-ified them, but the JSONB column expects a JSON
+    # string when written through Prisma.
+    user_fields = data_dict.get("user_fields")
+    if user_fields is not None:
+        data_dict["user_fields"] = safe_dumps(user_fields)
 
     return data_dict
 
@@ -581,19 +591,66 @@ async def store_user_credential(
     server_id: str,
     credential: str,
 ) -> None:
-    """Store a user credential for a BYOK MCP server."""
+    """Store a user credential for a BYOK MCP server.
+
+    BYOK, OAuth2, and user-fields payloads share the same ``credential_b64``
+    column. Refuse to overwrite a stored user-fields payload so saving a
+    BYOK credential does not silently destroy the user's saved field values.
+
+    Uses optimistic concurrency (compare-and-swap on ``credential_b64``) so
+    a concurrent ``store_user_field_values`` write between the read and the
+    write cannot be silently overwritten — mirroring the protection that
+    user-fields writes already have against BYOK writes.
+    """
 
     encoded = encrypt_value_helper(credential)
-    await prisma_client.db.litellm_mcpusercredentials.upsert(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
-        data={
-            "create": {
+
+    for _attempt in range(5):
+        existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+        )
+
+        if existing is None:
+            try:
+                await prisma_client.db.litellm_mcpusercredentials.create(
+                    data={
+                        "user_id": user_id,
+                        "server_id": server_id,
+                        "credential_b64": encoded,
+                    }
+                )
+                return
+            except UniqueViolationError:
+                # A concurrent writer inserted the row first; restart so we
+                # can inspect what they wrote before clobbering it.
+                await asyncio.sleep(0)
+                continue
+
+        if _decode_user_fields_payload(existing.credential_b64) is not None:
+            raise ValueError(
+                f"Existing credential for user {user_id} and server "
+                f"{server_id} holds user-fields values. Refusing to overwrite "
+                f"with a BYOK credential."
+            )
+
+        # Compare-and-swap on credential_b64: only succeed if the row still
+        # matches what we just inspected, so a concurrent user-fields write
+        # between the read and the write is not silently overwritten.
+        updated = await prisma_client.db.litellm_mcpusercredentials.update_many(
+            where={
                 "user_id": user_id,
                 "server_id": server_id,
-                "credential_b64": encoded,
+                "credential_b64": existing.credential_b64,
             },
-            "update": {"credential_b64": encoded},
-        },
+            data={"credential_b64": encoded},
+        )
+        if updated:
+            return
+        await asyncio.sleep(0)
+
+    raise RuntimeError(
+        f"store_user_credential: gave up after repeated concurrent "
+        f"modifications for user {user_id} and server {server_id}"
     )
 
 
@@ -602,12 +659,21 @@ async def get_user_credential(
     user_id: str,
     server_id: str,
 ) -> Optional[str]:
-    """Return credential for a user+server pair, or None."""
+    """Return credential for a user+server pair, or None.
+
+    The ``credential_b64`` column is multiplexed between BYOK strings,
+    OAuth2 blobs and user-fields blobs. A row holding a user-fields
+    payload is not a BYOK credential — return ``None`` so the caller
+    triggers the normal "no credential stored" flow instead of injecting
+    the raw JSON blob as an Authorization header.
+    """
 
     row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
+        return None
+    if _decode_user_fields_payload(row.credential_b64) is not None:
         return None
     return _decode_user_credential(row.credential_b64)
 
@@ -629,10 +695,238 @@ async def delete_user_credential(
     user_id: str,
     server_id: str,
 ) -> None:
-    """Delete the user's stored credential for a BYOK MCP server."""
+    """Delete the user's stored credential for a BYOK MCP server.
+
+    BYOK, OAuth2, and user-fields payloads share the same
+    ``(user_id, server_id)`` row. Refuse to delete a row that holds a
+    user-fields payload so the BYOK delete endpoint does not silently
+    destroy the user's saved field values — mirroring the overwrite
+    guards on the write paths.
+    """
+    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if existing is None:
+        raise RecordNotFoundError(
+            data={"error": {"message": "no BYOK credential row", "meta": {}}}
+        )
+    if _decode_user_fields_payload(existing.credential_b64) is not None:
+        # Treat as "no BYOK credential present" so the endpoint reports
+        # has_credential=False without clobbering the user-fields row.
+        raise RecordNotFoundError(
+            data={
+                "error": {
+                    "message": "row holds user-fields payload, not a BYOK credential",
+                    "meta": {},
+                }
+            }
+        )
     await prisma_client.db.litellm_mcpusercredentials.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
+
+
+# ── User-fields helpers ───────────────────────────────────────────────────────
+#
+# User-fields share the credential_b64 column with BYOK and OAuth2. We tag
+# the JSON payload with ``"type": "user_fields"`` so the read path can
+# distinguish formats without an extra column.
+
+
+def _parse_user_fields_plaintext(decoded: str) -> Optional[Dict[str, str]]:
+    """Return the field-values dict if ``decoded`` is a user-fields JSON payload.
+
+    Takes already-decrypted plaintext so callers that have already paid
+    the decryption cost (e.g. annotating server-list responses) can avoid
+    a redundant decryption round-trip.
+    """
+    try:
+        parsed = json.loads(decoded)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict) or parsed.get("type") != "user_fields":
+        return None
+    values = parsed.get("values")
+    if not isinstance(values, dict):
+        return {}
+    return {str(k): str(v) for k, v in values.items()}
+
+
+def _decode_user_fields_payload(stored: str) -> Optional[Dict[str, str]]:
+    """Return the field-values dict if ``stored`` holds a user-fields payload."""
+    decoded = _decode_user_credential(stored)
+    if decoded is None:
+        return None
+    return _parse_user_fields_plaintext(decoded)
+
+
+async def store_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    values: Optional[Dict[str, str]] = None,
+    *,
+    merge_fn: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+) -> Dict[str, str]:
+    """Persist the calling user's values for an MCP server's user fields.
+
+    The full set of values is encoded into a single encrypted JSON blob in
+    ``LiteLLM_MCPUserCredentials.credential_b64``. A ``"type"`` discriminator
+    lets ``get_user_field_values`` tell user-fields rows apart from BYOK
+    strings and OAuth2 payloads sharing the same column.
+
+    BYOK and OAuth2 credentials share the same ``(user_id, server_id)`` row.
+    Refuse to overwrite a non-user-fields credential so saving user-field
+    values does not silently destroy a stored BYOK API key or OAuth2 token.
+
+    Exactly one of ``values`` or ``merge_fn`` must be supplied:
+
+    * ``values`` writes the dict as-is.
+    * ``merge_fn`` is invoked with the currently-stored user-fields values
+      (``{}`` if no row exists) and must return the dict to persist.  It is
+      re-invoked on every CAS retry, so a concurrent partial save from the
+      same user in another tab is merged into the result instead of being
+      silently overwritten.
+
+    Uses optimistic concurrency to close the read-then-write race against
+    concurrent ``store_user_credential`` / ``store_user_oauth_credential``
+    calls: the write is gated on the previously-observed ``credential_b64``
+    being unchanged, and we retry from the re-read on contention.
+
+    Returns the dict that was ultimately persisted.
+    """
+
+    if (values is None) == (merge_fn is None):
+        raise ValueError(
+            "store_user_field_values: exactly one of `values` or `merge_fn` "
+            "must be provided"
+        )
+
+    def _encode(field_values: Dict[str, str]) -> str:
+        return encrypt_value_helper(
+            json.dumps({"type": "user_fields", "values": field_values})
+        )
+
+    # Pre-compute encoding for the ``values`` path so we don't pay encryption
+    # cost on every retry iteration when there is no merge function.
+    static_encoded: Optional[str] = None
+    if merge_fn is None:
+        assert values is not None
+        static_encoded = _encode(values)
+
+    # Bound the retry loop; in practice contention is resolved in a single
+    # extra round-trip but we leave headroom for pathological interleavings.
+    for _attempt in range(5):
+        existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+        )
+
+        if existing is None:
+            if merge_fn is not None:
+                current_values = merge_fn({})
+                encoded = _encode(current_values)
+            else:
+                assert values is not None and static_encoded is not None
+                current_values = values
+                encoded = static_encoded
+            try:
+                await prisma_client.db.litellm_mcpusercredentials.create(
+                    data={
+                        "user_id": user_id,
+                        "server_id": server_id,
+                        "credential_b64": encoded,
+                    }
+                )
+                return current_values
+            except UniqueViolationError:
+                # A concurrent writer inserted the row first; restart so we
+                # can inspect what they wrote before clobbering it.
+                await asyncio.sleep(0)
+                continue
+
+        existing_field_values = _decode_user_fields_payload(existing.credential_b64)
+        if existing_field_values is None:
+            raise ValueError(
+                f"Existing credential for user {user_id} and server "
+                f"{server_id} is not a user-fields payload (likely BYOK or "
+                f"OAuth2). Refusing to overwrite."
+            )
+
+        # When a merge function is supplied, recompute on every retry against
+        # the freshly-read existing values so a concurrent user-fields write
+        # from the same user in another tab is not silently dropped.
+        if merge_fn is not None:
+            current_values = merge_fn(existing_field_values)
+            encoded = _encode(current_values)
+        else:
+            assert values is not None and static_encoded is not None
+            current_values = values
+            encoded = static_encoded
+
+        # Compare-and-swap on credential_b64: only succeed if the row still
+        # matches what we just inspected, so a concurrent BYOK/OAuth2 write
+        # between the read and the write is not silently overwritten.
+        updated = await prisma_client.db.litellm_mcpusercredentials.update_many(
+            where={
+                "user_id": user_id,
+                "server_id": server_id,
+                "credential_b64": existing.credential_b64,
+            },
+            data={"credential_b64": encoded},
+        )
+        if updated:
+            return current_values
+        await asyncio.sleep(0)
+
+    raise RuntimeError(
+        f"store_user_field_values: gave up after repeated concurrent "
+        f"modifications for user {user_id} and server {server_id}"
+    )
+
+
+async def get_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> Optional[Dict[str, str]]:
+    """Return the user's stored field values, or ``None`` if not stored.
+
+    Returns ``None`` both when no row exists and when the row holds a
+    different credential type (BYOK / OAuth2) — callers should treat both
+    as "no user-fields configured for this user yet".
+    """
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return None
+    return _decode_user_fields_payload(row.credential_b64)
+
+
+async def delete_user_field_values(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+) -> bool:
+    """Delete the user's stored field values.
+
+    Only removes the row when it actually holds a user-fields payload, so a
+    co-located BYOK / OAuth2 credential for the same (user, server) pair is
+    not accidentally wiped. Returns True if a row was deleted.
+    """
+
+    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    if row is None:
+        return False
+    if _decode_user_fields_payload(row.credential_b64) is None:
+        return False
+    await prisma_client.db.litellm_mcpusercredentials.delete(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    )
+    return True
 
 
 # ── OAuth2 user-credential helpers ────────────────────────────────────────────
@@ -673,38 +967,60 @@ async def store_user_oauth_credential(
     if scopes:
         payload["scopes"] = scopes
 
-    # Guard against silently overwriting a BYOK credential with an OAuth token.
-    # Skip the guard when the caller knows the row is already an OAuth2 credential
-    # (e.g. during token refresh), saving an extra DB round-trip.
-    if not skip_byok_guard:
+    encoded = encrypt_value_helper(json.dumps(payload))
+
+    # Optimistic concurrency: compare-and-swap on ``credential_b64`` so a
+    # concurrent BYOK or user-fields write between the read and the write is
+    # not silently overwritten. ``skip_byok_guard`` (token refresh) bypasses
+    # the type check but still uses CAS to avoid clobbering data.
+    for _attempt in range(5):
         existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
+
+        if existing is None:
+            try:
+                await prisma_client.db.litellm_mcpusercredentials.create(
+                    data={
+                        "user_id": user_id,
+                        "server_id": server_id,
+                        "credential_b64": encoded,
+                    }
+                )
+                return
+            except UniqueViolationError:
+                await asyncio.sleep(0)
+                continue
+
         if (
-            existing is not None
+            not skip_byok_guard
             and _decode_oauth_payload(existing.credential_b64) is None
         ):
-            # Existing row is either a BYOK secret or an OAuth2 row that no
-            # longer decrypts (e.g. after a salt-key rotation).  In either
-            # case, refuse to overwrite — the caller would clobber data
-            # that may still be recoverable.
+            # Existing row is either a BYOK secret, a user-fields blob, or an
+            # OAuth2 row that no longer decrypts (e.g. after a salt-key
+            # rotation).  In any case, refuse to overwrite — the caller would
+            # clobber data that may still be recoverable.
             raise ValueError(
                 f"Existing credential for user {user_id} and server "
                 f"{server_id} could not be verified as an OAuth2 token. "
                 f"Refusing to overwrite."
             )
 
-    encoded = encrypt_value_helper(json.dumps(payload))
-    await prisma_client.db.litellm_mcpusercredentials.upsert(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
-        data={
-            "create": {
+        updated = await prisma_client.db.litellm_mcpusercredentials.update_many(
+            where={
                 "user_id": user_id,
                 "server_id": server_id,
-                "credential_b64": encoded,
+                "credential_b64": existing.credential_b64,
             },
-            "update": {"credential_b64": encoded},
-        },
+            data={"credential_b64": encoded},
+        )
+        if updated:
+            return
+        await asyncio.sleep(0)
+
+    raise RuntimeError(
+        f"store_user_oauth_credential: gave up after repeated concurrent "
+        f"modifications for user {user_id} and server {server_id}"
     )
 
 

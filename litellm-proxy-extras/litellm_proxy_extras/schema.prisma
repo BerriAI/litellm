@@ -328,6 +328,11 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
+  // Admin-defined per-user fields (e.g. bearer tokens, workspace IDs) that
+  // each end-user must supply via the dashboard before they can use the
+  // server. Each entry is a JSON object describing how the field is rendered
+  // in the dashboard and injected at request time.
+  user_fields           Json     @default("[]")
   source_url            String?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")

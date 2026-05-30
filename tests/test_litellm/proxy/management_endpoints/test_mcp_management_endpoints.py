@@ -2468,6 +2468,46 @@ class TestManagementPayloadValidation:
 
         assert payload.alias == "valid_server"
 
+    def test_rejects_is_byok_with_user_fields(self):
+        payload = SimpleNamespace(
+            server_name="valid_server",
+            alias=None,
+            is_byok=True,
+            user_fields=[{"field_key": "TOKEN", "header_name": "Authorization"}],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert exc_info.value.status_code == 400
+        assert "is_byok and user_fields" in exc_info.value.detail["error"]
+
+    def test_rejects_oauth2_with_user_fields(self):
+        payload = SimpleNamespace(
+            server_name="valid_server",
+            alias=None,
+            is_byok=False,
+            auth_type=MCPAuth.oauth2,
+            user_fields=[{"field_key": "WORKSPACE", "header_name": "X-Workspace"}],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
+        assert exc_info.value.status_code == 400
+        assert "oauth2" in exc_info.value.detail["error"]
+
+    def test_accepts_oauth2_token_exchange_with_user_fields(self):
+        payload = SimpleNamespace(
+            server_name="valid_server",
+            alias=None,
+            is_byok=False,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            user_fields=[{"field_key": "WORKSPACE", "header_name": "X-Workspace"}],
+        )
+
+        mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload)
+
     @pytest.mark.asyncio
     async def test_health_check_view_all_mode(self):
         """view_all mode should return health info for all MCP servers."""

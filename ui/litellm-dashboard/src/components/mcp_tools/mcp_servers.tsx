@@ -20,6 +20,7 @@ import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilt
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
+import { UserFieldsModal } from "./UserFieldsModal";
 import { getSecureItem } from "@/utils/secureStorage";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
@@ -64,6 +65,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [userFieldsModalServer, setUserFieldsModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
 
   useEffect(() => {
@@ -173,6 +175,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        (server: MCPServer) => setUserFieldsModalServer(server),
       ),
     [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
   );
@@ -458,6 +461,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           onSuccess={(_serverId) => {
             refetch();
             setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
+      {userFieldsModalServer && (
+        <UserFieldsModal
+          server={userFieldsModalServer}
+          open={!!userFieldsModalServer}
+          onClose={() => setUserFieldsModalServer(null)}
+          onSuccess={() => {
+            // Refetch the server list so missing_user_field_keys updates
+            // and the red badge clears (or stays red if still incomplete).
+            refetch();
+            setUserFieldsModalServer(null);
           }}
           accessToken={accessToken || ""}
         />

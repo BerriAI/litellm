@@ -176,6 +176,33 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
+/**
+ * One admin-declared per-user field on an MCP server. The admin lists these
+ * when creating the server; each end-user supplies their own values via the
+ * dashboard. Values get injected as HTTP headers (http/sse) or env vars (stdio)
+ * at request time.
+ */
+export interface MCPUserField {
+  field_key: string;
+  display_name?: string | null;
+  description?: string | null;
+  required?: boolean;
+  /** HTTP injection target (http/sse transports). */
+  header_name?: string | null;
+  /** Defaults to "{value}". Use e.g. "Bearer {value}" to prefix. */
+  header_value_template?: string | null;
+  /** Env var injection target (stdio transport). */
+  env_var_name?: string | null;
+}
+
+/** Response shape from /v1/mcp/server/{server_id}/user-field-values. */
+export interface MCPUserFieldsStatus {
+  server_id: string;
+  user_fields: MCPUserField[];
+  stored_field_keys: string[];
+  missing_field_keys: string[];
+}
+
 export interface MCPServer {
   server_id: string;
   server_name?: string | null;
@@ -221,6 +248,14 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+
+  /** Admin-declared per-user fields (e.g. bearer tokens) */
+  user_fields?: MCPUserField[] | null;
+  /**
+   * Populated by the proxy on list/get for the calling user — the field_keys
+   * the user has not yet filled in. Drives the red badge on the dashboard.
+   */
+  missing_user_field_keys?: string[] | null;
 
   /** GitHub / source repository URL */
   source_url?: string | null;

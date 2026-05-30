@@ -1,6 +1,21 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import {
+  Card,
+  Collapse,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  DeleteOutlined,
+  InfoCircleOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
 import { setToken } from "@/utils/mcpTokenStore";
@@ -373,6 +388,31 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
+      // Strip incomplete user_fields entries (e.g. an empty row added by an
+      // admin who forgot to remove it). The backend validator would reject
+      // these with a 422; filtering client-side gives a clearer experience.
+      const rawUserFields = (restValues as any).user_fields;
+      let cleanedUserFields: any[] | undefined;
+      if (Array.isArray(rawUserFields)) {
+        cleanedUserFields = rawUserFields
+          .filter(
+            (entry: any) =>
+              entry && typeof entry.field_key === "string" && entry.field_key.trim().length > 0,
+          )
+          .map((entry: any) => {
+            const result: Record<string, any> = { field_key: entry.field_key.trim() };
+            if (entry.display_name) result.display_name = entry.display_name;
+            if (entry.description) result.description = entry.description;
+            if (entry.header_name) result.header_name = entry.header_name;
+            if (entry.header_value_template)
+              result.header_value_template = entry.header_value_template;
+            if (entry.env_var_name) result.env_var_name = entry.env_var_name;
+            result.required = entry.required !== false;
+            return result;
+          });
+      }
+      (restValues as any).user_fields = cleanedUserFields ?? [];
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -694,6 +734,181 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 onKeyToolsChange={setKeyTools}
                 onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
+              />
+            )}
+
+            {/* User fields - admin-declared per-user values (bearer tokens, etc.) */}
+            {transportType !== "" && (
+              <Collapse
+                className="mb-4"
+                items={[
+                  {
+                    key: "user_fields",
+                    label: (
+                      <span className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                        Per-User Fields
+                        <Tooltip title="Optional fields each end-user must fill in on the dashboard before they can use this server. Values are injected as HTTP headers (http/sse) or env vars (stdio) at request time.">
+                          <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    ),
+                    children: (
+                      <Form.List name="user_fields">
+                        {(fields, { add, remove }) => (
+                          <>
+                            {fields.length === 0 && (
+                              <Typography.Paragraph
+                                type="secondary"
+                                className="!mb-3 text-xs"
+                              >
+                                Declare fields like <code>BEARER_TOKEN</code> or{" "}
+                                <code>WORKSPACE_ID</code> that each user must fill in
+                                before this server works for them. The dashboard will
+                                highlight servers with missing fields, and tool calls
+                                will fail with a friendly error pointing the user to
+                                the dashboard.
+                              </Typography.Paragraph>
+                            )}
+                            {fields.map(({ key, name, ...restField }) => (
+                              <Card
+                                size="small"
+                                key={key}
+                                className="!mb-3"
+                                type="inner"
+                                title={
+                                  <Typography.Text className="!text-xs !text-gray-500">
+                                    Field #{name + 1}
+                                  </Typography.Text>
+                                }
+                                extra={
+                                  <button
+                                    type="button"
+                                    aria-label="Remove field"
+                                    onClick={() => remove(name)}
+                                    className="text-gray-400 hover:text-red-600 transition-colors"
+                                  >
+                                    <DeleteOutlined />
+                                  </button>
+                                }
+                              >
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "field_key"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Field key
+                                      <Tooltip title="Unique storage key. Recommended to use SCREAMING_SNAKE_CASE.">
+                                        <InfoCircleOutlined className="ml-1.5 text-blue-400" />
+                                      </Tooltip>
+                                    </span>
+                                  }
+                                  rules={[
+                                    { required: true, message: "field_key is required" },
+                                    {
+                                      pattern: /^[A-Za-z][A-Za-z0-9_]*$/,
+                                      message: "Use letters, digits, underscores; start with a letter",
+                                    },
+                                  ]}
+                                >
+                                  <Input placeholder="BEARER_TOKEN" />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "display_name"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Display name
+                                    </span>
+                                  }
+                                >
+                                  <Input placeholder="Gmail OAuth Token" />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "description"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Description (help text shown on dashboard)
+                                    </span>
+                                  }
+                                >
+                                  <Input.TextArea
+                                    rows={2}
+                                    placeholder="Your personal Gmail OAuth bearer token."
+                                  />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "header_name"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      HTTP header name (http/sse)
+                                      <Tooltip title="Optional. When set, the user's value is injected as this header on outbound MCP requests.">
+                                        <InfoCircleOutlined className="ml-1.5 text-blue-400" />
+                                      </Tooltip>
+                                    </span>
+                                  }
+                                >
+                                  <Input placeholder="Authorization" />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "header_value_template"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Header value template
+                                      <Tooltip title="Defaults to '{value}'. Use e.g. 'Bearer {value}' to prefix the user's value automatically.">
+                                        <InfoCircleOutlined className="ml-1.5 text-blue-400" />
+                                      </Tooltip>
+                                    </span>
+                                  }
+                                >
+                                  <Input placeholder="Bearer {value}" />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "env_var_name"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Env var name (stdio)
+                                      <Tooltip title="Optional. When set, the user's value is forwarded as this env var to the spawned MCP process.">
+                                        <InfoCircleOutlined className="ml-1.5 text-blue-400" />
+                                      </Tooltip>
+                                    </span>
+                                  }
+                                >
+                                  <Input placeholder="GITHUB_TOKEN" />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "required"]}
+                                  label={
+                                    <span className="text-xs font-medium text-gray-700">
+                                      Required
+                                    </span>
+                                  }
+                                  valuePropName="checked"
+                                  initialValue={true}
+                                >
+                                  <Switch />
+                                </Form.Item>
+                              </Card>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                add({ required: true, header_value_template: "" })
+                              }
+                              className="w-full border border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 text-sm py-2 rounded-md flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <PlusOutlined /> Add user field
+                            </button>
+                          </>
+                        )}
+                      </Form.List>
+                    ),
+                  },
+                ]}
               />
             )}
 

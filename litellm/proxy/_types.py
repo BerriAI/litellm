@@ -1253,6 +1253,62 @@ class MCPApprovalStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class MCPUserField(LiteLLMPydanticObjectBase):
+    """Describes a single admin-declared per-user field on an MCP server.
+
+    The admin declares a list of these when creating/editing the server.
+    Each end-user then supplies their own value(s) via the dashboard, which
+    are injected at request time as either HTTP headers (for http/sse
+    transports) or environment variables (for stdio transport).
+    """
+
+    field_key: str  # storage key, must be unique within the server
+    display_name: Optional[str] = None  # human-readable label
+    description: Optional[str] = None  # help text for the dashboard
+    required: bool = True
+    # HTTP injection: when non-empty, the value is added to outbound headers.
+    # header_value_template defaults to "{value}"; use e.g. "Bearer {value}"
+    # to prefix the credential automatically.
+    header_name: Optional[str] = None
+    header_value_template: Optional[str] = None
+    # Stdio injection: when non-empty, the value is forwarded as an env var
+    # to the spawned MCP process.
+    env_var_name: Optional[str] = None
+
+
+def _validate_unique_user_field_keys(
+    user_fields: List[MCPUserField],
+) -> List[MCPUserField]:
+    seen: set = set()
+    duplicates: set = set()
+    for entry in user_fields:
+        key = entry.field_key
+        if key in seen:
+            duplicates.add(key)
+        else:
+            seen.add(key)
+    if duplicates:
+        raise ValueError(
+            f"user_fields contains duplicate field_key values: {sorted(duplicates)}"
+        )
+    return user_fields
+
+
+class MCPUserFieldValuesRequest(LiteLLMPydanticObjectBase):
+    """Body for storing the calling user's values for an MCP server's user fields."""
+
+    values: Dict[str, str]
+
+
+class MCPUserFieldsStatus(LiteLLMPydanticObjectBase):
+    """Per-server view of the calling user's user-field completeness."""
+
+    server_id: str
+    user_fields: List[MCPUserField] = Field(default_factory=list)
+    stored_field_keys: List[str] = Field(default_factory=list)
+    missing_field_keys: List[str] = Field(default_factory=list)
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1286,6 +1342,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    user_fields: List[MCPUserField] = Field(default_factory=list)
     source_url: Optional[str] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
@@ -1337,6 +1394,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @field_validator("user_fields")
+    @classmethod
+    def _user_fields_unique(cls, v: List[MCPUserField]) -> List[MCPUserField]:
+        return _validate_unique_user_field_keys(v)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1369,6 +1431,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
+    user_fields: List[MCPUserField] = Field(default_factory=list)
     source_url: Optional[str] = None
 
     @model_validator(mode="before")
@@ -1395,9 +1458,35 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     )
         return values
 
+    @field_validator("user_fields")
+    @classmethod
+    def _user_fields_unique(cls, v: List[MCPUserField]) -> List[MCPUserField]:
+        return _validate_unique_user_field_keys(v)
+
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_MCPServerTable record"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_user_fields(cls, values):
+        """Accept ``user_fields`` as either a list or a JSON string.
+
+        Prisma can hand JSONB columns back as a serialized string when the
+        row was written via ``safe_dumps`` (see ``_prepare_mcp_server_data``).
+        Coercing here keeps the rest of the pipeline able to assume a list.
+        """
+        if isinstance(values, dict):
+            raw = values.get("user_fields")
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = []
+                if not isinstance(parsed, list):
+                    parsed = []
+                values["user_fields"] = parsed
+        return values
 
     server_id: str
     server_name: Optional[str] = None
@@ -1442,6 +1531,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
+    user_fields: List[MCPUserField] = Field(default_factory=list)
+    # Computed per-request for the calling user. Populated only on the
+    # list/get endpoints that resolve credentials for the caller.
+    missing_user_field_keys: Optional[List[str]] = None
     source_url: Optional[str] = None
     # BYOM submission fields
     approval_status: Optional[str] = Field(

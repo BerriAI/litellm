@@ -191,6 +191,25 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _deserialize_user_fields(data: Any) -> List[Dict[str, Any]]:
+    """Decode the JSON-encoded ``user_fields`` blob from the MCP server row.
+
+    Always returns a list — falsy or malformed values become ``[]`` so callers
+    can iterate without a None check.
+    """
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, str):
+        try:
+            decoded = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -892,6 +911,9 @@ class MCPServerManager:
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            user_fields=_deserialize_user_fields(
+                getattr(mcp_server, "user_fields", None)
+            ),
             # AWS SigV4 fields
             aws_access_key_id=aws_creds.get("aws_access_key_id"),
             aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
@@ -1363,11 +1385,23 @@ class MCPServerManager:
         self,
         server: MCPServer,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_field_env: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, str]]:
-        """Resolve stdio env values, supporting header-driven placeholders."""
+        """Resolve stdio env values, supporting header-driven placeholders.
 
-        if server.transport != MCPTransport.stdio or not server.env:
+        ``user_field_env`` carries values resolved from admin-declared
+        user_fields with an ``env_var_name`` set. They take precedence
+        over the static server.env entries so a user's stored value
+        always overrides any placeholder default.
+        """
+
+        if server.transport != MCPTransport.stdio:
+            # Non-stdio transports (HTTP/SSE) don't take an env dict; user
+            # fields with env_var_name are stdio-only. Match the legacy
+            # contract of always returning None for non-stdio servers.
             return None
+        if not server.env:
+            return user_field_env or None
 
         resolved_env: Dict[str, str] = {}
         normalized_headers = {k.lower(): v for k, v in (raw_headers or {}).items()}
@@ -1384,7 +1418,83 @@ class MCPServerManager:
             else:
                 resolved_env[env_key] = env_value
 
+        if user_field_env:
+            resolved_env.update(user_field_env)
+        # Preserve the legacy contract: when an env dict is present on the
+        # server we always return a dict (even if empty after template
+        # resolution). Only return None when no env is configured at all.
         return resolved_env
+
+    async def _resolve_user_field_values(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> Dict[str, str]:
+        """Read the calling user's stored user-field values for ``mcp_server``.
+
+        Returns ``{}`` when the user has no row, no user_id, or there's no
+        DB. The caller decides what to do with missing required fields —
+        ``server.execute_mcp_tool`` raises a 401 with a config_url before
+        we even get here, so by the time injection happens we already
+        know the values are present.
+
+        Delegates to ``server._get_user_field_values_cached`` so the
+        enforcement check and dispatch share a single cache + DB-lookup
+        implementation.
+        """
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            coerce_user_fields,
+        )
+
+        if not coerce_user_fields(mcp_server):
+            return {}
+        if user_api_key_auth is None or not getattr(user_api_key_auth, "user_id", None):
+            return {}
+
+        from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+            _get_user_field_values_cached,
+        )
+
+        _, values = await _get_user_field_values_cached(mcp_server, user_api_key_auth)
+        return values or {}
+
+    async def _enforce_required_user_fields(
+        self,
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional["UserAPIKeyAuth"],
+    ) -> None:
+        """Raise the user_fields_missing 401 when required values are absent.
+
+        ``server.execute_mcp_tool`` runs the same gate for the streamable-HTTP
+        entrypoint, but ``call_tool`` is also called directly by the
+        Responses API path (``LiteLLM_Proxy_MCP_Handler``). Running the check
+        here covers every dispatch path through the manager so a caller
+        cannot skip enforcement by going around ``execute_mcp_tool``.
+        """
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            build_user_fields_missing_error,
+            compute_missing_user_fields,
+            server_has_user_fields,
+        )
+
+        if not server_has_user_fields(mcp_server):
+            return
+
+        stored_values = await self._resolve_user_field_values(
+            mcp_server, user_api_key_auth
+        )
+        missing = compute_missing_user_fields(mcp_server, stored_values or None)
+        if not missing:
+            return
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            _resolve_proxy_base_url_env,
+        )
+
+        detail = build_user_fields_missing_error(
+            mcp_server, missing, _resolve_proxy_base_url_env()
+        )
+        raise HTTPException(status_code=401, detail=detail)
 
     async def _create_mcp_client(
         self,
@@ -2538,6 +2648,7 @@ class MCPServerManager:
         server: MCPServer,
         tool_name: str,
         arguments: Dict[str, Any],
+        user_field_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call an OpenAPI tool handler directly.
@@ -2549,12 +2660,20 @@ class MCPServerManager:
         Args:
             tool_name: The full tool name (with prefix) to call
             arguments: Tool arguments to pass to the handler
+            user_field_headers: Optional admin-declared per-user header values
+                resolved from ``MCPServer.user_fields`` for the calling user.
+                Forwarded via the openapi generator's request ContextVar so
+                the closure-baked handler picks them up — mirrors the
+                local-registry dispatch path in ``server.execute_mcp_tool``.
 
         Returns:
             CallToolResult with the response from the API
         """
         from mcp.types import TextContent
 
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_user_field_headers,
+        )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
@@ -2570,6 +2689,11 @@ class MCPServerManager:
                 isError=True,
             )
 
+        _user_field_token = (
+            _request_user_field_headers.set(user_field_headers)
+            if user_field_headers
+            else None
+        )
         try:
             # Call the tool handler with the arguments
             # The handler is an async function that makes the HTTP request
@@ -2590,6 +2714,9 @@ class MCPServerManager:
                 content=[TextContent(type="text", text=error_msg)],
                 isError=True,
             )
+        finally:
+            if _user_field_token is not None:
+                _request_user_field_headers.reset(_user_field_token)
 
     async def pre_call_tool_check(
         self,
@@ -2761,6 +2888,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2844,6 +2972,37 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
 
+        # User-fields: resolve the calling user's stored values once and
+        # reuse them for both the header (http/sse) and env (stdio) paths
+        # below — calling the resolver twice would repeat cache lookups
+        # and coercion work for the same data.
+        from litellm.proxy._experimental.mcp_server.user_fields import (
+            resolve_user_field_env,
+            resolve_user_field_headers,
+        )
+
+        stored_user_field_values = await self._resolve_user_field_values(
+            mcp_server, user_api_key_auth
+        )
+        user_field_headers = (
+            resolve_user_field_headers(mcp_server, stored_user_field_values)
+            if stored_user_field_values
+            else {}
+        )
+        if user_field_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            # Match the OpenAPI/local path's case-insensitive precedence: a
+            # user-field header replaces any existing header (e.g. from
+            # static_headers) whose name matches case-insensitively, instead
+            # of leaving two differently-cased duplicates on the wire.
+            existing_lower_names = {k.lower(): k for k in extra_headers}
+            for header_name, value in user_field_headers.items():
+                collision = existing_lower_names.get(header_name.lower())
+                if collision is not None and collision != header_name:
+                    del extra_headers[collision]
+                extra_headers[header_name] = value
+
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
@@ -2851,8 +3010,8 @@ class MCPServerManager:
                 if "Authorization" in extra_headers:
                     verbose_logger.warning(
                         "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
+                        "the existing Authorization header (from static_headers, forwarded raw "
+                        "headers, or user-fields). The hook JWT will take precedence."
                     )
                 elif server_auth_header is not None:
                     # server_auth_header is passed separately to _create_mcp_client as
@@ -2873,7 +3032,14 @@ class MCPServerManager:
         if extra_headers is not None and len(extra_headers) == 0:
             extra_headers = None
 
-        stdio_env = self._build_stdio_env(mcp_server, raw_headers)
+        user_field_env = (
+            resolve_user_field_env(mcp_server, stored_user_field_values)
+            if stored_user_field_values
+            else {}
+        )
+        stdio_env = self._build_stdio_env(
+            mcp_server, raw_headers, user_field_env=user_field_env or None
+        )
 
         client = await self._create_mcp_client(
             server=mcp_server,
@@ -3056,6 +3222,8 @@ class MCPServerManager:
         start_time = datetime.datetime.now()
         mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
+        await self._enforce_required_user_fields(mcp_server, user_api_key_auth)
+
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
@@ -3105,9 +3273,34 @@ class MCPServerManager:
                     "transport to enable hook header injection.",
                     server_name,
                 )
+            # User-fields: resolve the calling user's stored values and forward
+            # them as upstream headers so admin-declared required fields reach
+            # the OpenAPI handler. Mirrors the local-registry dispatch path in
+            # ``server.execute_mcp_tool`` — without this, _enforce_user_fields
+            # would gate the call on the values being present but the values
+            # would be silently dropped before dispatch.
+            user_field_headers: Optional[Dict[str, str]] = None
+            from litellm.proxy._experimental.mcp_server.user_fields import (
+                resolve_user_field_headers,
+            )
+
+            stored_user_field_values = await self._resolve_user_field_values(
+                mcp_server, user_api_key_auth
+            )
+            if stored_user_field_values:
+                resolved = resolve_user_field_headers(
+                    mcp_server, stored_user_field_values
+                )
+                if resolved:
+                    user_field_headers = resolved
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(
+                        mcp_server,
+                        name,
+                        arguments,
+                        user_field_headers=user_field_headers,
+                    )
                 )
             )
         else:
@@ -3124,6 +3317,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

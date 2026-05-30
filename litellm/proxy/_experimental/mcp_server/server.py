@@ -46,6 +46,11 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_initialize_instructions,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.user_fields import (
+    build_user_fields_missing_error,
+    compute_missing_user_fields,
+    server_has_user_fields,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -90,6 +95,14 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
 
+# Short-lived in-memory cache for user-field values, mirroring the BYOK cache.
+# Value is (values_dict_or_None, monotonic_timestamp). None means "we checked
+# and the user has no row yet" — still cached to avoid hammering the DB on
+# tool calls that will fail the required-fields check.
+_user_fields_cache: Dict[Tuple[str, str], Tuple[Optional[Dict[str, str]], float]] = {}
+_USER_FIELDS_CACHE_TTL = 60  # seconds, matches BYOK
+_USER_FIELDS_CACHE_MAX_SIZE = 4096
+
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     """Remove a (user_id, server_id) entry from the BYOK credential cache.
@@ -107,6 +120,60 @@ def _write_byok_cred_cache(
     if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
         _byok_cred_cache.clear()
     _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+
+
+def _invalidate_user_fields_cache(user_id: str, server_id: str) -> None:
+    """Drop a cached user-fields entry after a user updates their values."""
+    _user_fields_cache.pop((user_id, server_id), None)
+
+
+def _write_user_fields_cache(
+    user_id: str, server_id: str, values: Optional[Dict[str, str]]
+) -> None:
+    """Cache stored user-field values, capping total entries."""
+    if len(_user_fields_cache) >= _USER_FIELDS_CACHE_MAX_SIZE:
+        _user_fields_cache.clear()
+    _user_fields_cache[(user_id, server_id)] = (values, time.monotonic())
+
+
+async def _get_user_field_values_cached(
+    mcp_server: MCPServer,
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    """Return (user_id, stored_values) for the calling user.
+
+    ``stored_values`` is None when either no user_id is available or
+    the user has not yet saved any values. Reads through a 60s
+    in-memory cache so back-to-back tool calls don't hammer the DB.
+
+    Module-level (not nested) so ``mcp_server_manager`` can reuse the
+    same cache + DB-lookup path during dispatch — keeping two copies
+    in sync was a maintenance hazard.
+    """
+    user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+    if not user_id:
+        return None, None
+
+    cache_key = (user_id, mcp_server.server_id)
+    cached = _user_fields_cache.get(cache_key)
+    if cached is not None:
+        values, ts = cached
+        if time.monotonic() - ts < _USER_FIELDS_CACHE_TTL:
+            return user_id, values
+
+    from litellm.proxy._experimental.mcp_server.db import get_user_field_values
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return user_id, None
+
+    values = await get_user_field_values(
+        prisma_client=prisma_client,
+        user_id=user_id,
+        server_id=mcp_server.server_id,
+    )
+    _write_user_fields_cache(user_id, mcp_server.server_id, values)
+    return user_id, values
 
 
 # Check if MCP is available
@@ -179,6 +246,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
+        _request_user_field_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -2209,6 +2277,51 @@ if MCP_AVAILABLE:
                 },
             )
 
+    async def _enforce_user_fields(
+        mcp_server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """Raise a friendly 401 when required user-fields are missing.
+
+        Looks at the server's declared ``user_fields`` and the calling
+        user's saved values. If any ``required`` field is unset, raises
+        with ``error=user_fields_missing`` and a ``config_url`` pointing
+        at the dashboard. The error body is what Claude Code / other MCP
+        clients surface to the end-user — we put the URL in both the
+        ``message`` and as a structured field so simple clients still
+        show a clickable link.
+        """
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            _resolve_proxy_base_url_env,
+        )
+
+        user_id = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
+        if not user_id:
+            # No identity means we can't look up stored values. Compute the
+            # missing-required set against an empty value map and only raise
+            # when at least one required field is actually missing — servers
+            # whose user_fields are all optional must not be blocked here.
+            missing = compute_missing_user_fields(mcp_server, None)
+            if not missing:
+                return
+            detail = build_user_fields_missing_error(
+                mcp_server,
+                missing,
+                _resolve_proxy_base_url_env(),
+            )
+            raise HTTPException(status_code=401, detail=detail)
+
+        _, stored_values = await _get_user_field_values_cached(
+            mcp_server, user_api_key_auth
+        )
+        missing = compute_missing_user_fields(mcp_server, stored_values)
+        if not missing:
+            return
+        detail = build_user_fields_missing_error(
+            mcp_server, missing, _resolve_proxy_base_url_env()
+        )
+        raise HTTPException(status_code=401, detail=detail)
+
     async def execute_mcp_tool(  # noqa: PLR0915
         name: str,
         arguments: Dict[str, Any],
@@ -2367,6 +2480,13 @@ if MCP_AVAILABLE:
                 # External auth header supplied; still enforce user-identity check.
                 await _check_byok_credential(mcp_server, user_api_key_auth)
 
+            # User fields: required admin-declared per-user values must be
+            # present before we dispatch. The helper raises a friendly 401
+            # with a config_url pointing at the dashboard when any required
+            # field is missing.
+            if server_has_user_fields(mcp_server):
+                await _enforce_user_fields(mcp_server, user_api_key_auth)
+
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
         #########################################################
@@ -2456,13 +2576,35 @@ if MCP_AVAILABLE:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
 
+            # User-fields headers: enforce_user_fields above guarantees the
+            # required values are present; resolve them once and inject so
+            # OpenAPI/local tools see the same user-provided values that the
+            # managed MCP dispatch path injects.
+            user_field_headers: Optional[Dict[str, str]] = None
+            if server_has_user_fields(mcp_server):
+                from litellm.proxy._experimental.mcp_server.user_fields import (
+                    resolve_user_field_headers,
+                )
+
+                _, stored_field_values = await _get_user_field_values_cached(
+                    mcp_server, user_api_key_auth
+                )
+                if stored_field_values:
+                    resolved = resolve_user_field_headers(
+                        mcp_server, stored_field_values
+                    )
+                    if resolved:
+                        user_field_headers = resolved
+
             _auth_token = _request_auth_header.set(auth_header_value)
             _extra_token = _request_extra_headers.set(forwarded_headers)
+            _user_field_token = _request_user_field_headers.set(user_field_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
+                _request_user_field_headers.reset(_user_field_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
