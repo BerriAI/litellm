@@ -1202,7 +1202,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "category": category_name,
@@ -1242,7 +1242,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "category": category_name,
@@ -1285,7 +1285,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             error_msg = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
@@ -1325,7 +1325,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 error_msg += f" ({description})"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": error_msg,
                     "keyword": keyword,
@@ -1677,7 +1677,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "ContentFilterGuardrail: competitor intent refuse - %s", intent_val
             )
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": msg,
                     "intent": intent_val,
