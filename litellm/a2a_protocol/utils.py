@@ -60,6 +60,12 @@ class A2ARequestUtils:
         if not isinstance(result, dict):
             return ""
 
+        # Direct message format (A2A spec): detect by explicit kind tag only.
+        # The "parts" heuristic is too broad and would match any future result
+        # type that happens to include a "parts" field.
+        if result.get("kind") == "message":
+            return A2ARequestUtils.extract_text_from_message(result)
+
         message = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
 

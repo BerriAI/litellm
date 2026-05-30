@@ -10,7 +10,8 @@ Follows the A2A Spec.
 
 import asyncio
 import os
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -18,6 +19,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import merge_agent_card
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -34,6 +36,34 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
+
+
+def _proxy_base_url(http_request: Request) -> str:
+    """Return the proxy's base URL as seen by the caller, without trailing slash."""
+    return str(http_request.base_url).rstrip("/")
+
+
+def _build_merged_agent_card(
+    upstream_card: Optional[Mapping[str, Any]],
+    *,
+    agent_id: str,
+    http_request: Request,
+    agent_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply the LiteLLM-fronting merge to ``upstream_card`` for ``agent_id``."""
+    proxy_base = _proxy_base_url(http_request)
+    # Prefer a card-supplied ``name`` (the discovery UI exposes an editable
+    # "Name (shown to API clients)" field that flows into
+    # ``agent_card_params.name``) over the internal ``agent_name`` identifier.
+    # Fall back to ``agent_name`` only when the card itself has no name.
+    card_name = upstream_card.get("name") if upstream_card else None
+    return merge_agent_card(
+        upstream_card,
+        proxy_url=f"{proxy_base}/a2a/{agent_id}",
+        proxy_base_url=proxy_base,
+        name=card_name or agent_name,
+    )
+
 
 router = APIRouter()
 
@@ -281,6 +311,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 )
 async def create_agent(
     request: AgentConfig,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -345,8 +376,31 @@ async def create_agent(
                 detail=f"Agent with name {request.get('agent_name')} already exists",
             )
 
+        # Apply the LiteLLM-fronting merge only when the admin actually
+        # provided an agent card. Plain chat/LLM agents register without
+        # ``agent_card_params``, and synthesising a default A2A card for them
+        # would advertise capabilities (``supportedInterfaces``, security
+        # schemes, default skills) the agent doesn't actually expose.
+        upstream_card = request.get("agent_card_params")
+        agent_to_create: AgentConfig = request
+        new_agent_id: Optional[str] = None
+        if upstream_card is not None:
+            # Pre-generate the agent_id so the merged card can reference it
+            # in ``supportedInterfaces`` before the DB row exists.
+            new_agent_id = str(uuid.uuid4())
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=new_agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            agent_to_create = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.add_agent_to_db(
-            agent=request, prisma_client=prisma_client, created_by=created_by
+            agent=agent_to_create,
+            prisma_client=prisma_client,
+            created_by=created_by,
+            agent_id=new_agent_id,
         )
 
         agent_name = result.agent_name
@@ -473,6 +527,7 @@ async def get_agent_by_id(
 async def update_agent(
     agent_id: str,
     request: AgentConfig,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -533,9 +588,25 @@ async def update_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
+        # Re-apply the LiteLLM-fronting merge — an update is a re-registration,
+        # so any new upstream card the admin pasted must go through the same
+        # transformation as initial create. Plain agents without an
+        # ``agent_card_params`` skip the merge so we don't synthesise an A2A
+        # card for them.
+        upstream_card = request.get("agent_card_params")
+        agent_to_update: AgentConfig = request
+        if upstream_card is not None:
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            agent_to_update = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
-            agent=request,
+            agent=agent_to_update,
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
@@ -566,6 +637,7 @@ async def update_agent(
 async def patch_agent(
     agent_id: str,
     request: PatchAgentRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -626,9 +698,26 @@ async def patch_agent(
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
 
+        # Re-merge only when the patch actually touches agent_card_params; a
+        # patch updating just litellm_params/rate limits (``agent_card_params``
+        # omitted) shouldn't rewrite the stored card. An explicitly provided
+        # ``agent_card_params`` — even an empty dict — still goes through the
+        # merge so LiteLLM applies its security schemes and supported
+        # interfaces instead of storing a bare card.
+        patch_payload: PatchAgentRequest = request
+        upstream_card = request.get("agent_card_params")
+        if upstream_card is not None:
+            merged_card = _build_merged_agent_card(
+                upstream_card,
+                agent_id=agent_id,
+                http_request=http_request,
+                agent_name=request.get("agent_name"),
+            )
+            patch_payload = {**request, "agent_card_params": merged_card}  # type: ignore[typeddict-item]
+
         result = await AGENT_REGISTRY.patch_agent_in_db(
             agent_id=agent_id,
-            agent=request,
+            agent=patch_payload,
             prisma_client=prisma_client,
             updated_by=updated_by,
         )

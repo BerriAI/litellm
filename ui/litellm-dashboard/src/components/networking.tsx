@@ -6299,6 +6299,79 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
   }
 };
 
+export interface DiscoveredAgentCard {
+  protocolVersion?: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  url?: string;
+  iconUrl?: string;
+  documentationUrl?: string;
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
+  capabilities?: Record<string, any>;
+  skills?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    tags?: string[];
+    examples?: string[];
+    [key: string]: any;
+  }>;
+  provider?: { organization?: string; url?: string };
+  [key: string]: any;
+}
+
+export interface DiscoverAgentCardResponse {
+  url: string;
+  agent_card: DiscoveredAgentCard;
+}
+
+/**
+ * How the backend should locate the upstream agent card.
+ *
+ * - ``well_known_fallback`` (default): pure A2A — try the three standard
+ *   well-known paths under the base URL.
+ * - ``langgraph_platform``: LangGraph Platform — hits the canonical
+ *   well-known path with an ``assistant_id`` query parameter, because
+ *   LangGraph mounts one shared card endpoint per deployment.
+ */
+export type DiscoveryMode = "well_known_fallback" | "langgraph_platform";
+
+export interface DiscoverAgentCardOptions {
+  discovery_mode?: DiscoveryMode;
+  /** Mode-specific params. ``langgraph_platform`` requires ``assistant_id``. */
+  params?: Record<string, any>;
+}
+
+export const discoverAgentCardCall = async (
+  accessToken: string,
+  url: string,
+  options?: DiscoverAgentCardOptions,
+): Promise<DiscoverAgentCardResponse> => {
+  const endpoint = proxyBaseUrl ? `${proxyBaseUrl}/v1/a2a/discover` : `/v1/a2a/discover`;
+  const body: Record<string, any> = { url };
+  if (options?.discovery_mode) body.discovery_mode = options.discovery_mode;
+  if (options?.params) body.params = options.params;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(errorData);
+  }
+
+  return (await response.json()) as DiscoverAgentCardResponse;
+};
+
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;

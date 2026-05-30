@@ -464,6 +464,70 @@ def test_public_model_hub_mixed_health_statuses():
 
 
 # ---------------------------------------------------------------------------
+# /public/agent_hub
+# ---------------------------------------------------------------------------
+
+
+def test_public_agent_hub_rewrites_upstream_url_to_proxy():
+    """Public agent hub must not leak the upstream backend URL retained on the
+    stored card. The ``url`` field has to be overwritten with the proxy
+    ``/a2a/{agent_id}`` entrypoint, matching the well-known card endpoint, so
+    an unauthenticated client cannot call the backend directly."""
+    from litellm.types.agents import AgentResponse
+
+    upstream_url = "https://upstream.internal.example.com/a2a"
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={"name": "public-agent", "url": upstream_url},
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    card = payload[0]
+    assert upstream_url not in card.get("url", "")
+    assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_returns_empty_when_no_public_groups():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = []
+
+    with (
+        patch("litellm.public_agent_groups", None),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
 # /public/endpoints
 # ---------------------------------------------------------------------------
 
