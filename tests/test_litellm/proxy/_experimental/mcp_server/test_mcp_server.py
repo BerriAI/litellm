@@ -1508,7 +1508,7 @@ async def test_stateful_mcp_requests_refresh_session_auth_context():
         {"mcp-session-id": session_id},
         "",
     )
-    mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+    mcp_server._remove_stateful_session_tracking(session_id)
 
 
 @pytest.mark.asyncio
