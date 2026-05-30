@@ -897,9 +897,26 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+
+            # An assistant message can carry both text and function_call items mixed
+            # inside `content`. The top-level `type` is not "function_call" in that
+            # case (it's a regular message item with a `role`), so the function_call
+            # parts would otherwise be silently dropped here — leaving the downstream
+            # `function_call_output` orphaned and causing "Missing corresponding tool
+            # call for tool response message". Split them out into a proper assistant
+            # message with both `content` and `tool_calls`. See issue #28978.
+            role = input_item.get("role") or "user"
+            if role == "assistant" and isinstance(content, list) and any(
+                isinstance(part, dict) and part.get("type") == "function_call"
+                for part in content
+            ):
+                return LiteLLMCompletionResponsesConfig._transform_responses_api_mixed_assistant_content_to_chat_completion_message(
+                    content_list=content
+                )
+
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=role,
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
@@ -1111,7 +1128,60 @@ class LiteLLMCompletionResponsesConfig:
         return [chat_completion_response_message]
 
     @staticmethod
-    def _resolve_file_id(item: dict[str, Any]) -> str | None:
+    def _transform_responses_api_mixed_assistant_content_to_chat_completion_message(
+        content_list: List[Any],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """
+        Transform a Responses API assistant message whose `content` list mixes
+        text/output_text parts with `function_call` parts into a single Chat
+        Completion assistant message carrying both `content` and `tool_calls`.
+
+        The non-mixed cases are already handled by:
+        - `_transform_responses_api_function_call_to_chat_completion_message`
+          (top-level item with `type == "function_call"`)
+        - `_transform_responses_api_content_to_chat_completion_content`
+          (top-level item with text-only content)
+        """
+        non_call_parts: List[Any] = []
+        tool_calls: List[ChatCompletionToolCallChunk] = []
+        for idx, part in enumerate(content_list):
+            if isinstance(part, dict) and part.get("type") == "function_call":
+                tool_calls.append(
+                    ChatCompletionToolCallChunk(
+                        id=part.get("call_id") or part.get("id") or "",
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=part.get("name") or "",
+                            arguments=str(part.get("arguments") or ""),
+                        ),
+                        index=idx,
+                    )
+                )
+            else:
+                non_call_parts.append(part)
+
+        transformed_content: Any = None
+        if non_call_parts:
+            transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                non_call_parts
+            )
+
+        return [
+            ChatCompletionResponseMessage(
+                role="assistant",
+                content=transformed_content,
+                tool_calls=tool_calls,
+            )
+        ]
+
+    @staticmethod
+    def _resolve_file_id(item: Dict[str, Any]) -> Optional[str]:
         """
         Return the effective file_id for a Responses API input_file item.
         Explicit file_id takes precedence; file_url is used as fallback so
