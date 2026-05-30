@@ -239,6 +239,35 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
 
 
+@pytest.mark.asyncio
+async def test_async_stream_treats_empty_tool_calls_as_text():
+    text_chunk = _make_chunk(Delta(content="Hello", role="assistant", tool_calls=[]))
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="stop",
+    )
+
+    async def mock_stream():
+        for c in [text_chunk, finish_chunk]:
+            yield c
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=mock_stream(),
+        model="test-model",
+    )
+
+    events = await _collect_events_async(wrapper)
+    deltas = [
+        e["delta"]
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+    ]
+
+    assert deltas == [{"type": "text_delta", "text": "Hello"}]
+
+
 def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
     """
     Sync counterpart: when a provider bundles tool_call arguments in the first
@@ -381,3 +410,27 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         f"got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+
+
+def test_sync_stream_treats_empty_tool_calls_as_text():
+    text_chunk = _make_chunk(Delta(content="Hello", role="assistant", tool_calls=[]))
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="stop",
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([text_chunk, finish_chunk]),
+        model="test-model",
+    )
+
+    events = _collect_events_sync(wrapper)
+    deltas = [
+        e["delta"]
+        for e in events
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+    ]
+
+    assert deltas == [{"type": "text_delta", "text": "Hello"}]
