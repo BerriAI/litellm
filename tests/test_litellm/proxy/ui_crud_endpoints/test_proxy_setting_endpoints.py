@@ -1869,3 +1869,112 @@ class TestProxySettingEndpoints:
         assert "field_schema" in data
         assert "properties" in data["field_schema"]
         assert "role_mappings" in data["field_schema"]["properties"]
+
+
+class TestUpdateMCPSemanticFilterSettingsAuthorization:
+    """Regression tests for Bug #17: PATCH /update/mcp_semantic_filter_settings
+    must be restricted to PROXY_ADMIN. Before the fix, any authenticated
+    principal (internal user, viewer, or a virtual key) could rewrite the global
+    MCP semantic filter config that applies across the whole proxy."""
+
+    @pytest.mark.parametrize(
+        "user_role",
+        [
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ],
+    )
+    def test_non_admin_cannot_update_mcp_semantic_filter_settings(
+        self, monkeypatch, user_role
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        # store_model_in_db is True so that, absent a role gate, the write would
+        # otherwise succeed -- this isolates the assertion to authorization.
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="non-admin-user",
+            user_role=user_role,
+        )
+
+        payload = {
+            "enabled": True,
+            "embedding_model": "text-embedding-3-large",
+            "top_k": 5,
+            "similarity_threshold": 0.9,
+        }
+
+        try:
+            response = client.patch(
+                "/update/mcp_semantic_filter_settings", json=payload
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 403, (
+            f"role {user_role} must not be able to update global MCP semantic "
+            f"filter settings, got {response.status_code}: {response.text}"
+        )
+
+    def test_proxy_admin_can_update_mcp_semantic_filter_settings(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "mcp_semantic_tool_filter", {}, raising=False)
+
+        captured = {}
+
+        async def mock_get_config():
+            return {"litellm_settings": {}}
+
+        async def mock_save_config(new_config=None):
+            captured["config"] = new_config
+
+        monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+        monkeypatch.setattr(proxy_config, "save_config", mock_save_config)
+        monkeypatch.setattr(
+            proxy_config, "_init_semantic_filter_settings_in_db", AsyncMock()
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        payload = {
+            "enabled": True,
+            "embedding_model": "text-embedding-3-large",
+            "top_k": 5,
+            "similarity_threshold": 0.9,
+        }
+
+        try:
+            response = client.patch(
+                "/update/mcp_semantic_filter_settings", json=payload
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["embedding_model"] == "text-embedding-3-large"
+        assert data["settings"]["top_k"] == 5
+        # The global write path actually ran for an admin.
+        assert (
+            captured["config"]["litellm_settings"]["mcp_semantic_tool_filter"][
+                "embedding_model"
+            ]
+            == "text-embedding-3-large"
+        )
