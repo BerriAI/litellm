@@ -661,7 +661,40 @@ def test_should_skip_ignores_client_supplied_metadata_flag():
 
 
 def test_should_skip_honors_per_model_skip_list():
+    """The per-model skip fires for a model bound to the input file ID (here a
+    model-embedded ``file-<base64>``), which reflects the model the batch runs."""
+    import base64
+
     rate_limiter = _make_rate_limiter()
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+    encoded = (
+        base64.urlsafe_b64encode(b"litellm:file-xyz;model,gpt-4o-mini")
+        .decode()
+        .rstrip("=")
+    )
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
+    ):
+        should_skip, descriptors = (
+            rate_limiter._should_skip_batch_input_file_processing(
+                data={"input_file_id": f"file-{encoded}"},
+                user_api_key_dict=user,
+            )
+        )
+    assert should_skip is True
+    assert descriptors is None
+
+
+def test_should_not_skip_per_model_for_spoofed_top_level_model():
+    """A caller must not bypass batch rate limits by naming a skip-listed model
+    in the top-level ``model`` while routing a different model through the JSONL
+    ``body.model`` entries. The per-model skip only trusts the file-bound model,
+    so a skip-listed top-level model over a plain file still gets processed."""
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch(
         "litellm.proxy.proxy_server.general_settings",
@@ -673,8 +706,7 @@ def test_should_skip_honors_per_model_skip_list():
                 user_api_key_dict=user,
             )
         )
-    assert should_skip is True
-    assert descriptors is None
+    assert should_skip is False
 
 
 def test_should_skip_when_no_rate_limits_configured():

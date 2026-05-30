@@ -99,12 +99,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
         self.parallel_request_limiter = parallel_request_limiter
 
-    def _get_batch_routing_model(self, data: Dict) -> Optional[str]:
-        """Resolve the deployment/model used for this batch from request data."""
-        model = data.get("model")
-        if isinstance(model, str) and model:
-            return model
+    def _get_file_bound_batch_model(self, data: Dict) -> Optional[str]:
+        """Resolve the model bound to the batch input file ID.
 
+        The model embedded in a ``file-<base64>`` ID or a unified managed
+        file's target model is fixed when the file is created, so it reflects
+        the model the batch will actually run. Unlike the client-supplied
+        top-level ``model`` field, it cannot be swapped per request to point a
+        skip decision at a deployment the JSONL never routes to.
+        """
         input_file_id = data.get("input_file_id")
         if not isinstance(input_file_id, str) or not input_file_id:
             return None
@@ -126,6 +129,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 return target_model_names[0]
 
         return None
+
+    def _get_batch_routing_model(self, data: Dict) -> Optional[str]:
+        """Resolve the deployment/model used for this batch from request data."""
+        model = data.get("model")
+        if isinstance(model, str) and model:
+            return model
+
+        return self._get_file_bound_batch_model(data)
 
     def _resolve_batch_provider(self, batch_model: Optional[str]) -> Optional[str]:
         """Resolve the provider from the deployment that serves ``batch_model``.
@@ -196,6 +207,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         into the file via an admin-configured skip (global disable,
         per-model, per-provider).
 
+        The per-model skip is matched against the file-bound model only, never
+        the client-supplied top-level ``model``. The latter selects routing
+        credentials but not the models the batch runs (those are the JSONL
+        ``body.model`` entries), so honoring it would let a caller name a
+        skip-listed deployment while routing a different, rate-limited model.
+
         Returns ``(should_skip, descriptors)`` where ``descriptors`` is the
         rate-limit descriptor list computed for the no-limits check, so the
         caller can reuse it for counter enforcement without recomputing.
@@ -208,13 +225,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
             return True, None
 
-        batch_model = self._get_batch_routing_model(data)
         skip_models = (
             general_settings.get("skip_batch_input_file_rate_limiting_for_models") or []
         )
-        if batch_model and self._matches_skip_list(batch_model, skip_models):
+        file_bound_model = self._get_file_bound_batch_model(data)
+        if file_bound_model and self._matches_skip_list(file_bound_model, skip_models):
             verbose_proxy_logger.debug(
-                f"Skipping batch input file processing for model={batch_model}"
+                f"Skipping batch input file processing for model={file_bound_model}"
             )
             return True, None
 
@@ -223,7 +240,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             or []
         )
         if skip_providers:
-            batch_provider = self._resolve_batch_provider(batch_model)
+            batch_provider = self._resolve_batch_provider(
+                self._get_batch_routing_model(data)
+            )
             if batch_provider and batch_provider in skip_providers:
                 verbose_proxy_logger.debug(
                     f"Skipping batch input file processing for provider={batch_provider}"
