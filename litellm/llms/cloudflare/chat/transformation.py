@@ -1,6 +1,5 @@
-import json
 import time
-from typing import AsyncIterator, Iterator, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 
@@ -35,6 +34,43 @@ class CloudflareError(BaseLLMException):
             request=self.request,
             response=self.response,
         )  # Call the base class constructor with the parameters it needs
+
+
+def _extract_cloudflare_chat_content(result: Dict[str, Any]) -> str:
+    # Legacy Cloudflare fields take precedence, and "" is a valid response.
+    if "response" in result and result["response"] is not None:
+        if isinstance(result["response"], str):
+            return result["response"]
+        raise CloudflareError(
+            status_code=500,
+            message=f"Unable to parse Cloudflare chat response. Invalid response field: {result}",
+        )
+
+    if "response_text" in result and result["response_text"] is not None:
+        if isinstance(result["response_text"], str):
+            return result["response_text"]
+        raise CloudflareError(
+            status_code=500,
+            message=f"Unable to parse Cloudflare chat response. Invalid response_text field: {result}",
+        )
+
+    if "choices" in result:
+        choices = result["choices"]
+        if (
+            isinstance(choices, list)
+            and len(choices) > 0
+            and isinstance(choices[0], dict)
+        ):
+            message = choices[0].get("message")
+            if isinstance(message, dict) and message.get("content") is not None:
+                content = message["content"]
+                if isinstance(content, str):
+                    return content
+
+    raise CloudflareError(
+        status_code=500,
+        message=f"Unable to parse Cloudflare chat response. Response result: {result}",
+    )
 
 
 class CloudflareChatConfig(BaseConfig):
@@ -149,9 +185,10 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
         result = completion_response["result"]
-        model_response.choices[0].message.content = result.get("response") if result.get("response") is not None else result.get("response_text", "")  # type: ignore
+        model_response.choices[0].message.content = _extract_cloudflare_chat_content(  # type: ignore
+            result=result
+        )
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
@@ -191,32 +228,43 @@ class CloudflareChatConfig(BaseConfig):
 
 class CloudflareChatResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
-        try:
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
-            finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
-            provider_specific_fields = None
+        text = ""
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        is_finished = False
+        finish_reason = ""
+        usage: Optional[ChatCompletionUsageBlock] = None
+        provider_specific_fields = None
 
-            index = int(chunk.get("index", 0))
+        index = int(chunk.get("index", 0))
 
-            if "response" in chunk and chunk["response"] is not None:
-                text = chunk["response"]
-            elif "response_text" in chunk and chunk["response_text"] is not None:
-                text = chunk["response_text"]
+        if "response" in chunk and chunk["response"] is not None:
+            text = chunk["response"]
+        elif "response_text" in chunk and chunk["response_text"] is not None:
+            text = chunk["response_text"]
+        elif "choices" in chunk and isinstance(chunk["choices"], list):
+            choices = chunk["choices"]
+            if len(choices) > 0 and isinstance(choices[0], dict):
+                choice = choices[0]
+                index = int(choice.get("index", index))
+                delta = choice.get("delta")
+                if isinstance(delta, dict) and delta.get("content") is not None:
+                    text = delta["content"]
+                if choice.get("finish_reason") is not None:
+                    is_finished = True
+                    finish_reason = choice["finish_reason"]
 
-            returned_chunk = GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-                provider_specific_fields=provider_specific_fields,
-            )
+        if not is_finished and chunk.get("finish_reason") is not None:
+            is_finished = True
+            finish_reason = chunk["finish_reason"]
 
-            return returned_chunk
+        returned_chunk = GenericStreamingChunk(
+            text=text,
+            tool_use=tool_use,
+            is_finished=is_finished,
+            finish_reason=finish_reason,
+            usage=usage,
+            index=index,
+            provider_specific_fields=provider_specific_fields,
+        )
 
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+        return returned_chunk
