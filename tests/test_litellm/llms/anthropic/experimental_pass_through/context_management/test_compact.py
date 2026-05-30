@@ -352,6 +352,43 @@ async def test_opt_in_gating_no_summary_model_configured():
     assert result.iterations_usage is None
 
 
+async def test_opt_in_gating_no_summary_model_keeps_post_compaction_tail():
+    """No summary model + prior compaction block forwards the full tail.
+
+    The prior summary lives on the system prefix; the post-compaction turns it
+    does not cover must be forwarded unchanged rather than collapsed to the
+    latest user question (which would strip intermediate turns the model needs).
+    """
+    messages = _messages_with_compaction("prior summary text")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+        return_value=None,
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+        )
+
+    assert result.applied_edits[0]["error"] == "summary_model_not_configured"
+    assert result.system is not None
+    assert "prior summary text" in str(result.system)
+    assert result.compaction_block is None
+    assert result.iterations_usage is None
+    # Post-compaction tail forwarded unchanged (compaction blocks stripped).
+    assert [m["role"] for m in result.messages] == ["user", "assistant", "user"]
+    assert result.messages[0]["content"] == "newer question"
+    assert result.messages[-1]["content"] == "latest question"
+    for msg in result.messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert block.get("type") != "compaction"
+
+
 # ---------------------------------------------------------------------------
 # Client compaction block without context_management
 # ---------------------------------------------------------------------------

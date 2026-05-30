@@ -932,10 +932,12 @@ async def apply_compact_20260112(  # noqa: PLR0915
     summary_model = _read_summary_model_setting()
     if summary_model is None:
         applied["error"] = "summary_model_not_configured"
-        if prior_compaction_block is not None:
-            # Prior context lives in ``augmented_system`` (compaction summary
-            # prefix); reduce to the latest user question to avoid re-sending
-            # stale post-compaction turns the summary already covers.
+        # Slice-only forwarding: ``augmented_system`` already carries any prior
+        # compaction summary, and the post-compaction tail in
+        # ``downstream_messages`` is recent context the summary does not cover,
+        # so forward it unchanged. Only fall back to the last user question when
+        # the strip leaves nothing for the downstream call to answer.
+        if not downstream_messages:
             downstream_messages = _select_last_user_question(effective_messages)
         return PolyfillResult(
             messages=downstream_messages,
