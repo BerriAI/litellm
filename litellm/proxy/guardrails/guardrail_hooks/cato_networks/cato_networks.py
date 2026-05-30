@@ -477,12 +477,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
     async def forward_the_stream_to_cato(
         self,
         websocket: ClientConnection,
-        response_iter,
+        response_iter: AsyncGenerator[Any, None],
     ) -> None:
         async for chunk in response_iter:
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json()
-            if isinstance(chunk, dict):
+            elif not isinstance(chunk, (str, bytes)):
                 chunk = json.dumps(chunk)
             await websocket.send(chunk)
         await websocket.send(json.dumps({"done": True}))

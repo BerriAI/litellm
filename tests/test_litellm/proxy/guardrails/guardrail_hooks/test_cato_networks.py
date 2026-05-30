@@ -1752,18 +1752,26 @@ async def test_forward_the_stream_to_cato_serializes_chunks():
     websocket = MagicMock()
     websocket.send = AsyncMock()
 
+    model_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "done", "role": "assistant"},
+            }
+        ]
+    )
+
     async def response_iter():
         yield {"role": "assistant"}
-        yield ModelResponse(
-            choices=[
-                {
-                    "finish_reason": "stop",
-                    "index": 0,
-                    "message": {"content": "done", "role": "assistant"},
-                }
-            ]
-        )
+        yield model_response
+        yield "raw-sse-chunk"
+        yield [1, 2, 3]
 
     await guard.forward_the_stream_to_cato(websocket, response_iter())
-    assert websocket.send.await_count == 3
-    assert json.loads(websocket.send.await_args_list[-1].args[0]) == {"done": True}
+    sent = [call.args[0] for call in websocket.send.await_args_list]
+    assert sent[0] == json.dumps({"role": "assistant"})
+    assert sent[1] == model_response.model_dump_json()
+    assert sent[2] == "raw-sse-chunk"
+    assert sent[3] == json.dumps([1, 2, 3])
+    assert json.loads(sent[-1]) == {"done": True}
