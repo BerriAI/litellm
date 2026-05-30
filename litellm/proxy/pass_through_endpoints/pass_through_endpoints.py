@@ -75,7 +75,7 @@ pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Dict[
-    str, Dict[str, Union[str, List[str], Dict[str, Any]]]
+    str, Dict[str, Union[str, bool, List[str], Dict[str, Any]]]
 ] = {}
 
 
@@ -2345,7 +2345,10 @@ class InitPassThroughEndpointHelpers:
                 # Get the methods for this route. Prefer the registered metadata,
                 # but keep supporting test fixtures / older registry entries that
                 # only encoded methods in the route key.
-                route_methods = _registered_pass_through_routes[key].get("methods", [])
+                methods_entry = _registered_pass_through_routes[key].get("methods", [])
+                route_methods: List[str] = (
+                    methods_entry if isinstance(methods_entry, list) else []
+                )
                 if not route_methods and len(parts) == 4:
                     route_methods = parts[3].split(",")
 
