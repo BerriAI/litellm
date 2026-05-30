@@ -3384,12 +3384,12 @@ async def test_mcp_key_access_group_extras_when_group_has_no_servers():
 
 
 @pytest.mark.asyncio
-async def test_mcp_key_access_group_extras_when_group_authorizes_neither():
-    """
-    Escalation regression: team member attaches a foreign access group to their key.
-    Group grants servers BUT assigned_team_ids/assigned_key_ids exclude this caller.
-    No extras contributed.
-    """
+async def test_mcp_key_access_group_extras_granted_even_when_group_authorizes_neither():
+    """Grants are ungated: attaching the group to the key is itself the grant, so its
+    servers are contributed even when assigned_team_ids/assigned_key_ids exclude this
+    caller. (A team member self-assigning a foreign group to reach past the team
+    ceiling is a known, accepted-for-now tradeoff; restricting who may set
+    key.access_group_ids is a separate concern.)"""
     valid_token = UserAPIKeyAuth(
         token="team-a-token",
         access_group_ids=["team-b-mcp-group"],
@@ -3414,7 +3414,7 @@ async def test_mcp_key_access_group_extras_when_group_authorizes_neither():
         result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
             valid_token
         )
-        assert result == []
+        assert result == ["srv-finance-only"]
     finally:
         _stop_patches(patches)
 
@@ -3699,11 +3699,12 @@ async def test_get_allowed_mcp_servers_includes_team_access_group_extras_end_to_
 
 
 @pytest.mark.asyncio
-async def test_key_access_group_ids_resolves_mcp_servers_ungated():
-    """A teamless key whose unified access_group_ids grant an MCP server sees it
-    even though the group lists the key in NEITHER assigned_key_ids NOR
-    assigned_team_ids — the group is attached to the key, so it grants the key's
-    own scope (ungated, mirroring can_key_call_model's fallback)."""
+async def test_allowed_mcp_servers_for_key_excludes_access_group_ids():
+    """The key's own ceiling (which is intersected against the team) must NOT resolve
+    access_group_ids — those are additive grants handled separately, so folding them
+    in here is exactly the bug this fix removes. A key with only access_group_ids and
+    no object_permission yields an empty ceiling, and the group resolver is never
+    called from this path."""
     auth = UserAPIKeyAuth(
         token="test-token-hash",
         api_key="sk-test",
@@ -3720,15 +3721,16 @@ async def test_key_access_group_ids_resolves_mcp_servers_ungated():
     ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
 
-    assert result == ["srv-stripe"]
-    mock_resolver.assert_called_once()
-    assert mock_resolver.call_args.kwargs["access_group_ids"] == ["mcp-premium"]
+    assert result == []
+    mock_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_key_access_group_ids_union_with_object_permission():
-    """When both legacy key.object_permission and unified key.access_group_ids
-    grant MCP servers, the final list is their union."""
+async def test_allowed_mcp_servers_for_key_uses_object_permission_not_access_groups():
+    """The key's own ceiling is built from object_permission alone. Even when the key
+    also carries access_group_ids that would resolve to other servers, those grants do
+    NOT enter this (intersected) scope — only the object_permission server comes back.
+    """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -3763,82 +3765,40 @@ async def test_key_access_group_ids_union_with_object_permission():
                 "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["srv-stripe"],
-            ),
+            ) as mock_resolver,
         ):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
 
-        assert set(result) == {"srv-direct", "srv-stripe"}
+        assert set(result) == {"srv-direct"}
+        mock_resolver.assert_not_called()
     finally:
         global_mcp_server_manager.registry.pop("srv-direct", None)
 
 
 @pytest.mark.asyncio
-async def test_key_access_group_ids_empty_returns_no_extras():
-    """Empty key.access_group_ids and no object_permission → resolver called with
-    [], short-circuits without DB access, returns []."""
-    auth = UserAPIKeyAuth(
-        token="test-token-hash",
-        api_key="sk-test",
-        access_group_ids=[],
-    )
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
-            new_callable=AsyncMock,
-            return_value=[],
-        ) as mock_resolver,
-    ):
-        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(auth)
-
-    assert result == []
-    mock_resolver.assert_called_once()
-    assert mock_resolver.call_args.kwargs["access_group_ids"] == []
-
-
-@pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_key_access_group_base_end_to_end():
-    """End-to-end bug repro: a teamless key has an MCP-granting access group on
-    its access_group_ids, but the group lists the key in NEITHER assigned_key_ids
-    NOR assigned_team_ids. The gated extras path returns [] (no override), yet the
-    ungated base key path grants the server → the key sees it through
-    get_allowed_mcp_servers."""
+async def test_get_allowed_mcp_servers_surfaces_ungated_key_access_group_grant_end_to_end():
+    """End-to-end: a teamless key has an MCP-granting access group on its
+    access_group_ids. The grant is resolved ungated by the additive extras path and
+    surfaces through get_allowed_mcp_servers, even though the key's own ceiling
+    (object_permission) is empty."""
     auth = UserAPIKeyAuth(
         token="test-token",
         api_key="sk-test",
         access_group_ids=["mcp-group"],
     )
-    # Group grants the server but admits neither this key nor its (absent) team.
-    fake_ag = _fake_mcp_access_group(
-        access_group_id="mcp-group",
-        access_mcp_server_ids=["srv-deepwiki"],
-        assigned_team_ids=[],
-        assigned_key_ids=[],
-    )
 
     patches = _patch_proxy_server_globals_for_mcp() + [
-        # Ungated base resolver used by _get_allowed_mcp_servers_for_key.
         patch(
             "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=["srv-deepwiki"],
         ),
-        # Gated path (_get_key_access_group_mcp_server_extras) resolves the group
-        # via get_access_object; empty assigned_* → it contributes nothing.
-        patch(
-            "litellm.proxy.auth.auth_checks.get_access_object",
-            new_callable=AsyncMock,
-            return_value=fake_ag,
-        ),
     ]
     _start_patches(patches)
     try:
-        # Sanity: the gated extras path alone denies (the old behavior).
         extras = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
-        assert extras == []
+        assert extras == ["srv-deepwiki"]
 
-        # But the key now sees the server via the ungated base path.
         result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert result == ["srv-deepwiki"]
     finally:
