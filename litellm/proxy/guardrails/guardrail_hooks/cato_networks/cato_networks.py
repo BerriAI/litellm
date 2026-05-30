@@ -353,7 +353,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         required_action = res.get("required_action")
         action_type = required_action and required_action.get("action_type", None)
         if action_type and action_type == "block_action":
-            return self._handle_block_action_on_output(
+            self._handle_block_action_on_output(
                 res.get("analysis_result", {}), required_action
             )
         redacted_chat = res.get("redacted_chat", None)
@@ -368,7 +368,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     def _handle_block_action_on_output(
         self, analysis_result: Any, required_action: Any
-    ) -> dict | None:
+    ) -> None:
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Cato: detected: {detected}, enabled policies: {policies}".format(
@@ -376,7 +376,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 policies=list(analysis_result.get("policy_drill_down", {}).keys()),
             ),
         )
-        return {"detection_message": detection_message}
+        raise HTTPException(status_code=400, detail=detection_message)
 
     def _build_cato_headers(
         self,
@@ -457,16 +457,6 @@ class CatoNetworksGuardrail(CustomGuardrail):
                             user_email=user_email,
                         )
                     )
-                    if (
-                        cato_output_guardrail_result
-                        and cato_output_guardrail_result.get("detection_message")
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=cato_output_guardrail_result.get(
-                                "detection_message"
-                            ),
-                        )
                     redacted_output = (
                         cato_output_guardrail_result.get("redacted_output")
                         if cato_output_guardrail_result

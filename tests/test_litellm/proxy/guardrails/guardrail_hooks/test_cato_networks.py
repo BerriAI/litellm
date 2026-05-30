@@ -1209,6 +1209,47 @@ async def test_post_call_success_hook_block_action_raises():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("detection_message", [None, ""])
+async def test_post_call_success_hook_block_action_raises_without_detection_message(
+    detection_message,
+):
+    """A block_action whose detection_message is null or empty must still raise so the
+    blocked output never reaches the caller, matching the input-path behavior."""
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+    required_action = {"action_type": "block_action", "policy_name": "PII"}
+    if detection_message is not None:
+        required_action["detection_message"] = detection_message
+    block_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": required_action,
+        }
+    )
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "secret", "role": "assistant"},
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=block_response,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guard.async_post_call_success_hook(
+                data=request_data,
+                response=llm_response,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+    assert exc_info.value.status_code == 400
+    assert llm_response.choices[0].message.content == "secret"
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_anonymize_action_redacts_content():
     guard = _make_guardrail()
     request_data = {"messages": [{"role": "user", "content": "hi"}]}
