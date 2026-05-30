@@ -201,6 +201,61 @@ class TestMCPRequestHandler:
             assert result == []  # Should handle exception gracefully
 
     @pytest.mark.parametrize(
+        "key_servers,team_servers,grant_servers,expected,scenario",
+        [
+            # Key has no own scope, restrictive team ceiling {test}, server
+            # granted only via key.access_group_ids → caller sees team's server
+            # AND the grant (grant is added on top of the ceiling).
+            (
+                [],
+                ["test"],
+                ["context7"],
+                ["context7", "test"],
+                "grant_over_team_ceiling",
+            ),
+            # key {a} ∩ team {b} = {} ; the grant still surfaces, proving grants
+            # are unioned with the ceiling, not intersected against it.
+            (
+                ["a"],
+                ["b"],
+                ["context7"],
+                ["context7"],
+                "grant_survives_empty_intersection",
+            ),
+            # No grant → ceiling behavior is unchanged (no additive leakage).
+            (["x", "y"], ["x"], [], ["x"], "no_grant_keeps_intersection"),
+        ],
+    )
+    async def test_access_group_grants_are_additive_over_ceiling(
+        self, key_servers, team_servers, grant_servers, expected, scenario
+    ):
+        """Regression: key.access_group_ids grants are unioned on top of the
+        key/team MCP ceiling, so a grant reaches the caller even when the team
+        ceiling does not include it (and even when key ∩ team is empty)."""
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+            access_group_ids=["grp-mcp"],
+        )
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+            ) as mock_key,
+            patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team,
+            patch.object(
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras"
+            ) as mock_grants,
+        ):
+            mock_key.return_value = key_servers
+            mock_team.return_value = team_servers
+            mock_grants.return_value = grant_servers
+            result = await MCPRequestHandler.get_allowed_mcp_servers(mock_user_auth)
+        assert sorted(result) == sorted(expected)
+
+    @pytest.mark.parametrize(
         "headers,expected_api_key,expected_mcp_auth_header,expected_server_auth_headers",
         [
             # Test case 1: x-litellm-api-key header present
