@@ -148,6 +148,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
