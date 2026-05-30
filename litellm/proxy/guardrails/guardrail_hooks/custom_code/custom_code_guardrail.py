@@ -331,17 +331,6 @@ class CustomCodeGuardrail(CustomGuardrail):
                 f"Custom code guardrail '{self.guardrail_name}': Blocking {input_type} - {reason}"
             )
 
-            is_output = input_type == "response"
-
-            # For pre-call, raise passthrough exception to return synthetic response
-            if not is_output:
-                self.raise_passthrough_exception(
-                    violation_message=reason,
-                    request_data=request_data,
-                    detection_info=detection_info,
-                )
-
-            # For post-call, raise HTTP exception
             raise HTTPException(
                 status_code=400,
                 detail={
