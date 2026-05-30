@@ -1771,6 +1771,7 @@ async def test_model_connection(
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
+        resolved_model_info: Optional[dict] = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1791,6 +1792,9 @@ async def test_model_connection(
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                    resolved_model_info = deployment_by_id.model_info.model_dump(
                         exclude_none=True
                     )
                 elif model_name:
@@ -1819,6 +1823,9 @@ async def test_model_connection(
                         config_litellm_params = dict(
                             deployments[0].get("litellm_params", {})
                         )
+                        resolved_model_info = dict(
+                            deployments[0].get("model_info", {}) or {}
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
@@ -1842,7 +1849,7 @@ async def test_model_connection(
         )
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
+            model_info=resolved_model_info if resolved_model_info is not None else (model_info or {}),
             litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)

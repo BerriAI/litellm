@@ -697,6 +697,71 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_respects_health_check_supports_max_tokens():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/29266.
+
+    When model_info.health_check_supports_max_tokens is False, the outgoing
+    request must not include max_tokens. Previously model_info={} was hardcoded
+    in the call to _update_litellm_params_for_health_check, so the flag was
+    silently dropped and max_tokens: 5 was always injected for chat mode.
+    """
+    mock_request = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+    mock_prisma_client = MagicMock()
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+    mock_router.get_model_list.return_value = []
+    mock_can_user_make_model_call = AsyncMock()
+    mock_ahealth_check = AsyncMock(return_value={"status": "healthy"})
+    mock_run_with_timeout = AsyncMock(return_value={"status": "healthy"})
+
+    def mock_reject_os_environ(params):
+        return None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            mock_reject_os_environ,
+        ),
+    ):
+        await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake-key",
+                "api_base": "https://fake.invalid",
+            },
+            model_info={"health_check_supports_max_tokens": False},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    model_params = mock_ahealth_check.call_args.kwargs.get("model_params", {})
+    assert "max_tokens" not in model_params, (
+        "max_tokens must not be sent when health_check_supports_max_tokens is False; "
+        f"got model_params={model_params}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
