@@ -102,11 +102,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     def _get_file_bound_batch_model(self, data: Dict) -> Optional[str]:
         """Resolve the model bound to the batch input file ID.
 
-        The model embedded in a ``file-<base64>`` ID or a unified managed
-        file's target model is fixed when the file is created, so it reflects
-        the model the batch will actually run. Unlike the client-supplied
-        top-level ``model`` field, it cannot be swapped per request to point a
-        skip decision at a deployment the JSONL never routes to.
+        Used only as a fallback routing model when the request omits a
+        top-level ``model``; the provider is then read from that deployment's
+        trusted credentials for the provider-level skip decision.
         """
         input_file_id = data.get("input_file_id")
         if not isinstance(input_file_id, str) or not input_file_id:
@@ -168,16 +166,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         provider = credentials.get("custom_llm_provider")
         return provider if isinstance(provider, str) and provider else None
 
-    def _matches_skip_list(self, value: str, skip_list: List[str]) -> bool:
-        if not skip_list:
-            return False
-        for entry in skip_list:
-            if not isinstance(entry, str) or not entry:
-                continue
-            if value == entry or value.startswith(f"{entry}/"):
-                return True
-        return False
-
     def _create_batch_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -197,21 +185,25 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Tuple[bool, Optional[List["RateLimitDescriptor"]]]:
         """
-        Skip downloading batch input files when configured or when there is
-        nothing to enforce (no applicable rate limits and no model allowlist).
+        Skip downloading batch input files when the operator disabled batch
+        input-file rate limiting, when the batch runs entirely on a skip-listed
+        provider, or when there is nothing to enforce (no applicable rate
+        limits).
 
-        When the caller's key has a model allowlist to enforce, no skip path
-        is honored: the JSONL must still be downloaded so
+        A skip is only honored for keys with unrestricted model access. When
+        the key has a model allowlist, the JSONL must still be downloaded so
         ``_enforce_batch_file_model_access`` can validate every ``body.model``
-        entry. Otherwise a restricted key could smuggle unauthorized models
-        into the file via an admin-configured skip (global disable,
-        per-model, per-provider).
+        entry, otherwise a restricted key could smuggle unauthorized models
+        into the file via an admin-configured skip.
 
-        The per-model skip is matched against the file-bound model only, never
-        the client-supplied top-level ``model``. The latter selects routing
-        credentials but not the models the batch runs (those are the JSONL
-        ``body.model`` entries), so honoring it would let a caller name a
-        skip-listed deployment while routing a different, rate-limited model.
+        The skip is never keyed on a specific model name. The models a batch
+        actually runs are its JSONL ``body.model`` entries, and any model
+        identifier the caller can influence (the top-level ``model`` or the
+        unsigned model embedded in a ``file-...`` id) can be pointed at a
+        skip-listed deployment while the file routes a different, rate-limited
+        model. The provider skip is safe because the provider is read from the
+        routing deployment's trusted credentials and the batch is constrained
+        to run on that provider.
 
         Returns ``(should_skip, descriptors)`` where ``descriptors`` is the
         rate-limit descriptor list computed for the no-limits check, so the
@@ -223,16 +215,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         from litellm.proxy.proxy_server import general_settings
 
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
-            return True, None
-
-        skip_models = (
-            general_settings.get("skip_batch_input_file_rate_limiting_for_models") or []
-        )
-        file_bound_model = self._get_file_bound_batch_model(data)
-        if file_bound_model and self._matches_skip_list(file_bound_model, skip_models):
-            verbose_proxy_logger.debug(
-                f"Skipping batch input file processing for model={file_bound_model}"
-            )
             return True, None
 
         skip_providers = (

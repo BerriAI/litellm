@@ -571,14 +571,6 @@ def test_get_batch_routing_model_uses_unified_file_id_target():
         )
 
 
-def test_matches_skip_list_handles_empty_and_entry_shapes():
-    rate_limiter = _make_rate_limiter()
-    assert rate_limiter._matches_skip_list("gpt-4o", []) is False
-    assert rate_limiter._matches_skip_list("gpt-4o", ["gpt-4o"]) is True
-    assert rate_limiter._matches_skip_list("vertex_ai/gemini", ["vertex_ai"]) is True
-    assert rate_limiter._matches_skip_list("gpt-4o", [None, "", "claude"]) is False
-
-
 def test_key_requires_batch_model_access_check_branches():
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
@@ -660,12 +652,19 @@ def test_should_skip_ignores_client_supplied_metadata_flag():
     assert should_skip is False
 
 
-def test_should_skip_honors_per_model_skip_list():
-    """The per-model skip fires for a model bound to the input file ID (here a
-    model-embedded ``file-<base64>``), which reflects the model the batch runs."""
+def test_should_not_skip_for_forged_model_embedded_file_id():
+    """A ``file-<base64>`` id embeds an unsigned model name the caller fully
+    controls, so a caller can re-encode any accessible provider file id with a
+    skip-listed model while the JSONL still routes rate-limited ``body.model``
+    entries. The per-model skip must therefore never fire: with applicable rate
+    limits, a forged skip-listed file-bound model still falls through to file
+    processing and counter enforcement."""
     import base64
 
     rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     encoded = (
         base64.urlsafe_b64encode(b"litellm:file-xyz;model,gpt-4o-mini")
@@ -682,15 +681,15 @@ def test_should_skip_honors_per_model_skip_list():
                 user_api_key_dict=user,
             )
         )
-    assert should_skip is True
-    assert descriptors is None
+    assert should_skip is False
+    assert descriptors is not None
 
 
-def test_should_not_skip_per_model_for_spoofed_top_level_model():
+def test_should_not_skip_for_skip_listed_top_level_model():
     """A caller must not bypass batch rate limits by naming a skip-listed model
     in the top-level ``model`` while routing a different model through the JSONL
-    ``body.model`` entries. The per-model skip only trusts the file-bound model,
-    so a skip-listed top-level model over a plain file still gets processed."""
+    ``body.model`` entries. No per-model skip exists, so a skip-listed model over
+    a plain file still gets processed."""
     rate_limiter = _make_rate_limiter()
     rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
