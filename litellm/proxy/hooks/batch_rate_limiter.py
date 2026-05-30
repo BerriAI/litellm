@@ -332,7 +332,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     detail={
                         "error": (
                             "Batch input file references a model the caller is "
-                            f"not authorized to use: model={model}, reason={str(e)}"
+                            f"not authorized to use: model={model_to_check}, reason={str(e)}"
                         )
                     },
                 )
