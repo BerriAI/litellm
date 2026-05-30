@@ -193,7 +193,7 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match = re.match(r"(\d+)([a-z]+)", duration)
+    match = re.fullmatch(r"(\d+)(mo|[smhdw])", duration)
     if not match:
         return None, None
 
