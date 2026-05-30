@@ -64,6 +64,9 @@ HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE = "http.response.status_code"
 HTTP_ROUTE_ATTRIBUTE = "http.route"
 URL_PATH_ATTRIBUTE = "url.path"
 PREPROCESSING_DURATION_MS_ATTRIBUTE = "litellm.preprocessing.duration_ms"
+TEAM_METADATA_ATTRIBUTE = "litellm.team.metadata"
+MODEL_GROUP_ATTRIBUTE = "litellm.model_group"
+PROVIDER_MODEL_ATTRIBUTE = "litellm.provider.model"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -1213,6 +1216,68 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         ):
             self._set_team_attributes_from_kwargs(proxy_span, kwargs)
 
+    def _set_inference_identity_attributes(
+        self,
+        span: Span,
+        standard_logging_payload: StandardLoggingPayload,
+        litellm_params: dict,
+    ) -> None:
+        """Stamp request-identity attributes onto an inference span so every
+        LLM-call span is filterable by the route it came in on, the team's
+        metadata, and both the user-facing (model_group alias) and the
+        dispatched (provider) model names. Empty/absent values are skipped.
+        """
+        metadata = standard_logging_payload.get("metadata") or {}
+
+        http_route = metadata.get("user_api_key_request_route")
+        if http_route:
+            self.safe_set_attribute(
+                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
+            )
+
+        # ``user_api_key_team_metadata`` is dropped from the standard logging
+        # payload metadata, so read it from the raw request metadata in kwargs.
+        # ``metadata`` and ``litellm_metadata`` are alternate names for the same
+        # full metadata dict (the name varies by endpoint), so first-truthy wins.
+        raw_metadata = (
+            litellm_params.get("metadata")
+            or litellm_params.get("litellm_metadata")
+            or {}
+        )
+        team_metadata = self._team_metadata_json(
+            raw_metadata.get("user_api_key_team_metadata")
+        )
+        if team_metadata:
+            self.safe_set_attribute(
+                span=span, key=TEAM_METADATA_ATTRIBUTE, value=team_metadata
+            )
+
+        model_group = standard_logging_payload.get("model_group")
+        if model_group:
+            self.safe_set_attribute(
+                span=span, key=MODEL_GROUP_ATTRIBUTE, value=model_group
+            )
+
+        hidden_params = standard_logging_payload.get("hidden_params") or {}
+        provider_model = hidden_params.get(
+            "litellm_model_name"
+        ) or standard_logging_payload.get("model")
+        if provider_model:
+            self.safe_set_attribute(
+                span=span, key=PROVIDER_MODEL_ATTRIBUTE, value=provider_model
+            )
+
+    @staticmethod
+    def _team_metadata_json(value: Any) -> Optional[str]:
+        """JSON-serialize a team's metadata dict for a single span attribute.
+
+        Returns ``None`` for a missing, non-dict, or empty mapping so the
+        empty case is dropped rather than stamping a useless ``"{}"``.
+        """
+        if not isinstance(value, dict) or not value:
+            return None
+        return safe_dumps(value)
+
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
@@ -2023,6 +2088,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     key="hidden_params",
                     value=safe_dumps(hidden_params),
                 )
+
+            self._set_inference_identity_attributes(
+                span=span,
+                standard_logging_payload=standard_logging_payload,
+                litellm_params=litellm_params,
+            )
             # Cost breakdown tracking
             cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
                 "cost_breakdown"
