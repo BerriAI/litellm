@@ -892,6 +892,7 @@ class MCPServerManager:
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            submitted_by=getattr(mcp_server, "submitted_by", None),
             # AWS SigV4 fields
             aws_access_key_id=aws_creds.get("aws_access_key_id"),
             aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
@@ -995,6 +996,18 @@ class MCPServerManager:
             if server.allow_all_keys is True
         ]
 
+    def get_server_ids_submitted_by(self, user_id: str) -> List[str]:
+        """Return server IDs that ``user_id`` submitted.
+
+        A user who submits a server for review keeps visibility of it after an
+        admin approves it, even if no access group grants them access.
+        """
+        return [
+            server.server_id
+            for server in self.get_registry().values()
+            if server.submitted_by == user_id
+        ]
+
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
@@ -1052,6 +1065,15 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+                submitter_user_id = (
+                    getattr(user_api_key_auth, "user_id", None)
+                    if user_api_key_auth
+                    else None
+                )
+                if submitter_user_id:
+                    combined_servers.update(
+                        self.get_server_ids_submitted_by(submitter_user_id)
+                    )
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
