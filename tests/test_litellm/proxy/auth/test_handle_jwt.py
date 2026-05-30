@@ -189,6 +189,82 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
 
 
 @pytest.mark.asyncio
+async def test_find_team_with_model_access_uses_request_method_for_passthrough_auth():
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    team = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["gpt-4"],
+        metadata={},
+    )
+    mock_registered_routes = {
+        "test-uuid-1:exact:/custom:GET": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["GET"],
+            "passthrough_params": {"dependencies": None},
+        },
+        "test-uuid-2:exact:/custom:POST": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom",
+            "type": "exact",
+            "methods": ["POST"],
+            "passthrough_params": {"dependencies": [object()]},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids={"team-a"},
+            requested_model=None,
+            route="/custom",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request_method="GET",
+        )
+        assert team_id == "team-a"
+        assert team_obj == team
+
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_team_with_model_access(
+                team_ids={"team-a"},
+                requested_model=None,
+                route="/custom",
+                jwt_handler=jwt_handler,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+                request_method="POST",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_proxy_admin_user_role():
     """Test that is_proxy_admin is True when user_object.user_role is PROXY_ADMIN"""
     # Setup test data

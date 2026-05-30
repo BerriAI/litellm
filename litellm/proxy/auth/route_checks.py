@@ -103,6 +103,8 @@ class RouteChecks:
         if len(valid_token.allowed_routes) == 0:
             return True
 
+        denied_auth_enforced_pass_through_route = False
+
         # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in valid_token.allowed_routes:
             if RouteChecks._route_matches_allowed_route(
@@ -129,6 +131,7 @@ class RouteChecks:
                                 route=route, user_api_key_dict=valid_token
                             ):
                                 return True
+                            denied_auth_enforced_pass_through_route = True
                         else:
                             return True
 
@@ -151,6 +154,7 @@ class RouteChecks:
                                     route=route, user_api_key_dict=valid_token
                                 ):
                                     return True
+                                denied_auth_enforced_pass_through_route = True
                             else:
                                 return True
 
@@ -175,6 +179,11 @@ class RouteChecks:
                 route=route, pattern=allowed_route
             ):
                 return True
+
+        if denied_auth_enforced_pass_through_route:
+            RouteChecks._require_auth_pass_through_access(
+                route=route, valid_token=valid_token
+            )
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

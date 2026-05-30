@@ -917,6 +917,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             proxy_logging_obj=proxy_logging_obj,
                             parent_otel_span=parent_otel_span,
                             request_headers=_safe_get_request_headers(request),
+                            request_method=RouteChecks._get_request_method(
+                                request=request
+                            ),
                         )
 
                     is_proxy_admin = result["is_proxy_admin"]

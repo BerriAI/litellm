@@ -783,6 +783,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
                 valid_token=valid_token,
             )
         assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
 
 
 def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():

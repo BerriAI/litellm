@@ -1120,10 +1120,14 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        request_method: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
+        normalized_request_method = (
+            request_method.upper() if isinstance(request_method, str) else None
+        )
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
@@ -1163,7 +1167,8 @@ class JWTAuthManager:
                         if (
                             is_allowed
                             and RouteChecks.is_auth_enforced_pass_through_route(
-                                route=route
+                                route=route,
+                                method=normalized_request_method,
                             )
                         ):
                             # JWT team selection is team-scoped; key metadata is not
@@ -1619,6 +1624,7 @@ class JWTAuthManager:
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         request_headers: Optional[dict] = None,
+        request_method: Optional[str] = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
@@ -1755,6 +1761,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                request_method=request_method,
             )
         # Extract alias fields for resolution (if configured)
         org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
