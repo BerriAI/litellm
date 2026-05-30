@@ -503,3 +503,34 @@ describe("MCPServerEdit (instructions, Bug #14)", () => {
     expect(payload.instructions).toBe("Updated guidance.");
   });
 });
+
+describe("MCPServerEdit (tool display name validation, Bug #10)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("blocks save when a tool display name contains invalid characters", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          tool_name_to_display_name: { some_tool: "Bad Name" },
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+});

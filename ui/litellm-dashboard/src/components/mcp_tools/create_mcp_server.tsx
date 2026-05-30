@@ -14,7 +14,7 @@ import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, findInvalidToolDisplayName, TOOL_DISPLAY_NAME_ERROR } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -280,6 +280,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
+    const invalidDisplayName = findInvalidToolDisplayName(toolNameToDisplayName);
+    if (invalidDisplayName) {
+      NotificationsManager.fromBackend(
+        `Invalid display name "${invalidDisplayName.displayName}" for tool "${invalidDisplayName.toolName}". ${TOOL_DISPLAY_NAME_ERROR}`,
+      );
+      setIsLoading(false);
+      return;
+    }
     try {
       const {
         static_headers: staticHeadersList,
