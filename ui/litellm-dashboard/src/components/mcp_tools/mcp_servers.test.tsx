@@ -431,4 +431,38 @@ describe("MCPServers", () => {
     // The server list refresh must NOT trigger a second health check
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
   });
+
+  it("hides the Network Settings tab for non-admin roles", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} userRole="internal_user" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByRole("tab", { name: "Network Settings" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the Network Settings tab for admin roles", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} userRole="Admin" />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByRole("tab", { name: "Network Settings" }),
+    ).toBeInTheDocument();
+  });
 });

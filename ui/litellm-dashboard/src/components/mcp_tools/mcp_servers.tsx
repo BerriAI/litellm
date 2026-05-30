@@ -354,7 +354,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
-            <Tab>Network Settings</Tab>
+            {isAdminRole(userRole) && <Tab>Network Settings</Tab>}
             {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
           </div>
         </TabList>
@@ -439,9 +439,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPSemanticFilterSettings accessToken={accessToken} />
           </TabPanel>
-          <TabPanel>
-            <MCPNetworkSettings accessToken={accessToken} />
-          </TabPanel>
+          {isAdminRole(userRole) && (
+            <TabPanel>
+              <MCPNetworkSettings accessToken={accessToken} />
+            </TabPanel>
+          )}
           {isAdminRole(userRole) && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />
