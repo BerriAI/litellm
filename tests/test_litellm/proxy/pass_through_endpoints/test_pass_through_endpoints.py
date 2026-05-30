@@ -539,6 +539,7 @@ async def test_pass_through_handler_rejects_unregistered_method():
     request.method = "GET"
 
     with (
+        patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}),
         patch(
             "litellm.proxy.auth.auth_utils.get_request_route",
             return_value="/test/path",
