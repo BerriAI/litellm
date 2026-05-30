@@ -1973,8 +1973,10 @@ class AmazonConverseConfig(BaseConfig):
                         if isinstance(_text, str):
                             block_text += _text
 
+            block_offset = content_offset
             if block_text:
                 citations_text_parts.append(block_text)
+                content_offset += len(block_text)
 
             raw_citations = citations_block.get("citations")
             if not isinstance(raw_citations, list):
@@ -2001,15 +2003,13 @@ class AmazonConverseConfig(BaseConfig):
                     ChatCompletionAnnotation(
                         type="url_citation",
                         url_citation={
-                            "start_index": content_offset + start,
-                            "end_index": content_offset + end,
+                            "start_index": block_offset + start,
+                            "end_index": block_offset + end,
                             "title": str(citation.get("title") or ""),
                             "url": str(citation.get("source") or ""),
                         },
                     )
                 )
-
-            content_offset += len(block_text)
 
         citations_text = "".join(citations_text_parts) if citations_text_parts else None
         return citations_text, annotations or None

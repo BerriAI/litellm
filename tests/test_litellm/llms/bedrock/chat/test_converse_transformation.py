@@ -4852,6 +4852,92 @@ def test_transform_response_citation_null_source_title_become_empty_strings():
     assert annotation["url_citation"]["title"] == ""
 
 
+def test_transform_response_citations_offset_tracks_text_only_blocks():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    leading_text = "First sentence without a citation. "
+    cited_text = "Apptio is a company that makes calls to Bedrock"
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": leading_text}],
+                        }
+                    },
+                    {
+                        "citationsContent": {
+                            "content": [{"text": cited_text}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": len(cited_text),
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    expected_start = len(leading_text)
+    assert message.content == leading_text + cited_text
+    assert (
+        message.content[expected_start : expected_start + len(cited_text)] == cited_text
+    )
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == expected_start
+    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(
+        cited_text
+    )
+
+
 def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
     from litellm.types.utils import ModelResponse
