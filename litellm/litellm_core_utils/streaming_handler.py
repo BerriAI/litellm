@@ -1835,8 +1835,10 @@ class CustomStreamWrapper:
                     processed_chunk, None, None, cache_hit
                 )
             )
-        ## SYNC LOGGING
-        self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
+        ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
+        litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
+        if self.logging_obj._is_sync_litellm_request(litellm_params):
+            self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -2231,21 +2233,17 @@ class CustomStreamWrapper:
                         cache_hit,
                     )
                 else:
+                    # prefer_async_handlers routes CustomLogger to async_success_handler
+                    # when consumers use ``async for`` on sync-SDK streams. Legacy string
+                    # callbacks still run via executor.submit inside dispatch_success_handlers.
                     asyncio.create_task(
-                        self.logging_obj.async_success_handler(
+                        self.logging_obj.dispatch_success_handlers(
                             complete_streaming_response,
                             cache_hit=cache_hit,
                             start_time=None,
                             end_time=None,
+                            prefer_async_handlers=True,
                         )
-                    )
-
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        complete_streaming_response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
                     )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
