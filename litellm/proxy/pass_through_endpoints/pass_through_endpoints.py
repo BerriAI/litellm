@@ -2514,8 +2514,12 @@ class InitPassThroughEndpointHelpers:
                     InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
 
-                # Get the methods for this route
+                # Get the methods for this route. Prefer the registered metadata,
+                # but keep supporting test fixtures / older registry entries that
+                # only encoded methods in the route key.
                 route_methods = _registered_pass_through_routes[key].get("methods", [])
+                if not route_methods and len(parts) == 4:
+                    route_methods = parts[3].split(",")
 
                 # Check if path matches
                 path_matches = False

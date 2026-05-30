@@ -1124,6 +1124,8 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
+        denied_auth_enforced_pass_through_route = False
+
         if not team_ids:
             if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
                 raise HTTPException(
@@ -1158,6 +1160,22 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
+                        if (
+                            is_allowed
+                            and RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route
+                            )
+                        ):
+                            # JWT team selection is team-scoped; key metadata is not
+                            # available here, so passthrough access is granted only by
+                            # the selected team's metadata.
+                            is_allowed = RouteChecks.check_passthrough_route_access(
+                                route=route,
+                                user_api_key_dict=UserAPIKeyAuth(
+                                    team_metadata=team_object.metadata or {}
+                                ),
+                            )
+                            denied_auth_enforced_pass_through_route = not is_allowed
                         verbose_proxy_logger.debug(
                             f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
@@ -1165,6 +1183,15 @@ class JWTAuthManager:
                             return team_id, team_object
             except Exception:
                 continue
+
+        if denied_auth_enforced_pass_through_route:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Team not allowed to access passthrough route {route}. "
+                    "Configure `allowed_passthrough_routes` on the team."
+                ),
+            )
 
         if requested_model:
             raise HTTPException(

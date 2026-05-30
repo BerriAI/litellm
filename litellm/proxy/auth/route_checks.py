@@ -121,7 +121,16 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        return True
+                        if RouteChecks.is_auth_enforced_pass_through_route(
+                            route=route,
+                            method=RouteChecks._get_request_method(request=request),
+                        ):
+                            if RouteChecks.check_passthrough_route_access(
+                                route=route, user_api_key_dict=valid_token
+                            ):
+                                return True
+                        else:
+                            return True
 
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
@@ -134,7 +143,16 @@ class RouteChecks:
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                             route=route
                         ):
-                            return True
+                            if RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            ):
+                                if RouteChecks.check_passthrough_route_access(
+                                    route=route, user_api_key_dict=valid_token
+                                ):
+                                    return True
+                            else:
+                                return True
 
                         # Method-aware carve-out: allow GET on the two
                         # read-only MCP-server discovery endpoints
@@ -228,7 +246,14 @@ class RouteChecks:
             route=route,
         )
 
-        if RouteChecks.is_llm_api_route(route=route):
+        if RouteChecks.is_auth_enforced_pass_through_route(
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+        ):
+            RouteChecks._require_auth_pass_through_access(
+                route=route, valid_token=valid_token
+            )
+        elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
@@ -623,6 +648,60 @@ class RouteChecks:
             return True
 
         return False
+
+    @staticmethod
+    def _get_request_method(request: Optional[Request]) -> Optional[str]:
+        if request is None:
+            return None
+
+        method = getattr(request, "method", None)
+        if not isinstance(method, str):
+            return None
+
+        return method.upper()
+
+    @staticmethod
+    def is_auth_enforced_pass_through_route(
+        route: str, method: Optional[str] = None
+    ) -> bool:
+        """
+        True for config/DB pass-through endpoints registered with auth=true.
+
+        These routes are injected into ``openai_routes`` for spend/budget hooks but
+        must not inherit blanket ``openai_routes`` RBAC; access is gated by
+        ``allowed_passthrough_routes`` on the key or team.
+        """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=route, method=method
+        )
+        if route_info is None:
+            return False
+        dependencies = route_info.get("passthrough_params", {}).get("dependencies")
+        return dependencies is not None
+
+    @staticmethod
+    def _require_auth_pass_through_access(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        """
+        if RouteChecks.check_passthrough_route_access(
+            route=route, user_api_key_dict=valid_token
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team not allowed to access passthrough route {route}. "
+                "Configure `allowed_passthrough_routes` on the team or key."
+            ),
+        )
 
     @staticmethod
     def check_passthrough_route_access(
