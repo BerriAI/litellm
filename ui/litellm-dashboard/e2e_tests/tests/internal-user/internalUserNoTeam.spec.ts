@@ -23,18 +23,19 @@ test.describe("Internal User with no team memberships", () => {
     await page.getByRole("button", { name: /Create New Key/i }).click();
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    // Click the team dropdown and confirm no team options render. The
-    // dropdown's `notFoundContent` is "No teams found" when the user has no
-    // memberships and the search hasn't loaded anything.
     const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
     await teamSelect.click();
 
     const dropdown = page.locator(".ant-select-dropdown:visible").first();
     await expect(dropdown).toBeVisible({ timeout: 5_000 });
 
-    // Either explicit "No teams found" copy or zero option rows — both are
-    // valid renderings of an empty dropdown.
-    const optionCount = await dropdown.getByRole("option").count();
-    expect(optionCount).toBe(0);
+    // Wait for the settled-empty state, not a transient one. The dropdown shows
+    // a spinner while teams load and only swaps in "No teams found" once the
+    // request resolves with nothing (team_dropdown.tsx renders the spinner when
+    // isLoading and this copy otherwise). Asserting on it means a regression
+    // where teams DO load for this user fails here instead of racing a one-shot
+    // count() against an in-flight request.
+    await expect(dropdown.getByText("No teams found")).toBeVisible({ timeout: 10_000 });
+    await expect(dropdown.getByRole("option")).toHaveCount(0);
   });
 });
