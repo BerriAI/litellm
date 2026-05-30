@@ -232,7 +232,7 @@ class OllamaConfig(BaseConfig):
           "name": "mistral"
         }'
         """
-        return OllamaModelInfo().get_runtime_model_info(
+        return OllamaModelInfo().get_model_info(
             model=model, api_base=api_base, api_key=api_key
         )
 

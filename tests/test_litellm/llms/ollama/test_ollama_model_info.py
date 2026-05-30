@@ -231,7 +231,7 @@ class TestOllamaGetModelInfo:
 
         config = OllamaConfig()
         result = config.get_model_info(
-            "llama3", api_base="http://my-remote-server:11434"
+            "my-custom-model", api_base="http://my-remote-server:11434"
         )
 
         assert captured_urls[0] == "http://my-remote-server:11434/api/show"
@@ -254,7 +254,7 @@ class TestOllamaGetModelInfo:
         monkeypatch.setenv("OLLAMA_API_KEY", "env-api-key")
 
         config = OllamaConfig()
-        config.get_model_info("llama3")
+        config.get_model_info("my-custom-model")
 
         assert captured_urls[0] == "http://env-server:11434/api/show"
         assert captured_headers[0] == {"Authorization": "Bearer env-api-key"}
@@ -275,7 +275,7 @@ class TestOllamaGetModelInfo:
 
         config = OllamaConfig()
         config.get_model_info(
-            "llama3",
+            "my-custom-model",
             api_base="http://my-remote-server:11434",
             api_key="explicit-api-key",
         )
@@ -358,7 +358,9 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        config.get_model_info("llama3", api_base="http://localhost:11434/api/generate")
+        config.get_model_info(
+            "my-custom-model", api_base="http://localhost:11434/api/generate"
+        )
 
         assert captured_urls[0] == "http://localhost:11434/api/show"
 
@@ -373,9 +375,11 @@ class TestOllamaGetModelInfo:
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
         config = OllamaConfig()
-        result = config.get_model_info("llama3", api_base="http://unreachable:11434")
+        result = config.get_model_info(
+            "my-custom-model", api_base="http://unreachable:11434"
+        )
 
-        assert result["key"] == "llama3"
+        assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
         assert result["input_cost_per_token"] == 0.0
         assert result["output_cost_per_token"] == 0.0
@@ -394,11 +398,27 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        config.get_model_info("ollama/llama3", api_base="http://localhost:11434")
-        assert captured_json[0]["name"] == "llama3"
+        config.get_model_info(
+            "ollama/my-custom-model", api_base="http://localhost:11434"
+        )
+        assert captured_json[0]["name"] == "my-custom-model"
 
-        config.get_model_info("ollama_chat/llama3", api_base="http://localhost:11434")
-        assert captured_json[1]["name"] == "llama3"
+        config.get_model_info(
+            "ollama_chat/my-custom-model", api_base="http://localhost:11434"
+        )
+        assert captured_json[1]["name"] == "my-custom-model"
+
+    def test_get_model_info_skips_network_for_static_model(self, monkeypatch):
+        """Statically-priced models must not trigger an /api/show network call."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            raise AssertionError("Static Ollama model should not query /api/show")
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        assert config.get_model_info("ollama/llama2") is None
 
     def test_litellm_get_model_info_uses_provider_hook_for_unknown_model(
         self, monkeypatch
