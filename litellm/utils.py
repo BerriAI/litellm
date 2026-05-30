@@ -5673,7 +5673,6 @@ def _cached_get_model_info_helper(
     model: str,
     custom_llm_provider: Optional[str],
     api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
@@ -5684,7 +5683,6 @@ def _cached_get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
-        api_key=api_key,
     )
 
 
