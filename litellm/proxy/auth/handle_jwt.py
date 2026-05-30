@@ -1782,6 +1782,28 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+        # The RBAC role-claim path (rbac_role == TEAM) sets team_id without
+        # loading team_object, so fetch it here before gating an auth-enforced
+        # passthrough route on the team's allowed_passthrough_routes.
+        if (
+            team_id
+            and team_object is None
+            and RouteChecks.is_auth_enforced_pass_through_route(
+                route=route,
+                method=(
+                    request_method.upper() if isinstance(request_method, str) else None
+                ),
+            )
+        ):
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
+
         if team_id and not JWTAuthManager._team_has_passthrough_route_access(
             team_object=team_object,
             route=route,
