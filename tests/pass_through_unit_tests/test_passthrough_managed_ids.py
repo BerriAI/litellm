@@ -40,6 +40,7 @@ from litellm.proxy.pass_through_endpoints.managed_id_codec import (
 )
 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
     _canonical_path,
+    _passthrough_provider_marker,
     _resolve_one,
     is_passthrough_list_route,
     list_passthrough_ids_from_db,
@@ -946,6 +947,26 @@ class TestRewriteResponseIds:
         assert hook.store_unified_file_id.call_args.kwargs["file_object"] is None
 
     @pytest.mark.asyncio
+    async def test_file_create_persists_provider_marker_for_list_scope(self):
+        """The minted file row must carry the provider marker (it flows into
+        flat_model_file_ids), or the DB-pushed provider scope in
+        list_passthrough_ids_from_db would never match it."""
+        pc = _prisma_client()
+        hook = _managed_files_hook()
+        await rewrite_response_ids(
+            provider="azure",
+            method="POST",
+            route="/azure/openai/files",
+            body={"id": "file-abc123", "object": "file"},
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=hook,
+        )
+        mappings = hook.store_unified_file_id.call_args.kwargs["model_mappings"]
+        assert _passthrough_provider_marker("azure") in mappings.values()
+        assert _passthrough_provider_marker("openai") not in mappings.values()
+
+    @pytest.mark.asyncio
     async def test_batch_snapshot_stores_managed_nested_file_ids(self):
         """The persisted batch snapshot must carry the managed nested file ID so
         the list response matches the rewritten direct GET response."""
@@ -1206,13 +1227,45 @@ class TestFlagOff:
 
 
 def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
-    """Return a prisma_client whose find_many returns the given fake rows."""
+    """Return a prisma_client whose find_many honors the provider scope pushed
+    into the ``where`` clause, mirroring how Postgres would filter rows.
+
+    File rows are scoped via ``flat_model_file_ids: {has: <marker>}`` and object
+    rows via ``model_object_id: {startswith: passthrough:<provider>:}``; the mock
+    applies the same predicate so a test feeding mixed-provider rows exercises
+    the real DB-pushdown contract instead of an unscoped passthrough."""
     pc = _prisma_client()
 
+    def _file_filter(*args, where=None, take=None, **kwargs):
+        rows = list(file_rows or [])
+        marker = (where or {}).get("flat_model_file_ids", {}) or {}
+        marker = marker.get("has")
+        if marker is not None:
+            rows = [
+                r
+                for r in rows
+                if marker in (getattr(r, "flat_model_file_ids", None) or [])
+            ]
+        return rows if take is None else rows[:take]
+
+    def _batch_filter(*args, where=None, take=None, **kwargs):
+        rows = list(batch_rows or [])
+        prefix = (where or {}).get("model_object_id", {}) or {}
+        prefix = prefix.get("startswith")
+        if prefix is not None:
+            rows = [
+                r
+                for r in rows
+                if str(getattr(r, "model_object_id", "") or "").startswith(prefix)
+            ]
+        return rows if take is None else rows[:take]
+
     if file_rows is not None:
-        pc.db.litellm_managedfiletable.find_many = AsyncMock(return_value=file_rows)
+        pc.db.litellm_managedfiletable.find_many = AsyncMock(side_effect=_file_filter)
     if batch_rows is not None:
-        pc.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=batch_rows)
+        pc.db.litellm_managedobjecttable.find_many = AsyncMock(
+            side_effect=_batch_filter
+        )
     return pc
 
 
@@ -1224,6 +1277,12 @@ def _fake_file_row(
     row.created_by = created_by
     row.team_id = team_id
     row.file_object = {"filename": "test.jsonl", "bytes": 42, "purpose": "batch"}
+    payload = decode(unified_id)
+    row.flat_model_file_ids = (
+        [payload.raw_provider_id, _passthrough_provider_marker(payload.provider)]
+        if payload is not None
+        else []
+    )
 
     import datetime
 
@@ -1240,6 +1299,12 @@ def _fake_batch_row(
     row.team_id = team_id
     row.file_object = {"status": "completed", "input_file_id": "file-managed-1"}
     row.file_purpose = "batch"
+    payload = decode(unified_id)
+    row.model_object_id = (
+        f"passthrough:{payload.provider}:{payload.raw_provider_id}"
+        if payload is not None
+        else None
+    )
 
     import datetime
 
@@ -1325,9 +1390,12 @@ class TestListPassthroughIdsFromDb:
 
         assert result is not None
         assert len(result["data"]) == 2
-        # Verify the DB was called with empty where (unscoped = admin)
+        # Admin adds no owner scoping, but the provider scope is always pushed
+        # to the DB; the only where clause is the provider marker filter.
         call_kwargs = pc.db.litellm_managedfiletable.find_many.call_args.kwargs
-        assert call_kwargs["where"] == {}
+        assert call_kwargs["where"] == {
+            "flat_model_file_ids": {"has": _passthrough_provider_marker("openai")}
+        }
 
     @pytest.mark.asyncio
     async def test_list_files_user_scoped_where(self):
@@ -1422,39 +1490,18 @@ class TestListPassthroughIdsFromDb:
         assert result["data"] == []
 
     @pytest.mark.asyncio
-    async def test_list_has_more_true_when_scan_cap_hit_with_full_batch(self):
-        """
-        When the 20-iteration scan cap is exhausted and the last DB batch was
-        full-sized (indicating more rows exist), has_more must be True even if
-        we haven't accumulated fetch_limit matched rows yet.  Without this fix,
-        a high-mixed-provider pool returns has_more=False on a truncated page.
-        """
-        import datetime
-        from unittest.mock import AsyncMock
+    async def test_list_files_pushes_provider_scope_to_db(self):
+        """File listing scopes by provider at the DB level via the provider
+        marker in flat_model_file_ids, so a single query serves the page and a
+        mixed-provider pool can never truncate or leak the other provider.
 
-        # Simulate a pool of rows where every DB page is full (fetch_limit = 21)
-        # but ALL rows belong to "azure" — so an "openai" scan never matches any.
-        # After max_scans the last batch was still full, so has_more must be True.
-        fetch_limit = 21  # raw_limit=20 → fetch_limit=21
+        A large azure-only pool must return an empty openai page with
+        has_more=False in exactly one DB round-trip.
+        """
         azure_rows = [
-            _fake_file_row(new_managed_id("azure", f"file-{i}"))
-            for i in range(fetch_limit)
+            _fake_file_row(new_managed_id("azure", f"file-{i}")) for i in range(50)
         ]
-        # Shift created_at so repeated calls return "different" pages
-        for i, row in enumerate(azure_rows):
-            row.created_at = datetime.datetime(
-                2025, 1, 1, tzinfo=datetime.timezone.utc
-            ) - datetime.timedelta(seconds=i)
-
-        call_count = 0
-
-        async def always_full_azure_pages(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            return azure_rows  # always returns a full page of azure rows
-
-        pc = _prisma_with_list()
-        pc.db.litellm_managedfiletable.find_many = always_full_azure_pages
+        pc = _prisma_with_list(file_rows=azure_rows)
 
         result = await list_passthrough_ids_from_db(
             provider="openai",  # asking for openai but DB only has azure rows
@@ -1465,9 +1512,13 @@ class TestListPassthroughIdsFromDb:
         )
 
         assert result is not None
-        # No openai-matched rows, but scan cap was hit with a full last batch
-        assert result["has_more"] is True
         assert result["data"] == []
+        assert result["has_more"] is False
+        where = pc.db.litellm_managedfiletable.find_many.call_args.kwargs["where"]
+        assert where["flat_model_file_ids"] == {
+            "has": _passthrough_provider_marker("openai")
+        }
+        assert pc.db.litellm_managedfiletable.find_many.await_count == 1
 
     @pytest.mark.asyncio
     async def test_list_ignores_cross_provider_cursor(self):
@@ -1560,66 +1611,3 @@ class TestListPassthroughIdsFromDb:
         where = pc.db.litellm_managedobjecttable.find_many.call_args.kwargs["where"]
         assert where["model_object_id"] == {"startswith": "passthrough:azure:"}
         assert pc.db.litellm_managedobjecttable.find_many.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_list_files_scan_does_not_skip_same_timestamp_rows(self):
-        """Files have no DB provider column, so the scan filters by provider in
-        the application layer and pages through the DB.  Several rows can share a
-        created_at timestamp; when a non-matching row sits on the first page
-        boundary, advancing by a created_at cursor would drop every matching row
-        that shares that timestamp.  Offset paging must still return them all."""
-        import datetime
-
-        t1 = datetime.datetime(2025, 1, 3, tzinfo=datetime.timezone.utc)
-        t2 = datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc)
-        t3 = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
-
-        def _row(provider: str, raw: str, created_at):
-            row = _fake_file_row(new_managed_id(provider, raw))
-            row.created_at = created_at
-            return row
-
-        # Canonical newest->oldest. The three t2 rows tie on the timestamp and the
-        # only openai row in that tie sits just past the first page (fetch_limit=3).
-        rows = [
-            _row("azure", "file-a", t1),
-            _row("azure", "file-b", t2),
-            _row("azure", "file-c", t2),
-            _row("openai", "file-d", t2),
-            _row("openai", "file-e", t3),
-        ]
-
-        async def fake_find_many(where=None, order=None, take=None, skip=0):
-            where = where or {}
-            out = list(rows)
-            created_at = where.get("created_at")
-            if isinstance(created_at, dict):
-                if "lt" in created_at:
-                    out = [r for r in out if r.created_at < created_at["lt"]]
-                if "gt" in created_at:
-                    out = [r for r in out if r.created_at > created_at["gt"]]
-                if "lte" in created_at:
-                    out = [r for r in out if r.created_at <= created_at["lte"]]
-                if "gte" in created_at:
-                    out = [r for r in out if r.created_at >= created_at["gte"]]
-            out.sort(key=lambda r: r.created_at, reverse=True)
-            out = out[skip:]
-            if take is not None:
-                out = out[:take]
-            return out
-
-        pc = _prisma_with_list()
-        pc.db.litellm_managedfiletable.find_many = fake_find_many
-
-        result = await list_passthrough_ids_from_db(
-            provider="openai",
-            route="/openai/v1/files",
-            user_api_key_dict=_admin_user(),
-            prisma_client=pc,
-            query_params={"limit": "2"},
-        )
-
-        assert result is not None
-        returned = {item["id"] for item in result["data"]}
-        assert returned == {rows[3].unified_file_id, rows[4].unified_file_id}
-        assert result["has_more"] is False

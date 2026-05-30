@@ -171,6 +171,16 @@ def _passthrough_sentinel_model_id(provider: str) -> str:
     return f"_passthrough_{provider}"
 
 
+# Key under which the provider marker is stored in a file row's model_mappings.
+# Its value lands in flat_model_file_ids (built from model_mappings.values()),
+# giving the file table a DB-queryable provider scope it otherwise lacks.
+_PASSTHROUGH_PROVIDER_MARKER_KEY = "_passthrough_provider_marker"
+
+
+def _passthrough_provider_marker(provider: str) -> str:
+    return f"_passthrough_provider:{provider}"
+
+
 def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
     payload = decode(unified_id)
     return payload is not None and payload.provider == provider
@@ -435,7 +445,12 @@ async def _mint_or_reuse_file(
                     file_object_snapshot, managed_id
                 ),
                 litellm_parent_otel_span=None,
-                model_mappings={_passthrough_sentinel_model_id(provider): raw_id},
+                model_mappings={
+                    _passthrough_sentinel_model_id(provider): raw_id,
+                    _PASSTHROUGH_PROVIDER_MARKER_KEY: _passthrough_provider_marker(
+                        provider
+                    ),
+                },
                 user_api_key_dict=user_api_key_dict,
             )
         except Exception:
@@ -761,24 +776,21 @@ async def _fetch_list_rows(
     where: Dict[str, Any],
     fetch_order: str,
     fetch_limit: int,
-    skip: int = 0,
 ) -> Optional[List[Any]]:
     # created_at is not unique, so a second sort on the unique id column gives a
-    # total order; the scan loop relies on it to advance by offset without
-    # skipping or repeating rows that share a created_at timestamp.
+    # total order, keeping the limit+1 page boundary and cursor deterministic
+    # across rows that share a created_at timestamp.
     try:
         if resource_kind == "files":
             return await prisma_client.db.litellm_managedfiletable.find_many(
                 where=where,
                 order=[{"created_at": fetch_order}, {"unified_file_id": fetch_order}],
                 take=fetch_limit,
-                skip=skip,
             )
         return await prisma_client.db.litellm_managedobjecttable.find_many(
             where={**where, "file_purpose": "batch"},
             order=[{"created_at": fetch_order}, {"unified_object_id": fetch_order}],
             take=fetch_limit,
-            skip=skip,
         )
     except Exception:
         verbose_proxy_logger.warning(
@@ -796,65 +808,36 @@ async def _fetch_provider_scoped_list_rows(
     raw_limit: int,
     fetch_limit: int,
 ) -> Tuple[List[Any], bool]:
-    """Fetch list rows scoped to *provider* by decoding each managed ID.
+    """Fetch one page of list rows scoped to *provider* at the DB level.
 
-    Always returns a (page, has_more) tuple — never ``None``.  A DB failure
-    returns the rows matched so far (fail-closed) rather than ``None``, which
-    would cause the caller to fall through to the upstream provider.
+    Both resource kinds carry a provider-distinguishing value that the query
+    filters on directly: object rows namespace ``model_object_id`` as
+    ``passthrough:{provider}:{raw}`` (see ``_mint_or_reuse_object``) and file
+    rows carry ``_passthrough_provider:{provider}`` in ``flat_model_file_ids``
+    (see ``_mint_or_reuse_file``), since the file table has no provider column.
+    Pushing the scope into the query means a single DB round-trip serves the
+    page, with no application-layer scanning that could truncate large pools.
+
+    A DB failure returns an empty page (fail closed) so the caller never falls
+    through to the upstream provider.
     """
-    matched: List[Any] = []
-    scan_where = dict(where)
-    id_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
-    # Object rows store model_object_id as "passthrough:{provider}:{raw}" (see
-    # _mint_or_reuse_object), so the provider scope is pushed down to the indexed
-    # DB column and the scan collapses to one query. File rows have no provider
-    # column and fall back to the application-layer decode filter below.
-    if resource_kind != "files":
-        scan_where["model_object_id"] = {"startswith": f"passthrough:{provider}:"}
-    max_scans = 20
-    last_batch_full = False  # True when the last DB page was full-sized
-    scanned = 0  # offset into the totally-ordered result set
+    scoped_where = dict(where)
+    if resource_kind == "files":
+        scoped_where["flat_model_file_ids"] = {
+            "has": _passthrough_provider_marker(provider)
+        }
+    else:
+        scoped_where["model_object_id"] = {"startswith": f"passthrough:{provider}:"}
 
-    for _ in range(max_scans):
-        batch = await _fetch_list_rows(
-            prisma_client, resource_kind, scan_where, fetch_order, fetch_limit, scanned
-        )
-        if batch is None:
-            # DB error — fail closed: return the rows matched so far.
-            verbose_proxy_logger.warning(
-                "managed_id_rewriter: list DB error mid-scan provider=%s kind=%s "
-                "— returning partial results to fail closed",
-                provider,
-                resource_kind,
-            )
-            last_batch_full = False
-            break
-        if not batch:
-            last_batch_full = False
-            break
-
-        scanned += len(batch)
-        last_batch_full = len(batch) >= fetch_limit
-
-        for row in batch:
-            if _managed_id_matches_provider(getattr(row, id_field), provider):
-                matched.append(row)
-
-        if len(matched) >= fetch_limit:
-            break
-
-        if not last_batch_full:
-            break
+    rows = await _fetch_list_rows(
+        prisma_client, resource_kind, scoped_where, fetch_order, fetch_limit
+    )
+    if rows is None:
+        return [], False
 
     effective_limit = min(raw_limit, 100)
-    # has_more is True when:
-    # 1. We accumulated more rows than the requested limit (normal path), OR
-    # 2. The scan cap was hit while the last DB page was still full-sized —
-    #    meaning unscanned rows almost certainly remain.  Without this,
-    #    high-mixed-provider pools would return has_more=False on a truncated page.
-    scan_cap_hit = len(matched) < fetch_limit and last_batch_full
-    has_more = len(matched) > effective_limit or scan_cap_hit
-    page = matched[:effective_limit]
+    has_more = len(rows) > effective_limit
+    page = rows[:effective_limit]
     if fetch_order == "asc":
         page = list(reversed(page))
     return page, has_more
