@@ -124,8 +124,7 @@ class MCPRequestHandler:
         )
 
         request_route = get_request_route(request)
-        # Only OAuth metadata routes registered under /.well-known/ are public.
-        if request_route.startswith("/.well-known/"):
+        if MCPRequestHandler._is_public_mcp_discovery_route(request_route):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
             not litellm_api_key
@@ -262,6 +261,27 @@ class MCPRequestHandler:
         return [servers_and_path]
 
     @staticmethod
+    def _is_public_mcp_discovery_route(request_route: str) -> bool:
+        """
+        True only for the registered OAuth discovery routes that are meant to be
+        unauthenticated. A bare ``startswith("/.well-known/")`` let a crafted
+        sub-path smuggle an anonymous session into tool execution, so match the
+        known discovery route families exactly while still allowing their
+        dynamic ``/{server_name}`` and ``/mcp/{server_name}`` suffixes. These are
+        the only ``/.well-known/`` routes the MCP server registers.
+        """
+        public_discovery_prefixes = (
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/openid-configuration",
+            "/.well-known/jwks.json",
+        )
+        return any(
+            request_route == prefix or request_route.startswith(prefix + "/")
+            for prefix in public_discovery_prefixes
+        )
+
+    @staticmethod
     def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
         """
         True only when EVERY MCP server the request targets is configured for
@@ -293,6 +313,13 @@ class MCPRequestHandler:
         for name in target_names:
             server = global_mcp_server_manager.get_mcp_server_by_name(name)
             if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+            # Never treat a failed auth as anonymous-passthrough for M2M
+            # (client_credentials) servers: LiteLLM fetches the upstream token
+            # itself using stored credentials, so allowing the fallback would
+            # let any caller invoke tools as the proxy's service account.
+            # Mirrors the exclusion in _target_servers_delegate_auth_to_upstream.
+            if server.has_client_credentials:
                 return False
         return True
 

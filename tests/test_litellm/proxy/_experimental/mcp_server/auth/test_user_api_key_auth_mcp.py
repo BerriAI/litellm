@@ -573,6 +573,7 @@ class TestMCPOAuth2AuthFlow:
 
         oauth2_server = MagicMock()
         oauth2_server.auth_type = MCPAuth.oauth2
+        oauth2_server.has_client_credentials = False  # interactive oauth2, not M2M
 
         with (
             patch(
@@ -732,6 +733,7 @@ class TestMCPOAuth2AuthFlow:
 
         oauth2_server = MagicMock()
         oauth2_server.auth_type = MCPAuth.oauth2
+        oauth2_server.has_client_credentials = False  # interactive oauth2, not M2M
 
         with (
             patch(
@@ -899,6 +901,7 @@ class TestMCPOAuth2FallbackTargetGating:
     def _make_server(auth_type):
         server = MagicMock()
         server.auth_type = auth_type
+        server.has_client_credentials = False  # interactive oauth2, not M2M
         return server
 
     async def test_fallback_blocked_when_target_is_not_oauth2(self):

@@ -465,6 +465,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=_client_ip,
                 host_progress_callback=host_progress_callback,
                 **data,  # for logging
             )
@@ -2353,6 +2354,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -2374,6 +2376,19 @@ if MCP_AVAILABLE:
                 await global_mcp_server_manager.get_allowed_mcp_servers(
                     user_api_key_auth=user_api_key_auth,
                 )
+            )
+
+            # Apply the same client-IP filter the discovery path uses, so an
+            # internal-only server (available_on_public_internet=false) that is
+            # hidden from tools/list cannot still be invoked via tools/call from
+            # an external IP. Falls open when the IP is unknown (internal calls).
+            if client_ip is None:
+                client_ip = _get_client_ip_from_context()
+            (
+                allowed_mcp_server_ids,
+                _ip_blocked_count,
+            ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+                allowed_mcp_server_ids, client_ip
             )
 
             allowed_mcp_servers: List[MCPServer] = []

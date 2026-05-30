@@ -2426,18 +2426,20 @@ class MCPServerManager:
 
     def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
         """
-        Check if the tool is allowed or banned for the given server
+        Check if the tool is allowed or banned for the given server.
+
+        Matching is case-insensitive to stay consistent with the case-insensitive
+        tool-listing filter (``_tool_name_matches``). Otherwise a denylist entry
+        whose casing differs from the upstream tool name would hide the tool from
+        tools/list yet still slip past this tools/call gate.
         """
+        candidates = {tool_name.lower(), f"{server.name}-{tool_name}".lower()}
         if server.allowed_tools:
-            return (
-                tool_name in server.allowed_tools
-                or f"{server.name}-{tool_name}" in server.allowed_tools
-            )
+            allowed = {t.lower() for t in server.allowed_tools}
+            return bool(candidates & allowed)
         if server.disallowed_tools:
-            return (
-                tool_name not in server.disallowed_tools
-                and f"{server.name}-{tool_name}" not in server.disallowed_tools
-            )
+            disallowed = {t.lower() for t in server.disallowed_tools}
+            return not (candidates & disallowed)
         return True
 
     def validate_allowed_params(
