@@ -556,18 +556,9 @@ async def _mint_or_reuse_object(
     # f"{purpose}:{provider}:{raw_id}" for the same reason.
     namespaced_model_object_id = f"passthrough:{provider}:{raw_id}"
 
-    # Dedup: look up by the namespaced key — guaranteed unique per provider.
-    try:
-        existing = await prisma_client.db.litellm_managedobjecttable.find_first(
-            where={"model_object_id": namespaced_model_object_id}
-        )
-    except Exception:
-        verbose_proxy_logger.debug(
-            "managed_id_rewriter: object dedup lookup failed", exc_info=True
-        )
-        existing = None
-
-    if existing is not None:
+    async def _reuse_existing(existing: Any, refresh_snapshot: bool) -> str:
+        """Resolve an already-persisted namespaced row: enforce the access
+        check, optionally refresh the snapshot, and return its managed ID."""
         if not can_access_resource(
             user_api_key_dict, existing.created_by, existing.team_id
         ):
@@ -591,27 +582,42 @@ async def _mint_or_reuse_object(
                 raw_id.split("_", 1)[0],
             )
             return raw_id
-        # Refresh the stored snapshot so DB-served list responses reflect
-        # the batch's latest state (e.g. output_file_id / error_file_id that
-        # were null at creation but populated once the batch completed).
-        try:
-            await prisma_client.db.litellm_managedobjecttable.update(
-                where={"unified_object_id": existing.unified_object_id},
-                data={
-                    "file_object": json.dumps(body_snapshot),
-                    "updated_by": user_api_key_dict.user_id,
-                },
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "managed_id_rewriter: object snapshot refresh failed",
-                exc_info=True,
-            )
+        if refresh_snapshot:
+            # Refresh the stored snapshot so DB-served list responses reflect
+            # the batch's latest state (e.g. output_file_id / error_file_id that
+            # were null at creation but populated once the batch completed).
+            try:
+                await prisma_client.db.litellm_managedobjecttable.update(
+                    where={"unified_object_id": existing.unified_object_id},
+                    data={
+                        "file_object": json.dumps(body_snapshot),
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: object snapshot refresh failed",
+                    exc_info=True,
+                )
         verbose_proxy_logger.debug(
             "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
             raw_id.split("_", 1)[0],
         )
         return existing.unified_object_id
+
+    # Dedup: look up by the namespaced key — guaranteed unique per provider.
+    try:
+        existing = await prisma_client.db.litellm_managedobjecttable.find_first(
+            where={"model_object_id": namespaced_model_object_id}
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "managed_id_rewriter: object dedup lookup failed", exc_info=True
+        )
+        existing = None
+
+    if existing is not None:
+        return await _reuse_existing(existing, refresh_snapshot=True)
 
     # No existing row — mint and upsert.
     managed_id = new_managed_id(provider, raw_id)
@@ -638,6 +644,19 @@ async def _mint_or_reuse_object(
             },
         )
     except Exception:
+        # A concurrent caller may have inserted the same namespaced row between
+        # our dedup lookup and this insert (model_object_id is @unique, so the
+        # loser's create hits a UniqueConstraintViolation). Re-read it and reuse
+        # the winner's managed ID so both callers converge on one ID instead of
+        # the loser silently keeping the raw id.
+        try:
+            raced = await prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"model_object_id": namespaced_model_object_id}
+            )
+        except Exception:
+            raced = None
+        if raced is not None:
+            return await _reuse_existing(raced, refresh_snapshot=False)
         # No row backs the minted ID, so every later resolve would 404. Fall
         # back to the raw id (as when no persistence is available) to keep the
         # caller's freshly-created resource reachable rather than orphaned.

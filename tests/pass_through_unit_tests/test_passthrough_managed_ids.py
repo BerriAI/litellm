@@ -810,6 +810,79 @@ class TestRewriteResponseIds:
         assert decode(result["id"]) is None
 
     @pytest.mark.asyncio
+    async def test_concurrent_create_converges_on_winner_managed_id(self):
+        """
+        Two callers minting the same namespaced object row race: the dedup lookup
+        finds nothing for both, but the @unique model_object_id lets only one
+        insert win. The loser's upsert raises, and it must re-read the winner's
+        row and return that managed ID rather than silently keeping the raw ID
+        (which would leave the two callers divergent for the same upstream batch).
+        """
+        pc = _prisma_client()
+        winner_managed_id = encode("openai", "winner-uuid", "batch_race")
+        winner_row = MagicMock()
+        winner_row.created_by = "user-1"
+        winner_row.team_id = "team-1"
+        winner_row.unified_object_id = winner_managed_id
+        # First (dedup) lookup misses; post-collision re-read finds the winner.
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=[None, winner_row]
+        )
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(
+            side_effect=Exception("UniqueConstraintViolation: model_object_id")
+        )
+
+        body = {"id": "batch_race", "object": "batch", "input_file_id": None}
+        result = await rewrite_response_ids(
+            provider="openai",
+            method="POST",
+            route="/openai/v1/batches",
+            body=body,
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+        # The loser converges on the winner's managed ID, not the raw batch ID.
+        assert result["id"] == winner_managed_id
+        assert decode(result["id"]).raw_provider_id == "batch_race"
+        assert pc.db.litellm_managedobjecttable.find_first.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_create_race_with_cross_owner_winner_retrieve_404(self):
+        """
+        If the row that wins the insert race on a non-create (retrieve) route is
+        owned by a different tenant, the loser must be denied with 404 rather
+        than handed the raw ID — the post-collision re-read runs the same access
+        check as the initial dedup hit.
+        """
+        from fastapi import HTTPException
+
+        pc = _prisma_client()
+        winner_row = MagicMock()
+        winner_row.created_by = "other-user"
+        winner_row.team_id = "other-team"
+        winner_row.unified_object_id = encode("openai", "other-uuid", "batch_race")
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=[None, winner_row]
+        )
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(
+            side_effect=Exception("UniqueConstraintViolation: model_object_id")
+        )
+
+        body = {"id": "batch_race", "object": "batch", "input_file_id": None}
+        with pytest.raises(HTTPException) as exc_info:
+            await rewrite_response_ids(
+                provider="openai",
+                method="GET",
+                route="/openai/v1/batches/batch_race",
+                body=body,
+                user_api_key_dict=_user("attacker", "attacker-team"),
+                prisma_client=pc,
+                managed_files_hook=None,
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_cross_provider_batch_collision_dedup_uses_namespaced_key(self):
         """
         When OpenAI already has a row for batch_shared, an Azure request must
