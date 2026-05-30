@@ -270,15 +270,23 @@ class MCPRequestHandler:
         dynamic ``/{server_name}`` and ``/mcp/{server_name}`` suffixes. These are
         the only ``/.well-known/`` routes the MCP server registers.
         """
-        public_discovery_prefixes = (
-            "/.well-known/oauth-authorization-server",
-            "/.well-known/oauth-protected-resource",
+        # Static discovery endpoints have no registered sub-paths, so match
+        # them exactly; a sub-path under them would be a smuggle attempt.
+        static_routes = (
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
         )
+        if request_route in static_routes:
+            return True
+        # Parameterized discovery routes carry a dynamic /{server_name} or
+        # /mcp/{server_name} suffix.
+        parameterized_prefixes = (
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-protected-resource",
+        )
         return any(
             request_route == prefix or request_route.startswith(prefix + "/")
-            for prefix in public_discovery_prefixes
+            for prefix in parameterized_prefixes
         )
 
     @staticmethod

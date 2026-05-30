@@ -57,6 +57,9 @@ def test_is_public_mcp_discovery_route_allows_only_known_families():
     assert not f("/.well-known/")
     assert not f("/.well-known/oauth-authorization-server-evil")  # prefix boundary
     assert not f("/mcp/tools/call")
+    # Static endpoints have no sub-paths; a sub-path is a smuggle attempt.
+    assert not f("/.well-known/jwks.json/anything")
+    assert not f("/.well-known/openid-configuration/anything")
 
 
 # --------------------------------------------------------------------------- #
@@ -171,11 +174,11 @@ async def test_public_mcp_hub_redacts_secrets():
         result = await get_mcp_servers()
 
     pub = result[0]
+    # Credential carriers and free-form metadata are dropped entirely on the
+    # unauthenticated hub.
     assert pub.url is None
     assert pub.spec_path is None
-    blob = json.dumps(pub.mcp_info)
-    assert "sk-mcp-info-secret" not in blob
-    assert pub.mcp_info["description"] == "a server"  # non-secret metadata kept
+    assert pub.mcp_info is None
 
 
 # --------------------------------------------------------------------------- #

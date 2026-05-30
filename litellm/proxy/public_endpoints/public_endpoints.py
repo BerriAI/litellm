@@ -233,23 +233,21 @@ async def get_agents():
     response_model=List[MCPPublicServer],
 )
 async def get_mcp_servers():
-    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
-    masker = SensitiveDataMasker()
     public_mcp_servers = global_mcp_server_manager.get_public_mcp_servers()
     servers = []
     for server in public_mcp_servers:
         public_server = MCPPublicServer(**server.model_dump())
         # This endpoint is unauthenticated. url / spec_path routinely embed an
-        # upstream API key, and mcp_info is free-form metadata that can carry
-        # tokens, so strip the credential carriers before exposing them.
+        # upstream API key, and mcp_info is free-form metadata whose arbitrary
+        # keys (e.g. apiKey, authHeader) can hold tokens that field-name masking
+        # would miss, so drop all three rather than try to redact them.
         public_server.url = None
         public_server.spec_path = None
-        if public_server.mcp_info:
-            public_server.mcp_info = masker.mask_dict(public_server.mcp_info)
+        public_server.mcp_info = None
         servers.append(public_server)
     return servers
 
