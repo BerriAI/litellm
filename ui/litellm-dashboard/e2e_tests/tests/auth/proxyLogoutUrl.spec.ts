@@ -2,15 +2,14 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 
 /**
- * Env-gated: only runs when the proxy is launched with PROXY_LOGOUT_URL set.
+ * Runs as part of the standard e2e suite: both `run_e2e.sh` and the CircleCI
+ * `e2e_ui_testing` job boot the proxy with PROXY_LOGOUT_URL=https://www.example.com
+ * and export the same value to this Playwright process. The spec reads it to
+ * know where the browser is expected to land.
  *
- * `run_e2e.sh` deliberately exports PROXY_LOGOUT_URL="" so the rest of the suite
- * gets the default behaviour. To exercise this contract, re-launch the proxy
- * with the env var and re-run this spec, e.g.:
- *
- *   PROXY_LOGOUT_URL=https://www.example.com ./run_e2e.sh -g "PROXY_LOGOUT_URL"
- *
- * Pattern matches the existing env-gated `serverRootPathRedirect.spec.ts`.
+ * The skip guard below is a safety net for environments that launch the proxy
+ * without the env var (e.g. an ad-hoc `npx playwright test` against a default
+ * proxy) — there the logout target is empty and this contract can't be checked.
  */
 const LOGOUT_URL = process.env.PROXY_LOGOUT_URL ?? "";
 
@@ -19,28 +18,66 @@ test.skip(!LOGOUT_URL, "Requires PROXY_LOGOUT_URL env var");
 test.describe("PROXY_LOGOUT_URL redirect", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test("Logout sends the user to PROXY_LOGOUT_URL", async ({ page }) => {
+  test("Logout clears the session and redirects to PROXY_LOGOUT_URL", async ({ page }) => {
+    const target = new URL(LOGOUT_URL);
+
+    // Stub the external logout destination so the assertion doesn't depend on
+    // that host being reachable from CI — we only care that the browser is sent
+    // there, not what it serves back.
+    await page.route(
+      (url) => url.origin === target.origin,
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: "<html><body>logged out</body></html>",
+        }),
+    );
+
+    // navbar.tsx populates the logout target only after the proxy UI settings
+    // fetch (/sso/get/ui_settings) resolves. Clicking Logout before that lands
+    // runs `window.location.href = ""` — a same-origin reload, not a redirect —
+    // so gate the click on the settings response, not just on first paint.
+    const settingsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/sso/get/ui_settings") && r.ok(),
+      { timeout: 30_000 },
+    );
     await page.goto("/ui");
-    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
+    await settingsLoaded;
 
-    // Open the navbar account dropdown (UserDropdown uses trigger=click)
-    const accountButton = page.locator('button[aria-label^="Account menu"]').first();
-    await accountButton.click();
+    // Pre-condition: we start authenticated. The admin storage state carries a
+    // `token` cookie, so a real logout has something to tear down.
+    const tokensBefore = (await page.context().cookies()).filter((c) => c.name === "token");
+    expect(tokensBefore.length, "should start logged in with a token cookie").toBeGreaterThan(0);
 
-    const popup = page.locator(".ant-dropdown:visible").filter({
-      has: page.locator(".bg-white.rounded-lg.shadow-lg"),
-    }).first();
-    await expect(popup).toBeVisible({ timeout: 5_000 });
+    // Open the navbar account dropdown (trigger=click) and click Logout by role
+    // rather than internal Ant Design CSS classes, which are not a stable API.
+    await page.getByRole("button", { name: /^Account menu/ }).click();
+    const logout = page.getByRole("menuitem", { name: "Logout" });
+    await expect(logout).toBeVisible({ timeout: 5_000 });
 
-    // After clicking Logout, navbar.tsx assigns window.location.href = LOGOUT_URL.
-    // Wait for navigation to the external host instead of a same-origin reload.
+    // handleLogout clears cookies/local storage, then assigns window.location.href.
+    // Arm the navigation wait before the click so we never miss the redirect.
     await Promise.all([
-      page.waitForURL(new RegExp(LOGOUT_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), {
-        timeout: 15_000,
-      }),
-      popup.getByText("Logout", { exact: true }).click(),
+      page.waitForURL((url) => url.origin === target.origin, { timeout: 15_000 }),
+      logout.click(),
     ]);
 
-    expect(page.url()).toContain(LOGOUT_URL);
+    // The browser landed on the configured logout URL (origin + any path prefix)...
+    const landed = new URL(page.url());
+    expect(landed.origin).toBe(target.origin);
+    expect(
+      landed.pathname.startsWith(target.pathname),
+      `expected ${landed.href} to start with ${target.href}`,
+    ).toBeTruthy();
+
+    // ...and the client-side session cookie is gone (clearTokenCookies ran before
+    // the redirect). HttpOnly cookies set server-side can't be cleared from JS,
+    // so scope the check to the JS-managed token the UI is responsible for.
+    const clientTokensAfter = (await page.context().cookies()).filter(
+      (c) => c.name === "token" && !c.httpOnly,
+    );
+    expect(clientTokensAfter, "client token cookie should be cleared on logout").toHaveLength(0);
   });
 });
