@@ -484,6 +484,42 @@ class TestRewriteResponseIds:
         assert decode(result["id"]).provider == "azure"
 
     @pytest.mark.asyncio
+    async def test_cross_owner_object_collision_returns_raw_id_not_404(self):
+        """
+        On the OUTPUT (mint) path, if the namespaced key is already owned by a
+        different caller (e.g. two upstream accounts under one provider name
+        issued the same raw batch ID), the caller's successful upstream create
+        must NOT be turned into a 404. Leave their raw ID unmanaged instead.
+        """
+        pc = _prisma_client()
+        other_owner_row = MagicMock()
+        other_owner_row.created_by = "other-user"
+        other_owner_row.team_id = "other-team"
+        other_owner_row.unified_object_id = encode(
+            "azure", "other-user", "batch_shared"
+        )
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
+            return_value=other_owner_row
+        )
+        pc.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
+
+        body = {"id": "batch_shared", "object": "batch", "input_file_id": None}
+        result = await rewrite_response_ids(
+            provider="azure",
+            method="POST",
+            route="/azure/openai/batches",
+            body=body,
+            user_api_key_dict=_user("user-azure", "team-azure"),
+            prisma_client=pc,
+            managed_files_hook=None,
+        )
+        # Caller gets their raw batch ID back, unmanaged; not a 404, and not
+        # the other owner's managed ID.
+        assert result["id"] == "batch_shared"
+        # No new row is minted (would violate the @unique model_object_id).
+        pc.db.litellm_managedobjecttable.upsert.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_batch_retrieve_swaps_output_file_id(self):
         pc = _prisma_client()
         hook = _managed_files_hook()

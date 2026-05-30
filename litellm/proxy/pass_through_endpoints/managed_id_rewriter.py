@@ -437,19 +437,23 @@ async def _mint_or_reuse_object(
             if not can_access_resource(
                 user_api_key_dict, existing.created_by, existing.team_id
             ):
-                # Cross-tenant collision: treat as 404 to avoid leaking
-                # that the object exists under a different owner.
-                raise HTTPException(
-                    status_code=404,
-                    detail="Managed resource not found.",
+                # OUTPUT (mint) path only: a different owner already holds this
+                # namespaced key (e.g. two upstream accounts under one provider
+                # name issued the same raw id). The caller's upstream create
+                # succeeded, so leave their raw id unmanaged rather than 404 a
+                # successful response; a new row can't be minted here because
+                # model_object_id is @unique.
+                verbose_proxy_logger.debug(
+                    "managed_id_rewriter: object dedup hit different owner; "
+                    "leaving raw id unmanaged for prefix=%s",
+                    raw_id.split("_", 1)[0],
                 )
+                return raw_id
             verbose_proxy_logger.debug(
                 "managed_id_rewriter: reusing existing managed object id for raw prefix=%s",
                 raw_id.split("_", 1)[0],
             )
             return existing.unified_object_id
-    except HTTPException:
-        raise
     except Exception:
         verbose_proxy_logger.debug(
             "managed_id_rewriter: object dedup lookup failed", exc_info=True
