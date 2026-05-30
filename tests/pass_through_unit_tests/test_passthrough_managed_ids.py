@@ -1188,3 +1188,23 @@ class TestListPassthroughIdsFromDb:
         assert result is not None
         assert len(result["data"]) == 1
         assert decode(result["data"][0]["id"]).provider == "openai"
+
+    @pytest.mark.asyncio
+    async def test_list_batches_pushes_provider_scope_to_db(self):
+        """Batch listing scopes by provider at the DB level via the namespaced
+        model_object_id, so a single query serves the page instead of scanning."""
+        batch_row = _fake_batch_row(new_managed_id("azure", "batch_abc"))
+        pc = _prisma_with_list(batch_rows=[batch_row])
+
+        result = await list_passthrough_ids_from_db(
+            provider="azure",
+            route="/azure/openai/batches",
+            user_api_key_dict=_admin_user(),
+            prisma_client=pc,
+        )
+
+        assert result is not None
+        assert len(result["data"]) == 1
+        where = pc.db.litellm_managedobjecttable.find_many.call_args.kwargs["where"]
+        assert where["model_object_id"] == {"startswith": "passthrough:azure:"}
+        assert pc.db.litellm_managedobjecttable.find_many.await_count == 1

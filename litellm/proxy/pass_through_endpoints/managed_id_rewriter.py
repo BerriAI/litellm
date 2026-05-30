@@ -182,7 +182,9 @@ def _managed_id_matches_provider(unified_id: str, provider: str) -> bool:
 #   /openai/v1/files              -> /v1/files
 #   /azure/openai/files           -> /files  (_canonical_path then prepends /v1/)
 #   /azure_ai/openai/files        -> /files
-_PASSTHROUGH_PREFIX_RE = re.compile(r"^/(?:azure(?:_ai)?/)?openai(?:_passthrough)?")
+_PASSTHROUGH_PREFIX_RE = re.compile(
+    r"^/(?:azure(?:_ai)?/)?openai(?:_passthrough)?(?=/|$)"
+)
 
 
 def _canonical_path(route: str) -> str:
@@ -729,6 +731,12 @@ async def _fetch_provider_scoped_list_rows(
     matched: List[Any] = []
     scan_where = dict(where)
     id_field = "unified_file_id" if resource_kind == "files" else "unified_object_id"
+    # Object rows store model_object_id as "passthrough:{provider}:{raw}" (see
+    # _mint_or_reuse_object), so the provider scope is pushed down to the indexed
+    # DB column and the scan collapses to one query. File rows have no provider
+    # column and fall back to the application-layer decode filter below.
+    if resource_kind != "files":
+        scan_where["model_object_id"] = {"startswith": f"passthrough:{provider}:"}
     max_scans = 20
     last_batch_full = False  # True when the last DB page was full-sized
 
