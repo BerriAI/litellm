@@ -1295,6 +1295,123 @@ async def test_anonymize_action_redacts_response_format_schema_descriptions():
 
 
 @pytest.mark.asyncio
+async def test_call_cato_guardrail_inspects_response_format_schema_string_values():
+    """Schema string values other than ``description`` (``title``, ``const``,
+    ``default`` and ``enum``/``examples`` items) are forwarded to the model, so
+    blocked text hidden in any of them must reach Cato."""
+    guard = _make_guardrail()
+    data = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "title": "leak title-hunter2",
+                            "const": "leak const-hunter2",
+                            "default": "leak default-hunter2",
+                            "enum": ["leak enum-hunter2"],
+                            "examples": ["leak example-hunter2"],
+                        }
+                    },
+                },
+            },
+        },
+    }
+    captured = {}
+
+    def side_effect(url, *args, **kwargs):
+        captured["messages"] = kwargs.get("json", {}).get("messages")
+        return _make_response(
+            {
+                "analysis_result": {"policy_drill_down": {"secrets": {}}},
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "blocked",
+                },
+            }
+        )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=side_effect,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    assert exc.value.status_code == 400
+    forwarded = " ".join(m.get("content") or "" for m in captured["messages"])
+    for field in ("title", "const", "default", "enum", "example"):
+        assert f"leak {field}-hunter2" in forwarded
+
+
+@pytest.mark.asyncio
+async def test_anonymize_action_redacts_response_format_schema_string_values():
+    """Anonymized text is written back to every schema string value, not just
+    ``description``: ``title``, ``const``, ``default`` and each ``enum``/
+    ``examples`` item, mapped by inspection order."""
+    guard = _make_guardrail()
+    data = {
+        "messages": [{"role": "user", "content": "Hi my name is Brian"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "greeting",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "who": {
+                            "type": "string",
+                            "description": "Desc Brian",
+                            "title": "Title Brian",
+                            "const": "Const Brian",
+                            "default": "Default Brian",
+                            "enum": ["Enum Brian A", "Enum Brian B"],
+                            "examples": ["Example Brian"],
+                        }
+                    },
+                },
+            },
+        },
+    }
+    response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {}},
+            "required_action": {"action_type": "anonymize_action"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "Hi my name is [NAME_1]"},
+                    {"role": "system", "content": "Desc [NAME_1]"},
+                    {"role": "system", "content": "Title [NAME_1]"},
+                    {"role": "system", "content": "Const [NAME_1]"},
+                    {"role": "system", "content": "Default [NAME_1]"},
+                    {"role": "system", "content": "Enum [NAME_1] A"},
+                    {"role": "system", "content": "Enum [NAME_1] B"},
+                    {"role": "system", "content": "Example [NAME_1]"},
+                ]
+            },
+        }
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response,
+    ):
+        result = await guard.call_cato_guardrail(data, hook="pre_call", key_alias=None)
+
+    who = result["response_format"]["json_schema"]["schema"]["properties"]["who"]
+    assert who["description"] == "Desc [NAME_1]"
+    assert who["title"] == "Title [NAME_1]"
+    assert who["const"] == "Const [NAME_1]"
+    assert who["default"] == "Default [NAME_1]"
+    assert who["enum"] == ["Enum [NAME_1] A", "Enum [NAME_1] B"]
+    assert who["examples"] == ["Example [NAME_1]"]
+
+
+@pytest.mark.asyncio
 async def test_call_cato_guardrail_on_output_includes_responses_api_input():
     """The output hook must forward Responses-API ``input`` context alongside the output."""
     guard = _make_guardrail()

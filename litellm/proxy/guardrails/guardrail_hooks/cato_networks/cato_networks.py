@@ -141,9 +141,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         every text fragment. Chat ``messages`` stay 1:1 with the request so
         redacted results map back by index, and every other field the proxy
         forwards to the model (Responses-API ``input``/``instructions``, legacy
-        completion ``prompt`` and ``tools[].function.description``) is appended as
-        synthetic messages so blocked text cannot bypass inspection by hiding in
-        one of them."""
+        completion ``prompt`` and tool/function/``response_format`` schema strings)
+        is appended as synthetic messages so blocked text cannot bypass inspection
+        by hiding in one of them."""
         flattened = []
         for message in data.get("messages") or []:
             if isinstance(message, dict) and isinstance(message.get("content"), list):
@@ -172,13 +172,17 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_schema_description_refs(data: dict):
-        """Yield ``(container, key)`` for every non-empty string ``description``
-        the proxy forwards to the model inside tool/function and structured-output
-        schemas: each ``tools[].function`` and legacy ``functions[]`` entry, the
-        ``response_format`` JSON schema, plus every nested ``description`` in their
-        JSON-schema ``parameters``/``schema``. Blocked text hidden in any of them
-        must be inspected and redacted like any other prompt."""
+    def _iter_schema_string_refs(data: dict):
+        """Yield ``(container, key)`` for every non-empty schema string the proxy
+        forwards to the model inside tool/function and structured-output schemas:
+        each ``tools[].function`` and legacy ``functions[]`` entry plus the
+        ``response_format`` JSON schema, walked recursively for the free-text and
+        value strings a caller could hide blocked text in (``description``,
+        ``title``, ``const``, ``default`` and every ``enum``/``examples`` item).
+        Blocked text in any of them must be inspected and redacted like any other
+        prompt."""
+        scalar_keys = ("description", "title", "const", "default")
+        list_keys = ("enum", "examples")
 
         stack: list = []
         for tool in data.get("tools") or []:
@@ -195,9 +199,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
         while stack:
             node = stack.pop()
             if isinstance(node, dict):
-                description = node.get("description")
-                if isinstance(description, str) and description:
-                    yield node, "description"
+                for key in scalar_keys:
+                    value = node.get(key)
+                    if isinstance(value, str) and value:
+                        yield node, key
+                for key in list_keys:
+                    items = node.get(key)
+                    if isinstance(items, list):
+                        for idx, item in enumerate(items):
+                            if isinstance(item, str) and item:
+                                yield items, idx
                 stack.extend(reversed(list(node.values())))
             elif isinstance(node, list):
                 stack.extend(reversed(node))
@@ -206,8 +217,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
     def _extra_inspection_sources(cls, data: dict) -> list:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
-        ``prompt`` and tool/function schema ``description`` fields. Returned as
-        ``(field, messages)`` in a fixed order so the anonymize path can slice
+        ``prompt`` and tool/function/``response_format`` schema strings. Returned
+        as ``(field, messages)`` in a fixed order so the anonymize path can slice
         redactions back to the field they came from."""
         sources: list = []
         input_messages = build_inspection_messages({"input": data.get("input")})
@@ -221,12 +232,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
         prompt_messages = cls._prompt_inspection_messages(data.get("prompt"))
         if prompt_messages:
             sources.append(("prompt", prompt_messages))
-        schema_descriptions = [
+        schema_strings = [
             {"role": "system", "content": container[key]}
-            for container, key in cls._iter_schema_description_refs(data)
+            for container, key in cls._iter_schema_string_refs(data)
         ]
-        if schema_descriptions:
-            sources.append(("schema_descriptions", schema_descriptions))
+        if schema_strings:
+            sources.append(("schema_strings", schema_strings))
         return sources
 
     async def call_cato_guardrail(
@@ -311,13 +322,13 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
-        elif field == "schema_descriptions":
-            cls._apply_schema_description_redaction(data, redacted)
+        elif field == "schema_strings":
+            cls._apply_schema_string_redaction(data, redacted)
 
     @classmethod
-    def _apply_schema_description_redaction(cls, data: dict, redacted: list) -> None:
+    def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:
         redactions = iter(redacted)
-        for container, key in cls._iter_schema_description_refs(data):
+        for container, key in cls._iter_schema_string_refs(data):
             replacement = next(redactions, None)
             if replacement is not None and replacement.get("content") is not None:
                 container[key] = replacement["content"]
