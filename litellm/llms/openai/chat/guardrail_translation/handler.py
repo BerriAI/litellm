@@ -376,9 +376,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            returned_tool_calls = guardrailed_inputs.get("tool_calls")
             guardrailed_tool_calls: List[Dict[str, Any]] = (
-                cast(List[Dict[str, Any]], guardrailed_inputs.get("tool_calls"))
-                if "tool_calls" in guardrailed_inputs
+                cast(List[Dict[str, Any]], returned_tool_calls)
+                if isinstance(returned_tool_calls, list)
+                and len(returned_tool_calls) == len(tool_calls_to_check)
                 else tool_calls_to_check
             )
 

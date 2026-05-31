@@ -108,6 +108,45 @@ class MockCopiedToolCallGuardrail(CustomGuardrail):
         )
 
 
+class MockNonListToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns tool_calls as a non-list envelope on the response
+    path, as some released guardrails do when they assign a detection API JSON dict."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        result = GenericGuardrailAPIInputs(texts=inputs.get("texts", []))
+        result["tool_calls"] = {"verdict": "allow", "detections": []}  # type: ignore
+        return result
+
+
+class MockMisalignedToolCallGuardrail(CustomGuardrail):
+    """Mock guardrail that returns a tool_calls list whose length differs from the
+    input, so it cannot be applied positionally onto the response."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        shortened = []
+        if tool_calls:
+            first = dict(tool_calls[0])
+            first["function"] = {"name": "x", "arguments": json.dumps({"x": 1})}
+            shortened.append(first)
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=shortened,
+        )
+
+
 class TestOpenAIChatCompletionsHandlerToolsInput:
     """Test input processing with tools (function definitions)"""
 
@@ -802,6 +841,92 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         response_tool_call = response.choices[0].message.tool_calls[0]
         assert response_tool_call.function.name == "send_email"
         assert json.loads(response_tool_call.function.arguments) == {"email": "[EMAIL]"}
+
+    @pytest.mark.asyncio
+    async def test_output_response_ignores_non_list_returned_tool_calls(self):
+        """A guardrail returning tool_calls as a non-list (e.g. a detection-API envelope
+        dict) must not crash the remap; the original arguments are preserved."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockNonListToolCallGuardrail(guardrail_name="test")
+        original = json.dumps({"email": "john@example.com"})
+        response = ModelResponse(
+            id="chatcmpl-nonlist",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_email",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=original
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        response_tool_call = response.choices[0].message.tool_calls[0]
+        assert response_tool_call.function.arguments == original
+
+    @pytest.mark.asyncio
+    async def test_output_response_ignores_misaligned_returned_tool_calls(self):
+        """A guardrail returning a tool_calls list of a different length than the input
+        cannot be applied positionally; the handler falls back and preserves the
+        original arguments instead of writing onto the wrong tool call."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockMisalignedToolCallGuardrail(guardrail_name="test")
+        first_args = json.dumps({"email": "a@example.com"})
+        second_args = json.dumps({"email": "b@example.com"})
+        response = ModelResponse(
+            id="chatcmpl-misaligned",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=first_args
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_2",
+                                type="function",
+                                function=Function(
+                                    name="send_email", arguments=second_args
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        tool_calls = response.choices[0].message.tool_calls
+        assert tool_calls[0].function.arguments == first_args
+        assert tool_calls[1].function.arguments == second_args
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
