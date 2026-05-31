@@ -78,6 +78,49 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
+_HEALTH_CREDENTIAL_FIELDS = (
+    "api_key",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "vertex_credentials",
+)
+_HEALTH_DESTINATION_FIELDS = (
+    "api_base",
+    "base_url",
+    "api_version",
+    "vertex_location",
+    "vertex_project",
+    "aws_region_name",
+)
+
+
+def _reject_inherited_credential_redirect(
+    config_litellm_params: dict, request_litellm_params: dict
+) -> None:
+    """Confused-deputy guard for /health/test_connection.
+
+    If a credential is inherited from the resolved deployment (present in the
+    config params, not supplied by the request) while the request overrides the
+    connection target, the inherited secret would be sent to a caller-chosen
+    endpoint. Refuse it; the caller must supply their own credential or omit the
+    destination override.
+    """
+    inherited_credential = any(
+        field in config_litellm_params and field not in request_litellm_params
+        for field in _HEALTH_CREDENTIAL_FIELDS
+    )
+    overrides_destination = any(
+        field in request_litellm_params for field in _HEALTH_DESTINATION_FIELDS
+    )
+    if inherited_credential and overrides_destination:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Cannot override the connection target (e.g. api_base) while inheriting stored credentials. Supply your own api_key, or omit the destination override."
+            },
+        )
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -1672,7 +1715,7 @@ async def health_liveliness_options():
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def test_model_connection(
+async def test_model_connection(  # noqa: PLR0915
     request: Request,
     mode: Optional[
         Literal[
@@ -1747,6 +1790,7 @@ async def test_model_connection(
         dict: A dictionary containing the health check result with either success information or error details.
     """
     from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
@@ -1766,11 +1810,23 @@ async def test_model_connection(
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
+        # Binding a named global credential resolves it by name with no ownership
+        # model, so it is proxy-admin-only (consistent with model management).
+        if request_litellm_params.get("litellm_credential_name") and not is_proxy_admin(
+            user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can use litellm_credential_name."},
+            )
         model_name = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
+        # model_info of the deployment resolved by id; used to authorize against
+        # the deployment's real owner rather than the caller-supplied model_info.
+        resolved_model_info: Optional[dict] = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -1791,6 +1847,9 @@ async def test_model_connection(
 
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(
+                        exclude_none=True
+                    )
+                    resolved_model_info = deployment_by_id.model_info.model_dump(
                         exclude_none=True
                     )
                 elif model_name:
@@ -1829,12 +1888,25 @@ async def test_model_connection(
         # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
 
-        ## Auth check
+        # Refuse sending an inherited credential to a caller-overridden destination.
+        _reject_inherited_credential_redirect(
+            config_litellm_params=config_litellm_params,
+            request_litellm_params=request_litellm_params,
+        )
+
+        ## Auth check — when the deployment was resolved by id, authorize against
+        ## its real owner (model_info), not the caller-supplied model_info, so a
+        ## team admin cannot probe another team's deployment by passing their own
+        ## team_id.
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=model_info,
+                model_info=(
+                    resolved_model_info
+                    if resolved_model_info is not None
+                    else model_info
+                ),
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,

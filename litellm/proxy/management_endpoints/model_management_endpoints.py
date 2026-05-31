@@ -13,11 +13,12 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from typing import Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -35,8 +36,13 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
@@ -60,6 +66,142 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+# Credential fields that must never be silently re-pointed at a new endpoint,
+# and the routing fields that change where they are sent.
+_CREDENTIAL_LITELLM_PARAMS = (
+    "api_key",
+    "litellm_credential_name",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "vertex_credentials",
+)
+_DESTINATION_LITELLM_PARAMS = ("api_base", "base_url", "custom_llm_provider")
+
+
+def _field_explicitly_set(model: Optional[BaseModel], field: str) -> bool:
+    """True if `field` was explicitly provided (to a value or null) on a model."""
+    return model is not None and field in model.model_fields_set
+
+
+def _validate_model_url_params(litellm_params: dict) -> None:
+    """SSRF-guard api_base/base_url on stored model configs, mirroring the
+    request-time guard in auth_utils.is_request_body_safe so the proxy applies
+    one consistent policy. Gated on litellm.user_url_validation (default True)
+    with user_url_allowed_hosts as the escape hatch for internal endpoints."""
+    if not getattr(litellm, "user_url_validation", False):
+        return
+    for url_field in ("api_base", "base_url"):
+        url_value = litellm_params.get(url_field)
+        if not url_value or not isinstance(url_value, str):
+            continue
+        try:
+            validate_url(url_value)
+        except SSRFError as e:
+            raise ProxyException(
+                message=(
+                    f"{url_field}={url_value!r} is rejected by the SSRF guard "
+                    f"({e}). Add the host to general_settings.user_url_allowed_hosts "
+                    "to allow it."
+                ),
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=url_field,
+            )
+
+
+def _decrypted_param(value: object) -> object:
+    """Decrypt a stored litellm_param for comparison; non-string or
+    non-encrypted values pass through unchanged."""
+    return (
+        decrypt_value_helper(value, "litellm_param", return_original_value=True)
+        if isinstance(value, str)
+        else value
+    )
+
+
+def _strip_credentials_on_destination_change(
+    merged_litellm_params: dict,
+    patch_plaintext: dict,
+    db_plaintext: "Callable[[str], object]",
+) -> None:
+    """If the patch changes a destination field (api_base/base_url/custom_llm_provider)
+    without supplying a fresh credential, drop the inherited secret(s) from the
+    merged params so a stored credential is never silently re-pointed at a new
+    (possibly attacker-controlled) endpoint."""
+    destination_changed = any(
+        field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
+        for field in _DESTINATION_LITELLM_PARAMS
+    )
+    supplied_new_credential = any(
+        field in patch_plaintext for field in _CREDENTIAL_LITELLM_PARAMS
+    )
+    if destination_changed and not supplied_new_credential:
+        for field in _CREDENTIAL_LITELLM_PARAMS:
+            merged_litellm_params.pop(field, None)
+
+
+def _assert_privileged_model_fields_authorized(
+    litellm_params: Optional[BaseModel],
+    model_info: Optional[BaseModel],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Pricing overrides and credential-name binding are proxy-admin-only.
+
+    Per-token/character pricing (SPECIAL_MODEL_INFO_PARAMS) gates spend/budget
+    enforcement, so a non-admin must not set or clear it. litellm_credential_name
+    resolves a globally-stored credential by name with no ownership model, so
+    only a proxy admin may bind one to a model.
+    """
+    if is_proxy_admin(user_api_key_dict):
+        return
+    for field in SPECIAL_MODEL_INFO_PARAMS:
+        if _field_explicitly_set(litellm_params, field) or _field_explicitly_set(
+            model_info, field
+        ):
+            raise ProxyException(
+                message=f"Only proxy admins can set model pricing fields (e.g. {field}).",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=field,
+            )
+    if (
+        _field_explicitly_set(litellm_params, "litellm_credential_name")
+        and litellm_params.litellm_credential_name is not None  # type: ignore
+    ):
+        raise ProxyException(
+            message="Only proxy admins can bind a stored credential (litellm_credential_name) to a model.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_credential_name",
+        )
+
+
+def _assert_team_model_has_own_credential(
+    model_params: Deployment, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    """A team-scoped model created by a non-admin must carry its own credential,
+    so it cannot silently inherit the proxy's global provider keys at call time."""
+    if is_proxy_admin(user_api_key_dict):
+        return
+    if model_params.model_info is None or model_params.model_info.team_id is None:
+        return
+    litellm_params = model_params.litellm_params
+    has_credential = any(
+        getattr(litellm_params, field, None)
+        for field in ("api_key", "aws_secret_access_key", "vertex_credentials")
+    )
+    if not has_credential:
+        raise ProxyException(
+            message=(
+                "Team-scoped models must provide their own credential (e.g. "
+                "litellm_params.api_key) and cannot inherit the proxy's global keys."
+            ),
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_params.api_key",
+        )
 
 
 async def update_team(*args, **kwargs):
@@ -112,13 +254,16 @@ def update_db_model(
         merged_deployment_dict["model_name"] = updated_patch.model_name
 
     # update litellm params
+    patch_litellm_plaintext: dict = {}
     if updated_patch.litellm_params:
+        patch_litellm_plaintext = updated_patch.litellm_params.model_dump(
+            exclude_none=True
+        )
+        # SSRF-guard the patched destination (api_base/base_url).
+        _validate_model_url_params(patch_litellm_plaintext)
         # Encrypt any sensitive values
         encrypted_params = {
-            k: encrypt_value_helper(v)
-            for k, v in updated_patch.litellm_params.model_dump(
-                exclude_none=True
-            ).items()
+            k: encrypt_value_helper(v) for k, v in patch_litellm_plaintext.items()
         }
 
         merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
@@ -129,6 +274,13 @@ def update_db_model(
             merged_deployment_dict["model_info"] = {}
         merged_deployment_dict["model_info"].update(
             updated_patch.model_info.model_dump(exclude_none=True)
+        )
+
+    # The deployment id is the immutable primary key; never let a patched (or
+    # freshly-constructed, auto-id'd) model_info blob change it.
+    if db_model.model_info is not None and db_model.model_info.id is not None:
+        merged_deployment_dict.setdefault("model_info", {})["id"] = (  # type: ignore
+            db_model.model_info.id
         )
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
@@ -156,6 +308,18 @@ def update_db_model(
             ):
                 merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
+
+    # Refuse to silently re-point a stored credential at a new endpoint: if the
+    # destination changed without a fresh credential, drop the inherited secret
+    # so it must be re-entered rather than forwarded to the new destination.
+    if updated_patch.litellm_params:
+        _strip_credentials_on_destination_change(
+            merged_deployment_dict["litellm_params"],  # type: ignore
+            patch_litellm_plaintext,
+            lambda field: _decrypted_param(
+                getattr(db_model.litellm_params, field, None)
+            ),
+        )
 
     # convert to prisma compatible format
 
@@ -273,6 +437,13 @@ async def patch_model(
                 code=status.HTTP_403_FORBIDDEN,
                 param="blocked",
             )
+
+        # Pricing overrides and credential binding are proxy-admin-only.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=patch_data.litellm_params,
+            model_info=patch_data.model_info,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -443,9 +614,32 @@ async def _update_team_model_in_db(
         premium_user=premium_user,
     )
 
-    patch_team_id = patch_data.model_info.team_id if patch_data.model_info else None
+    db_team_id = db_model.model_info.team_id if db_model.model_info else None
+    explicit_patch_team_id = (
+        patch_data.model_info.team_id if patch_data.model_info else None
+    )
 
-    # No team_id in patch, proceed with standard update
+    # A team admin must not move a model to a different team.
+    if (
+        explicit_patch_team_id is not None
+        and db_team_id is not None
+        and explicit_patch_team_id != db_team_id
+    ):
+        raise ProxyException(
+            message="Cannot reassign a model to a different team.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="model_info.team_id",
+        )
+
+    # Inherit the persisted team_id when the patch omits it, so a team-scoped
+    # model keeps its team scoping (and its internal model_name) instead of being
+    # renamed into the global pool via a model_info-less PATCH.
+    patch_team_id = (
+        explicit_patch_team_id if explicit_patch_team_id is not None else db_team_id
+    )
+
+    # Genuinely non-team model: standard update.
     if patch_team_id is None:
         return update_db_model(db_model=db_model, updated_patch=patch_data)
 
@@ -463,7 +657,6 @@ async def _update_team_model_in_db(
     patch_data.model_info.team_public_model_name = public_model_name
 
     # Check if team assignment is new or changed
-    db_team_id = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment = db_team_id != patch_team_id
 
     if is_new_team_assignment:
@@ -826,7 +1019,13 @@ async def delete_model(
         # delete team model alias
         if model_params.model_info.team_id is not None:
             removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
+                # The team alias is keyed on the PUBLIC model name; the internal
+                # model_name is the unique UUID, which never matches an alias, so
+                # using it here leaves the alias (and team.models entry) orphaned.
+                public_model_name=(
+                    model_params.model_info.team_public_model_name
+                    or model_params.model_name
+                ),
                 prisma_client=prisma_client,
             )
 
@@ -870,8 +1069,16 @@ async def delete_model(
                 )
 
             ## DELETE FROM ROUTER ##
+            # Only evict a router deployment that originated from the DB. A
+            # config (static) deployment must never be removed by deleting a DB
+            # row, even if a row shares its id.
             if llm_router is not None:
-                llm_router.delete_deployment(id=model_info.id)
+                router_deployment = llm_router.get_deployment(model_id=model_info.id)
+                if (
+                    router_deployment is not None
+                    and router_deployment.model_info.db_model
+                ):
+                    llm_router.delete_deployment(id=model_info.id)
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
@@ -1002,6 +1209,7 @@ async def add_new_model(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -1025,6 +1233,35 @@ async def add_new_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+
+        # Pricing overrides and credential binding are proxy-admin-only.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=model_params.litellm_params,
+            model_info=model_params.model_info,
+            user_api_key_dict=user_api_key_dict,
+        )
+        # A non-admin team model must carry its own credential (no global-key fallback).
+        _assert_team_model_has_own_credential(model_params, user_api_key_dict)
+        # SSRF-guard the destination on create.
+        _validate_model_url_params(
+            model_params.litellm_params.model_dump(exclude_none=True)
+        )
+        # Reject a model_info.id that collides with a live deployment, so a DB
+        # row cannot hijack (and on delete evict) a config/router deployment's id.
+        if (
+            model_params.model_info.id is not None
+            and llm_router is not None
+            and llm_router.has_model_id(model_params.model_info.id)
+        ):
+            raise ProxyException(
+                message=(
+                    f"model_info.id={model_params.model_info.id} already belongs to an "
+                    "existing deployment; omit model_info.id to auto-generate one."
+                ),
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="model_info.id",
+            )
 
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
@@ -1192,6 +1429,13 @@ async def update_model(
             premium_user=premium_user,
         )
 
+        # Pricing/credential field authz, parity with patch_model / add_new_model.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=model_params.litellm_params,
+            model_info=model_params.model_info,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # update DB
         if store_model_in_db is True:
             _existing_litellm_params_dict = dict(
@@ -1204,6 +1448,8 @@ async def update_model(
             _new_litellm_params_dict = model_params.litellm_params.dict(
                 exclude_none=True
             )
+            # SSRF-guard the patched destination on this legacy update path too.
+            _validate_model_url_params(_new_litellm_params_dict)
 
             ### ENCRYPT PARAMS ###
             for k, v in _new_litellm_params_dict.items():
@@ -1224,6 +1470,15 @@ async def update_model(
                     merged_dictionary[key] = _existing_litellm_params_dict[key]
                 else:
                     pass
+
+            # Don't silently re-point an inherited credential at a new endpoint.
+            _strip_credentials_on_destination_change(
+                merged_dictionary,
+                _new_litellm_params_dict,
+                lambda field: _decrypted_param(
+                    _existing_litellm_params_dict.get(field)
+                ),
+            )
 
             _data: dict = {
                 "litellm_params": json.dumps(merged_dictionary),  # type: ignore

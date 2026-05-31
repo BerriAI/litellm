@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 import time
@@ -1823,3 +1824,157 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert "aws_access_key_id" not in cleaned
     assert cleaned.get("api_base") == "https://example.test/v1"
     assert cleaned.get("api_version") == "2024-10-21"
+
+
+# ---------------------------------------------------------------------------
+# VERIA-120: /health/test_connection confused-deputy hardening
+# ---------------------------------------------------------------------------
+
+
+def _health_test_connection_patches(mock_prisma, mock_router, mock_auth, mock_ahealth):
+    def _noop_update(model_info, litellm_params):
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "x"}]
+        return params
+
+    return (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            mock_auth,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(return_value={"status": "healthy"}),
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            _noop_update,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            lambda params: None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_test_connection_authorizes_against_resolved_deployment_owner():
+    """A team admin must not probe another team's deployment by id: the auth
+    check must run against the RESOLVED deployment's team_id, not the
+    caller-supplied model_info.team_id."""
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    victim = Deployment(
+        model_name="victim",
+        litellm_params=LiteLLM_Params(
+            model="azure/gpt-4o",
+            api_key="sk-victim",
+            api_base="https://victim.example/v1",
+        ),
+        model_info={"id": "victim-id", "team_id": "team-OWNER"},
+    )
+    mock_router = MagicMock()
+    mock_router.get_deployment.side_effect = lambda model_id: (
+        victim if model_id == "victim-id" else None
+    )
+
+    captured = {}
+
+    async def _capture(*, model_params, **kwargs):
+        captured["team_id"] = model_params.model_info.team_id
+        return True
+
+    mock_auth = AsyncMock(side_effect=_capture)
+    mock_ahealth = AsyncMock(return_value={"status": "healthy"})
+
+    with contextlib.ExitStack() as stack:
+        for p in _health_test_connection_patches(
+            MagicMock(), mock_router, mock_auth, mock_ahealth
+        ):
+            stack.enter_context(p)
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "azure/gpt-4o"},  # no destination override
+            model_info={"id": "victim-id", "team_id": "team-ATTACKER"},
+            user_api_key_dict=MagicMock(user_id="attacker", token="t"),
+        )
+
+    assert captured.get("team_id") == "team-OWNER"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_rejects_inherited_key_with_api_base_override():
+    """Refuse to send an inherited config api_key to a request-overridden
+    api_base (the credential-exfiltration vector)."""
+    from fastapi import HTTPException
+
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    victim = Deployment(
+        model_name="victim",
+        litellm_params=LiteLLM_Params(
+            model="azure/gpt-4o",
+            api_key="sk-victim",
+            api_base="https://victim.example/v1",
+        ),
+        model_info={"id": "victim-id", "team_id": "team-OWNER"},
+    )
+    mock_router = MagicMock()
+    mock_router.get_deployment.side_effect = lambda model_id: (
+        victim if model_id == "victim-id" else None
+    )
+    mock_auth = AsyncMock(return_value=True)
+    mock_ahealth = AsyncMock(return_value={"status": "healthy"})
+
+    with contextlib.ExitStack() as stack:
+        for p in _health_test_connection_patches(
+            MagicMock(), mock_router, mock_auth, mock_ahealth
+        ):
+            stack.enter_context(p)
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={
+                    "model": "azure/gpt-4o",
+                    "api_base": "https://attacker.example/v1",  # override, no api_key
+                },
+                model_info={"id": "victim-id"},
+                user_api_key_dict=MagicMock(user_id="attacker", token="t"),
+            )
+        assert exc_info.value.status_code == 400
+
+    mock_ahealth.assert_not_called()  # the inherited key never went out
+
+
+def test_reject_inherited_credential_redirect_helper():
+    from fastapi import HTTPException
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _reject_inherited_credential_redirect,
+    )
+
+    # inherited credential + overridden destination -> rejected
+    with pytest.raises(HTTPException):
+        _reject_inherited_credential_redirect(
+            config_litellm_params={"api_key": "sk-x", "api_base": "https://real"},
+            request_litellm_params={"api_base": "https://attacker"},
+        )
+    # request supplies its own credential -> allowed
+    _reject_inherited_credential_redirect(
+        config_litellm_params={"api_key": "sk-x"},
+        request_litellm_params={"api_key": "sk-own", "api_base": "https://attacker"},
+    )
+    # no destination override -> allowed
+    _reject_inherited_credential_redirect(
+        config_litellm_params={"api_key": "sk-x"},
+        request_litellm_params={"model": "gpt-4o"},
+    )
