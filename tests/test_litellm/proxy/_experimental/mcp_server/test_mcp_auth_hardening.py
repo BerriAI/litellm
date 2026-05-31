@@ -45,10 +45,11 @@ def test_is_public_mcp_discovery_route_allows_only_known_families():
 
     f = MCPRequestHandler._is_public_mcp_discovery_route
 
-    # Real discovery routes (including dynamic suffixes) are public.
+    # Exactly the registered discovery templates are public.
     assert f("/.well-known/oauth-authorization-server")
-    assert f("/.well-known/oauth-protected-resource/mcp/my-server")
-    assert f("/.well-known/oauth-authorization-server/my-server")
+    assert f("/.well-known/oauth-authorization-server/my-server")  # /{server}
+    assert f("/.well-known/oauth-protected-resource/mcp/my-server")  # /mcp/{server}
+    assert f("/.well-known/oauth-protected-resource/my-server/mcp")  # /{server}/mcp
     assert f("/.well-known/openid-configuration")
     assert f("/.well-known/jwks.json")
 
@@ -60,6 +61,10 @@ def test_is_public_mcp_discovery_route_allows_only_known_families():
     # Static endpoints have no sub-paths; a sub-path is a smuggle attempt.
     assert not f("/.well-known/jwks.json/anything")
     assert not f("/.well-known/openid-configuration/anything")
+    # Extra/unregistered segments under a parameterized prefix are rejected.
+    assert not f("/.well-known/oauth-authorization-server/foo/bar")  # 2 segs, no mcp
+    assert not f("/.well-known/oauth-authorization-server/mcp/srv/extra")  # too deep
+    assert not f("/.well-known/oauth-protected-resource/srv/")  # trailing slash
 
 
 # --------------------------------------------------------------------------- #

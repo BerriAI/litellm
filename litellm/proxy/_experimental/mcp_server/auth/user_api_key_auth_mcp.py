@@ -264,30 +264,40 @@ class MCPRequestHandler:
     def _is_public_mcp_discovery_route(request_route: str) -> bool:
         """
         True only for the registered OAuth discovery routes that are meant to be
-        unauthenticated. A bare ``startswith("/.well-known/")`` let a crafted
-        sub-path smuggle an anonymous session into tool execution, so match the
-        known discovery route families exactly while still allowing their
-        dynamic ``/{server_name}`` and ``/mcp/{server_name}`` suffixes. These are
-        the only ``/.well-known/`` routes the MCP server registers.
+        unauthenticated. A bare ``startswith("/.well-known/")`` (or even a loose
+        prefix match) let a crafted sub-path smuggle an anonymous session into
+        tool execution, so match the exact registered templates and reject any
+        extra path segments. These are the only ``/.well-known/`` routes the MCP
+        server registers.
         """
-        # Static discovery endpoints have no registered sub-paths, so match
-        # them exactly; a sub-path under them would be a smuggle attempt.
+        # Static discovery endpoints have no registered sub-paths.
         static_routes = (
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
         )
         if request_route in static_routes:
             return True
-        # Parameterized discovery routes carry a dynamic /{server_name} or
-        # /mcp/{server_name} suffix.
+
+        # Parameterized discovery routes accept exactly the registered shapes:
+        #   /<prefix>, /<prefix>/{server}, /<prefix>/mcp/{server},
+        #   /<prefix>/{server}/mcp — and nothing deeper.
         parameterized_prefixes = (
             "/.well-known/oauth-authorization-server",
             "/.well-known/oauth-protected-resource",
         )
-        return any(
-            request_route == prefix or request_route.startswith(prefix + "/")
-            for prefix in parameterized_prefixes
-        )
+        for prefix in parameterized_prefixes:
+            if request_route == prefix:
+                return True
+            if request_route.startswith(prefix + "/"):
+                segments = request_route[len(prefix) + 1 :].split("/")
+                if "" in segments:  # trailing/empty segment, e.g. "/prefix/foo/"
+                    return False
+                if len(segments) == 1:  # /{server}
+                    return True
+                if len(segments) == 2 and "mcp" in segments:  # /mcp/{srv} or /{srv}/mcp
+                    return True
+                return False
+        return False
 
     @staticmethod
     def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
