@@ -3116,12 +3116,26 @@ def test_get_error_information_prefers_message_attribute_over_empty_str():
     assert info["error_code"] == "401"
 
 
-def test_handle_anthropic_messages_response_logging_with_response_completed_event():
+@pytest.mark.parametrize(
+    "event_cls, event_type",
+    [
+        ("ResponseCompletedEvent", "response.completed"),
+        ("ResponseIncompleteEvent", "response.incomplete"),
+        ("ResponseFailedEvent", "response.failed"),
+    ],
+)
+def test_handle_anthropic_messages_response_logging_with_terminal_responses_api_events(
+    event_cls, event_type
+):
     """Regression test for #28943: when anthropic_messages routes to OpenAI Responses
-    API and stream=True, success_handler receives a ResponseCompletedEvent instead of
-    a ModelResponse. The handler must return the inner ResponsesAPIResponse rather than
-    crashing with AnthropicResponse.model_validate."""
-    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+    API and stream=True, success_handler receives a terminal ResponsesAPI event instead
+    of a ModelResponse. The handler must return the inner ResponsesAPIResponse rather
+    than crashing with AnthropicResponse.model_validate."""
+    import importlib
+
+    openai_types = importlib.import_module("litellm.types.llms.openai")
+    EventClass = getattr(openai_types, event_cls)
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
     logging_obj = LitellmLogging(
         model="gpt-4o",
@@ -3136,7 +3150,7 @@ def test_handle_anthropic_messages_response_logging_with_response_completed_even
     inner_response = ResponsesAPIResponse(
         id="resp_test", created_at=1700000000, output=[]
     )
-    event = ResponseCompletedEvent(type="response.completed", response=inner_response)
+    event = EventClass(type=event_type, response=inner_response)
 
     result = logging_obj._handle_anthropic_messages_response_logging(result=event)
 
