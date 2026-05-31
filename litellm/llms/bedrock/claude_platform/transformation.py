@@ -93,7 +93,9 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             "anthropic_workspace_id",
             "anthropic-workspace-id",
         }
-        optional_params = {k: v for k, v in optional_params.items() if k not in _WORKSPACE_KEYS}
+        optional_params = {
+            k: v for k, v in optional_params.items() if k not in _WORKSPACE_KEYS
+        }
         return super().transform_request(
             model=model,
             messages=messages,
