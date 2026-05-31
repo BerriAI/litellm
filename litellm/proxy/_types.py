@@ -242,6 +242,11 @@ class KeyManagementRoutes(str, enum.Enum):
     TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
+    # Field-level opt-in permission (not a real HTTP route). When present in a
+    # team's `team_member_permissions`, non-admin members of that team may set
+    # `access_group_ids` on keys they create/update. Default-deny.
+    KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+
     # info and health routes
     KEY_INFO = "/key/info"
     KEY_HEALTH = "/key/health"
@@ -552,6 +557,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
+        KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
     ]
 
     management_routes = (
