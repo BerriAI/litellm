@@ -10,10 +10,10 @@ interface CreatedKeyDisplayProps {
 }
 
 const codingAgentLogos: { name: string; src: string }[] = [
-  { name: "Cursor", src: "../ui/assets/logos/cursor.svg" },
-  { name: "Claude Code", src: "../ui/assets/logos/anthropic.svg" },
-  { name: "OpenAI Codex", src: "../ui/assets/logos/openai_small.svg" },
-  { name: "GitHub Copilot", src: "../ui/assets/logos/github_copilot.svg" },
+  { name: "Cursor", src: "/ui/assets/logos/cursor.svg" },
+  { name: "Claude Code", src: "/ui/assets/logos/anthropic.svg" },
+  { name: "OpenAI Codex", src: "/ui/assets/logos/openai_small.svg" },
+  { name: "GitHub Copilot", src: "/ui/assets/logos/github_copilot.svg" },
 ];
 
 const CodingAgentLogos: React.FC = () => (
@@ -70,15 +70,22 @@ const resolveProxyBaseUrl = (): string => {
 };
 
 const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
-  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedKeyIcon, setCopiedKeyIcon] = useState(false);
+  const [copiedKeyButton, setCopiedKeyButton] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
 
   const codingAgentPrompt = useMemo(() => buildCodingAgentPrompt(resolveProxyBaseUrl()), []);
 
-  const handleCopyKey = () => {
-    setCopiedKey(true);
+  const handleCopyKeyIcon = () => {
+    setCopiedKeyIcon(true);
     MessageManager.success("Key copied to clipboard");
-    setTimeout(() => setCopiedKey(false), 2000);
+    setTimeout(() => setCopiedKeyIcon(false), 2000);
+  };
+
+  const handleCopyKeyButton = () => {
+    setCopiedKeyButton(true);
+    MessageManager.success("Key copied to clipboard");
+    setTimeout(() => setCopiedKeyButton(false), 2000);
   };
 
   const handleCopyPrompt = () => {
@@ -110,8 +117,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       <div className="rounded-md border mb-4" style={{ borderColor: "#e5e7eb", background: "#fafafa" }}>
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
           <span className="text-sm font-medium text-gray-700">Your API Key</span>
-          <Tooltip title={copiedKey ? "Copied!" : "Copy API key"}>
-            <CopyToClipboard text={apiKey} onCopy={handleCopyKey}>
+          <Tooltip title={copiedKeyIcon ? "Copied!" : "Copy API key"}>
+            <CopyToClipboard text={apiKey} onCopy={handleCopyKeyIcon}>
               <Button type="text" size="small" aria-label="Copy API key" icon={<CopyOutlined />} />
             </CopyToClipboard>
           </Tooltip>
@@ -162,9 +169,9 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         </div>
       </div>
 
-      <CopyToClipboard text={apiKey} onCopy={handleCopyKey}>
+      <CopyToClipboard text={apiKey} onCopy={handleCopyKeyButton}>
         <Button type="primary" style={{ marginTop: 16 }}>
-          {copiedKey ? "Copied!" : "Copy Virtual Key"}
+          {copiedKeyButton ? "Copied!" : "Copy Virtual Key"}
         </Button>
       </CopyToClipboard>
     </div>

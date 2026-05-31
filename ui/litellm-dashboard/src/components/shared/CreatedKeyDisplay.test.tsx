@@ -104,4 +104,23 @@ describe("CreatedKeyDisplay", () => {
 
     expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
   });
+
+  it("does not relabel the primary button when the icon copy button is clicked", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+
+    await user.click(screen.getByRole("button", { name: /^copy api key$/i }));
+
+    expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^copied!$/i })).not.toBeInTheDocument();
+  });
+
+  it("uses absolute /ui/assets/logos/ paths so logos resolve regardless of the current route", () => {
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+    const images = screen.getByTestId("coding-agent-logos").querySelectorAll("img");
+
+    Array.from(images).forEach((img) => {
+      expect(img.getAttribute("src")).toMatch(/^\/ui\/assets\/logos\//);
+    });
+  });
 });
