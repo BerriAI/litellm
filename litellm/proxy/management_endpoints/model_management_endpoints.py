@@ -671,7 +671,21 @@ class ModelManagementAuthChecks:
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             return True
-        elif team_obj is None or not _is_user_team_admin(
+
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id != team_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team ID={} does not match the API key's team ID={}. A key scoped to a team can only manage models for that team.".format(
+                        team_id, user_api_key_dict.team_id
+                    )
+                },
+            )
+
+        if team_obj is None or not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=team_obj
         ):
             raise HTTPException(

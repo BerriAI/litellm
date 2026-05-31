@@ -165,6 +165,53 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_key_scoped_to_other_team_fails(self):
+        """A key scoped to team B cannot create a model for team A, even if the
+        key's user is an admin of team A."""
+        key_scoped_to_team_b = UserAPIKeyAuth(
+            user_id="test_user",
+            team_id="team_b",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_a_obj = LiteLLM_TeamTable(
+            team_id="team_a",
+            team_alias="team_a",
+            members_with_roles=[
+                Member(user_id="test_user", role="admin"),
+            ],
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="team_a",
+                user_api_key_dict=key_scoped_to_team_b,
+                team_obj=team_a_obj,
+                premium_user=True,
+            )
+        assert "403" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_can_user_make_team_model_call_no_team_id_key_succeeds(self):
+        """A key with no team_id falls back to the team-admin check (unchanged)."""
+        key_without_team = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[Member(user_id="test_user", role="admin")],
+        )
+
+        result = ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_id="test_team",
+            user_api_key_dict=key_without_team,
+            team_obj=team_obj,
+            premium_user=True,
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
     async def test_allow_team_model_action_success(self):
         """Test successful team model action"""
         model_params = Deployment(
