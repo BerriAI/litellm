@@ -4477,6 +4477,20 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                 )
 
+        elif custom_llm_provider == "antigravity2":
+            from litellm.llms.antigravity2.chat.transformation import Antigravity2Config
+
+            response = Antigravity2Config().completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                optional_params=optional_params,
+                api_key=api_key,
+                logging_obj=logging,
+                custom_llm_provider=custom_llm_provider,
+                acompletion=acompletion,
+            )
+
         elif custom_llm_provider == "langgraph":
             # LangGraph - Agent Runtime Provider
             from litellm.llms.langgraph.chat.transformation import LangGraphConfig

@@ -132,6 +132,7 @@ LLM_CONFIG_NAMES = (
     "DataRobotConfig",
     "AnthropicConfig",
     "ClaudeMaxConfig",
+    "Antigravity2Config",
     "BedrockClaudePlatformConfig",
     "AnthropicTextConfig",
     "GroqSTTConfig",
@@ -615,6 +616,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
     "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
     "ClaudeMaxConfig": (".llms.claude_max.chat.transformation", "ClaudeMaxConfig"),
+    "Antigravity2Config": (
+        ".llms.antigravity2.chat.transformation",
+        "Antigravity2Config",
+    ),
     "BedrockClaudePlatformConfig": (
         ".llms.bedrock.claude_platform.transformation",
         "BedrockClaudePlatformConfig",

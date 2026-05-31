@@ -5,7 +5,7 @@
 | Property | Details |
 |-------|-------|
 | Description | Server-side refresh-token adapters for subscription-backed inference providers. Clients call LiteLLM normally and LiteLLM refreshes provider OAuth tokens on the server. |
-| Provider Routes on LiteLLM | `claude_max/` |
+| Provider Routes on LiteLLM | `claude_max/`, `antigravity2/` |
 | Supported Operations | `/chat/completions`, including streaming when the upstream provider supports it |
 
 These providers are intended for private gateways where the LiteLLM server owns the subscription login and clients authenticate only to LiteLLM. Do not expose the server token files to client machines.
@@ -53,7 +53,37 @@ export CLAUDE_MAX_API_BASE="https://api.anthropic.com/v1/messages"
 
 ## Antigravity 2.0
 
-Antigravity 2.0 is not implemented by this provider page yet. The deprecated Cloud Code Assist / Gemini CLI `cloudcode-pa.googleapis.com/v1internal` gateway is intentionally not documented here because it is not the Antigravity 2.0 SDK/CLI runtime contract.
+The `antigravity2/` provider uses Google's official Antigravity 2.0 Python SDK (`google-antigravity`) and its local agent runtime. This is intentionally separate from, and does not use, deprecated Gemini CLI, Cloud Code Assist, or internal gateway contracts.
+
+Install the SDK in the LiteLLM server image because the PyPI wheels include the compiled Antigravity runtime binary:
+
+```bash showLineNumbers title="Server dependency"
+pip install google-antigravity
+```
+
+Authentication is managed on the LiteLLM server by the official runtime. The Antigravity CLI authenticates through the system keyring and falls back to Google Sign-In when no active session exists; the Python SDK can also use `GEMINI_API_KEY` / `ANTIGRAVITY2_API_KEY` or Vertex settings configured on the server. Clients should not send provider credentials.
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: frontier
+    litellm_params:
+      model: antigravity2/gemini-3.1-pro-preview
+  - model_name: antigravity-2-pro
+    litellm_params:
+      model: antigravity2/gemini-3.1-pro-preview
+```
+
+Optional server-side overrides:
+
+```bash showLineNumbers title="Antigravity 2.0 overrides"
+export ANTIGRAVITY2_APP_DATA_DIR="/var/lib/litellm/antigravity2"
+export ANTIGRAVITY2_API_KEY="$GEMINI_API_KEY"
+export ANTIGRAVITY2_VERTEX="false"
+export ANTIGRAVITY2_PROJECT="my-gcp-project"
+export ANTIGRAVITY2_LOCATION="us-central1"
+```
+
+For private inference-gateway usage, LiteLLM disables Antigravity built-in tools and subagents by default, so `antigravity2/` behaves like a chat inference provider rather than an autonomous file-editing/code-execution agent.
 
 ## LiteLLM virtual keys
 

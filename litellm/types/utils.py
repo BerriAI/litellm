@@ -3235,6 +3235,7 @@ class LlmProviders(str, Enum):
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     CLAUDE_MAX = "claude_max"
+    ANTIGRAVITY2 = "antigravity2"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
