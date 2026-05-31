@@ -691,8 +691,8 @@ class ModelManagementAuthChecks:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "Team ID={} does not match the API key's team ID={}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status.".format(
-                        team_id, user_api_key_dict.team_id
+                    "error": "You are not an admin for team ID={}. Only team admins can manage this team's models. Check `/user/info` to verify your team admin status.".format(
+                        team_id
                     )
                 },
             )
