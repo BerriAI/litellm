@@ -64,13 +64,12 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
       logout.click(),
     ]);
 
-    // The browser landed on the configured logout URL (origin + any path prefix)...
+    // The browser landed on exactly the configured logout URL. Compare normalized
+    // hrefs (both sides through URL()) so trailing-slash / default-port rewrites the
+    // browser applies are matched on the expected side too — this pins scheme, host,
+    // port, path, query and hash, not just the origin.
     const landed = new URL(page.url());
-    expect(landed.origin).toBe(target.origin);
-    expect(
-      landed.pathname.startsWith(target.pathname),
-      `expected ${landed.href} to start with ${target.href}`,
-    ).toBeTruthy();
+    expect(landed.href).toBe(target.href);
 
     // ...and the client-side session cookie is gone (clearTokenCookies ran before
     // the redirect). HttpOnly cookies set server-side can't be cleared from JS,
