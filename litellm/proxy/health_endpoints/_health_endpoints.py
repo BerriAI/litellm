@@ -1881,6 +1881,11 @@ async def test_model_connection(  # noqa: PLR0915
                         config_litellm_params = dict(
                             deployments[0].get("litellm_params", {})
                         )
+                        # Authorize against the matched deployment's owner, not
+                        # the caller-supplied model_info (same as the id path).
+                        resolved_model_info = dict(
+                            deployments[0].get("model_info", {}) or {}
+                        )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "

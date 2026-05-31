@@ -135,19 +135,19 @@ def _strip_credentials_on_destination_change(
     patch_plaintext: dict,
     db_plaintext: "Callable[[str], object]",
 ) -> None:
-    """If the patch changes a destination field (api_base/base_url/custom_llm_provider)
-    without supplying a fresh credential, drop the inherited secret(s) from the
-    merged params so a stored credential is never silently re-pointed at a new
-    (possibly attacker-controlled) endpoint."""
+    """When a destination field (api_base/base_url/provider endpoint) changes,
+    drop every INHERITED credential — one the patch did not itself supply — so a
+    stored secret is never silently re-pointed at a new (possibly attacker-
+    controlled) endpoint. Cleared per field: supplying one credential must not
+    preserve the others."""
     destination_changed = any(
         field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
         for field in _DESTINATION_LITELLM_PARAMS
     )
-    supplied_new_credential = any(
-        field in patch_plaintext for field in _CREDENTIAL_LITELLM_PARAMS
-    )
-    if destination_changed and not supplied_new_credential:
-        for field in _CREDENTIAL_LITELLM_PARAMS:
+    if not destination_changed:
+        return
+    for field in _CREDENTIAL_LITELLM_PARAMS:
+        if field not in patch_plaintext:
             merged_litellm_params.pop(field, None)
 
 

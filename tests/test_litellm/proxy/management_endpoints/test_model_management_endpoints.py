@@ -2480,3 +2480,26 @@ class TestModelMgmtAuthzHardening:
             model_info=None,
             user_api_key_dict=self._admin(),
         )
+
+    def test_destination_change_clears_inherited_credential_per_field(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strip_credentials_on_destination_change,
+        )
+
+        # Patch redirects api_base AND supplies an UNRELATED credential
+        # (aws_secret_access_key); the inherited api_key must still be dropped.
+        merged = {
+            "api_key": "sk-inherited",
+            "aws_secret_access_key": "supplied",
+            "api_base": "https://attacker.example",
+        }
+        patch_plaintext = {
+            "api_base": "https://attacker.example",
+            "aws_secret_access_key": "supplied",
+        }
+        db = {"api_base": "https://real.example", "api_key": "sk-inherited"}
+        _strip_credentials_on_destination_change(
+            merged, patch_plaintext, lambda f: db.get(f)
+        )
+        assert "api_key" not in merged  # inherited, not re-supplied -> dropped
+        assert merged.get("aws_secret_access_key") == "supplied"  # supplied -> kept

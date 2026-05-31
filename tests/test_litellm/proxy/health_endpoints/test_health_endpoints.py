@@ -1987,3 +1987,45 @@ def test_reject_inherited_credential_redirect_helper():
         config_litellm_params={"api_key": "sk-x"},
         request_litellm_params={"model": "gpt-4o"},
     )
+
+
+@pytest.mark.asyncio
+async def test_test_connection_model_name_path_authorizes_against_resolved_owner():
+    """When the deployment is resolved by model_name (no id), auth must still run
+    against the resolved deployment's owner, not the caller-supplied model_info."""
+    victim_deployment = {
+        "model_name": "victim-model",
+        "litellm_params": {
+            "model": "azure/gpt-4o",
+            "api_key": "sk-victim",
+            "api_base": "https://victim.example/v1",
+        },
+        "model_info": {"id": "victim-id", "team_id": "team-OWNER"},
+    }
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None  # no id resolution
+    mock_router.get_model_list.return_value = [victim_deployment]
+
+    captured = {}
+
+    async def _capture(*, model_params, **kwargs):
+        captured["team_id"] = model_params.model_info.team_id
+        return True
+
+    mock_auth = AsyncMock(side_effect=_capture)
+    mock_ahealth = AsyncMock(return_value={"status": "healthy"})
+
+    with contextlib.ExitStack() as stack:
+        for p in _health_test_connection_patches(
+            MagicMock(), mock_router, mock_auth, mock_ahealth
+        ):
+            stack.enter_context(p)
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "victim-model"},  # resolved by name, no id
+            model_info={"team_id": "team-ATTACKER"},
+            user_api_key_dict=MagicMock(user_id="attacker", token="t"),
+        )
+
+    assert captured.get("team_id") == "team-OWNER"
