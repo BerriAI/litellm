@@ -80,6 +80,7 @@ def _reject_os_environ_references(params: dict) -> None:
 
 _HEALTH_CREDENTIAL_FIELDS = (
     "api_key",
+    "litellm_credential_name",
     "aws_secret_access_key",
     "aws_session_token",
     "vertex_credentials",

@@ -1968,6 +1968,15 @@ def test_reject_inherited_credential_redirect_helper():
             config_litellm_params={"api_key": "sk-x", "api_base": "https://real"},
             request_litellm_params={"api_base": "https://attacker"},
         )
+    # inherited stored-credential-NAME (no inline api_key) + override -> also rejected
+    with pytest.raises(HTTPException):
+        _reject_inherited_credential_redirect(
+            config_litellm_params={
+                "litellm_credential_name": "openai-cred",
+                "api_base": "https://real",
+            },
+            request_litellm_params={"api_base": "https://attacker"},
+        )
     # request supplies its own credential -> allowed
     _reject_inherited_credential_redirect(
         config_litellm_params={"api_key": "sk-x"},
