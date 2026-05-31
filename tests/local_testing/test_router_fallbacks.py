@@ -1626,3 +1626,57 @@ async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbac
             resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
             == expected_attempted_fallbacks
         )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_model_group_alias_respects_fallbacks(sync_mode):
+    """
+    Related issue - https://github.com/BerriAI/litellm/issues/10317
+
+    When a request targets a model via ``model_group_alias``, fallbacks
+    declared against the underlying real model group should still fire.
+    Previously the fallback lookup was performed against the alias name
+    (e.g. ``"alias-model"``) which never matched a fallback keyed by the
+    real model (``"real-bad-model"``), so the router raised the original
+    error with ``No fallback model group found for original
+    model_group=alias-model``.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "real-bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        model_group_alias={"alias-model": "real-bad-model"},
+        fallbacks=[{"real-bad-model": ["my-good-model"]}],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="alias-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+    else:
+        response = await router.acompletion(
+            model="alias-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.model == "gpt-4o"
