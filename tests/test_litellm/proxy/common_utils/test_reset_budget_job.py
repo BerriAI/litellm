@@ -92,6 +92,37 @@ class MockLiteLLMEndUserTable:
         return self._find_many_results
 
 
+class MockBatcher:
+    """Captures per-row update calls and exposes them after commit().
+
+    Mirrors prisma's `db.batch_()` ergonomics enough that the reset job's
+    narrow-write helpers (`_write_key_reset_updates` et al) can run against
+    the mock and the test can assert on what would have been written.
+    """
+
+    def __init__(self):
+        self.calls: List[Dict[str, Any]] = []
+        self.committed: bool = False
+
+        class _Table:
+            def __init__(_self, table_name: str, outer: "MockBatcher"):
+                _self._table_name = table_name
+                _self._outer = outer
+
+            def update(_self, where, data):
+                _self._outer.calls.append(
+                    {"table": _self._table_name, "where": where, "data": data}
+                )
+
+        self.litellm_verificationtoken = _Table("key", self)
+        self.litellm_usertable = _Table("user", self)
+        self.litellm_teamtable = _Table("team", self)
+
+    async def commit(self):
+        self.committed = True
+        return self.calls
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
@@ -99,6 +130,19 @@ class MockDB:
         self.litellm_endusertable = MockLiteLLMEndUserTable()
         self.litellm_organizationtable = MockLiteLLMOrganizationTable()
         self.litellm_tagtable = MockLiteLLMTagTable()
+        self.batch_calls: List[Dict[str, Any]] = []
+
+    def batch_(self):
+        batcher = MockBatcher()
+        # Aggregate calls across all batches so tests can assert on cumulative writes.
+        original_commit = batcher.commit
+
+        async def _record_and_commit():
+            self.batch_calls.extend(batcher.calls)
+            return await original_commit()
+
+        batcher.commit = _record_and_commit  # type: ignore[assignment]
+        return batcher
 
 
 class MockPrismaClient:
@@ -205,6 +249,7 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
             "budget_duration": "30d",
             "budget_reset_at": now,
             "id": "test-key-1",
+            "token": "tok-key-1",
         },
     )
 
@@ -213,11 +258,16 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     # Run the test
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
-    # Verify results
-    assert len(mock_prisma_client.updated_data["key"]) == 1
-    updated_key = mock_prisma_client.updated_data["key"][0]
-    assert updated_key.spend == 0.0
-    assert updated_key.budget_reset_at > now
+    # The reset writes only {spend, budget_reset_at} per row via batch_().
+    # Full-row writes would re-detonate the Prisma DataError on rows carrying
+    # object_permission_id / budget_limits (see #27730).
+    key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
+    assert len(key_writes) == 1
+    write = key_writes[0]
+    assert write["where"] == {"token": "tok-key-1"}
+    assert write["data"]["spend"] == 0
+    assert write["data"]["budget_reset_at"] > now
+    assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
@@ -231,6 +281,7 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
             "budget_duration": "7d",
             "budget_reset_at": now,
             "id": "test-user-1",
+            "user_id": "uid-1",
         },
     )
 
@@ -239,11 +290,13 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
     # Run the test
     asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
 
-    # Verify results
-    assert len(mock_prisma_client.updated_data["user"]) == 1
-    updated_user = mock_prisma_client.updated_data["user"][0]
-    assert updated_user.spend == 0.0
-    assert updated_user.budget_reset_at > now
+    user_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "user"]
+    assert len(user_writes) == 1
+    write = user_writes[0]
+    assert write["where"] == {"user_id": "uid-1"}
+    assert write["data"]["spend"] == 0
+    assert write["data"]["budget_reset_at"] > now
+    assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
@@ -257,6 +310,7 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
             "budget_duration": "1mo",
             "budget_reset_at": now,
             "id": "test-team-1",
+            "team_id": "tid-1",
         },
     )
 
@@ -265,11 +319,13 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     # Run the test
     asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
 
-    # Verify results
-    assert len(mock_prisma_client.updated_data["team"]) == 1
-    updated_team = mock_prisma_client.updated_data["team"][0]
-    assert updated_team.spend == 0.0
-    assert updated_team.budget_reset_at > now
+    team_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "team"]
+    assert len(team_writes) == 1
+    write = team_writes[0]
+    assert write["where"] == {"team_id": "tid-1"}
+    assert write["data"]["spend"] == 0
+    assert write["data"]["budget_reset_at"] > now
+    assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
@@ -324,6 +380,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
             "budget_duration": "30d",
             "budget_reset_at": now,
             "id": "test-key-1",
+            "token": "tok-all-1",
         },
     )
 
@@ -335,6 +392,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
             "budget_duration": "7d",
             "budget_reset_at": now,
             "id": "test-user-1",
+            "user_id": "uid-all-1",
         },
     )
 
@@ -346,6 +404,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
             "budget_duration": "1mo",
             "budget_reset_at": now,
             "id": "test-team-1",
+            "team_id": "tid-all-1",
         },
     )
 
@@ -379,17 +438,22 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Run the test
     asyncio.run(reset_budget_job.reset_budget())
 
-    # Verify results
-    assert len(mock_prisma_client.updated_data["key"]) == 1
-    assert len(mock_prisma_client.updated_data["user"]) == 1
-    assert len(mock_prisma_client.updated_data["team"]) == 1
+    # key/user/team rows are written via batch_().<table>.update — verify each
+    # one fired exactly once with the narrow {spend, budget_reset_at} payload.
+    for table_name, where in [
+        ("key", {"token": "tok-all-1"}),
+        ("user", {"user_id": "uid-all-1"}),
+        ("team", {"team_id": "tid-all-1"}),
+    ]:
+        writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == table_name]
+        assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
+        assert writes[0]["where"] == where
+        assert writes[0]["data"]["spend"] == 0
+        assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
+
+    # Enduser + budget rows still go through update_data (not narrowed; different path).
     assert len(mock_prisma_client.updated_data["enduser"]) == 1
     assert len(mock_prisma_client.updated_data["budget"]) == 1
-
-    # Check that all spends were reset to 0
-    assert mock_prisma_client.updated_data["key"][0].spend == 0.0
-    assert mock_prisma_client.updated_data["user"][0].spend == 0.0
-    assert mock_prisma_client.updated_data["team"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
 
 
@@ -1396,6 +1460,105 @@ def test_reset_budget_for_teams_invalidates_redis_counter(
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(
         key="spend:team:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_does_not_zero_counter_when_db_write_fails(monkeypatch):
+    """
+    Regression for #27730 (the bypass-half).
+
+    If the DB write inside the reset job raises (e.g. Prisma DataError on a
+    row carrying object_permission_id or budget_limits), the Redis spend
+    counter MUST NOT be zeroed — that would let get_current_spend admit
+    requests past the cap while the DB row still holds the over-budget
+    spend.
+
+    Pre-fix: _reset_budget_common pre-zeroed the counter before the DB
+    write attempt, opening the bypass window.
+    Post-fix: counter invalidation lives in the caller, AFTER the DB write
+    commits. If the write raises, the post-write invalidation never runs.
+    """
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    prisma_client = MagicMock()
+
+    matching_key = type(
+        "Key",
+        (),
+        {
+            "spend": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now - timedelta(seconds=1),
+            "token": "sk-failing",
+        },
+    )
+
+    # get_data returns one key needing reset; the batched DB write then explodes.
+    async def fake_get_data(table_name, query_type, **kwargs):
+        if table_name == "key":
+            return [matching_key]
+        return []
+
+    prisma_client.get_data = fake_get_data
+
+    batcher = MagicMock()
+    batcher.litellm_verificationtoken.update = MagicMock()
+
+    async def failing_commit():
+        raise RuntimeError("simulated Prisma DataError on update")
+
+    batcher.commit = failing_commit
+    prisma_client.db.batch_ = MagicMock(return_value=batcher)
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MockProxyLogging(), prisma_client=prisma_client
+    )
+
+    asyncio.run(job.reset_budget_for_litellm_keys())
+
+    # CRITICAL: counter invalidation must NOT have been called at all —
+    # the DB write raised before the post-write invalidation loop. Using
+    # assert_not_called() instead of iterating call_args_list, because the
+    # latter is vacuously true when the list is empty (would pass even if
+    # the bypass were re-introduced via a different code path).
+    counter_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+def test_reset_budget_for_keys_writes_only_spend_and_reset_at(reset_budget_job, mock_prisma_client):
+    """
+    Regression for #27730 (the trigger-half).
+
+    The reset job must write only {spend, budget_reset_at} per row — never
+    the full key object. Sending the full object via the old update_data
+    batcher path made Prisma reject any row carrying object_permission_id
+    or budget_limits (both became non-NULL on UI-created keys after v1.84.0).
+    """
+    now = datetime.now(timezone.utc)
+    key_with_problematic_fields = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {
+            "spend": 50.0,
+            "budget_duration": "30d",
+            "budget_reset_at": now,
+            "token": "sk-problematic",
+            "object_permission_id": "perm-abc",   # would be rejected on update
+            "budget_limits": [{"max_budget": 5}],   # would be rejected on update
+            "metadata": {"some": "thing"},
+        },
+    )
+    mock_prisma_client.data["key"] = [key_with_problematic_fields]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
+    assert len(key_writes) == 1
+    payload_keys = set(key_writes[0]["data"].keys())
+    assert payload_keys == {"spend", "budget_reset_at"}, (
+        f"reset payload must not include any field besides spend / budget_reset_at, "
+        f"got: {payload_keys}. Any extra field (object_permission_id, budget_limits, etc.) "
+        f"trips Prisma DataError and detonates the whole batch."
     )
 
 
