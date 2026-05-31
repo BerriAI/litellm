@@ -174,10 +174,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
     @staticmethod
     def _iter_schema_description_refs(data: dict):
         """Yield ``(container, key)`` for every non-empty string ``description``
-        the proxy forwards to the model inside tool/function schemas: each
-        ``tools[].function`` and legacy ``functions[]`` entry plus every nested
-        ``description`` in their JSON-schema ``parameters``. Blocked text hidden
-        in any of them must be inspected and redacted like any other prompt."""
+        the proxy forwards to the model inside tool/function and structured-output
+        schemas: each ``tools[].function`` and legacy ``functions[]`` entry, the
+        ``response_format`` JSON schema, plus every nested ``description`` in their
+        JSON-schema ``parameters``/``schema``. Blocked text hidden in any of them
+        must be inspected and redacted like any other prompt."""
 
         stack: list = []
         for tool in data.get("tools") or []:
@@ -186,6 +187,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         for function in data.get("functions") or []:
             if isinstance(function, dict):
                 stack.append(function)
+        response_format = data.get("response_format")
+        if isinstance(response_format, dict):
+            stack.append(response_format)
         stack.reverse()
 
         while stack:
