@@ -2911,23 +2911,30 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-        elif custom_llm_provider == "anthropic":
-            api_key = (
-                api_key
-                or litellm.anthropic_key
-                or litellm.api_key
-                or os.environ.get("ANTHROPIC_API_KEY")
-            )
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            # call /messages
-            # default route for all anthropic models
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("ANTHROPIC_API_BASE")
-                or get_secret("ANTHROPIC_BASE_URL")
-                or "https://api.anthropic.com/v1/messages"
-            )
+        elif custom_llm_provider == "anthropic" or custom_llm_provider == "claude_max":
+            if custom_llm_provider == "claude_max":
+                from litellm.llms.claude_max.chat.transformation import ClaudeMaxConfig
+
+                claude_max_config = ClaudeMaxConfig()
+                api_key = api_key or claude_max_config.get_access_token()
+                api_base = claude_max_config.get_api_base(api_base)
+                headers = {**claude_max_config.get_default_headers(), **headers}
+                custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            else:
+                api_key = (
+                    api_key
+                    or litellm.anthropic_key
+                    or litellm.api_key
+                    or os.environ.get("ANTHROPIC_API_KEY")
+                )
+                custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+                api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret("ANTHROPIC_API_BASE")
+                    or get_secret("ANTHROPIC_BASE_URL")
+                    or "https://api.anthropic.com/v1/messages"
+                )
 
             # Check if we should disable automatic URL suffix appending
             disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
@@ -3487,7 +3494,7 @@ def completion(  # type: ignore # noqa: PLR0915
             raise ValueError(
                 "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
-        elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
+        elif custom_llm_provider in ("vertex_ai_beta", "gemini"):
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -3512,8 +3519,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("PALM_API_KEY")  # older palm api key should also work
                 or litellm.api_key
             )
-
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
+
             new_params = safe_deep_copy(optional_params or {})
             response = vertex_chat_completion.completion(  # type: ignore
                 model=model,
