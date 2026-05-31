@@ -179,23 +179,24 @@ class CatoNetworksGuardrail(CustomGuardrail):
         ``description`` in their JSON-schema ``parameters``. Blocked text hidden
         in any of them must be inspected and redacted like any other prompt."""
 
-        def walk(node: Any):
+        stack: list = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
+                stack.append(tool["function"])
+        for function in data.get("functions") or []:
+            if isinstance(function, dict):
+                stack.append(function)
+        stack.reverse()
+
+        while stack:
+            node = stack.pop()
             if isinstance(node, dict):
                 description = node.get("description")
                 if isinstance(description, str) and description:
                     yield node, "description"
-                for value in node.values():
-                    yield from walk(value)
+                stack.extend(reversed(list(node.values())))
             elif isinstance(node, list):
-                for item in node:
-                    yield from walk(item)
-
-        for tool in data.get("tools") or []:
-            if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
-                yield from walk(tool["function"])
-        for function in data.get("functions") or []:
-            if isinstance(function, dict):
-                yield from walk(function)
+                stack.extend(reversed(node))
 
     @classmethod
     def _extra_inspection_sources(cls, data: dict) -> list:
