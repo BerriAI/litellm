@@ -210,3 +210,30 @@ class TestImageGenerationEntryPointHeaders:
         mock_openai_client.images.generate.assert_called_once()
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
+
+    @pytest.mark.asyncio
+    async def test_custom_provider_is_used_before_async_entrypoint_runs(self):
+        import litellm
+
+        mock_image_data = MagicMock()
+        mock_image_data.model_dump.return_value = {
+            "created": 1700000000,
+            "data": [{"url": "https://example.com/image.png"}],
+        }
+
+        mock_openai_client = MagicMock()
+        mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+        mock_openai_client.api_key = "test-key"
+        mock_openai_client._base_url._uri_reference = "https://api.openai.com"
+
+        await litellm.aimage_generation(
+            model="Qwen-Image",
+            prompt="A white cat",
+            custom_llm_provider="openai",
+            client=mock_openai_client,
+            api_key="test-key",
+        )
+
+        mock_openai_client.images.generate.assert_called_once()
+        _, kwargs = mock_openai_client.images.generate.call_args
+        assert kwargs["model"] == "Qwen-Image"
