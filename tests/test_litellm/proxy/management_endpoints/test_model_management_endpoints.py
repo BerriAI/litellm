@@ -2544,3 +2544,17 @@ class TestModelMgmtAuthzHardening:
             self._assert_resupply(
                 {"sagemaker_base_url": "https://attacker.example"}, db
             )
+
+    def test_sts_endpoint_change_requires_web_identity_token_resupply(self):
+        from litellm.proxy._types import ProxyException
+
+        # Repointing aws_sts_endpoint must require re-supplying a stored web
+        # identity token; supplying an unrelated credential must not let it ride.
+        db = {
+            "aws_sts_endpoint": "https://sts.real",
+            "aws_web_identity_token": "stored-token",
+        }
+        with pytest.raises(ProxyException):
+            self._assert_resupply(
+                {"aws_sts_endpoint": "https://sts.attacker", "api_key": "x"}, db
+            )

@@ -83,6 +83,7 @@ _HEALTH_CREDENTIAL_FIELDS = (
     "litellm_credential_name",
     "aws_secret_access_key",
     "aws_session_token",
+    "aws_web_identity_token",
     "azure_ad_token",
     "vertex_credentials",
 )
