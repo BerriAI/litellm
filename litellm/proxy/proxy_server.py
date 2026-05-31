@@ -9,6 +9,7 @@ import random
 import re
 import secrets
 import shutil
+import atexit
 import subprocess
 import sys
 import tempfile
@@ -1671,12 +1672,20 @@ try:
             verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
         else:
             tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_")
-            shutil.copytree(ui_path, tmp_dir, dirs_exist_ok=True)
-            _restructure_ui_html_files(tmp_dir)
-            ui_path = tmp_dir
-            verbose_proxy_logger.info(
-                f"Copied read-only UI to temp dir and restructured: {tmp_dir}"
-            )
+            try:
+                shutil.copytree(ui_path, tmp_dir, dirs_exist_ok=True)
+                _restructure_ui_html_files(tmp_dir)
+                atexit.register(shutil.rmtree, tmp_dir, True)
+                ui_path = tmp_dir
+                verbose_proxy_logger.info(
+                    f"Copied read-only UI to temp dir and restructured: {tmp_dir}"
+                )
+            except Exception:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                verbose_proxy_logger.warning(
+                    f"Failed to copy and restructure UI from {ui_path}; "
+                    f"extensionless routes like /ui/login may return 404"
+                )
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
