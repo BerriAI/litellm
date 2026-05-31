@@ -1583,6 +1583,14 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
+
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
     user_alias: Optional[str] = None
     user_role: Optional[
         Literal[
@@ -1642,6 +1650,13 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
     # else they will get overwritten
     user_id: Optional[str] = None
     user_email: Optional[str] = None
+
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     @model_validator(mode="before")
     @classmethod

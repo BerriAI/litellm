@@ -87,3 +87,24 @@ def test_user_api_key_auth_hashes_authorization_header_form_of_key():
         assert from_header.api_key == baseline.api_key
         assert from_header.token == baseline.token
         assert not from_header.api_key.lower().startswith("bearer")
+
+
+def test_new_user_request_strips_email_whitespace():
+    from litellm.proxy._types import NewUserRequest
+
+    req = NewUserRequest(user_email="  user@example.com  ")
+    assert req.user_email == "user@example.com"
+
+
+def test_update_user_request_strips_email_whitespace():
+    from litellm.proxy._types import UpdateUserRequest
+
+    req = UpdateUserRequest(user_email="\tuser@example.com\n")
+    assert req.user_email == "user@example.com"
+
+
+def test_new_user_request_none_email_stays_none():
+    from litellm.proxy._types import NewUserRequest
+
+    req = NewUserRequest(user_email=None)
+    assert req.user_email is None
