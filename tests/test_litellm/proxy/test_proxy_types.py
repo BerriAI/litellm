@@ -108,3 +108,51 @@ def test_new_user_request_none_email_stays_none():
 
     req = NewUserRequest(user_email=None)
     assert req.user_email is None
+
+
+def test_update_user_request_blank_email_raises():
+    import pytest
+    from pydantic import ValidationError
+    from litellm.proxy._types import UpdateUserRequest
+
+    with pytest.raises(ValidationError, match="Either user id or user email"):
+        UpdateUserRequest(user_email="   ")
+
+
+def test_member_base_strips_email_whitespace():
+    from litellm.proxy._types import MemberBase
+
+    m = MemberBase(user_email="  member@example.com  ")
+    assert m.user_email == "member@example.com"
+
+
+def test_member_base_blank_email_raises():
+    import pytest
+    from pydantic import ValidationError
+    from litellm.proxy._types import MemberBase
+
+    with pytest.raises(ValidationError, match="Either user id or user email"):
+        MemberBase(user_email="   ")
+
+
+def test_member_delete_request_strips_email_whitespace():
+    from litellm.proxy._types import MemberDeleteRequest
+
+    m = MemberDeleteRequest(user_email=" del@example.com ")
+    assert m.user_email == "del@example.com"
+
+
+def test_member_delete_request_blank_email_raises():
+    import pytest
+    from pydantic import ValidationError
+    from litellm.proxy._types import MemberDeleteRequest
+
+    with pytest.raises(ValidationError, match="Either user id or user email"):
+        MemberDeleteRequest(user_email="   ")
+
+
+def test_new_user_request_blank_email_becomes_none():
+    from litellm.proxy._types import NewUserRequest
+
+    req = NewUserRequest(user_email="   ")
+    assert req.user_email is None

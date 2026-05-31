@@ -1588,7 +1588,8 @@ class NewUserRequest(GenerateRequestBase):
     @classmethod
     def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
         if isinstance(v, str):
-            return v.strip()
+            stripped = v.strip()
+            return stripped or None
         return v
 
     user_alias: Optional[str] = None
@@ -1655,13 +1656,16 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
     @classmethod
     def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
         if isinstance(v, str):
-            return v.strip()
+            stripped = v.strip()
+            return stripped or None
         return v
 
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
+        user_email = values.get("user_email")
+        email_is_blank = user_email is None or not str(user_email).strip()
+        if values.get("user_id") is None and email_is_blank:
             raise ValueError("Either user id or user email must be provided")
         return values
 
@@ -1790,12 +1794,22 @@ class MemberBase(LiteLLMPydanticObjectBase):
         description="The email address of the user to add. Either user_id or user_email must be provided",
     )
 
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped or None
+        return v
+
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
         if not isinstance(values, dict):
             raise ValueError("input needs to be a dictionary")
-        if values.get("user_id") is None and values.get("user_email") is None:
+        user_email = values.get("user_email")
+        email_is_blank = user_email is None or not str(user_email).strip()
+        if values.get("user_id") is None and email_is_blank:
             raise ValueError("Either user id or user email must be provided")
         return values
 
@@ -3993,10 +4007,20 @@ class MemberDeleteRequest(LiteLLMPydanticObjectBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
+    @field_validator("user_email", mode="before")
+    @classmethod
+    def strip_user_email(cls, v: Optional[str]) -> Optional[str]:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped or None
+        return v
+
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
+        user_email = values.get("user_email")
+        email_is_blank = user_email is None or not str(user_email).strip()
+        if values.get("user_id") is None and email_is_blank:
             raise ValueError("Either user id or user email must be provided")
         return values
 
