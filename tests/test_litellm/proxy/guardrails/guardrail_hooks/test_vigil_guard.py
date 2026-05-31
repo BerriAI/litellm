@@ -166,12 +166,10 @@ async def test_sanitized_replaces_text():
             {
                 "decision": "SANITIZED",
                 "sanitizedText": "S",
-                "redactedText": "R",
                 "outputText": "O",
             },
             "S",
         ),
-        ({"decision": "SANITIZED", "redactedText": "R", "outputText": "O"}, "R"),
         ({"decision": "SANITIZED", "outputText": "O"}, "O"),
         ({"decision": "SANITIZED", "sanitizedText": ""}, ""),
         ({"decision": "SANITIZED"}, "orig"),

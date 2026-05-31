@@ -402,7 +402,7 @@ class VigilGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _resolve_sanitized_text(original: str, analysis: Dict[str, Any]) -> str:
-        for key in ("sanitizedText", "redactedText", "outputText"):
+        for key in ("sanitizedText", "outputText"):
             value = analysis.get(key)
             if isinstance(value, str):
                 return value
