@@ -6082,8 +6082,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _cached_get_model_info(
+def _build_model_info(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -6111,11 +6110,18 @@ def _cached_get_model_info(
     # if verbose_logger.isEnabledFor(logging.DEBUG):
     # verbose_logger.debug(f"model_info: {_model_info}")
 
-    returned_model_info = ModelInfo(
-        **_model_info, supported_openai_params=supported_openai_params
-    )
+    return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
 
-    return returned_model_info
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _cached_get_model_info(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+) -> ModelInfo:
+    return _build_model_info(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
 
 
 def get_model_info(
@@ -6195,11 +6201,9 @@ def get_model_info(
         }
     """
     # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys bypass the cache.
+    # kept out of the cache key; explicit keys are resolved without the cache.
     if api_key is not None:
-        return _cached_get_model_info.__wrapped__(
-            model, custom_llm_provider, api_base, api_key
-        )
+        return _build_model_info(model, custom_llm_provider, api_base, api_key)
     return _cached_get_model_info(model, custom_llm_provider, api_base)
 
 
