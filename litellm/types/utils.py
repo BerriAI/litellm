@@ -148,6 +148,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -3597,6 +3600,10 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
+
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
     )
 
 
