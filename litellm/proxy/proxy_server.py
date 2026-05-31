@@ -1659,33 +1659,38 @@ try:
                     # Another process may have already moved this file.
                     continue
 
-    try:
-        is_pre_restructured = _is_ui_pre_restructured(ui_path)
-        is_writable = os.access(ui_path, os.W_OK)
-
-        if is_pre_restructured:
+    def _prepare_ui_directory(path: str) -> str:
+        """Return a fully restructured UI path, copying to a temp dir if the source is read-only."""
+        if _is_ui_pre_restructured(path):
             verbose_proxy_logger.info(
-                f"Skipping UI restructuring: {ui_path} is already pre-restructured"
+                f"Skipping UI restructuring: {path} is already pre-restructured"
             )
-        elif is_writable:
-            _restructure_ui_html_files(ui_path)
-            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
-        else:
-            tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_")
-            try:
-                shutil.copytree(ui_path, tmp_dir, dirs_exist_ok=True)
-                _restructure_ui_html_files(tmp_dir)
-                atexit.register(shutil.rmtree, tmp_dir, True)
-                ui_path = tmp_dir
-                verbose_proxy_logger.info(
-                    f"Copied read-only UI to temp dir and restructured: {tmp_dir}"
-                )
-            except Exception:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                verbose_proxy_logger.warning(
-                    f"Failed to copy and restructure UI from {ui_path}; "
-                    f"extensionless routes like /ui/login may return 404"
-                )
+            return path
+
+        if os.access(path, os.W_OK):
+            _restructure_ui_html_files(path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {path}")
+            return path
+
+        tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_")
+        try:
+            shutil.copytree(path, tmp_dir, dirs_exist_ok=True, symlinks=True)
+            _restructure_ui_html_files(tmp_dir)
+            atexit.register(shutil.rmtree, tmp_dir, True)
+            verbose_proxy_logger.info(
+                f"Copied read-only UI to temp dir and restructured: {tmp_dir}"
+            )
+            return tmp_dir
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            verbose_proxy_logger.warning(
+                f"Failed to copy and restructure UI from {path}; "
+                f"extensionless routes like /ui/login may return 404"
+            )
+            return path
+
+    try:
+        ui_path = _prepare_ui_directory(ui_path)
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"

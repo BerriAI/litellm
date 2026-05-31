@@ -646,6 +646,70 @@ def test_read_only_ui_dir_falls_back_to_temp_dir_for_extensionless_routes(tmp_pa
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_prepare_ui_uses_temp_dir_when_not_writable(tmp_path, monkeypatch):
+    import shutil
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "login.html").write_text("<html>login</html>")
+    (ui_root / "_next").mkdir()
+
+    monkeypatch.setattr(proxy_server.os, "access", lambda path, mode: False)
+
+    result = proxy_server._prepare_ui_directory(str(ui_root))
+    try:
+        assert result != str(ui_root)
+        assert (Path(result) / "login" / "index.html").exists()
+        assert not (Path(result) / "login.html").exists()
+
+        app = FastAPI()
+        app.mount("/ui", StaticFiles(directory=result, html=True), name="ui")
+        response = TestClient(app).get("/ui/login")
+        assert response.status_code == 200
+        assert "login" in response.text
+    finally:
+        shutil.rmtree(result, ignore_errors=True)
+
+
+def test_prepare_ui_cleans_up_temp_dir_on_copy_failure(tmp_path, monkeypatch):
+    import shutil
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "_next").mkdir()
+
+    monkeypatch.setattr(proxy_server.os, "access", lambda path, mode: False)
+    monkeypatch.setattr(
+        proxy_server.shutil,
+        "copytree",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    import tempfile
+
+    created_dirs: list = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def tracking_mkdtemp(**kwargs):
+        d = real_mkdtemp(**kwargs)
+        created_dirs.append(d)
+        return d
+
+    monkeypatch.setattr(proxy_server.tempfile, "mkdtemp", tracking_mkdtemp)
+
+    result = proxy_server._prepare_ui_directory(str(ui_root))
+
+    assert result == str(ui_root)
+    for d in created_dirs:
+        assert not Path(d).exists(), f"temp dir {d} was not cleaned up"
+
+
 def test_admin_ui_export_serves_nested_extensionless_routes():
     out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
