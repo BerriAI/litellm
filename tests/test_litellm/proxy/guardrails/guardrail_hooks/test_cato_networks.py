@@ -16,7 +16,7 @@ from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import
     CatoNetworksGuardrailMissingSecrets,
 )
 from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ResponsesAPIResponse
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -2127,6 +2127,143 @@ async def test_post_call_success_hook_redacts_both_content_and_tool_arguments():
     message = result.choices[0].message
     assert message.content == "Sure [NAME_1], sending now"
     assert message.tool_calls[0].function.arguments == '{"to": "[NAME_1]"}'
+
+
+def _make_responses_api_response(output: list) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(id="resp-1", created_at=0, output=output)
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_redacts_responses_api_output_text():
+    """``/v1/responses`` returns a ``ResponsesAPIResponse``; the post-call hook must
+    inspect and redact ``output[*].content[*].text`` so generated text cannot bypass
+    the Cato output guardrail by using the Responses API."""
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "Hello [NAME_1]"},
+                ]
+            },
+        }
+    )
+    response = _make_responses_api_response(
+        [
+            {
+                "type": "message",
+                "id": "msg-1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello Brian"}],
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = anonymize_response
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    posted = mock_post.call_args.kwargs["json"]["messages"]
+    assert posted[-1] == {"role": "assistant", "content": "Hello Brian"}
+    assert result.output[0]["content"][0]["text"] == "Hello [NAME_1]"
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_redacts_responses_api_function_call_arguments():
+    """A Responses API ``function_call`` output item carries model-generated text in
+    ``arguments``; the hook must inspect and redact it even when there is no
+    ``output_text`` block."""
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "email my doctor"}]}
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "email my doctor"},
+                    {"role": "assistant", "content": '{"recipient": "[NAME_1]"}'},
+                ]
+            },
+        }
+    )
+    response = _make_responses_api_response(
+        [
+            {
+                "type": "function_call",
+                "id": "fc-1",
+                "call_id": "call-1",
+                "name": "send_email",
+                "arguments": '{"recipient": "Brian"}',
+                "status": "completed",
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = anonymize_response
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    posted = mock_post.call_args.kwargs["json"]["messages"]
+    assert posted[-1] == {"role": "assistant", "content": '{"recipient": "Brian"}'}
+    assert result.output[0].arguments == '{"recipient": "[NAME_1]"}'
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_blocks_responses_api_output():
+    """A ``block_action`` on Responses API output must raise so the blocked text never
+    reaches the caller."""
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "hi"}]}
+    block_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"secrets": {}}},
+            "required_action": {
+                "action_type": "block_action",
+                "detection_message": "blocked responses output",
+                "policy_name": "secrets",
+            },
+        }
+    )
+    response = _make_responses_api_response(
+        [
+            {
+                "type": "message",
+                "id": "msg-1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hunter2"}],
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=block_response,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await guard.async_post_call_success_hook(
+                data=request_data,
+                response=response,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "blocked responses output"
+    assert response.output[0]["content"][0]["text"] == "hunter2"
 
 
 # -----------------------------------------------------------------------------

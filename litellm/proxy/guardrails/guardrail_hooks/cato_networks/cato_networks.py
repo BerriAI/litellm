@@ -37,6 +37,7 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
+    ResponsesAPIResponse,
 )
 
 if TYPE_CHECKING:
@@ -463,36 +464,91 @@ class CatoNetworksGuardrail(CustomGuardrail):
         else:
             message.tool_calls[idx].function.arguments = redacted
 
+    @staticmethod
+    def _responses_output_field(item: Any, key: str) -> Any:
+        return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+    @classmethod
+    def _responses_output_fragments(cls, response: ResponsesAPIResponse) -> list:
+        """Assistant text the Responses API returns to the caller: every
+        ``output_text`` content block plus every function-call ``arguments``
+        string, each paired with the ``(container, key)`` a Cato redaction is
+        written back to. Output items and their content may be pydantic objects
+        or plain dicts, so both access patterns are handled."""
+        fragments: list = []
+        for item in response.output or []:
+            item_type = cls._responses_output_field(item, "type")
+            if item_type == "function_call":
+                arguments = cls._responses_output_field(item, "arguments")
+                if isinstance(arguments, str) and arguments:
+                    fragments.append((item, "arguments", arguments))
+            elif item_type == "message":
+                for content in cls._responses_output_field(item, "content") or []:
+                    if cls._responses_output_field(content, "type") != "output_text":
+                        continue
+                    text = cls._responses_output_field(content, "text")
+                    if isinstance(text, str) and text:
+                        fragments.append((content, "text", text))
+        return fragments
+
+    @staticmethod
+    def _apply_responses_output_fragment(
+        container: Any, key: str, redacted: str
+    ) -> None:
+        if isinstance(container, dict):
+            container[key] = redacted
+        else:
+            setattr(container, key, redacted)
+
+    async def _inspect_output_text(
+        self,
+        data: dict,
+        text: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        user_email: Optional[str],
+    ) -> Optional[str]:
+        """Run the Cato output guardrail on a single assistant text fragment.
+        Raises on a block action and returns the redacted replacement, or
+        ``None`` when the fragment must be left unchanged."""
+        cato_output_guardrail_result = await self.call_cato_guardrail_on_output(
+            data,
+            text,
+            hook="output",
+            key_alias=user_api_key_dict.key_alias,
+            user_email=user_email,
+        )
+        if cato_output_guardrail_result:
+            return cato_output_guardrail_result.get("redacted_output")
+        return None
+
     async def async_post_call_success_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
     ) -> Any:
+        user_email = self._resolve_cato_user_email(user_api_key_dict)
         if isinstance(response, ModelResponse) and response.choices:
-            user_email = self._resolve_cato_user_email(user_api_key_dict)
             for choice in response.choices:
                 if not isinstance(choice, Choices):
                     continue
                 for target, text in self._output_fragments(choice.message):
-                    cato_output_guardrail_result = (
-                        await self.call_cato_guardrail_on_output(
-                            data,
-                            text,
-                            hook="output",
-                            key_alias=user_api_key_dict.key_alias,
-                            user_email=user_email,
-                        )
-                    )
-                    redacted_output = (
-                        cato_output_guardrail_result.get("redacted_output")
-                        if cato_output_guardrail_result
-                        else None
+                    redacted_output = await self._inspect_output_text(
+                        data, text, user_api_key_dict, user_email
                     )
                     if redacted_output is not None:
                         self._apply_output_fragment(
                             choice.message, target, redacted_output
                         )
+        elif isinstance(response, ResponsesAPIResponse):
+            for container, key, text in self._responses_output_fragments(response):
+                redacted_output = await self._inspect_output_text(
+                    data, text, user_api_key_dict, user_email
+                )
+                if redacted_output is not None:
+                    self._apply_responses_output_fragment(
+                        container, key, redacted_output
+                    )
         return response
 
     async def async_post_call_streaming_iterator_hook(
