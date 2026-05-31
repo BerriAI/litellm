@@ -1978,3 +1978,22 @@ def test_reject_inherited_credential_redirect_helper():
         config_litellm_params={"api_key": "sk-x"},
         request_litellm_params={"model": "gpt-4o"},
     )
+
+
+def test_reject_ssrf_destination_helper():
+    import litellm
+    from fastapi import HTTPException
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _reject_ssrf_destination,
+    )
+
+    # Internal/metadata target is rejected when URL validation is on.
+    with patch.object(litellm, "user_url_validation", True):
+        with pytest.raises(HTTPException):
+            _reject_ssrf_destination(
+                {"api_base": "http://169.254.169.254/latest/meta-data/"}
+            )
+    # The opt-out toggle is honored (internal endpoints / Ollama).
+    with patch.object(litellm, "user_url_validation", False):
+        _reject_ssrf_destination({"api_base": "http://127.0.0.1:8080"})

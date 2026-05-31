@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -119,6 +120,26 @@ def _reject_inherited_credential_redirect(
                 "error": "Cannot override the connection target (e.g. api_base) while inheriting stored credentials. Supply your own api_key, or omit the destination override."
             },
         )
+
+
+def _reject_ssrf_destination(litellm_params: dict) -> None:
+    """Block a (possibly request-overridden) api_base/base_url that resolves to an
+    internal/metadata target. Gated on litellm.user_url_validation (default True)
+    with user_url_allowed_hosts as the allowlist escape hatch, mirroring the
+    request-time guard so /health/test_connection cannot be used for SSRF."""
+    if not getattr(litellm, "user_url_validation", False):
+        return
+    for url_field in ("api_base", "base_url"):
+        url_value = litellm_params.get(url_field)
+        if not isinstance(url_value, str) or not url_value:
+            continue
+        try:
+            validate_url(url_value)
+        except SSRFError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"{url_field} is rejected by the SSRF guard: {e}"},
+            )
 
 
 def get_callback_identifier(callback):
@@ -1893,6 +1914,8 @@ async def test_model_connection(  # noqa: PLR0915
             config_litellm_params=config_litellm_params,
             request_litellm_params=request_litellm_params,
         )
+        # Block SSRF to internal/metadata targets via the (overridden) destination.
+        _reject_ssrf_destination(litellm_params)
 
         ## Auth check — when the deployment was resolved by id, authorize against
         ## its real owner (model_info), not the caller-supplied model_info, so a
