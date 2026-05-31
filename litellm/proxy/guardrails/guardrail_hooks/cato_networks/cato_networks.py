@@ -172,25 +172,36 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_tool_function_descriptions(data: dict):
-        """Yield the ``function`` dict of every request tool carrying a non-empty
-        string ``description``. Descriptions are forwarded to the model, so blocked
-        text placed there must be inspected and redacted like any other prompt."""
+    def _iter_schema_description_refs(data: dict):
+        """Yield ``(container, key)`` for every non-empty string ``description``
+        the proxy forwards to the model inside tool/function schemas: each
+        ``tools[].function`` and legacy ``functions[]`` entry plus every nested
+        ``description`` in their JSON-schema ``parameters``. Blocked text hidden
+        in any of them must be inspected and redacted like any other prompt."""
+
+        def walk(node: Any):
+            if isinstance(node, dict):
+                description = node.get("description")
+                if isinstance(description, str) and description:
+                    yield node, "description"
+                for value in node.values():
+                    yield from walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    yield from walk(item)
+
         for tool in data.get("tools") or []:
-            if not isinstance(tool, dict):
-                continue
-            function = tool.get("function")
-            if not isinstance(function, dict):
-                continue
-            description = function.get("description")
-            if isinstance(description, str) and description:
-                yield function
+            if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
+                yield from walk(tool["function"])
+        for function in data.get("functions") or []:
+            if isinstance(function, dict):
+                yield from walk(function)
 
     @classmethod
     def _extra_inspection_sources(cls, data: dict) -> list:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
-        ``prompt`` and ``tools[].function.description``. Returned as
+        ``prompt`` and tool/function schema ``description`` fields. Returned as
         ``(field, messages)`` in a fixed order so the anonymize path can slice
         redactions back to the field they came from."""
         sources: list = []
@@ -205,12 +216,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
         prompt_messages = cls._prompt_inspection_messages(data.get("prompt"))
         if prompt_messages:
             sources.append(("prompt", prompt_messages))
-        tool_descriptions = [
-            {"role": "system", "content": function["description"]}
-            for function in cls._iter_tool_function_descriptions(data)
+        schema_descriptions = [
+            {"role": "system", "content": container[key]}
+            for container, key in cls._iter_schema_description_refs(data)
         ]
-        if tool_descriptions:
-            sources.append(("tools", tool_descriptions))
+        if schema_descriptions:
+            sources.append(("schema_descriptions", schema_descriptions))
         return sources
 
     async def call_cato_guardrail(
@@ -295,16 +306,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
-        elif field == "tools":
-            cls._apply_tool_redaction(data, redacted)
+        elif field == "schema_descriptions":
+            cls._apply_schema_description_redaction(data, redacted)
 
     @classmethod
-    def _apply_tool_redaction(cls, data: dict, redacted: list) -> None:
+    def _apply_schema_description_redaction(cls, data: dict, redacted: list) -> None:
         redactions = iter(redacted)
-        for function in cls._iter_tool_function_descriptions(data):
+        for container, key in cls._iter_schema_description_refs(data):
             replacement = next(redactions, None)
             if replacement is not None and replacement.get("content") is not None:
-                function["description"] = replacement["content"]
+                container[key] = replacement["content"]
 
     @staticmethod
     def _apply_prompt_redaction(data: dict, redacted: list) -> None:
