@@ -380,7 +380,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 redacted_output = all_redacted[assistant_index].get("content")
                 if redacted_output is not None:
                     return {"redacted_output": redacted_output}
-        return {"redacted_output": output}
+        return None
 
     def _handle_block_action_on_output(
         self, analysis_result: Any, required_action: Any
