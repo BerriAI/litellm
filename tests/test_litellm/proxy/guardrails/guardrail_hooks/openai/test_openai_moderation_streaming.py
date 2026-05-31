@@ -67,10 +67,7 @@ async def test_openai_moderation_guardrail_streaming_latency():
             request_data = {
                 "messages": [{"role": "user", "content": "hi"}],
                 "guardrail_to_apply": openai_guardrail,
-                "metadata": {
-                    "guardrails": ["test-openai-moderation"],
-                    "guardrail_config": {"streaming_sampling_rate": 1},
-                },  # Check every chunk for test
+                "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
             chunks_received = 0
@@ -161,10 +158,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
             request_data = {
                 "messages": [{"role": "user", "content": "generate hate"}],
                 "guardrail_to_apply": openai_guardrail,
-                "metadata": {
-                    "guardrails": ["test-openai-moderation"],
-                    "guardrail_config": {"streaming_sampling_rate": 1},
-                },
+                "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
             # Should raise HTTPException
@@ -242,10 +236,7 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
         request_data = {
             "messages": [{"role": "user", "content": "hi"}],
             "guardrail_to_apply": openai_guardrail,
-            "metadata": {
-                "guardrails": ["test-openai-moderation"],
-                "guardrail_config": {"streaming_sampling_rate": 1},
-            },
+            "metadata": {"guardrails": ["test-openai-moderation"]},
         }
 
         with (
@@ -284,3 +275,230 @@ async def test_openai_moderation_streaming_end_of_stream_request_data_passthroug
             guardrail_resp, dict
         ), f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
         assert "results" in guardrail_resp
+
+
+def _make_stream_chunk(content: str, finish_reason=None):
+    """Build a real ModelResponseStream so the handler's isinstance checks pass."""
+    import litellm
+    from litellm.types.utils import Delta
+
+    return ModelResponseStream(
+        model="gpt-4",
+        choices=[
+            litellm.StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_streaming_default_uses_sampled_cadence():
+    """Default config samples every 5th streamed chunk and runs a final aggregate
+    pass after the stream ends. 10 chunks → sampled at chunks 5 and 10 → 2 in-stream
+    calls, plus 1 final = 3 total.
+    """
+    import litellm
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        openai_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = MagicMock()
+        mock_mod_response.results = []
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_model_response = ModelResponse(
+            id="mock-response",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(role="assistant", content="ABCDEFGHIJ"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        with (
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ) as patched_make_request,
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=mock_model_response,
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": openai_guardrail,
+                "metadata": {"guardrails": ["test-openai-moderation"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        assert patched_make_request.await_count == 3, (
+            f"Expected 3 moderation calls (2 sampled at chunks 5 / 10 + 1 final), "
+            f"got {patched_make_request.await_count}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_streaming_end_of_stream_only_opt_in_calls_moderation_once():
+    """Opt-in streaming_end_of_stream_only=True skips in-stream sampling and runs
+    moderation once on the assembled response at end of stream.
+    """
+    import litellm
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        openai_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+            streaming_end_of_stream_only=True,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = MagicMock()
+        mock_mod_response.results = []
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_model_response = ModelResponse(
+            id="mock-response",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(role="assistant", content="ABCDEFGHIJ"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        with (
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ) as patched_make_request,
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=mock_model_response,
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": openai_guardrail,
+                "metadata": {"guardrails": ["test-openai-moderation"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        assert patched_make_request.await_count == 1, (
+            f"Expected exactly one moderation call at end of stream, "
+            f"got {patched_make_request.await_count}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_streaming_sampled_when_end_of_stream_only_disabled():
+    """With streaming_end_of_stream_only=False and streaming_sampling_rate=2,
+    moderation runs every 2nd chunk during the stream, plus once more at end.
+    """
+    import litellm
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        openai_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=2,
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = MagicMock()
+        mock_mod_response.results = []
+
+        async def mock_stream():
+            chunks_data = ["A", "B", "C", "D", "E", "F"]
+            for i, content in enumerate(chunks_data):
+                yield _make_stream_chunk(
+                    content,
+                    finish_reason="stop" if i == len(chunks_data) - 1 else None,
+                )
+
+        mock_model_response = ModelResponse(
+            id="mock-response",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(role="assistant", content="ABCDEF"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        with (
+            patch.object(
+                openai_guardrail, "async_make_request", return_value=mock_mod_response
+            ) as patched_make_request,
+            patch(
+                "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+                return_value=mock_model_response,
+            ),
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+            request_data = {
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": openai_guardrail,
+                "metadata": {"guardrails": ["test-openai-moderation"]},
+            }
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        # 6 chunks, sampling_rate=2 → in-stream calls at chunks 2, 4, 6 (3 calls),
+        # plus the final aggregate pass after the stream ends (1 call) = 4 total.
+        assert patched_make_request.await_count == 4, (
+            f"Expected 4 moderation calls (3 sampled + 1 final aggregate), "
+            f"got {patched_make_request.await_count}"
+        )
