@@ -130,16 +130,17 @@ def _decrypted_param(value: object) -> object:
     )
 
 
-def _strip_credentials_on_destination_change(
-    merged_litellm_params: dict,
+def _assert_credential_resupplied_on_destination_change(
     patch_plaintext: dict,
     db_plaintext: "Callable[[str], object]",
 ) -> None:
-    """When a destination field (api_base/base_url/provider endpoint) changes,
-    drop every INHERITED credential — one the patch did not itself supply — so a
-    stored secret is never silently re-pointed at a new (possibly attacker-
-    controlled) endpoint. Cleared per field: supplying one credential must not
-    preserve the others."""
+    """Changing a model's destination (api_base/base_url/provider endpoint) must
+    not send an inherited credential to the new endpoint. Clearing the credential
+    is NOT sufficient: an empty/absent key falls back to the proxy's environment
+    secret (e.g. OPENAI_API_KEY) and would still be sent there. So require the
+    caller to re-supply, with a non-empty value, every credential the model
+    already had; otherwise reject. A non-empty re-supplied value is the caller's
+    own credential going to their own endpoint, which is allowed."""
     destination_changed = any(
         field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
         for field in _DESTINATION_LITELLM_PARAMS
@@ -147,8 +148,17 @@ def _strip_credentials_on_destination_change(
     if not destination_changed:
         return
     for field in _CREDENTIAL_LITELLM_PARAMS:
-        if field not in patch_plaintext:
-            merged_litellm_params.pop(field, None)
+        if db_plaintext(field) and not patch_plaintext.get(field):
+            raise ProxyException(
+                message=(
+                    f"Re-provide {field} (non-empty) when changing the model "
+                    "endpoint; a stored credential cannot be reused with, or "
+                    "cleared in favor of an environment fallback at, a new destination."
+                ),
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=field,
+            )
 
 
 def _is_pricing_field(field: str) -> bool:
@@ -356,18 +366,6 @@ def update_db_model(
                 merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
-    # Refuse to silently re-point a stored credential at a new endpoint: if the
-    # destination changed without a fresh credential, drop the inherited secret
-    # so it must be re-entered rather than forwarded to the new destination.
-    if updated_patch.litellm_params:
-        _strip_credentials_on_destination_change(
-            merged_deployment_dict["litellm_params"],  # type: ignore
-            patch_litellm_plaintext,
-            lambda field: _decrypted_param(
-                getattr(db_model.litellm_params, field, None)
-            ),
-        )
-
     # convert to prisma compatible format
 
     prisma_compatible_model_dict = PrismaCompatibleUpdateDBModel()
@@ -491,6 +489,14 @@ async def patch_model(
             model_info=patch_data.model_info,
             user_api_key_dict=user_api_key_dict,
         )
+
+        if patch_data.litellm_params and not is_proxy_admin(user_api_key_dict):
+            _assert_credential_resupplied_on_destination_change(
+                patch_data.litellm_params.model_dump(exclude_none=True),
+                lambda field: _decrypted_param(
+                    getattr(db_model.litellm_params, field, None)
+                ),
+            )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -1519,13 +1525,13 @@ async def update_model(
                     pass
 
             # Don't silently re-point an inherited credential at a new endpoint.
-            _strip_credentials_on_destination_change(
-                merged_dictionary,
-                _new_litellm_params_dict,
-                lambda field: _decrypted_param(
-                    _existing_litellm_params_dict.get(field)
-                ),
-            )
+            if not is_proxy_admin(user_api_key_dict):
+                _assert_credential_resupplied_on_destination_change(
+                    _new_litellm_params_dict,
+                    lambda field: _decrypted_param(
+                        _existing_litellm_params_dict.get(field)
+                    ),
+                )
 
             _data: dict = {
                 "litellm_params": json.dumps(merged_dictionary),  # type: ignore

@@ -1956,81 +1956,50 @@ class TestModelMgmtAuthzHardening:
         info = json.loads(result["model_info"])
         assert info["id"] == "real-id"
 
-    def test_api_base_change_clears_inherited_credential(self):
-        import litellm
+    @staticmethod
+    def _assert_resupply(patch_plaintext, db):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
+            _assert_credential_resupplied_on_destination_change,
         )
-        from litellm.types.router import updateLiteLLMParams
 
-        with (
-            patch.object(litellm, "user_url_validation", False),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value, **kwargs: value,
-            ),
-        ):
-            result = update_db_model(
-                db_model=self._db_model_with_secret(),
-                updated_patch=updateDeployment(
-                    litellm_params=updateLiteLLMParams(
-                        api_base="https://attacker.example.com"
-                    )
-                ),
-            )
-        params = json.loads(result["litellm_params"])
-        assert "api_key" not in params  # stored secret must not ride to new base
-
-    def test_api_base_change_with_new_key_keeps_credential(self):
-        import litellm
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
+        _assert_credential_resupplied_on_destination_change(
+            patch_plaintext, lambda field: db.get(field)
         )
-        from litellm.types.router import updateLiteLLMParams
 
-        with (
-            patch.object(litellm, "user_url_validation", False),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value, **kwargs: value,
-            ),
-        ):
-            result = update_db_model(
-                db_model=self._db_model_with_secret(),
-                updated_patch=updateDeployment(
-                    litellm_params=updateLiteLLMParams(
-                        api_base="https://attacker.example.com", api_key="sk-new"
-                    )
-                ),
+    def test_destination_change_without_resupply_is_rejected(self):
+        from litellm.proxy._types import ProxyException
+
+        db = {"api_base": "https://real.example.com", "api_key": "sk-stored"}
+        # Redirecting api_base without re-supplying the stored key must be
+        # rejected; clearing it would fall back to the proxy env key instead.
+        with pytest.raises(ProxyException) as e:
+            self._assert_resupply({"api_base": "https://attacker.example.com"}, db)
+        assert str(e.value.code) == "400"
+
+    def test_empty_credential_resupply_is_rejected(self):
+        from litellm.proxy._types import ProxyException
+
+        db = {"api_base": "https://real.example.com", "api_key": "sk-stored"}
+        # An empty key is not a fresh credential: it resolves to OPENAI_API_KEY.
+        with pytest.raises(ProxyException):
+            self._assert_resupply(
+                {"api_base": "https://attacker.example.com", "api_key": ""}, db
             )
-        params = json.loads(result["litellm_params"])
-        assert "api_key" in params  # caller re-supplied a key, so it is kept
 
-    def test_unchanged_destination_keeps_credential(self):
-        import litellm
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
+    def test_destination_change_with_resupply_is_allowed(self):
+        db = {"api_base": "https://real.example.com", "api_key": "sk-stored"}
+        self._assert_resupply(
+            {"api_base": "https://attacker.example.com", "api_key": "sk-new"}, db
         )
-        from litellm.types.router import updateLiteLLMParams
 
-        # Re-saving the same api_base (e.g. a UI resend) must NOT clear the key.
-        with (
-            patch.object(litellm, "user_url_validation", False),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value, **kwargs: value,
-            ),
-        ):
-            result = update_db_model(
-                db_model=self._db_model_with_secret(),
-                updated_patch=updateDeployment(
-                    litellm_params=updateLiteLLMParams(
-                        api_base="https://real.example.com"
-                    )
-                ),
-            )
-        params = json.loads(result["litellm_params"])
-        assert "api_key" in params
+    def test_unchanged_destination_is_allowed(self):
+        db = {"api_base": "https://real.example.com", "api_key": "sk-stored"}
+        self._assert_resupply({"api_base": "https://real.example.com"}, db)
+
+    def test_keyless_model_destination_change_is_allowed(self):
+        # A model that never carried a credential has nothing to leak.
+        db = {"api_base": "https://real.example.com"}
+        self._assert_resupply({"api_base": "https://attacker.example.com"}, db)
 
     def test_validate_model_url_params_blocks_internal_ip(self):
         import litellm
@@ -2481,25 +2450,19 @@ class TestModelMgmtAuthzHardening:
             user_api_key_dict=self._admin(),
         )
 
-    def test_destination_change_clears_inherited_credential_per_field(self):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _strip_credentials_on_destination_change,
-        )
+    def test_destination_change_partial_resupply_is_rejected(self):
+        from litellm.proxy._types import ProxyException
 
         # Patch redirects api_base AND supplies an UNRELATED credential
-        # (aws_secret_access_key); the inherited api_key must still be dropped.
-        merged = {
-            "api_key": "sk-inherited",
-            "aws_secret_access_key": "supplied",
-            "api_base": "https://attacker.example",
-        }
-        patch_plaintext = {
-            "api_base": "https://attacker.example",
-            "aws_secret_access_key": "supplied",
-        }
+        # (aws_secret_access_key); the inherited api_key is still not re-supplied,
+        # so the change must be rejected rather than letting api_key ride along.
         db = {"api_base": "https://real.example", "api_key": "sk-inherited"}
-        _strip_credentials_on_destination_change(
-            merged, patch_plaintext, lambda f: db.get(f)
-        )
-        assert "api_key" not in merged  # inherited, not re-supplied -> dropped
-        assert merged.get("aws_secret_access_key") == "supplied"  # supplied -> kept
+        with pytest.raises(ProxyException) as e:
+            self._assert_resupply(
+                {
+                    "api_base": "https://attacker.example",
+                    "aws_secret_access_key": "supplied",
+                },
+                db,
+            )
+        assert e.value.param == "api_key"

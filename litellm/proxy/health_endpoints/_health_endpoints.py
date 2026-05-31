@@ -109,11 +109,11 @@ def _reject_inherited_credential_redirect(
     destination override.
     """
     inherited_credential = any(
-        field in config_litellm_params and field not in request_litellm_params
+        config_litellm_params.get(field) and not request_litellm_params.get(field)
         for field in _HEALTH_CREDENTIAL_FIELDS
     )
     overrides_destination = any(
-        field in request_litellm_params for field in _HEALTH_DESTINATION_FIELDS
+        request_litellm_params.get(field) for field in _HEALTH_DESTINATION_FIELDS
     )
     if inherited_credential and overrides_destination:
         raise HTTPException(
