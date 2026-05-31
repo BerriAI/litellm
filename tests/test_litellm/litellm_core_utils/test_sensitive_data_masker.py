@@ -209,3 +209,19 @@ def test_fully_redacting_masker_masks_short_secret_values():
     assert set(masked["api_key"]) == {"*"}
     assert masked["password"] == "*"
     assert masked["port"] == 6379
+
+
+from litellm.litellm_core_utils.sensitive_data_masker import mask_url_query_values
+
+
+def test_mask_url_query_values_redacts_all_query_values_keeps_names():
+    """Query-param values (which may carry an upstream key under any name) are
+    masked while names and the rest of the URL are preserved."""
+    out = mask_url_query_values("https://host.example/v1?api_key=secret123&x=v1")
+    assert "secret123" not in out
+    assert "api_key=" in out and "x=" in out  # names preserved
+    assert out.startswith("https://host.example/v1?")
+    # No query string / non-URL inputs are unchanged.
+    assert mask_url_query_values("https://host.example/v1") == "https://host.example/v1"
+    assert mask_url_query_values("not-a-url") == "not-a-url"
+    assert mask_url_query_values(None) is None

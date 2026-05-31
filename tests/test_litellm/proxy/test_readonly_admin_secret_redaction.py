@@ -134,10 +134,13 @@ def test_mask_pass_through_endpoint_secrets_redacts_all_credential_fields():
         _mask_pass_through_endpoint_secrets,
     )
 
+    target = (
+        "https://user:targetpw@upstream.example.com/v1?subscription-key=tgt-qp-secret"
+    )
     ep = _make_endpoint(
         headers={"Authorization": "Bearer sk-upstream-secret-token"},
         default_query_params={"api_key": "qp-secret-key-value"},
-        target="https://user:targetpw@upstream.example.com/v1",
+        target=target,
     )
     masked = _mask_pass_through_endpoint_secrets(ep)
 
@@ -147,11 +150,14 @@ def test_mask_pass_through_endpoint_secrets_redacts_all_credential_fields():
     # default_query_params value masked, name preserved.
     assert "api_key" in masked.default_query_params
     assert "qp-secret-key-value" not in masked.default_query_params["api_key"]
-    # target URL userinfo password redacted.
+    # target URL userinfo password AND query-param secret both redacted.
     assert "targetpw" not in masked.target
+    assert "tgt-qp-secret" not in masked.target
+    assert "subscription-key" in masked.target  # param name preserved
     # Original object is not mutated.
     assert ep.headers["Authorization"] == "Bearer sk-upstream-secret-token"
     assert ep.default_query_params["api_key"] == "qp-secret-key-value"
+    assert ep.target == target
 
 
 @pytest.mark.asyncio

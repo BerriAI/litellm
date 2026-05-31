@@ -1,7 +1,7 @@
 import re
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
@@ -210,6 +210,34 @@ def mask_url_credentials(value: Any) -> Any:
     if parts.port is not None:
         netloc += f":{parts.port}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def mask_url_query_values(value: Any) -> Any:
+    """Redact the values of every query parameter in a URL while keeping the
+    parameter names, so a secret passed as a query param (e.g.
+    ``https://host/v1?api_key=secret``) is not returned verbatim. The query
+    keys can be arbitrary (``apiKey``, ``subscription-key``), so all values are
+    masked rather than only the credential-looking ones.
+
+    Non-URL strings, and URLs without a query string, are returned unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if not parts.query:
+        return value
+    masked_query = urlencode(
+        [
+            (key, _default_masker.mask_char * 4)
+            for key, _ in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+    )
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, masked_query, parts.fragment)
+    )
 
 
 # Usage example:

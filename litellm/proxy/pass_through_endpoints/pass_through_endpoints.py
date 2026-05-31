@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
     mask_url_credentials,
+    mask_url_query_values,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
@@ -2642,11 +2643,12 @@ def _mask_pass_through_endpoint_secrets(
 ) -> PassThroughGenericEndpoint:
     """Return a copy of the endpoint with forwarded credentials masked.
 
-    A pass-through endpoint carries upstream credentials in three places: the
+    A pass-through endpoint carries upstream credentials in several places: the
     forwarded ``headers``, the ``default_query_params`` (an API key is often
-    passed as a query param), and the ``target`` URL userinfo. Names/structure
-    stay visible so a read-only caller can still see what is configured; the
-    values are redacted.
+    passed as a query param), and the ``target`` URL, which can embed a secret
+    both in its userinfo and as a query parameter. Names/structure stay visible
+    so a read-only caller can still see what is configured; the values are
+    redacted.
     """
     masked = endpoint.model_copy(deep=True)
     if masked.headers:
@@ -2656,7 +2658,7 @@ def _mask_pass_through_endpoint_secrets(
             masked.default_query_params, set(masked.default_query_params.keys())
         )
     if masked.target:
-        masked.target = mask_url_credentials(masked.target)
+        masked.target = mask_url_query_values(mask_url_credentials(masked.target))
     return masked
 
 
