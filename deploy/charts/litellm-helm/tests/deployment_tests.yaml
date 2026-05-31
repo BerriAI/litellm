@@ -3,6 +3,16 @@ templates:
   - deployment.yaml
   - configmap-litellm.yaml
 tests:
+  - it: should default image tag to chart appVersion
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-database:v1.85.1
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: :main-
+
   - it: should work
     template: deployment.yaml
     set:
