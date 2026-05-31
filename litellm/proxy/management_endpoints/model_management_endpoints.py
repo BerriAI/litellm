@@ -142,30 +142,63 @@ def _strip_credentials_on_destination_change(
             merged_litellm_params.pop(field, None)
 
 
+def _is_pricing_field(field: str) -> bool:
+    """Custom per-token / per-second / per-pixel / per-request (and tiered) cost
+    overrides all follow this naming, so match by convention rather than an
+    enumerated subset that drifts out of date."""
+    return "cost_per" in field or field.endswith("_cost")
+
+
+def _contains_env_reference(value: object) -> bool:
+    """True if any (possibly nested) string is an `os.environ/` reference, which
+    resolves to a server-side environment secret at call time."""
+    if isinstance(value, str):
+        return value.startswith("os.environ/")
+    if isinstance(value, dict):
+        return any(_contains_env_reference(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_env_reference(v) for v in value)
+    return False
+
+
 def _assert_privileged_model_fields_authorized(
     litellm_params: Optional[BaseModel],
     model_info: Optional[BaseModel],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Pricing overrides and credential-name binding are proxy-admin-only.
+    """Restrict privileged model fields on non-admin (team-admin) writes.
 
-    Per-token/character pricing (SPECIAL_MODEL_INFO_PARAMS) gates spend/budget
-    enforcement, so a non-admin must not set or clear it. litellm_credential_name
-    resolves a globally-stored credential by name with no ownership model, so
-    only a proxy admin may bind one to a model.
+    - Any custom pricing/cost field gates spend/budget enforcement, so a
+      non-admin must not set or clear one.
+    - `litellm_credential_name` resolves a globally-stored credential by name
+      with no ownership model, so only a proxy admin may bind one.
+    - `os.environ/` references resolve to the server's environment secrets
+      (e.g. the operator's global provider key), so a non-admin must supply
+      literal values, not references (mirrors /health/test_connection).
     """
     if is_proxy_admin(user_api_key_dict):
         return
-    for field in SPECIAL_MODEL_INFO_PARAMS:
-        if _field_explicitly_set(litellm_params, field) or _field_explicitly_set(
-            model_info, field
-        ):
-            raise ProxyException(
-                message=f"Only proxy admins can set model pricing fields (e.g. {field}).",
-                type=ProxyErrorTypes.auth_error.value,
-                code=status.HTTP_403_FORBIDDEN,
-                param=field,
-            )
+    for model in (litellm_params, model_info):
+        if model is None:
+            continue
+        for field, value in model.model_dump(exclude_unset=True).items():
+            if _is_pricing_field(field):
+                raise ProxyException(
+                    message=f"Only proxy admins can set model pricing fields (e.g. {field}).",
+                    type=ProxyErrorTypes.auth_error.value,
+                    code=status.HTTP_403_FORBIDDEN,
+                    param=field,
+                )
+            if _contains_env_reference(value):
+                raise ProxyException(
+                    message=(
+                        f"os.environ/ references are not permitted in non-admin "
+                        f"model parameters (field: {field}); supply a literal value."
+                    ),
+                    type=ProxyErrorTypes.auth_error.value,
+                    code=status.HTTP_403_FORBIDDEN,
+                    param=field,
+                )
     if (
         _field_explicitly_set(litellm_params, "litellm_credential_name")
         and litellm_params.litellm_credential_name is not None  # type: ignore

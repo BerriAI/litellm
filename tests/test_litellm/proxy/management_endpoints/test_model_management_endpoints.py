@@ -2423,3 +2423,55 @@ class TestModelMgmtAuthzHardening:
                 )
             assert str(e.value.code) == "403"
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+    # --- Veria review follow-ups: broader pricing set + os.environ/ refs ---
+
+    def test_non_special_pricing_field_is_proxy_admin_only(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _assert_privileged_model_fields_authorized,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        # input_cost_per_second is a cost field NOT in SPECIAL_MODEL_INFO_PARAMS.
+        with pytest.raises(ProxyException) as e:
+            _assert_privileged_model_fields_authorized(
+                litellm_params=updateLiteLLMParams(input_cost_per_second=0.0),
+                model_info=None,
+                user_api_key_dict=self._non_admin(),
+            )
+        assert str(e.value.code) == "403"
+        # Proxy admin may set it.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=updateLiteLLMParams(input_cost_per_second=0.0),
+            model_info=None,
+            user_api_key_dict=self._admin(),
+        )
+
+    def test_env_reference_rejected_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _assert_privileged_model_fields_authorized,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        # os.environ/ api_key would resolve to the proxy's own global secret.
+        with pytest.raises(ProxyException) as e:
+            _assert_privileged_model_fields_authorized(
+                litellm_params=updateLiteLLMParams(api_key="os.environ/OPENAI_API_KEY"),
+                model_info=None,
+                user_api_key_dict=self._non_admin(),
+            )
+        assert str(e.value.code) == "403"
+        # A literal credential is fine for a non-admin.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=updateLiteLLMParams(api_key="sk-literal"),
+            model_info=None,
+            user_api_key_dict=self._non_admin(),
+        )
+        # Proxy admins use env references as the normal config pattern.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=updateLiteLLMParams(api_key="os.environ/OPENAI_API_KEY"),
+            model_info=None,
+            user_api_key_dict=self._admin(),
+        )
