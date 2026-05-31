@@ -1955,38 +1955,81 @@ async def test_test_connection_rejects_inherited_key_with_api_base_override():
     mock_ahealth.assert_not_called()  # the inherited key never went out
 
 
-def test_reject_inherited_credential_redirect_helper():
+def test_non_admin_destination_override_guard():
+    import litellm
     from fastapi import HTTPException
 
+    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _reject_inherited_credential_redirect,
+        _assert_non_admin_destination_override_is_safe,
     )
 
-    # inherited credential + overridden destination -> rejected
+    non_admin = MagicMock(user_role="internal_user")
+    admin = MagicMock(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    # Non-admin overrides api_base without supplying a credential -> rejected
+    # (a stored or environment key would otherwise be sent there).
     with pytest.raises(HTTPException):
-        _reject_inherited_credential_redirect(
-            config_litellm_params={"api_key": "sk-x", "api_base": "https://real"},
-            request_litellm_params={"api_base": "https://attacker"},
+        _assert_non_admin_destination_override_is_safe(
+            {"api_base": "https://attacker.example"}, non_admin
         )
-    # inherited stored-credential-NAME (no inline api_key) + override -> also rejected
-    with pytest.raises(HTTPException):
-        _reject_inherited_credential_redirect(
-            config_litellm_params={
-                "litellm_credential_name": "openai-cred",
-                "api_base": "https://real",
-            },
-            request_litellm_params={"api_base": "https://attacker"},
+    with patch.object(litellm, "user_url_validation", False):
+        # Non-admin overrides WITH their own credential -> allowed.
+        _assert_non_admin_destination_override_is_safe(
+            {"api_base": "https://attacker.example", "api_key": "sk-own"}, non_admin
         )
-    # request supplies its own credential -> allowed
-    _reject_inherited_credential_redirect(
-        config_litellm_params={"api_key": "sk-x"},
-        request_litellm_params={"api_key": "sk-own", "api_base": "https://attacker"},
+    # No destination override -> allowed.
+    _assert_non_admin_destination_override_is_safe({"model": "gpt-4o"}, non_admin)
+    # Proxy admin is exempt even when overriding without a credential.
+    _assert_non_admin_destination_override_is_safe(
+        {"api_base": "https://attacker.example"}, admin
     )
-    # no destination override -> allowed
-    _reject_inherited_credential_redirect(
-        config_litellm_params={"api_key": "sk-x"},
-        request_litellm_params={"model": "gpt-4o"},
-    )
+    # Non-admin override to an internal/metadata IP -> SSRF-rejected.
+    with patch.object(litellm, "user_url_validation", True):
+        with pytest.raises(HTTPException):
+            _assert_non_admin_destination_override_is_safe(
+                {
+                    "api_base": "http://169.254.169.254/latest/meta-data/",
+                    "api_key": "sk-own",
+                },
+                non_admin,
+            )
+
+
+@pytest.mark.asyncio
+async def test_test_connection_rejects_adhoc_override_without_credential():
+    """An ad-hoc OpenAI-compatible model (no resolved deployment) with an api_base
+    override and no api_key must be refused: the provider would otherwise fall
+    back to the proxy's OPENAI_API_KEY and send it to the override."""
+    from fastapi import HTTPException
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+    mock_router.get_model_list.return_value = []
+    mock_auth = AsyncMock(return_value=True)
+    mock_ahealth = AsyncMock(return_value={"status": "healthy"})
+
+    with contextlib.ExitStack() as stack:
+        for p in _health_test_connection_patches(
+            MagicMock(), mock_router, mock_auth, mock_ahealth
+        ):
+            stack.enter_context(p)
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={
+                    "model": "openai/gpt-4o",
+                    "api_base": "https://attacker.example/v1",
+                },
+                model_info={"team_id": "team-ATTACKER"},
+                user_api_key_dict=MagicMock(
+                    user_id="attacker", token="t", user_role="internal_user"
+                ),
+            )
+        assert exc_info.value.status_code == 400
+
+    mock_ahealth.assert_not_called()  # OPENAI_API_KEY never went out
 
 
 @pytest.mark.asyncio

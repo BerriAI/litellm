@@ -95,33 +95,60 @@ _HEALTH_DESTINATION_FIELDS = (
     "vertex_project",
     "aws_region_name",
 )
+# Caller-controlled endpoint URLs: overriding one re-points the request (and any
+# credential) at a new host, so it is SSRF-validated.
+_HEALTH_URL_FIELDS = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "aws_sts_endpoint",
+)
 
 
-def _reject_inherited_credential_redirect(
-    config_litellm_params: dict, request_litellm_params: dict
+def _assert_non_admin_destination_override_is_safe(
+    request_litellm_params: dict, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
-    """Confused-deputy guard for /health/test_connection.
+    """Confused-deputy / SSRF guard for /health/test_connection.
 
-    If a credential is inherited from the resolved deployment (present in the
-    config params, not supplied by the request) while the request overrides the
-    connection target, the inherited secret would be sent to a caller-chosen
-    endpoint. Refuse it; the caller must supply their own credential or omit the
-    destination override.
+    When a non-admin overrides the connection target (api_base/base_url/provider
+    endpoint), the request must carry its own non-empty credential. Otherwise the
+    downstream provider falls back to a stored or environment secret (e.g. the
+    resolved deployment's key, or OPENAI_API_KEY) and sends it to the
+    caller-chosen address. The overridden URL is also SSRF-validated so it cannot
+    point at an internal host or cloud-metadata endpoint. Proxy admins are
+    unaffected.
     """
-    inherited_credential = any(
-        config_litellm_params.get(field) and not request_litellm_params.get(field)
-        for field in _HEALTH_CREDENTIAL_FIELDS
-    )
-    overrides_destination = any(
-        request_litellm_params.get(field) for field in _HEALTH_DESTINATION_FIELDS
-    )
-    if inherited_credential and overrides_destination:
+    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+    from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
+
+    if is_proxy_admin(user_api_key_dict):
+        return
+    if not any(request_litellm_params.get(field) for field in _HEALTH_URL_FIELDS):
+        return
+    if not any(
+        request_litellm_params.get(field) for field in _HEALTH_CREDENTIAL_FIELDS
+    ):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "Cannot override the connection target (e.g. api_base) while inheriting stored credentials. Supply your own api_key, or omit the destination override."
+                "error": "Supply your own api_key when overriding the connection target (e.g. api_base); otherwise a stored or environment credential could be sent to it."
             },
         )
+    if not getattr(litellm, "user_url_validation", False):
+        return
+    for field in _HEALTH_URL_FIELDS:
+        url = request_litellm_params.get(field)
+        if not url or not isinstance(url, str):
+            continue
+        try:
+            validate_url(url)
+        except SSRFError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"{field} is rejected by the SSRF guard ({e}). Add the host to general_settings.user_url_allowed_hosts to allow it."
+                },
+            )
 
 
 def get_callback_identifier(callback):
@@ -1896,10 +1923,11 @@ async def test_model_connection(  # noqa: PLR0915
         # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
 
-        # Refuse sending an inherited credential to a caller-overridden destination.
-        _reject_inherited_credential_redirect(
-            config_litellm_params=config_litellm_params,
+        # A non-admin overriding the destination must bring their own credential
+        # and a non-internal URL, so no stored/environment secret is sent out.
+        _assert_non_admin_destination_override_is_safe(
             request_litellm_params=request_litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         ## Auth check — when the deployment was resolved by id, authorize against
