@@ -171,6 +171,7 @@ async def test_sanitized_replaces_text():
             "S",
         ),
         ({"decision": "SANITIZED", "outputText": "O"}, "O"),
+        ({"decision": "SANITIZED", "sanitizedText": 123, "outputText": "O"}, "O"),
         ({"decision": "SANITIZED", "sanitizedText": ""}, ""),
         ({"decision": "SANITIZED"}, "orig"),
     ],
@@ -208,6 +209,7 @@ async def test_blocked_raises_guardrail_exception_with_400():
             },
             "bm",
         ),
+        ({"decision": "BLOCKED", "blockMessage": "   ", "decisionReason": "dr"}, "dr"),
         (
             {"decision": "BLOCKED", "decisionReason": "dr", "categories": ["c1", "c2"]},
             "dr",
