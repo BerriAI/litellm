@@ -6339,6 +6339,16 @@ class Router:
         if disable_fallbacks is True or original_model_group is None:
             raise e
 
+        # If the caller routed to a `model_group_alias`, fallbacks may be
+        # declared against the underlying real model group (see #10317).
+        # Resolve the alias here so the downstream exact-match lookup in
+        # `get_fallback_model_group` works in both cases. `original_model_group`
+        # intentionally keeps the alias name for logging / fallback headers.
+        if model_group is not None:
+            aliased_model_group = self._get_model_from_alias(model=model_group)
+            if aliased_model_group is not None:
+                model_group = aliased_model_group
+
         input_kwargs = {
             "litellm_router": self,
             "original_exception": original_exception,
