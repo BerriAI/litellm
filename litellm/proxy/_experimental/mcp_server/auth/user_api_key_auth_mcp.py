@@ -264,11 +264,18 @@ class MCPRequestHandler:
     def _is_public_mcp_discovery_route(request_route: str) -> bool:
         """
         True only for the registered OAuth discovery routes that are meant to be
-        unauthenticated. A bare ``startswith("/.well-known/")`` (or even a loose
-        prefix match) let a crafted sub-path smuggle an anonymous session into
-        tool execution, so match the exact registered templates and reject any
-        extra path segments. These are the only ``/.well-known/`` routes the MCP
-        server registers.
+        unauthenticated. A bare ``startswith("/.well-known/")`` — or even a loose
+        prefix match — would let a crafted sub-path smuggle an anonymous session
+        into tool execution, so match only the exact registered shapes and reject
+        any extra path segments:
+
+          - ``/.well-known/openid-configuration`` (static)
+          - ``/.well-known/jwks.json`` (static)
+          - ``/.well-known/oauth-authorization-server`` and
+            ``/.well-known/oauth-protected-resource``, optionally followed by a
+            single ``/{server}``, ``/mcp/{server}``, or ``/{server}/mcp`` suffix
+
+        These are the only ``/.well-known/`` routes the MCP server registers.
         """
         # Static discovery endpoints have no registered sub-paths.
         static_routes = (
