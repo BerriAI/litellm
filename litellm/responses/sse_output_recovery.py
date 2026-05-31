@@ -64,19 +64,54 @@ def record_output_item_chunk(
     output_items[output_index] = item
 
 
+def record_output_text_delta_chunk(
+    parsed_chunk: Dict[str, Any],
+    output_items: Dict[int, Dict[str, Any]],
+    text_only_items: Dict[int, Dict[str, Any]],
+) -> None:
+    text_delta = parsed_chunk.get("delta")
+    if not isinstance(text_delta, str):
+        return
+    content_item = _get_or_create_text_content_item(
+        parsed_chunk=parsed_chunk,
+        output_items=output_items,
+        text_only_items=text_only_items,
+    )
+    if content_item is None:
+        return
+    current_text = content_item.get("text")
+    if not isinstance(current_text, str):
+        current_text = ""
+    content_item["text"] = f"{current_text}{text_delta}"
+
+
 def record_output_text_chunk(
     parsed_chunk: Dict[str, Any],
     output_items: Dict[int, Dict[str, Any]],
     text_only_items: Dict[int, Dict[str, Any]],
 ) -> None:
-    """Record an OUTPUT_TEXT_DONE chunk as a synthetic message item in
-    ``text_only_items``. Real OUTPUT_ITEM_DONE events already captured in
-    ``output_items`` take precedence at the same ``output_index``.
-    """
     text = parsed_chunk.get("text")
     if not isinstance(text, str):
         return
+    content_item = _get_or_create_text_content_item(
+        parsed_chunk=parsed_chunk,
+        output_items=output_items,
+        text_only_items=text_only_items,
+    )
+    if content_item is None:
+        return
+    content_item["text"] = text
+    if parsed_chunk.get("annotations") is not None:
+        content_item["annotations"] = parsed_chunk["annotations"]
+    else:
+        content_item.setdefault("annotations", [])
 
+
+def _get_or_create_text_content_item(
+    parsed_chunk: Dict[str, Any],
+    output_items: Dict[int, Dict[str, Any]],
+    text_only_items: Dict[int, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
     try:
         output_index_raw = parsed_chunk.get("output_index")
         if output_index_raw is None:
@@ -86,7 +121,7 @@ def record_output_text_chunk(
         output_index = len(text_only_items)
 
     if output_index in output_items:
-        return
+        return None
 
     item = text_only_items.get(output_index)
     if item is None:
@@ -101,7 +136,7 @@ def record_output_text_chunk(
 
     content = item.setdefault("content", [])
     if not isinstance(content, list):
-        return
+        return None
 
     try:
         content_index_raw = parsed_chunk.get("content_index")
@@ -112,7 +147,7 @@ def record_output_text_chunk(
         content_index = len(content)
 
     if content_index < 0 or content_index > _MAX_CONTENT_INDEX:
-        return
+        return None
 
     while len(content) <= content_index:
         content.append(
@@ -129,8 +164,7 @@ def record_output_text_chunk(
         content[content_index] = content_item
 
     content_item["type"] = "output_text"
-    content_item["text"] = text
-    if parsed_chunk.get("annotations") is not None:
-        content_item["annotations"] = parsed_chunk["annotations"]
-    else:
-        content_item.setdefault("annotations", [])
+    if not isinstance(content_item.get("text"), str):
+        content_item["text"] = ""
+    content_item.setdefault("annotations", [])
+    return content_item
