@@ -3658,6 +3658,7 @@ from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
 from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
+from litellm.types.llms.bedrock import SearchResultBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
@@ -4063,6 +4064,122 @@ def _convert_to_bedrock_tool_call_invoke(
         )
 
 
+def _append_bedrock_tool_result_media_block(
+    tool_result_content_blocks: List[BedrockToolResultContentBlock],
+    processed_block: BedrockContentBlock,
+    content: dict,
+    content_type: str,
+) -> None:
+    if "image" in processed_block:
+        tool_result_content_blocks.append(
+            BedrockToolResultContentBlock(image=processed_block["image"])
+        )
+    elif "document" in processed_block:
+        tool_result_content_blocks.append(
+            BedrockToolResultContentBlock(document=processed_block["document"])
+        )
+    else:
+        verbose_logger.warning(
+            "Bedrock Converse: unrecognized BedrockContentBlock keys "
+            "%s for %s tool-result block %s; dropping.",
+            list(processed_block.keys()),
+            content_type,
+            content,
+        )
+
+
+def _append_bedrock_tool_result_image_url_block(
+    tool_result_content_blocks: List[BedrockToolResultContentBlock],
+    content: dict,
+) -> None:
+    format: Optional[str] = None
+    if isinstance(content["image_url"], dict):
+        image_url = content["image_url"]["url"]
+        format = content["image_url"].get("format")
+    else:
+        image_url = content["image_url"]
+    processed_block = BedrockImageProcessor.process_image_sync(
+        image_url=image_url,
+        format=format,
+    )
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "image_url"
+    )
+
+
+def _append_bedrock_tool_result_file_block(
+    tool_result_content_blocks: List[BedrockToolResultContentBlock],
+    content: dict,
+) -> None:
+    # Match the user-message path (_process_file_message): accept either
+    # file_data (base64 data URI) or file_id (server-side reference / URL).
+    file_obj = content.get("file") or {}
+    file_data = file_obj.get("file_data")
+    file_id = file_obj.get("file_id")
+    if file_data is None and file_id is None:
+        raise litellm.BadRequestError(
+            message="file_data and file_id cannot both be None. Got={}".format(content),
+            model="",
+            llm_provider="bedrock",
+        )
+    processed_block = BedrockImageProcessor.process_image_sync(
+        image_url=cast(str, file_id or file_data),
+        format=file_obj.get("format"),
+    )
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "file"
+    )
+
+
+def _parse_bedrock_tool_result_content_list(
+    content_list: List,
+) -> List[BedrockToolResultContentBlock]:
+    tool_result_content_blocks: List[BedrockToolResultContentBlock] = []
+    for content in content_list:
+        if content["type"] == "text":
+            tool_result_content_blocks.append(
+                BedrockToolResultContentBlock(text=content["text"])
+            )
+        elif content["type"] == "image_url":
+            _append_bedrock_tool_result_image_url_block(
+                tool_result_content_blocks, content
+            )
+        elif content["type"] == "file":
+            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+    return tool_result_content_blocks
+
+
+def _build_bedrock_tool_result_content_blocks(
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+) -> tuple[List[BedrockToolResultContentBlock], bool]:
+    # Optional OpenAI tool-message extension:
+    # allow structured Bedrock search results on tool messages and map them
+    # directly to toolResult.content[].searchResult for Converse API.
+    #
+    # If `search_results` is present, we intentionally prefer it over `content`
+    # to avoid generating mixed text + searchResult blocks.
+    search_results = message.get("search_results")
+    if isinstance(search_results, list):
+        tool_result_content_blocks: List[BedrockToolResultContentBlock] = []
+        for result in search_results:
+            if not isinstance(result, dict):
+                continue
+            tool_result_content_blocks.append(
+                BedrockToolResultContentBlock(
+                    searchResult=cast(SearchResultBlock, result)
+                )
+            )
+        if tool_result_content_blocks:
+            return tool_result_content_blocks, True
+
+    message_content = message["content"]
+    if isinstance(message_content, str):
+        return [BedrockToolResultContentBlock(text=message_content)], False
+    if isinstance(message_content, List):
+        return _parse_bedrock_tool_result_content_list(message_content), False
+    return [], False
+
+
 def _convert_to_bedrock_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
 ) -> BedrockContentBlock:
@@ -4106,90 +4223,18 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    tool_result_content_blocks: List[BedrockToolResultContentBlock] = []
-    if isinstance(message["content"], str):
-        tool_result_content_blocks.append(
-            BedrockToolResultContentBlock(text=message["content"])
-        )
-    elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                tool_result_content_blocks.append(
-                    BedrockToolResultContentBlock(text=content["text"])
-                )
-            elif content["type"] == "image_url":
-                format: Optional[str] = None
-                if isinstance(content["image_url"], dict):
-                    image_url = content["image_url"]["url"]
-                    format = content["image_url"].get("format")
-                else:
-                    image_url = content["image_url"]
-                _block: BedrockContentBlock = BedrockImageProcessor.process_image_sync(
-                    image_url=image_url,
-                    format=format,
-                )
-                if "image" in _block:
-                    tool_result_content_blocks.append(
-                        BedrockToolResultContentBlock(image=_block["image"])
-                    )
-                elif "document" in _block:
-                    tool_result_content_blocks.append(
-                        BedrockToolResultContentBlock(document=_block["document"])
-                    )
-                else:
-                    verbose_logger.warning(
-                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
-                        "%s for image_url tool-result block %s; dropping.",
-                        list(_block.keys()),
-                        content,
-                    )
-            elif content["type"] == "file":
-                # Match the user-message path (_process_file_message): accept
-                # either file_data (base64 data URI) or file_id (server-side
-                # reference / URL) and hand off to BedrockImageProcessor. Raise
-                # BadRequestError on both-None rather than silently dropping.
-                file_obj = content.get("file") or {}
-                file_data = file_obj.get("file_data")
-                file_id = file_obj.get("file_id")
-                if file_data is None and file_id is None:
-                    raise litellm.BadRequestError(
-                        message="file_data and file_id cannot both be None. Got={}".format(
-                            content
-                        ),
-                        model="",
-                        llm_provider="bedrock",
-                    )
-                file_format = file_obj.get("format")
-                _file_block: BedrockContentBlock = (
-                    BedrockImageProcessor.process_image_sync(
-                        image_url=cast(str, file_id or file_data),
-                        format=file_format,
-                    )
-                )
-                if "document" in _file_block:
-                    tool_result_content_blocks.append(
-                        BedrockToolResultContentBlock(document=_file_block["document"])
-                    )
-                elif "image" in _file_block:
-                    tool_result_content_blocks.append(
-                        BedrockToolResultContentBlock(image=_file_block["image"])
-                    )
-                else:
-                    verbose_logger.warning(
-                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
-                        "%s for file tool-result block %s; dropping.",
-                        list(_file_block.keys()),
-                        content,
-                    )
+    tool_result_content_blocks, used_search_results = (
+        _build_bedrock_tool_result_content_blocks(message)
+    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
     tool_result = BedrockToolResultBlock(
-        content=tool_result_content_blocks,
-        toolUseId=id,
+        content=tool_result_content_blocks, toolUseId=id
     )
+    if used_search_results:
+        tool_result["status"] = cast(Literal["success"], "success")
 
     content_block = BedrockContentBlock(toolResult=tool_result)
 

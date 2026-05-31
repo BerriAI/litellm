@@ -243,3 +243,124 @@ def test_reasoning_effort_in_supported_params():
     assert "reasoning_effort" in config.get_supported_anthropic_messages_params(
         "claude-opus-4-7"
     )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6",
+        "claude-opus-4-6",
+        "bedrock/invoke/us.anthropic.claude-opus-4-6",
+        "vertex_ai/claude-opus-4-6",
+    ],
+)
+def test_legacy_thinking_high_budget_clamps_to_high_when_xhigh_unsupported(model):
+    """Claude Code sends ``thinking.budget_tokens=31999``; Sonnet 4.6 and Opus 4.6
+    have no ``xhigh`` tier, so the translator must emit ``high`` rather than the
+    provider-invalid ``xhigh`` (regression for issue #29282)."""
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 31999},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "high"}
+
+
+def test_legacy_thinking_high_budget_keeps_xhigh_when_supported():
+    """Opus 4.7 advertises an ``xhigh`` tier, so the high-budget bucket keeps it."""
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 31999},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "xhigh"}
+
+
+@pytest.mark.parametrize(
+    "budget_tokens,expected_effort",
+    [
+        (31999, "high"),
+        (24000, "high"),
+        (10000, "high"),
+        (9999, "medium"),
+        (5000, "medium"),
+        (4999, "low"),
+        (1024, "low"),
+    ],
+)
+def test_legacy_thinking_budget_buckets_on_sonnet_46(budget_tokens, expected_effort):
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": budget_tokens},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_legacy_thinking_does_not_override_explicit_output_config():
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 31999},
+        "output_config": {"effort": "low"},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "low"}
+
+
+def test_legacy_thinking_left_untouched_on_non_adaptive_model():
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 31999},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "enabled", "budget_tokens": 31999}
+    assert "output_config" not in result

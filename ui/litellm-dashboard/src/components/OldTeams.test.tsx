@@ -1018,3 +1018,83 @@ describe("OldTeams - organization alias display", () => {
     });
   });
 });
+
+describe("OldTeams - Resources column keys badge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("renders keys_count from the v2 payload in the Resources badge", async () => {
+    const { container } = renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "1",
+            team_alias: "Team With Keys",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            keys_count: 3,
+            members_with_roles: [],
+            spend: 0,
+          } as any,
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Team With Keys")).toBeInTheDocument();
+    });
+    const cyanTag = container.querySelector(".ant-tag-cyan");
+    expect(cyanTag).not.toBeNull();
+    expect(cyanTag?.textContent).toContain("3");
+  });
+
+  it("falls back to keys.length when keys_count is absent", async () => {
+    const { container } = renderWithQueryClient(
+      <OldTeams
+        teams={[
+          {
+            team_id: "2",
+            team_alias: "Legacy Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [{ token: "t1" } as any, { token: "t2" } as any],
+            members_with_roles: [],
+            spend: 0,
+          } as any,
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Legacy Team")).toBeInTheDocument();
+    });
+    const cyanTag = container.querySelector(".ant-tag-cyan");
+    expect(cyanTag).not.toBeNull();
+    expect(cyanTag?.textContent).toContain("2");
+  });
+});

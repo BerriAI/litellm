@@ -8,7 +8,17 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -189,7 +199,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, Iterator[bytes], AsyncIterator[Any]]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
@@ -346,8 +356,11 @@ def anthropic_messages_handler(
     **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
+    Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    Coroutine[
+        Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]
+    ],
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
@@ -456,9 +469,14 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                **_shared_kwargs
+                **_shared_kwargs,
             )
         )
 

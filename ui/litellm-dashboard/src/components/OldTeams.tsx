@@ -105,6 +105,7 @@ interface TeamInfo {
 
 interface PerTeamInfo {
   keys: KeyResponse[];
+  keys_count: number;
   team_info: TeamInfo;
 }
 
@@ -364,6 +365,7 @@ const Teams: React.FC<TeamProps> = ({
         (acc, team) => {
           acc[team.team_id] = {
             keys: team.keys || [],
+            keys_count: team.keys_count ?? team.keys?.length ?? 0,
             team_info: {
               members_with_roles: team.members_with_roles || [],
             },
@@ -745,7 +747,7 @@ const Teams: React.FC<TeamProps> = ({
       render: (_: unknown, record: Team) => {
         const memberCount = perTeamInfo?.[record.team_id]?.team_info?.members_with_roles?.length ?? 0;
         const modelCount = record.models?.length ?? 0;
-        const keyCount = perTeamInfo?.[record.team_id]?.keys?.length ?? 0;
+        const keyCount = perTeamInfo?.[record.team_id]?.keys_count ?? 0;
         return (
           <Flex gap={12} align="center">
             <Tooltip title={`${memberCount} Members`}>
@@ -977,17 +979,23 @@ const Teams: React.FC<TeamProps> = ({
           <DeleteResourceModal
             isOpen={isDeleteModalOpen}
             title="Delete Team?"
-            alertMessage={
-              teamToDelete?.keys?.length === 0
+            alertMessage={(() => {
+              const deleteKeyCount =
+                teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0;
+              return deleteKeyCount === 0
                 ? undefined
-                : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
-            }
+                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`;
+            })()}
             message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
               { label: "Team ID", value: teamToDelete?.team_id, code: true },
               { label: "Team Name", value: teamToDelete?.team_alias },
-              { label: "Keys", value: teamToDelete?.keys?.length },
+              {
+                label: "Keys",
+                value:
+                  teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0,
+              },
               { label: "Members", value: teamToDelete?.members_with_roles?.length },
             ]}
             requiredConfirmation={teamToDelete?.team_alias}

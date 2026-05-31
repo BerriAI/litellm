@@ -16,9 +16,10 @@ import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+    index_create,
 )
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
@@ -33,6 +34,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
 )
+from litellm.types.vector_stores import IndexCreateRequest
 from litellm.types.utils import LlmProviders
 
 
@@ -678,14 +680,147 @@ class TestIsAllowedToCallVectorStoreEndpoint:
             "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=mock_provider_config,
         ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.OPENAI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+
+    def test_delete_index_requires_admin(self):
+        """Non-admin users must not delete managed search indexes via pass-through."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can delete" in exc_info.value.detail
+
+    def test_delete_index_allowed_for_admin(self):
+        """Proxy admins can delete managed search indexes via pass-through."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = LitellmUserRoles.PROXY_ADMIN
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
             result = is_allowed_to_call_vector_store_endpoint(
-                provider=LlmProviders.OPENAI,
+                provider=LlmProviders.AZURE_AI,
                 index_name="my-index",
                 request=mock_request,
                 user_api_key_dict=mock_user_api_key,
             )
 
-        assert result is None
+        assert result is True
+
+    def test_update_index_requires_admin_with_update_message(self):
+        """Non-admin users get an update-specific message for index replacement."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "PUT"
+        mock_request.url.path = "/azure_ai/indexes/my-index"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
+            "write": [("PUT", "/docs")],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can update" in exc_info.value.detail
+
+    def test_index_name_prefix_does_not_match_lifecycle_request(self):
+        """An index name that is only a path prefix must not trigger lifecycle checks."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "DELETE"
+        mock_request.url.path = "/azure_ai/indexes/my-index-archive"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = None
+        mock_user_api_key.team_metadata = None
+
+        mock_provider_config = MagicMock()
+        mock_provider_config.get_vector_store_endpoints_by_type.return_value = {
+            "read": [],
+            "write": [],
+        }
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=mock_provider_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_endpoint(
+                    provider=LlmProviders.AZURE_AI,
+                    index_name="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins" not in exc_info.value.detail
 
     def test_team_metadata_permissions(self):
         """Test that team metadata permissions work."""
@@ -798,6 +933,81 @@ class TestIsAllowedToCallVectorStoreEndpoint:
                 )
 
         assert exc_info.value.status_code == 403
+
+
+class TestIndexCreate:
+    @pytest.mark.asyncio
+    async def test_index_create_requires_admin(self):
+        """Non-admin users must not register managed vector store indexes."""
+        request = IndexCreateRequest(
+            index_name="test-index",
+            litellm_params={
+                "vector_store_index": "real-index",
+                "vector_store_name": "azure-ai-search",
+            },
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await index_create(
+                request=mock_request,
+                index_create_request=request,
+                fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-test",
+                    key_name="sk-...test",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can create" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_index_create_allowed_for_admin(self):
+        """Proxy admins can register managed vector store indexes."""
+        create_request = IndexCreateRequest(
+            index_name="test-index",
+            litellm_params={
+                "vector_store_index": "real-index",
+                "vector_store_name": "azure-ai-search",
+            },
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock()
+        mock_row = MagicMock()
+        mock_row.model_dump.return_value = {
+            "index_name": "test-index",
+            "litellm_params": create_request.litellm_params.model_dump(),
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_managedvectorstoreindextable.find_unique = AsyncMock(
+            return_value=None
+        )
+        mock_prisma.db.litellm_managedvectorstoreindextable.create = AsyncMock(
+            return_value=mock_row
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ):
+            result = await index_create(
+                request=mock_request,
+                index_create_request=create_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-test",
+                    key_name="sk-...test",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_id="admin-user",
+                ),
+            )
+
+        assert result["index_name"] == "test-index"
+        mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
 
 
 class TestIsAllowedToCallVectorStoreFilesEndpoint:

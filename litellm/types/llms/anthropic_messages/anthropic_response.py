@@ -1,10 +1,11 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import TypeAlias, TypedDict
+from typing_extensions import NotRequired, TypeAlias, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
+    ContextManagementResponse,
 )
 
 
@@ -94,3 +95,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]
+    context_management: NotRequired[ContextManagementResponse]

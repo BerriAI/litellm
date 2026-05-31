@@ -221,7 +221,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       trigger={["click"]}
       menu={{ items: userItems }}
       popupRender={(menu) => (
-        <div className="rounded-lg bg-white shadow-lg">
+        <div className="rounded-lg bg-white shadow-lg" data-testid="user-dropdown-panel">
           {renderUserInfoSection()}
           <Divider style={{ margin: 0 }} />
           {React.cloneElement(menu as React.ReactElement, {

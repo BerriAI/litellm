@@ -3602,6 +3602,10 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""

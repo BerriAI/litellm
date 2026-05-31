@@ -1,0 +1,1122 @@
+"""Tests for the V2 ``OpenTelemetryV2`` CustomLogger adapter.
+
+Exercises the callback surface the existing call sites use: the LLM-call span
+opened at the ``pre_call`` boundary and closed at async success/failure, service
+hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
+(ambient context), and Baggage promotion onto child spans.
+"""
+
+import asyncio
+import contextlib
+from datetime import datetime, timezone
+
+import pytest
+
+pytest.importorskip("opentelemetry")
+
+from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
+    InMemorySpanExporter,
+)
+from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.trace.status import StatusCode  # noqa: E402
+
+from litellm.integrations.otel import (  # noqa: E402
+    GenAI,
+    LiteLLM,
+    OpenTelemetryV2Config,
+)
+from litellm.integrations.otel.plumbing import providers  # noqa: E402
+from litellm.integrations.otel.plumbing.context import (
+    set_request_root_span,
+)  # noqa: E402
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.model.spans import (  # noqa: E402
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    SpanRole,
+)
+from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
+
+# --------------------------------------------------------------------------- #
+#  Fixtures
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_root_span():
+    """Clear the request-root-span anchor around every test.
+
+    In production each request runs in its own asyncio task whose context is a
+    fresh copy, so the anchor never leaks between requests. The test process
+    shares one context, so reset it explicitly to keep tests order-independent.
+    """
+    from litellm.integrations.otel.plumbing import context as _otel_context
+
+    _otel_context._request_root_span.set(None)
+    yield
+    _otel_context._request_root_span.set(None)
+
+
+def _payload(**overrides):
+    payload = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "stream": False,
+        "model_parameters": {"temperature": 0.7, "max_tokens": 256},
+        "response": {
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop"}],
+        },
+        "metadata": {
+            "team_id": "t1",
+            "team_alias": "team one",
+            "user_api_key_hash": "hsh",
+        },
+        "api_base": "https://api.openai.com:443/v1",
+        "status": "success",
+        "litellm_call_id": "call_1",
+        "response_cost": 0.002,
+        "hidden_params": {},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _kwargs(payload=None):
+    return {
+        # ``litellm_call_id`` (here carried inside the payload) correlates the
+        # pre_call boundary with the close callback — the carrier is keyed by it.
+        "standard_logging_object": payload if payload is not None else _payload(),
+        "litellm_params": {"metadata": {}},
+    }
+
+
+def _logger(legacy_compat=True):
+    cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=legacy_compat)
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
+
+
+def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
+    """Drive the real boundary flow: open at ``pre_call`` then close at the async
+    callback. ``ambient``, if given, is the span that is the active OTel context
+    while ``pre_call`` runs (the server span) so the LLM span parents to it."""
+    if kwargs is None:
+        kwargs = _kwargs()
+    payload = kwargs.get("standard_logging_object") or {}
+    with (
+        trace.use_span(ambient, end_on_exit=False)
+        if ambient is not None
+        else contextlib.nullcontext()
+    ):
+        logger.log_pre_api_call(model=payload.get("model"), messages=[], kwargs=kwargs)
+    hook = logger.async_log_failure_event if fail else logger.async_log_success_event
+    asyncio.run(hook(kwargs, None, None, None))
+    return kwargs
+
+
+# --------------------------------------------------------------------------- #
+#  Time helpers
+# --------------------------------------------------------------------------- #
+
+
+def test_to_ns_handles_datetime_and_float():
+    dt = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+    assert to_ns(dt) == int(dt.timestamp() * 1e9)
+    assert to_ns(1.5) == 1_500_000_000
+    assert to_ns(None) is None
+    assert to_ns(True) is None  # bool is rejected — not a real epoch value
+
+
+def test_to_seconds_parses_string_formats():
+    assert to_seconds("2026-05-26 12:00:00.123") is not None
+    assert to_seconds("2026-05-26 12:00:00") is not None
+    assert to_seconds("nonsense") is None
+    assert to_seconds(None) is None
+    assert to_seconds(1.5) == 1.5
+
+
+# --------------------------------------------------------------------------- #
+#  LLM-call callbacks
+# --------------------------------------------------------------------------- #
+
+
+def test_async_log_success_event_emits_llm_call_span():
+    logger, exporter = _logger()
+    _emit_llm(logger)
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes[GenAI.OPERATION_NAME] == "chat"
+    assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    # Success leaves status UNSET (semconv default), not forced OK.
+    assert span.status.status_code is StatusCode.UNSET
+
+
+def test_async_log_failure_event_marks_error_status():
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_message": "429"},
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "RateLimitError"
+
+
+def test_sync_log_event_is_noop():
+    """V2 closes the span async-only; the sync callback runs out-of-context, so
+    it no-ops (the span stays open on the carrier until the async callback)."""
+    logger, exporter = _logger()
+    kwargs = _kwargs()
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    logger.log_success_event(kwargs, None, None, None)
+    logger.log_failure_event(kwargs, None, None, None)
+    assert exporter.get_finished_spans() == ()
+
+
+def test_missing_standard_logging_object_is_noop():
+    """No carrier (``pre_call`` never ran) → the callback emits nothing."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event({"litellm_params": {}}, None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
+
+
+def test_no_span_when_pre_call_never_ran():
+    """A request rejected before the upstream call — at the auth/budget gate, or
+    blocked by a pre-call guardrail — never reaches ``pre_call``, so there is no
+    carrier and the failure log produces no phantom CLIENT span. This replaces the
+    old post-hoc heuristics: "did pre_call run?" is the only signal needed."""
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "ProxyException", "error_code": "401"},
+    )
+    # No log_pre_api_call: the call never started.
+    asyncio.run(
+        logger.async_log_failure_event(_kwargs(payload=payload), None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()  # no phantom LLM span
+
+
+def test_real_llm_failure_still_emitted():
+    """A genuine LLM failure: ``pre_call`` ran (the call was attempted), so the
+    CLIENT span is opened at the boundary and closed ERROR."""
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_code": "429"},
+    )
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+    assert span.status.status_code is StatusCode.ERROR
+
+
+def test_idempotent_on_repeat_callback():
+    """The carrier is the dedup: once the async callback closes the span and
+    clears the carrier, a second callback firing emits nothing."""
+    logger, exporter = _logger()
+    kwargs = _kwargs()
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert len(exporter.get_finished_spans()) == 1
+
+
+def test_pre_call_idempotent_keeps_first_span():
+    """A retried call may re-enter ``pre_call`` with the same call id; the first
+    span (with the true start time) is kept, not replaced."""
+    logger, _ = _logger()
+    kwargs = _kwargs()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        first = logger._open_llm_calls["call_1"]
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        second = logger._open_llm_calls["call_1"]
+    server.end()
+    assert first is second  # not overwritten
+
+
+# --------------------------------------------------------------------------- #
+#  Parent resolution — ambient context at the boundary (no metadata threading)
+# --------------------------------------------------------------------------- #
+
+
+def test_llm_span_parents_to_ambient_server_span():
+    """The span is opened at ``pre_call`` while the server span is the active
+    context, so it nests under it natively (no ``litellm_parent_otel_span``)."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    _emit_llm(logger, ambient=server)
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    llm_span = by_name["chat gpt-4o"]
+    assert llm_span.parent is not None
+    assert llm_span.parent.span_id == server.get_span_context().span_id
+
+
+def test_llm_span_is_root_without_ambient_server_span():
+    """No server span at ``pre_call`` → creation is deferred and the span is a
+    root of its own trace (the SDK / no-proxy path)."""
+    logger, exporter = _logger()
+    _emit_llm(logger)
+    (span,) = exporter.get_finished_spans()
+    assert span.parent is None  # standalone (no proxy server span) → root
+
+
+# --------------------------------------------------------------------------- #
+#  Explicit request-root-span anchor — request-level spans (LLM call, guardrail)
+#  parent to the captured server span, NOT to whatever span is momentarily
+#  active. Regression cover for the two ambient-only failure modes:
+#    * auth: the LLM/guardrail span must not nest under the live ``auth`` span;
+#    * pass-through: the span must not orphan when closed off the request task.
+# --------------------------------------------------------------------------- #
+
+
+def test_llm_span_anchors_to_root_even_inside_active_phase_span():
+    """Bug 1: a synthetic error log can fire ``pre_call`` while the ``auth`` phase
+    span is the *active* context. The LLM span must still parent to the request
+    root (the server span), never to the auth span it happens to be nested in."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    kwargs = _kwargs()
+    # ``auth`` phase span is the active span when pre_call + close run.
+    with trace.use_span(server, end_on_exit=False):
+        with logger.start_phase_span("auth /chat/completions"):
+            logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+            asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    llm_span = by_name["chat gpt-4o"]
+    auth_span = by_name["auth /chat/completions"]
+    # Parented to the server root, NOT the auth span it was emitted inside.
+    assert llm_span.parent.span_id == server.get_span_context().span_id
+    assert llm_span.parent.span_id != auth_span.get_span_context().span_id
+
+
+def test_live_llm_span_anchors_to_root_with_no_active_span():
+    """Bug 2 (pass-through), live path: even with no span active at ``pre_call``,
+    the anchor is a recordable parent, so the span opens live under the server root
+    instead of orphaning — and the detached close just ends it, in the right
+    trace."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    kwargs = _kwargs()
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert logger._open_llm_calls["call_1"].span is not None  # live, via anchor
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    llm_span = by_name["chat gpt-4o"]
+    assert llm_span.parent.span_id == server.get_span_context().span_id
+    assert llm_span.context.trace_id == server.get_span_context().trace_id
+
+
+def test_deferred_llm_span_reads_anchor_at_close():
+    """Bug 2, deferred path: when the anchor isn't visible at ``pre_call`` (a
+    sync-only provider's thread-pool call) the span defers; the close — back on the
+    request task, anchor visible — must parent it to the root, not orphan it."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    kwargs = _kwargs()
+    # pre_call with NO anchor and no active span → deferred.
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert logger._open_llm_calls["call_1"].span is None  # deferred
+    # Anchor becomes visible at close (worker copied the request task's context).
+    set_request_root_span(server)
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    llm_span = by_name["chat gpt-4o"]
+    assert llm_span.parent.span_id == server.get_span_context().span_id
+    assert llm_span.context.trace_id == server.get_span_context().trace_id
+
+
+def test_synthetic_error_log_produces_no_llm_span():
+    """Bug 1 root cause: a proxy-gate error log (auth/rate-limit) fires ``pre_call``
+    for a request that never reached a provider. Tagged with
+    ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL``, it must open no carrier and emit no
+    LLM-call span — even though the failure callback also fires."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "ProxyException", "error_code": "401"},
+    )
+    kwargs = _kwargs(payload=payload)
+    kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+    with trace.use_span(server, end_on_exit=False):
+        with logger.start_phase_span("auth /chat/completions"):
+            logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+            assert "call_1" not in logger._open_llm_calls  # no carrier opened
+            asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    server.end()
+    names = {s.name for s in exporter.get_finished_spans()}
+    assert "chat gpt-4o" not in names  # no phantom LLM span
+    assert "auth /chat/completions" in names  # auth span itself still recorded
+
+
+def test_create_request_started_span_captures_anchor():
+    """``create_litellm_proxy_request_started_span`` doubles as the anchor capture
+    point: the active server span becomes the request root for later spans."""
+    from litellm.integrations.otel.plumbing.context import request_root_span
+
+    logger, _ = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        returned = logger.create_litellm_proxy_request_started_span(
+            start_time=datetime.now(), headers=None
+        )
+    server.end()
+    assert returned.get_span_context().span_id == server.get_span_context().span_id
+    assert (
+        request_root_span().get_span_context().span_id
+        == server.get_span_context().span_id
+    )
+
+
+def test_guardrail_span_anchors_to_root_inside_active_phase_span():
+    """A guardrail emitted from a failure hook that runs inside the live ``auth``
+    span must still be a sibling of the LLM call under the request root, not a
+    child of auth."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    request_data = {
+        "metadata": {
+            "standard_logging_guardrail_information": {
+                "guardrail_name": "my_guard",
+                "guardrail_status": "success",
+            }
+        }
+    }
+    with trace.use_span(server, end_on_exit=False):
+        with logger.start_phase_span("auth /chat/completions"):
+            logger._emit_guardrail_spans(request_data)
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    guard = by_name["execute_guardrail my_guard"]
+    auth_span = by_name["auth /chat/completions"]
+    assert guard.parent.span_id == server.get_span_context().span_id
+    assert guard.parent.span_id != auth_span.get_span_context().span_id
+
+
+def test_real_logging_pre_call_opens_span_end_to_end():
+    """Regression guard: a real ``LiteLLMLoggingObj.pre_call`` must fire
+    ``log_pre_api_call`` on the V2 logger (via ``litellm.input_callback``), so the
+    boundary span is opened and then closed by the success callback. If the logger
+    is not wired into ``input_callback``, no span is produced at all."""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _logger()
+    # Register exactly this logger as the (only) input callback pre_call iterates.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(litellm, "input_callback", [logger], raising=False)
+    try:
+        logging_obj = Logging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="call_e2e",
+            function_id="fn",
+        )
+        # The wrapper always runs this before pre_call — it's what seeds
+        # ``litellm_params`` and ``litellm_call_id`` into ``model_call_details``
+        # (the call id is how the close callback correlates back to this span).
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {}},
+            optional_params={},
+            model="gpt-4o",
+        )
+        # pre_call fires log_pre_api_call → opens the boundary span on the obj.
+        logging_obj.pre_call(input="hi", api_key="sk-test")
+        # The success callback closes it, reading the typed payload.
+        logging_obj.model_call_details["standard_logging_object"] = _payload(
+            litellm_call_id="call_e2e"
+        )
+        asyncio.run(
+            logger.async_log_success_event(
+                logging_obj.model_call_details, None, None, None
+            )
+        )
+    finally:
+        monkeypatch.undo()
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+
+
+def test_deferred_span_parents_to_ambient_at_close():
+    """When ``pre_call`` runs off the request task (a sync-only provider driven
+    through a thread pool, where contextvars don't follow), no ambient parent is
+    visible there, so span creation is deferred. The async callback — whose worker
+    context was copied from the request task and so still carries the server span —
+    then creates it parented to that server span, not as an orphan root."""
+    logger, exporter = _logger()
+    kwargs = _kwargs()
+    # pre_call with NO ambient span (the thread-pool case) → deferred.
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    # The close callback runs with the (worker-copied) server span ambient.
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    llm_span = by_name["chat gpt-4o"]
+    assert llm_span.parent.span_id == server.get_span_context().span_id
+
+
+# Inbound ``traceparent`` propagation is now the FastAPI instrumentor's job
+# (see proxy_server's startup mount + ``test_otel_v2_mount``), not the logger's.
+
+
+# --------------------------------------------------------------------------- #
+#  Baggage promotion (LLM call writes identity into baggage so child spans
+#  inherit team/key/model attrs).
+# --------------------------------------------------------------------------- #
+
+
+def test_baggage_identity_promoted_onto_llm_call():
+    """On the deferred (SDK / no-proxy) path the callback seeds identity Baggage
+    from the payload so the span is still labeled with team/key. (On the proxy
+    boundary path identity rides in from auth-seeded ambient Baggage instead.)"""
+    logger, exporter = _logger()
+    _emit_llm(logger)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.TEAM_ID] == "t1"
+    assert span.attributes[LiteLLM.TEAM_ALIAS] == "team one"
+    assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
+
+
+class _Auth:
+    """Stub matching the ``UserAPIKeyAuth`` fields the logger reads."""
+
+    team_id = "t1"
+    team_alias = "team one"
+    team_metadata = {"tier": "gold", "cost_center": "42"}
+    api_key = "hash1"
+    user_id = "u1"
+    org_id = None
+    key_alias = "k1"
+    end_user_id = None
+
+
+def test_provider_model_and_team_metadata_on_real_boundary_flow():
+    """End-to-end on the proxy boundary path (the gap a pure-emitter test misses):
+
+    - ``litellm.team.metadata`` is known at auth, so it rides identity Baggage
+      seeded there onto EVERY span (server + LLM call).
+    - ``litellm.provider.model`` is only known once routing picks a deployment
+      (in the payload at close), AFTER the auth seed and AFTER the boundary span
+      starts — so it can't ride Baggage. It's stamped directly on the LLM-call
+      span by the mapper, and is absent from the server span (which starts first).
+    """
+    import json
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    payload = _payload(
+        hidden_params={"litellm_model_name": "azure/my-deployment"},
+        metadata={
+            "user_api_key_team_id": "t1",
+            "user_api_key_team_alias": "team one",
+            "user_api_key_hash": "hash1",
+            "user_api_key_team_metadata": {"tier": "gold", "cost_center": "42"},
+        },
+    )
+    kwargs = _kwargs(payload=payload)
+    with trace.use_span(server, end_on_exit=False):
+        # auth boundary: seed identity (provider model unknown here)
+        logger.seed_request_identity(_Auth(), model="gpt-4o")
+        # pre_call boundary opens the LLM span; success closes it from the payload
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    server.end()
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    llm = spans["chat gpt-4o"]
+    srv = spans[LITELLM_PROXY_REQUEST_SPAN_NAME]
+    # provider model: on the LLM call span, NOT the server span
+    assert llm.attributes[LiteLLM.PROVIDER_MODEL] == "azure/my-deployment"
+    assert LiteLLM.PROVIDER_MODEL not in srv.attributes
+    # team metadata: on every span, JSON-serialized
+    expected = {"tier": "gold", "cost_center": "42"}
+    assert json.loads(llm.attributes[LiteLLM.TEAM_METADATA]) == expected
+    assert json.loads(srv.attributes[LiteLLM.TEAM_METADATA]) == expected
+
+
+def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
+    """The pre-call hook seeds identity Baggage in the request context so the
+    server span (stamped directly) AND later child spans (service here, via the
+    Baggage processor) carry identity — not just the LLM-call span."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+
+    async def _flow():
+        # pre-call seeds baggage + stamps the active server span
+        await logger.async_pre_call_hook(
+            _Auth(), None, {"model": "gpt-4o"}, "completion"
+        )
+        # a later service call (same task) must inherit the identity
+        await logger.async_service_success_hook(
+            payload=_ServicePayload("redis", "set"), parent_otel_span=server
+        )
+
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(_flow())
+    server.end()
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    redis = spans["redis set"]
+    assert redis.attributes[LiteLLM.TEAM_ID] == "t1"
+    assert redis.attributes[LiteLLM.KEY_HASH] == "hash1"
+    assert redis.attributes[f"{LiteLLM.METADATA_PREFIX}user_api_key_user_id"] == "u1"
+    srv = spans[LITELLM_PROXY_REQUEST_SPAN_NAME]
+    assert (
+        srv.attributes[LiteLLM.TEAM_ID] == "t1"
+    )  # stamped directly on the server span
+    assert srv.attributes[f"{LiteLLM.METADATA_PREFIX}user_api_key_user_id"] == "u1"
+
+
+# --------------------------------------------------------------------------- #
+#  Service hooks (Phase 3)
+# --------------------------------------------------------------------------- #
+
+
+class _Service:
+    """Stub matching ``ServiceTypes(str, Enum)``."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+class _ServicePayload:
+    def __init__(self, service="redis", call_type="set", error=None):
+        self.service = _Service(service)
+        self.call_type = call_type
+        self.error = error
+
+
+def _service_parent(logger):
+    """Helper: a live PROXY_REQUEST span to parent service spans under."""
+    return logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+
+
+def test_async_service_success_hook_emits_service_span():
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "set"),
+                parent_otel_span=parent,
+                event_metadata={"key1": "val1"},
+            )
+        )
+    finally:
+        parent.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    # Name disambiguates calls to the same service; redis is an outbound
+    # datastore call, so it's a CLIENT span with db.* semconv.
+    span = by_name["redis set"]
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["db.system.name"] == "redis"
+    assert span.attributes["db.operation.name"] == "set"
+    assert span.attributes[LiteLLM.SERVICE_NAME] == "redis"
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "set"
+    # Canonical (V2) namespaced metadata key
+    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}key1"] == "val1"
+    # V1 bare key (legacy dual-emit)
+    assert span.attributes["key1"] == "val1"
+    assert span.attributes["service"] == "redis"  # V1 bare key
+    assert span.attributes["call_type"] == "set"  # V1 bare key
+    # Success leaves status UNSET (semconv default), not forced OK.
+    assert span.status.status_code is StatusCode.UNSET
+
+
+def test_async_service_failure_hook_marks_error_status():
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_failure_hook(
+                payload=_ServicePayload("postgres", "query"),
+                error="boom",
+                parent_otel_span=parent,
+            )
+        )
+    finally:
+        parent.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["postgres query"]
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["db.system.name"] == "postgresql"
+    assert span.status.status_code is StatusCode.ERROR
+    # Without an explicit error_type from the payload, V2 stamps the fallback.
+    assert span.attributes["error.type"] == "error"
+    assert span.attributes[LiteLLM.SERVICE_NAME] == "postgres"
+
+
+def test_async_service_failure_hook_preserves_payload_error_over_override():
+    """When the payload itself carries an error, that takes precedence over the override."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_failure_hook(
+                payload=_ServicePayload("postgres", "query", error="db-down"),
+                error="override-only-used-when-payload-clean",
+                parent_otel_span=parent,
+            )
+        )
+    finally:
+        parent.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["postgres query"]
+    assert span.status.status_code is StatusCode.ERROR
+    assert "db-down" in (span.status.description or "")
+
+
+def test_metrics_only_ping_without_timing_or_parent_is_noop():
+    """A success with no timing and no parent is a prometheus-only ping (the
+    per-request ``self`` latency hook, in-memory queue gauges) — not a traceable
+    operation, so no span is emitted."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload(), parent_otel_span=None
+        )
+    )
+    assert exporter.get_finished_spans() == ()
+
+
+def test_background_service_call_with_timing_emits_root_span():
+    """A background datastore call (no request → no parent) but with real timing
+    still emits — as its own root trace — instead of being dropped."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("postgres", "query"),
+            parent_otel_span=None,
+            start_time=1.0,
+            end_time=2.0,
+        )
+    )
+    spans = exporter.get_finished_spans()
+    assert [s.name for s in spans] == ["postgres query"]
+    # No parent → it's a root span of its own trace.
+    assert spans[0].parent is None
+    assert spans[0].kind is SpanKind.CLIENT
+
+
+def test_internal_service_call_is_internal_kind_without_db_attrs():
+    """A genuine internal service (background job) is an INTERNAL span, no db.*."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("reset_budget_job", "reset_budget"),
+            parent_otel_span=None,
+            start_time=1.0,
+            end_time=2.0,
+        )
+    )
+    span = exporter.get_finished_spans()[0]
+    assert span.name == "reset_budget_job reset_budget"
+    assert span.kind is SpanKind.INTERNAL
+    assert "db.system.name" not in span.attributes
+    assert span.attributes[LiteLLM.SERVICE_NAME] == "reset_budget_job"
+
+
+def test_metrics_only_services_emit_no_span():
+    """self / router / proxy_pre_call / auth duplicate gen-AI spans or get a live
+    phase span — they are metrics-only and must not produce a service span."""
+    for service in ("self", "router", "proxy_pre_call", "auth"):
+        logger, exporter = _logger()
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload(service, "x"),
+                parent_otel_span=None,
+                start_time=1.0,
+                end_time=2.0,
+            )
+        )
+        assert exporter.get_finished_spans() == (), f"{service} should emit no span"
+
+
+def test_service_span_inherits_parent_when_provided():
+    logger, exporter = _logger()
+    parent = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload(), parent_otel_span=parent
+            )
+        )
+    finally:
+        parent.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert (
+        by_name["redis set"].parent.span_id
+        == by_name[LITELLM_PROXY_REQUEST_SPAN_NAME].get_span_context().span_id
+    )
+
+
+def test_service_span_prefers_ambient_context_over_threaded_parent():
+    """Service/DB spans parent to the active (ambient) span when there is one, so
+    they nest under whatever phase is active (e.g. a DB lookup under the live
+    ``auth`` span). The threaded ``parent_otel_span`` is only a fallback for when
+    ambient has no live span (a background service call)."""
+    logger, exporter = _logger()
+    ambient = logger._emitter.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    threaded = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    try:
+        with trace.use_span(ambient, end_on_exit=False):
+            asyncio.run(
+                logger.async_service_success_hook(
+                    payload=_ServicePayload("redis", "get"),
+                    parent_otel_span=threaded,
+                )
+            )
+    finally:
+        ambient.end()
+        threaded.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    assert by_name["redis get"].parent.span_id == ambient.get_span_context().span_id
+
+
+# --------------------------------------------------------------------------- #
+#  Proxy SERVER span lifecycle
+# --------------------------------------------------------------------------- #
+
+
+def test_create_proxy_request_started_span_returns_ambient_span():
+    """V2 doesn't create a server span (the instrumentor does), but it returns
+    the active server span so the proxy can thread it as the service-span parent
+    — service logging only fires the OTel hook when that parent is non-None."""
+    logger, exporter = _logger()
+    # No ambient recordable span → None (and creates nothing).
+    assert (
+        logger.create_litellm_proxy_request_started_span(
+            start_time=datetime.now(timezone.utc), headers={"traceparent": "x"}
+        )
+        is None
+    )
+    assert exporter.get_finished_spans() == ()
+    # With an active server span, return it (do NOT create a new one).
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    with trace.use_span(server, end_on_exit=False):
+        got = logger.create_litellm_proxy_request_started_span(
+            start_time=datetime.now(timezone.utc), headers=None
+        )
+    server.end()
+    assert got is server
+
+
+# --------------------------------------------------------------------------- #
+#  Constructor / proxy global guard
+# --------------------------------------------------------------------------- #
+
+
+def test_constructor_accepts_v1_compatible_kwargs():
+    """Mirrors V1's positional shape — config / callback_name / providers / **kwargs."""
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+    logger = OpenTelemetryV2(
+        config=cfg,
+        callback_name="otel",
+        tracer_provider=tp,
+        logger_provider=None,
+        meter_provider=None,
+        turn_off_message_logging=True,
+    )
+    assert logger.callback_name == "otel"
+    assert logger.turn_off_message_logging is True
+    assert logger.tracer is not None
+
+
+def test_default_config_reads_env(monkeypatch):
+    """No explicit config → reads env (exporter=console by default)."""
+    monkeypatch.delenv("OTEL_EXPORTER", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_PROTOCOL", raising=False)
+    logger = OpenTelemetryV2(
+        tracer_provider=providers.build_tracer_provider(
+            OpenTelemetryV2Config(exporter="in_memory")
+        )
+    )
+    assert logger.config.exporter == "console"
+
+
+def test_proxy_global_first_registered_wins(monkeypatch):
+    """``_init_otel_logger_on_litellm_proxy`` claims the global only when empty."""
+    proxy_server = pytest.importorskip("litellm.proxy.proxy_server")
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None, raising=False)
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+
+    first = OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    assert proxy_server.open_telemetry_logger is first
+
+    second = OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    # Global still points at the first registration.
+    assert proxy_server.open_telemetry_logger is first
+    assert second is not first
+
+
+def test_registers_into_litellm_service_callback(monkeypatch):
+    """The logger must mutate ``litellm.service_callback`` in place. An empty
+    list is falsy, so a ``getattr(..) or []`` would append to a throwaway local
+    and service spans (Redis, …) would silently never fire on this logger.
+    """
+    import litellm
+
+    pytest.importorskip("litellm.proxy.proxy_server")
+    monkeypatch.setattr(litellm, "service_callback", [], raising=False)
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+
+    first = OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    assert first in litellm.service_callback
+
+    # A second OTel logger sees one is already registered and does not duplicate.
+    OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    otel_registrations = [
+        cb
+        for cb in litellm.service_callback
+        if cb.__class__.__module__.startswith("litellm.integrations.otel")
+    ]
+    assert len(otel_registrations) == 1
+
+
+def test_registers_into_litellm_input_callback(monkeypatch):
+    """The logger must land in ``litellm.input_callback`` — the list
+    ``Logging.pre_call`` iterates to fire ``log_pre_api_call``. Without this the
+    boundary hook never runs and the gen-AI span is never opened (the span goes
+    completely missing). Deduped like ``service_callback``.
+    """
+    import litellm
+
+    pytest.importorskip("litellm.proxy.proxy_server")
+    monkeypatch.setattr(litellm, "input_callback", [], raising=False)
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+
+    first = OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    assert first in litellm.input_callback
+
+    OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    otel_registrations = [
+        cb
+        for cb in litellm.input_callback
+        if cb.__class__.__module__.startswith("litellm.integrations.otel")
+    ]
+    assert len(otel_registrations) == 1
+
+
+def test_registers_into_async_success_and_failure_callbacks(monkeypatch):
+    """The logger must self-register into ``litellm._async_success_callback`` and
+    ``litellm._async_failure_callback`` — the lists ``Logging.async_success_handler``
+    / ``async_failure_handler`` iterate to fire ``async_log_success_event`` /
+    ``async_log_failure_event``, where the boundary span is *closed*.
+
+    ``input_callback`` opens the span; these lists close it. Relying only on the
+    proxy's ``litellm.callbacks`` fan-out to populate them is not enough: a logger
+    that reached litellm via ``service_callback`` / ``success_callback`` (or was
+    created after the fan-out ran) is absent from ``litellm.callbacks``, so on a
+    pass-through request (which never runs ``function_setup``) the span opens and is
+    never ended — the gen-AI span leaks and never exports, while DB/service spans
+    still show up. Self-registration here guarantees every open has a close.
+    """
+    import litellm
+
+    pytest.importorskip("litellm.proxy.proxy_server")
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [], raising=False)
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    tp = providers.build_tracer_provider(cfg)
+
+    first = OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    assert first in litellm._async_success_callback
+    assert first in litellm._async_failure_callback
+
+    # Deduped — a second otel logger doesn't double up the close hook.
+    OpenTelemetryV2(config=cfg, tracer_provider=tp)
+    for callback_list in (
+        litellm._async_success_callback,
+        litellm._async_failure_callback,
+    ):
+        otel_registrations = [
+            cb
+            for cb in callback_list
+            if cb.__class__.__module__.startswith("litellm.integrations.otel")
+        ]
+        assert len(otel_registrations) == 1
+
+
+def test_boundary_span_closes_without_proxy_fanout(monkeypatch):
+    """A span opened at ``pre_call`` is still closed and exported when the logger is
+    registered ONLY via its own ``__init__`` (no ``litellm.callbacks`` fan-out, as
+    happens for a logger configured through ``service_callback``) and the close runs
+    through the real ``async_success_handler``.
+
+    Self-registration must wire both ends: the open hook (``input_callback``) and the
+    close hook (``_async_success_callback``). If only the open end were wired the span
+    would leak — opened but never closed, never exported.
+    """
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    pytest.importorskip("litellm.proxy.proxy_server")
+    monkeypatch.setattr(litellm, "input_callback", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [], raising=False)
+    # Crucially: the logger is NOT in litellm.callbacks, so the proxy fan-out would
+    # never reach it. Only __init__ self-registration wires the open + close hooks.
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+
+    logger, exporter = _logger()
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="pt_leak",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {}},
+        optional_params={},
+        model="gpt-4o",
+    )
+    logging_obj.model_call_details["litellm_call_id"] = "pt_leak"
+    # pre_call opens the boundary span (logger is in input_callback).
+    logging_obj.pre_call(input="hi", api_key="")
+    assert "pt_leak" in logger._open_llm_calls
+    # The close runs through the real async_success_handler, which iterates
+    # _async_success_callback — where the logger self-registered.
+    logging_obj.model_call_details["standard_logging_object"] = _payload(
+        litellm_call_id="pt_leak"
+    )
+    asyncio.run(
+        logging_obj.async_success_handler(
+            result=None, start_time=datetime.now(), end_time=datetime.now()
+        )
+    )
+    assert "pt_leak" not in logger._open_llm_calls  # carrier closed, not leaked
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+
+
+# --------------------------------------------------------------------------- #
+#  Guardrail span placement: request-level parent + real execution timestamps
+# --------------------------------------------------------------------------- #
+
+
+def _guardrail_request_data(*, start, end):
+    return {
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {
+                    "guardrail_name": "openai-moderation",
+                    "guardrail_mode": "pre_call",
+                    "guardrail_status": "success",
+                    "start_time": start,
+                    "end_time": end,
+                    "duration": end - start,
+                }
+            ],
+        }
+    }
+
+
+def test_guardrail_span_parents_to_ambient_server_span():
+    """The post-call hook runs in the request task with the server span ambient,
+    so the guardrail span parents to it natively — no span threaded through
+    metadata. (Auth already finished, so no phase span is active.)"""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    data = _guardrail_request_data(start=1000.0, end=1000.5)
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(
+                logger.async_post_call_success_hook(data, _Auth(), {"ok": True})
+            )
+    finally:
+        server.end()
+    g = {s.name: s for s in exporter.get_finished_spans()}[
+        "execute_guardrail openai-moderation"
+    ]
+    assert g.parent.span_id == server.get_span_context().span_id
+
+
+def test_guardrail_span_uses_actual_execution_timestamps():
+    """A pre_call guardrail's span carries its real start/end (from the logging
+    entry), so it sorts before the LLM call instead of at post-call emit time."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    data = _guardrail_request_data(start=1700.0, end=1700.25)
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(
+                logger.async_post_call_success_hook(data, _Auth(), {"ok": True})
+            )
+    finally:
+        server.end()
+    g = {s.name: s for s in exporter.get_finished_spans()}[
+        "execute_guardrail openai-moderation"
+    ]
+    assert g.start_time == to_ns(1700.0)
+    assert g.end_time == to_ns(1700.25)

@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import HTTPException, Request
@@ -35,6 +36,64 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
+
+
+def assert_proxy_admin_for_vector_store_index_management(
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    operation: Literal["create", "delete", "update"] = "create",
+) -> None:
+    """Raise 403 unless the caller is a proxy admin."""
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Only proxy admins can {operation} vector store indexes. "
+            "Contact your LiteLLM administrator."
+        ),
+    )
+
+
+def _suffix_after_index_name(request_path: str, index_name: str) -> Optional[str]:
+    """Return the path suffix after ``/indexes/{index_name}``, or None if absent."""
+    match = re.search(rf"/indexes/{re.escape(index_name)}(?=$|[/?])", request_path)
+    if match is None:
+        return None
+    return request_path[match.end() :]
+
+
+def _is_vector_store_index_lifecycle_request(
+    request_method: str,
+    request_path: str,
+    index_name: str,
+) -> bool:
+    """
+    True when the request creates or deletes a search index itself (not documents).
+
+    Examples (admin-only):
+    - DELETE /azure_ai/indexes/my-index
+    - PUT /azure_ai/indexes/my-index
+    - POST /azure_ai/indexes
+    """
+    if request_method not in ("POST", "PUT", "DELETE", "PATCH"):
+        return False
+
+    suffix = _suffix_after_index_name(request_path, index_name)
+    if suffix is not None:
+        # Document operations live under /indexes/{name}/docs/...
+        if suffix.startswith("/docs"):
+            return False
+        # DELETE/PUT/PATCH on /indexes/{name} itself is index lifecycle.
+        if suffix == "" or suffix.startswith("?"):
+            return True
+
+    # POST /indexes (create index at service level; no index name in path).
+    normalized = request_path.rstrip("/")
+    if request_method == "POST" and normalized.endswith("/indexes"):
+        return True
+
+    return False
 
 
 def _object_permission_allows_vector_store(
@@ -335,6 +394,22 @@ def is_allowed_to_call_vector_store_endpoint(
 
     request_route = get_request_route(request)
 
+    if _is_vector_store_index_lifecycle_request(
+        request_method=request.method,
+        request_path=request_route,
+        index_name=index_name,
+    ):
+        operation_label: Literal["create", "delete", "update"] = "create"
+        if request.method == "DELETE":
+            operation_label = "delete"
+        elif request.method in ("PUT", "PATCH"):
+            operation_label = "update"
+        assert_proxy_admin_for_vector_store_index_management(
+            user_api_key_dict,
+            operation=operation_label,
+        )
+        return True
+
     # Determine the permission type based on the request
     permission_type = None
     for endpoint in provider_vector_store_endpoints["read"]:
@@ -353,7 +428,14 @@ def is_allowed_to_call_vector_store_endpoint(
                 break
 
     if permission_type is None:
-        return None
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"User does not have permission to call vector store endpoint "
+                f"{index_name}. Ask your administrator to add the necessary "
+                "permissions to your API key/Team."
+            ),
+        )
 
     # Check if key has specific permission for allowed_vector_store_indexes
     has_permission = check_vector_store_permission(

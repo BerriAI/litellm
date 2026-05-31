@@ -107,6 +107,14 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
+        # Apply forward metadata AFTER the litellm_params merge so the helper
+        # sees any agent-owner-configured ``extra_body.metadata`` and can keep
+        # those keys authoritative over the client-supplied A2A metadata.
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params=params,
+        )
 
         # Call litellm.acompletion
         response = await litellm.acompletion(**completion_params)
@@ -214,6 +222,14 @@ class A2ACompletionBridgeHandler:
             if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
+        # Apply forward metadata AFTER the litellm_params merge so the helper
+        # sees any agent-owner-configured ``extra_body.metadata`` and can keep
+        # those keys authoritative over the client-supplied A2A metadata.
+        A2ACompletionBridgeTransformation.apply_forward_metadata_to_completion_params(
+            completion_params=completion_params,
+            a2a_message=message,
+            params=params,
+        )
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)

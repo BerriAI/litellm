@@ -69,3 +69,21 @@ def test_internal_jobs_user_has_proxy_admin_role():
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"
     assert system_user.team_alias == "system"
+
+
+def test_user_api_key_auth_hashes_authorization_header_form_of_key():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    raw_key = "sk-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    baseline = UserAPIKeyAuth(api_key=raw_key)
+
+    for header_form in (
+        f"Bearer {raw_key}",
+        f"bearer {raw_key}",
+        f"BEARER {raw_key}",
+        f"BeArEr {raw_key}",
+    ):
+        from_header = UserAPIKeyAuth(api_key=header_form)
+        assert from_header.api_key == baseline.api_key
+        assert from_header.token == baseline.token
+        assert not from_header.api_key.lower().startswith("bearer")

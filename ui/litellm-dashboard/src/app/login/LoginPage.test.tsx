@@ -18,7 +18,8 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
 }));
 
 vi.mock("@/utils/cookieUtils", () => ({
-  getCookie: vi.fn(),
+  clearTokenCookies: vi.fn(),
+  getCookieFromDocument: vi.fn(),
 }));
 
 vi.mock("@/utils/jwtUtils", () => ({
@@ -53,7 +54,7 @@ vi.mock("@/hooks/useWorker", () => ({
 }));
 
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
-import { getCookie } from "@/utils/cookieUtils";
+import { getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 
 const createQueryClient = () =>
@@ -83,7 +84,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
     const queryClient = createQueryClient();
     render(
@@ -108,7 +109,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const queryClient = createQueryClient();
@@ -134,7 +135,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -160,7 +161,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -189,7 +190,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const queryClient = createQueryClient();
@@ -216,7 +217,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
     const queryClient = createQueryClient();
     render(
@@ -244,7 +245,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -271,7 +272,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -324,7 +325,7 @@ describe("LoginPage", () => {
         },
         isLoading: false,
       });
-      (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
       (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
       const queryClient = createQueryClient();
@@ -352,7 +353,7 @@ describe("LoginPage", () => {
         },
         isLoading: false,
       });
-      (getCookie as ReturnType<typeof vi.fn>).mockReturnValue("legitimate-session-jwt");
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue("legitimate-session-jwt");
       (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
       const queryClient = createQueryClient();

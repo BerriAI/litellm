@@ -4,6 +4,7 @@ Mock tests for A2A endpoints.
 Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request.
 """
 
+import json
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -181,3 +182,67 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         # Verify proxy_server_request was added
         assert "proxy_server_request" in captured_data
         assert captured_data["proxy_server_request"]["method"] == "POST"
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_handles_none_agent_card_params():
+    """Agents without ``agent_card_params`` (e.g. plain chat agents routed
+    through the A2A endpoint by mistake) must not raise ``AttributeError`` on
+    ``agent_card_params.get(...)`` — they should return a JSON-RPC error.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_agent = MagicMock()
+    mock_agent.agent_card_params = None
+    mock_agent.litellm_params = None
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hello"}],
+                    "messageId": "msg-123",
+                }
+            },
+        }
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
+            return_value=mock_agent,
+        ),
+        patch(
+            "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
+            True,
+        ),
+        patch.dict(sys.modules, {"a2a": MagicMock(), "a2a.types": MagicMock()}),
+    ):
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        mock_fastapi_response = MagicMock()
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # JSONResponse exposes the body bytes; decode and verify it's a
+        # JSON-RPC error, not an "internal error" from a Python exception.
+        body = json.loads(response.body.decode())
+        assert body["jsonrpc"] == "2.0"
+        assert body["error"]["code"] == -32000
+        assert "no URL configured" in body["error"]["message"]

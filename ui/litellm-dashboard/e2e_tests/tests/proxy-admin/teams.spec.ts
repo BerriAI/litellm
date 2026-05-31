@@ -7,19 +7,7 @@ import {
   E2E_TEAM_ORG_ID,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
-import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
-
-/**
- * Click on a team ID in the table. Team IDs are rendered differently depending
- * on the component version — try button first (Tremor Button), fall back to
- * clickable span (OldTeams Typography.Text).
- */
-async function clickTeamId(page: import("@playwright/test").Page, teamId: string) {
-  const cell = page.locator("td").filter({ hasText: teamId }).first();
-  await expect(cell).toBeVisible({ timeout: 10_000 });
-  await cell.click();
-  await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
-}
+import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 
 test.describe("Proxy Admin - Teams", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });

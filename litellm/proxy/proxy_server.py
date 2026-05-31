@@ -825,6 +825,37 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
+    ## V2 OTEL: now that config (and therefore the callbacks) is loaded, publish
+    ## the chosen V2 logger's TracerProvider as the OTel global. The FastAPI
+    ## instrumentation mounted at app-creation binds to the global provider, so
+    ## this is what makes server spans and gen-ai spans share one provider and
+    ## land in the same trace. Prefer an already-registered preset logger
+    ## (arize, langfuse, …) so server spans export to that backend too; otherwise
+    ## build a generic one from OTEL_* envs. ``set_tracer_provider`` only takes
+    ## effect once, so the first configured logger wins.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            from opentelemetry import trace as _otel_trace
+
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            _otel_v2_logger = (
+                next(
+                    (
+                        cb
+                        for cb in litellm.service_callback
+                        if isinstance(cb, OpenTelemetryV2)
+                    ),
+                    None,
+                )
+                or OpenTelemetryV2()
+            )
+            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
+    except Exception as e:
+        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
+
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -1074,6 +1105,16 @@ app = FastAPI(
     strict_content_type=False,
 )
 
+## V2 OTEL: instrument the FastAPI app for server spans (gated by
+## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
+## the middleware stack is frozen and ``instrument_app`` raises "Cannot add
+## middleware after an application has started". See
+## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
+## no-op when the gate is off or the instrumentation package is unavailable.
+from litellm.integrations.otel.mount import instrument_fastapi_app
+
+instrument_fastapi_app(app)
+
 vertex_live_passthrough_vertex_base = VertexBase()
 
 
@@ -1238,6 +1279,17 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
         return
     if open_telemetry_logger is None:
         return
+    # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
+    # is that same span), and it records the error + ends it itself. Ending it here
+    # would end it early — losing the http.* attributes the instrumentor stamps on
+    # completion — and double-end it. Leave it to the instrumentor.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            return
+    except Exception:
+        pass
     try:
         from opentelemetry.trace import Status, StatusCode
 
@@ -15592,7 +15644,6 @@ async def get_routes():
 
 app.include_router(router)
 app.include_router(response_router)
-app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
@@ -15605,6 +15656,7 @@ app.include_router(fine_tuning_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
+app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)

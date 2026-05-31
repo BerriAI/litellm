@@ -23,3 +23,15 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
     await expect(dismissButton).not.toBeVisible({ timeout: 2_000 }).catch(() => {});
   }
 }
+
+/**
+ * Click on a team ID in the table. Team IDs are rendered differently depending
+ * on the component version — try button first (Tremor Button), fall back to
+ * clickable span (OldTeams Typography.Text).
+ */
+export async function clickTeamId(page: PlaywrightPage, teamId: string): Promise<void> {
+  const cell = page.locator("td").filter({ hasText: teamId }).first();
+  await expect(cell).toBeVisible({ timeout: 10_000 });
+  await cell.click();
+  await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
+}

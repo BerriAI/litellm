@@ -242,6 +242,11 @@ class KeyManagementRoutes(str, enum.Enum):
     TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
+    # Field-level opt-in permission (not a real HTTP route). When present in a
+    # team's `team_member_permissions`, non-admin members of that team may set
+    # `access_group_ids` on keys they create/update. Default-deny.
+    KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+
     # info and health routes
     KEY_INFO = "/key/info"
     KEY_HEALTH = "/key/health"
@@ -552,6 +557,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
+        KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
     ]
 
     management_routes = (
@@ -1067,6 +1073,7 @@ class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
+    disable_global_guardrails: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1832,6 +1839,7 @@ class NewTeamRequest(TeamBase):
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
+    disable_global_guardrails: Optional[bool] = None
     secret_manager_settings: Optional[dict] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     rpm_limit_type: Optional[
@@ -1900,6 +1908,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
@@ -2744,13 +2753,16 @@ class UserAPIKeyAuth(
         1. Regular API keys from LiteLLM DB
         2. JWT tokens used for connecting to LiteLLM API
         """
-        if api_key.startswith("sk-"):
-            return hash_token(api_key)
+        normalized = api_key
+        if normalized[:7].lower() == "bearer ":
+            normalized = normalized[7:]
+        if normalized.startswith("sk-"):
+            return hash_token(normalized)
         from litellm.proxy.auth.handle_jwt import JWTHandler
 
-        if JWTHandler.is_jwt(token=api_key):
-            return f"hashed-jwt-{hash_token(token=api_key)}"
-        return api_key
+        if JWTHandler.is_jwt(token=normalized):
+            return f"hashed-jwt-{hash_token(token=normalized)}"
+        return normalized
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":
@@ -4281,6 +4293,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
+    "disable_global_guardrails",
     "guardrails",
     "policies",
     "tags",

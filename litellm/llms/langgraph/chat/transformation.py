@@ -139,14 +139,16 @@ class LangGraphConfig(BaseConfig):
 
     def _convert_messages_to_langgraph_format(
         self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """
         Convert OpenAI-format messages to LangGraph format.
 
         OpenAI format: {"role": "user", "content": "..."}
         LangGraph format: {"role": "human", "content": "..."}
+
+        Preserves per-message ``metadata`` when present (e.g. A2A ``skillId``).
         """
-        langgraph_messages: List[Dict[str, str]] = []
+        langgraph_messages: List[Dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -169,7 +171,15 @@ class LangGraphConfig(BaseConfig):
             if not isinstance(content, str):
                 content = str(content)
 
-            langgraph_messages.append({"role": langgraph_role, "content": content})
+            langgraph_message: Dict[str, Any] = {
+                "role": langgraph_role,
+                "content": content,
+            }
+            message_metadata = msg.get("metadata")
+            if isinstance(message_metadata, dict) and message_metadata:
+                langgraph_message["metadata"] = message_metadata
+
+            langgraph_messages.append(langgraph_message)
 
         return langgraph_messages
 

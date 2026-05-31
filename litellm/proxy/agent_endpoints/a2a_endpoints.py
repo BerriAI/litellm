@@ -258,9 +258,17 @@ async def get_agent_card(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        if not agent.agent_card_params:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' has no agent card configured",
+            )
+
         # Copy and rewrite URL to point to LiteLLM proxy
-        agent_card = dict(agent.agent_card_params)
-        agent_card["url"] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+        agent_card = {
+            **agent.agent_card_params,
+            "url": f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}",
+        }
 
         verbose_proxy_logger.debug(
             f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}"
@@ -332,9 +340,14 @@ async def invoke_agent_a2a(  # noqa: PLR0915
 
         if params:
             # extract any litellm params from the params - eg. 'guardrails'
+            # ``metadata`` is intentionally excluded: it's a first-class A2A
+            # ``MessageSendParams`` field that the completion bridge forwards
+            # downstream via ``get_forward_metadata``. Stripping it here would
+            # collide with litellm's spend-tracking ``metadata`` kwarg and
+            # silently drop the caller's A2A request-level metadata.
             params_to_remove = []
             for key, value in params.items():
-                if key in all_litellm_params:
+                if key in all_litellm_params and key != "metadata":
                     params_to_remove.append(key)
                     body[key] = value
             for key in params_to_remove:
@@ -368,8 +381,9 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name
-        agent_url = agent.agent_card_params.get("url")
-        agent_name = agent.agent_card_params.get("name", agent_id)
+        agent_card_params = agent.agent_card_params or {}
+        agent_url = agent_card_params.get("url")
+        agent_name = agent_card_params.get("name", agent_id)
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}
