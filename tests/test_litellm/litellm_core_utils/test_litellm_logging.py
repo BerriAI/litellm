@@ -3114,3 +3114,30 @@ def test_get_error_information_prefers_message_attribute_over_empty_str():
     )
     assert info["error_message"] == "real failure detail"
     assert info["error_code"] == "401"
+
+
+def test_handle_anthropic_messages_response_logging_with_response_completed_event():
+    """Regression test for #28943: when anthropic_messages routes to OpenAI Responses
+    API and stream=True, success_handler receives a ResponseCompletedEvent instead of
+    a ModelResponse. The handler must return the inner ResponsesAPIResponse rather than
+    crashing with AnthropicResponse.model_validate."""
+    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-rce-123",
+        function_id="test-fn",
+    )
+
+    inner_response = ResponsesAPIResponse(
+        id="resp_test", created_at=1700000000, output=[]
+    )
+    event = ResponseCompletedEvent(type="response.completed", response=inner_response)
+
+    result = logging_obj._handle_anthropic_messages_response_logging(result=event)
+
+    assert result is inner_response

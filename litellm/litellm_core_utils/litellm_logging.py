@@ -3522,6 +3522,12 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ModelResponse):
             return result
+        elif isinstance(result, ResponseCompletedEvent):
+            # anthropic_messages() can route to OpenAI Responses API; in that path
+            # the assembled streaming result is a ResponseCompletedEvent rather than
+            # a ModelResponse. Return the inner response so downstream handlers
+            # (_transform_usage_objects, normalize_logging_result) can process it.
+            return result.response  # type: ignore[return-value]
 
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
