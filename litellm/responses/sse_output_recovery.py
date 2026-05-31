@@ -69,6 +69,11 @@ def record_output_text_delta_chunk(
     output_items: Dict[int, Dict[str, Any]],
     text_only_items: Dict[int, Dict[str, Any]],
 ) -> None:
+    """Accumulate an OUTPUT_TEXT_DELTA chunk into ``text_only_items``.
+
+    Real OUTPUT_ITEM_DONE events already captured in ``output_items`` take
+    precedence at the same ``output_index``.
+    """
     text_delta = parsed_chunk.get("delta")
     if not isinstance(text_delta, str):
         return

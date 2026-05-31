@@ -86,6 +86,34 @@ def test_text_delta_chunks_are_accumulated():
     assert text_only_items[0]["content"][0]["text"] == "Hello"
 
 
+def test_text_done_replaces_accumulated_delta_with_final_text():
+    output_items: dict = {}
+    text_only_items: dict = {}
+
+    record_output_text_delta_chunk(
+        parsed_chunk={
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "partial",
+        },
+        output_items=output_items,
+        text_only_items=text_only_items,
+    )
+    record_output_text_chunk(
+        parsed_chunk={
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
+            "text": "final",
+        },
+        output_items=output_items,
+        text_only_items=text_only_items,
+    )
+
+    assert text_only_items[0]["content"][0]["text"] == "final"
+
+
 def test_text_delta_with_invalid_delta_is_ignored():
     output_items: dict = {}
     text_only_items: dict = {}
