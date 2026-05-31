@@ -1967,27 +1967,35 @@ def test_non_admin_destination_override_guard():
     non_admin = MagicMock(user_role="internal_user")
     admin = MagicMock(user_role=LitellmUserRoles.PROXY_ADMIN)
 
+    def guard(config, request, user):
+        _assert_non_admin_destination_override_is_safe(config, request, user)
+
     # Non-admin overrides api_base without supplying a credential -> rejected
     # (a stored or environment key would otherwise be sent there).
     with pytest.raises(HTTPException):
-        _assert_non_admin_destination_override_is_safe(
-            {"api_base": "https://attacker.example"}, non_admin
+        guard({}, {"api_base": "https://attacker.example"}, non_admin)
+    # Stored credential not re-supplied (caller sends an UNRELATED field) ->
+    # rejected; the stored api_key must not ride along to the new endpoint.
+    with pytest.raises(HTTPException):
+        guard(
+            {"api_key": "sk-victim", "api_base": "https://victim"},
+            {"api_base": "https://attacker.example", "aws_session_token": "x"},
+            non_admin,
         )
     with patch.object(litellm, "user_url_validation", False):
         # Non-admin overrides WITH their own credential -> allowed.
-        _assert_non_admin_destination_override_is_safe(
-            {"api_base": "https://attacker.example", "api_key": "sk-own"}, non_admin
+        guard(
+            {}, {"api_base": "https://attacker.example", "api_key": "sk-own"}, non_admin
         )
     # No destination override -> allowed.
-    _assert_non_admin_destination_override_is_safe({"model": "gpt-4o"}, non_admin)
+    guard({"api_key": "sk-victim"}, {"model": "gpt-4o"}, non_admin)
     # Proxy admin is exempt even when overriding without a credential.
-    _assert_non_admin_destination_override_is_safe(
-        {"api_base": "https://attacker.example"}, admin
-    )
+    guard({"api_key": "sk-victim"}, {"api_base": "https://attacker.example"}, admin)
     # Non-admin override to an internal/metadata IP -> SSRF-rejected.
     with patch.object(litellm, "user_url_validation", True):
         with pytest.raises(HTTPException):
-            _assert_non_admin_destination_override_is_safe(
+            guard(
+                {},
                 {
                     "api_base": "http://169.254.169.254/latest/meta-data/",
                     "api_key": "sk-own",
@@ -2072,3 +2080,52 @@ async def test_test_connection_model_name_path_authorizes_against_resolved_owner
         )
 
     assert captured.get("team_id") == "team-OWNER"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_rejects_partial_credential_resupply_on_override():
+    """A non-admin overriding api_base while supplying only an UNRELATED credential
+    field must not let the resolved deployment's stored api_key ride along to the
+    new endpoint."""
+    from fastapi import HTTPException
+
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    victim = Deployment(
+        model_name="victim",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o",
+            api_key="sk-victim",
+            api_base="https://victim.example/v1",
+        ),
+        model_info={"id": "victim-id", "team_id": "team-OWNER"},
+    )
+    mock_router = MagicMock()
+    mock_router.get_deployment.side_effect = lambda model_id: (
+        victim if model_id == "victim-id" else None
+    )
+    mock_auth = AsyncMock(return_value=True)
+    mock_ahealth = AsyncMock(return_value={"status": "healthy"})
+
+    with contextlib.ExitStack() as stack:
+        for p in _health_test_connection_patches(
+            MagicMock(), mock_router, mock_auth, mock_ahealth
+        ):
+            stack.enter_context(p)
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={
+                    "model": "openai/gpt-4o",
+                    "api_base": "https://attacker.example/v1",
+                    "aws_session_token": "x",  # unrelated; api_key NOT re-supplied
+                },
+                model_info={"id": "victim-id"},
+                user_api_key_dict=MagicMock(
+                    user_id="attacker", token="t", user_role="internal_user"
+                ),
+            )
+        assert exc_info.value.status_code == 400
+
+    mock_ahealth.assert_not_called()  # stored sk-victim never went out

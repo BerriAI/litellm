@@ -1996,10 +1996,22 @@ class TestModelMgmtAuthzHardening:
         db = {"api_base": "https://real.example.com", "api_key": "sk-stored"}
         self._assert_resupply({"api_base": "https://real.example.com"}, db)
 
-    def test_keyless_model_destination_change_is_allowed(self):
-        # A model that never carried a credential has nothing to leak.
+    def test_keyless_model_destination_change_requires_credential(self):
+        from litellm.proxy._types import ProxyException
+
+        # Even a model stored without a credential falls back to the proxy env
+        # key (e.g. OPENAI_API_KEY) at call time, so repointing it without
+        # supplying a credential must be rejected.
         db = {"api_base": "https://real.example.com"}
-        self._assert_resupply({"api_base": "https://attacker.example.com"}, db)
+        with pytest.raises(ProxyException) as e:
+            self._assert_resupply({"api_base": "https://attacker.example.com"}, db)
+        assert str(e.value.code) == "400"
+
+    def test_keyless_model_destination_change_with_credential_is_allowed(self):
+        db = {"api_base": "https://real.example.com"}
+        self._assert_resupply(
+            {"api_base": "https://attacker.example.com", "api_key": "sk-own"}, db
+        )
 
     def test_validate_model_url_params_blocks_internal_ip(self):
         import litellm
@@ -2017,6 +2029,10 @@ class TestModelMgmtAuthzHardening:
             with pytest.raises(ProxyException):
                 _validate_model_url_params(
                     {"aws_bedrock_runtime_endpoint": "http://169.254.169.254/"}
+                )
+            with pytest.raises(ProxyException):
+                _validate_model_url_params(
+                    {"sagemaker_base_url": "http://169.254.169.254/"}
                 )
         # Honors the opt-out toggle (internal endpoints / Ollama).
         with (
@@ -2466,3 +2482,65 @@ class TestModelMgmtAuthzHardening:
                 db,
             )
         assert e.value.param == "api_key"
+
+    # --- Veria sweep follow-ups: authoritative pricing set, base_model, extra URLs ---
+
+    def test_spend_affecting_fields_are_proxy_admin_only(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _assert_privileged_model_fields_authorized,
+            _is_pricing_field,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        # Gate uses litellm's authoritative custom-pricing key set (not a subset),
+        # plus base_model which redirects the cost-lookup model.
+        for f in (
+            "tiered_pricing",
+            "cache_read_input_token_cost_flex",
+            "cache_creation_input_token_cost_above_1hr",
+            "base_model",
+            "input_cost_per_second",
+        ):
+            assert _is_pricing_field(f), f
+        for f in ("api_key", "api_base", "model", "custom_llm_provider"):
+            assert not _is_pricing_field(f), f
+
+        # A non-admin cannot zero a cache cost field outside the old subset...
+        with pytest.raises(ProxyException) as e:
+            _assert_privileged_model_fields_authorized(
+                litellm_params=updateLiteLLMParams(
+                    cache_read_input_token_cost_flex=0.0
+                ),
+                model_info=None,
+                user_api_key_dict=self._non_admin(),
+            )
+        assert str(e.value.code) == "403"
+        # ...nor repoint cost lookup via model_info.base_model.
+        with pytest.raises(ProxyException) as e:
+            _assert_privileged_model_fields_authorized(
+                litellm_params=None,
+                model_info=ModelInfo(base_model="gpt-3.5-turbo"),
+                user_api_key_dict=self._non_admin(),
+            )
+        assert str(e.value.code) == "403"
+        # Proxy admin may set them.
+        _assert_privileged_model_fields_authorized(
+            litellm_params=updateLiteLLMParams(cache_read_input_token_cost_flex=0.0),
+            model_info=ModelInfo(base_model="gpt-3.5-turbo"),
+            user_api_key_dict=self._admin(),
+        )
+
+    def test_sagemaker_base_url_change_requires_credential_resupply(self):
+        from litellm.proxy._types import ProxyException
+
+        # sagemaker_base_url retargets outbound SageMaker traffic, so changing it
+        # without re-supplying the stored AWS credential must be rejected.
+        db = {
+            "sagemaker_base_url": "https://real.example",
+            "aws_secret_access_key": "stored",
+        }
+        with pytest.raises(ProxyException):
+            self._assert_resupply(
+                {"sagemaker_base_url": "https://attacker.example"}, db
+            )

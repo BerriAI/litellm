@@ -83,40 +83,39 @@ _HEALTH_CREDENTIAL_FIELDS = (
     "litellm_credential_name",
     "aws_secret_access_key",
     "aws_session_token",
+    "azure_ad_token",
     "vertex_credentials",
 )
-_HEALTH_DESTINATION_FIELDS = (
-    "api_base",
-    "base_url",
-    "aws_bedrock_runtime_endpoint",
-    "aws_sts_endpoint",
-    "api_version",
-    "vertex_location",
-    "vertex_project",
-    "aws_region_name",
-)
 # Caller-controlled endpoint URLs: overriding one re-points the request (and any
-# credential) at a new host, so it is SSRF-validated.
+# credential) at a new host, so it is SSRF-validated. Mirrors the endpoint-redirect
+# subset of auth_utils._BANNED_REQUEST_BODY_PARAMS.
 _HEALTH_URL_FIELDS = (
     "api_base",
     "base_url",
     "aws_bedrock_runtime_endpoint",
     "aws_sts_endpoint",
+    "sagemaker_base_url",
+    "s3_endpoint_url",
+    "deployment_url",
 )
 
 
 def _assert_non_admin_destination_override_is_safe(
-    request_litellm_params: dict, user_api_key_dict: UserAPIKeyAuth
+    config_litellm_params: dict,
+    request_litellm_params: dict,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Confused-deputy / SSRF guard for /health/test_connection.
 
     When a non-admin overrides the connection target (api_base/base_url/provider
-    endpoint), the request must carry its own non-empty credential. Otherwise the
-    downstream provider falls back to a stored or environment secret (e.g. the
-    resolved deployment's key, or OPENAI_API_KEY) and sends it to the
-    caller-chosen address. The overridden URL is also SSRF-validated so it cannot
-    point at an internal host or cloud-metadata endpoint. Proxy admins are
-    unaffected.
+    endpoint), every credential the resolved deployment stores must be re-supplied
+    by the request (non-empty), and the request must carry a non-empty credential
+    at all. Otherwise the downstream provider sends a stored credential, or falls
+    back to an environment secret (e.g. OPENAI_API_KEY), to the caller-chosen
+    address — including the case where the caller supplies an unrelated credential
+    field to leave the stored one riding along. The overridden URL is also
+    SSRF-validated so it cannot point at an internal or cloud-metadata host.
+    Proxy admins are unaffected.
     """
     from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
     from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
@@ -125,6 +124,14 @@ def _assert_non_admin_destination_override_is_safe(
         return
     if not any(request_litellm_params.get(field) for field in _HEALTH_URL_FIELDS):
         return
+    for field in _HEALTH_CREDENTIAL_FIELDS:
+        if config_litellm_params.get(field) and not request_litellm_params.get(field):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Re-provide {field} when overriding the connection target; a stored credential cannot be sent to a caller-chosen endpoint."
+                },
+            )
     if not any(
         request_litellm_params.get(field) for field in _HEALTH_CREDENTIAL_FIELDS
     ):
@@ -1926,6 +1933,7 @@ async def test_model_connection(  # noqa: PLR0915
         # A non-admin overriding the destination must bring their own credential
         # and a non-internal URL, so no stored/environment secret is sent out.
         _assert_non_admin_destination_override_is_safe(
+            config_litellm_params=config_litellm_params,
             request_litellm_params=request_litellm_params,
             user_api_key_dict=user_api_key_dict,
         )

@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.litellm_core_utils.litellm_logging import _CUSTOM_PRICING_KEYS
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -75,14 +76,20 @@ _CREDENTIAL_LITELLM_PARAMS = (
     "litellm_credential_name",
     "aws_secret_access_key",
     "aws_session_token",
+    "azure_ad_token",
     "vertex_credentials",
 )
-# Caller-controlled endpoint URLs that must be SSRF-validated on write.
+# Caller-controlled endpoint URLs that must be SSRF-validated on write. Mirrors
+# the endpoint-redirect subset of auth_utils._BANNED_REQUEST_BODY_PARAMS so a
+# stored config can't reach an internal host that the request-time guard blocks.
 _URL_LITELLM_PARAMS = (
     "api_base",
     "base_url",
     "aws_bedrock_runtime_endpoint",
     "aws_sts_endpoint",
+    "sagemaker_base_url",
+    "s3_endpoint_url",
+    "deployment_url",
 )
 # Destination fields whose change must drop an inherited credential (URLs above
 # plus the provider selector, which isn't a URL so isn't SSRF-validated).
@@ -135,18 +142,31 @@ def _assert_credential_resupplied_on_destination_change(
     db_plaintext: "Callable[[str], object]",
 ) -> None:
     """Changing a model's destination (api_base/base_url/provider endpoint) must
-    not send an inherited credential to the new endpoint. Clearing the credential
-    is NOT sufficient: an empty/absent key falls back to the proxy's environment
-    secret (e.g. OPENAI_API_KEY) and would still be sent there. So require the
-    caller to re-supply, with a non-empty value, every credential the model
-    already had; otherwise reject. A non-empty re-supplied value is the caller's
-    own credential going to their own endpoint, which is allowed."""
+    not send a credential to the new endpoint that the caller did not themselves
+    provide. Two things are required. First, the patch must carry a non-empty
+    credential at all: even a model stored without one falls back to the proxy's
+    environment secret (e.g. OPENAI_API_KEY) at call time, which would then be
+    sent to the new endpoint. Second, every credential the model already had must
+    be re-supplied non-empty, so an inherited secret is never kept alongside an
+    unrelated new one. A non-empty re-supplied value is the caller's own
+    credential going to their own endpoint, which is allowed."""
     destination_changed = any(
         field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
         for field in _DESTINATION_LITELLM_PARAMS
     )
     if not destination_changed:
         return
+    if not any(patch_plaintext.get(field) for field in _CREDENTIAL_LITELLM_PARAMS):
+        raise ProxyException(
+            message=(
+                "Provide a non-empty credential (e.g. api_key) when changing the "
+                "model endpoint; otherwise the proxy's environment credential "
+                "would be used at the new destination."
+            ),
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="api_key",
+        )
     for field in _CREDENTIAL_LITELLM_PARAMS:
         if db_plaintext(field) and not patch_plaintext.get(field):
             raise ProxyException(
@@ -162,10 +182,15 @@ def _assert_credential_resupplied_on_destination_change(
 
 
 def _is_pricing_field(field: str) -> bool:
-    """Custom per-token / per-second / per-pixel / per-request (and tiered) cost
-    overrides all follow this naming, so match by convention rather than an
-    enumerated subset that drifts out of date."""
-    return "cost_per" in field or field.endswith("_cost")
+    """A field that influences cost/spend accounting, so it is proxy-admin-only.
+
+    The authoritative boundary is litellm's own custom-pricing key set (the same
+    fields the cost calculator reads from a deployment), so this cannot drift
+    behind the calculator. base_model redirects the cost-lookup model, and the
+    "cost" substring is a belt-and-suspenders catch for any future field that
+    follows the naming convention before it lands in the type.
+    """
+    return field in _CUSTOM_PRICING_KEYS or field == "base_model" or "cost" in field
 
 
 def _contains_env_reference(value: object) -> bool:
