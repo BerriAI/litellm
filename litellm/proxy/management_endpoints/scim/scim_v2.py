@@ -171,7 +171,7 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
     """Extract common data from SCIMUser object."""
     user_email = None
     if user.emails and len(user.emails) > 0:
-        user_email = user.emails[0].value
+        user_email = user.emails[0].value.strip()
 
     user_alias = None
     if user.name and user.name.givenName:
