@@ -27,6 +27,15 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.destination_credential_policy import (
+    CREDENTIAL_FIELDS as _HEALTH_CREDENTIAL_FIELDS,
+)
+from litellm.proxy.common_utils.destination_credential_policy import (
+    URL_DESTINATION_FIELDS as _HEALTH_URL_FIELDS,
+)
+from litellm.proxy.common_utils.destination_credential_policy import (
+    consumed_credentials_for,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
@@ -78,29 +87,6 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
-_HEALTH_CREDENTIAL_FIELDS = (
-    "api_key",
-    "litellm_credential_name",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_web_identity_token",
-    "azure_ad_token",
-    "vertex_credentials",
-)
-# Caller-controlled endpoint URLs: overriding one re-points the request (and any
-# credential) at a new host, so it is SSRF-validated. Mirrors the endpoint-redirect
-# subset of auth_utils._BANNED_REQUEST_BODY_PARAMS.
-_HEALTH_URL_FIELDS = (
-    "api_base",
-    "base_url",
-    "aws_bedrock_runtime_endpoint",
-    "aws_sts_endpoint",
-    "sagemaker_base_url",
-    "s3_endpoint_url",
-    "deployment_url",
-)
-
-
 def _assert_non_admin_destination_override_is_safe(
     config_litellm_params: dict,
     request_litellm_params: dict,
@@ -110,9 +96,10 @@ def _assert_non_admin_destination_override_is_safe(
 
     When a non-admin overrides the connection target (api_base/base_url/provider
     endpoint), every credential the resolved deployment stores must be re-supplied
-    by the request (non-empty), and the request must carry a non-empty credential
-    at all. Otherwise the downstream provider sends a stored credential, or falls
-    back to an environment secret (e.g. OPENAI_API_KEY), to the caller-chosen
+    by the request (non-empty), and each overridden URL must be accompanied by a
+    non-empty credential its provider actually consumes. Otherwise the downstream
+    provider sends a stored credential, or falls back to an ambient/environment
+    secret (e.g. OPENAI_API_KEY or ambient AWS credentials), to the caller-chosen
     address — including the case where the caller supplies an unrelated credential
     field to leave the stored one riding along. The overridden URL is also
     SSRF-validated so it cannot point at an internal or cloud-metadata host.
@@ -123,7 +110,10 @@ def _assert_non_admin_destination_override_is_safe(
 
     if is_proxy_admin(user_api_key_dict):
         return
-    if not any(request_litellm_params.get(field) for field in _HEALTH_URL_FIELDS):
+    overridden_urls = [
+        field for field in _HEALTH_URL_FIELDS if request_litellm_params.get(field)
+    ]
+    if not overridden_urls:
         return
     for field in _HEALTH_CREDENTIAL_FIELDS:
         if config_litellm_params.get(field) and not request_litellm_params.get(field):
@@ -133,15 +123,15 @@ def _assert_non_admin_destination_override_is_safe(
                     "error": f"Re-provide {field} when overriding the connection target; a stored credential cannot be sent to a caller-chosen endpoint."
                 },
             )
-    if not any(
-        request_litellm_params.get(field) for field in _HEALTH_CREDENTIAL_FIELDS
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Supply your own api_key when overriding the connection target (e.g. api_base); otherwise a stored or environment credential could be sent to it."
-            },
-        )
+    for field in overridden_urls:
+        consumed = consumed_credentials_for(field)
+        if not any(request_litellm_params.get(cred) for cred in consumed):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Overriding {field} requires supplying a credential it uses ({', '.join(consumed)}); otherwise a stored or ambient credential could be sent to it."
+                },
+            )
     if not getattr(litellm, "user_url_validation", False):
         return
     for field in _HEALTH_URL_FIELDS:

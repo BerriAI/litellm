@@ -1991,6 +1991,24 @@ def test_non_admin_destination_override_guard():
     guard({"api_key": "sk-victim"}, {"model": "gpt-4o"}, non_admin)
     # Proxy admin is exempt even when overriding without a credential.
     guard({"api_key": "sk-victim"}, {"api_base": "https://attacker.example"}, admin)
+    # An AWS endpoint override is NOT satisfied by an api_key (Bedrock/SageMaker
+    # sign with ambient AWS credentials regardless), so it must be rejected.
+    with pytest.raises(HTTPException):
+        guard(
+            {},
+            {"aws_bedrock_runtime_endpoint": "https://attacker", "api_key": "x"},
+            non_admin,
+        )
+    with patch.object(litellm, "user_url_validation", False):
+        # Supplying an actual AWS credential is accepted.
+        guard(
+            {},
+            {
+                "aws_bedrock_runtime_endpoint": "https://attacker",
+                "aws_secret_access_key": "ak",
+            },
+            non_admin,
+        )
     # Non-admin override to an internal/metadata IP -> SSRF-rejected.
     with patch.object(litellm, "user_url_validation", True):
         with pytest.raises(HTTPException):

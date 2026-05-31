@@ -43,6 +43,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.destination_credential_policy import (
+    CREDENTIAL_FIELDS,
+    URL_DESTINATION_FIELDS,
+    consumed_credentials_for,
+)
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -69,31 +74,13 @@ from litellm.utils import get_utc_datetime
 router = APIRouter()
 
 
-# Credential fields that must never be silently re-pointed at a new endpoint,
-# and the routing fields that change where they are sent.
-_CREDENTIAL_LITELLM_PARAMS = (
-    "api_key",
-    "litellm_credential_name",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_web_identity_token",
-    "azure_ad_token",
-    "vertex_credentials",
-)
-# Caller-controlled endpoint URLs that must be SSRF-validated on write. Mirrors
-# the endpoint-redirect subset of auth_utils._BANNED_REQUEST_BODY_PARAMS so a
-# stored config can't reach an internal host that the request-time guard blocks.
-_URL_LITELLM_PARAMS = (
-    "api_base",
-    "base_url",
-    "aws_bedrock_runtime_endpoint",
-    "aws_sts_endpoint",
-    "sagemaker_base_url",
-    "s3_endpoint_url",
-    "deployment_url",
-)
-# Destination fields whose change must drop an inherited credential (URLs above
-# plus the provider selector, which isn't a URL so isn't SSRF-validated).
+# Credential and endpoint-URL field sets, plus the provider-specific credential
+# policy, live in one shared module so the write paths and /health/test_connection
+# cannot drift apart.
+_CREDENTIAL_LITELLM_PARAMS = CREDENTIAL_FIELDS
+_URL_LITELLM_PARAMS = URL_DESTINATION_FIELDS
+# Destination fields whose change requires a fresh credential (URLs above plus the
+# provider selector, which isn't a URL so isn't SSRF-validated).
 _DESTINATION_LITELLM_PARAMS = _URL_LITELLM_PARAMS + ("custom_llm_provider",)
 
 
@@ -144,30 +131,35 @@ def _assert_credential_resupplied_on_destination_change(
 ) -> None:
     """Changing a model's destination (api_base/base_url/provider endpoint) must
     not send a credential to the new endpoint that the caller did not themselves
-    provide. Two things are required. First, the patch must carry a non-empty
-    credential at all: even a model stored without one falls back to the proxy's
-    environment secret (e.g. OPENAI_API_KEY) at call time, which would then be
-    sent to the new endpoint. Second, every credential the model already had must
-    be re-supplied non-empty, so an inherited secret is never kept alongside an
-    unrelated new one. A non-empty re-supplied value is the caller's own
-    credential going to their own endpoint, which is allowed."""
-    destination_changed = any(
-        field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
+    provide. Two things are required. First, each changed destination must be
+    accompanied by a non-empty credential its provider actually consumes: an
+    api_key does not make an AWS endpoint change safe, because Bedrock/SageMaker
+    sign with ambient AWS credentials regardless, and even a model with no stored
+    credential falls back to the proxy's environment secret at call time. Second,
+    every credential the model already had must be re-supplied non-empty, so an
+    inherited secret is never kept alongside an unrelated new one. A non-empty
+    re-supplied value is the caller's own credential going to their own endpoint,
+    which is allowed."""
+    changed_destinations = [
+        field
         for field in _DESTINATION_LITELLM_PARAMS
-    )
-    if not destination_changed:
+        if field in patch_plaintext and patch_plaintext[field] != db_plaintext(field)
+    ]
+    if not changed_destinations:
         return
-    if not any(patch_plaintext.get(field) for field in _CREDENTIAL_LITELLM_PARAMS):
-        raise ProxyException(
-            message=(
-                "Provide a non-empty credential (e.g. api_key) when changing the "
-                "model endpoint; otherwise the proxy's environment credential "
-                "would be used at the new destination."
-            ),
-            type=ProxyErrorTypes.validation_error.value,
-            code=status.HTTP_400_BAD_REQUEST,
-            param="api_key",
-        )
+    for field in changed_destinations:
+        consumed = consumed_credentials_for(field)
+        if not any(patch_plaintext.get(cred) for cred in consumed):
+            raise ProxyException(
+                message=(
+                    f"Changing {field} requires supplying a non-empty credential it "
+                    f"uses ({', '.join(consumed)}); otherwise the proxy's stored or "
+                    "ambient credential would be sent to the new destination."
+                ),
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=field,
+            )
     for field in _CREDENTIAL_LITELLM_PARAMS:
         if db_plaintext(field) and not patch_plaintext.get(field):
             raise ProxyException(
@@ -1105,6 +1097,7 @@ async def delete_model(
                     model_params.model_info.team_public_model_name
                     or model_params.model_name
                 ),
+                team_id=model_params.model_info.team_id,
                 prisma_client=prisma_client,
             )
 
@@ -1204,12 +1197,15 @@ async def delete_model(
 
 async def delete_team_model_alias(
     public_model_name: str,
+    team_id: str,
     prisma_client: PrismaClient,
 ) -> List[Tuple[str, str]]:
     """
     Delete a team model alias
 
-    Iterate through all team model aliases and delete the one that matches the model_id
+    Only the owning team's alias is touched: a public model name is not unique
+    across teams, so without scoping by team_id one team admin could delete
+    another team's alias that happens to point at the same public name.
 
     Returns:
     - List of team id + model alias pairs that were removed
@@ -1220,6 +1216,8 @@ async def delete_team_model_alias(
     tasks = []
     removed_model_aliases = []
     for team_model_alias in team_model_aliases:
+        if team_model_alias.team is None or team_model_alias.team.team_id != team_id:
+            continue
         model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
         id = team_model_alias.id
 

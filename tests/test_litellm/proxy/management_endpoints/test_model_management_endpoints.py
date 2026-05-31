@@ -293,105 +293,76 @@ class MockPrismaWrapper:
 
 
 class TestDeleteTeamModelAlias:
+    @staticmethod
+    def _alias_row(row_id, model_aliases, team_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            id=row_id,
+            model_aliases=model_aliases,
+            team=SimpleNamespace(team_id=team_id),
+        )
+
     @pytest.mark.asyncio
     async def test_delete_team_model_alias_success(self):
-        """Test successful deletion of a team model alias"""
+        """Only the owning team's alias is removed, even when another team's row
+        points at the same public model name."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_team_model_alias,
         )
 
-        # Setup test data
-        model_aliases_list = [
-            {
-                "id": 1,
-                "model_aliases": {
-                    "alias1": "public_model_1",
-                    "alias2": "public_model_2",
-                },
-                "updated_by": "test_user",
-                "created_by": "test_user",
-            },
-            {
-                "id": 2,
-                "model_aliases": {
-                    "alias3": "public_model_3",
-                    "alias4": "public_model_1",
-                },
-                "updated_by": "test_user",
-                "created_by": "test_user",
-            },  # public_model_1 appears twice
+        rows = [
+            self._alias_row(
+                1, {"alias1": "public_model_1", "alias2": "public_model_2"}, "team1"
+            ),
+            # team2 also aliases public_model_1; it must NOT be touched.
+            self._alias_row(2, {"alias4": "public_model_1"}, "team2"),
         ]
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=rows)
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
 
-        # Create mock prisma client
-        mock_prisma = MockPrismaClient(team_exists=True)
-        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
-
-        # Call the function
-        await delete_team_model_alias(
-            public_model_name="public_model_1", prisma_client=mock_prisma
+        removed = await delete_team_model_alias(
+            public_model_name="public_model_1",
+            team_id="team1",
+            prisma_client=mock_prisma,
         )
 
-        # Verify results
-        mock_db = mock_prisma.db.litellm_modeltable
-        assert (
-            len(mock_db.update_calls) == 2
-        )  # Should have 2 update calls since public_model_1 appears twice
-
-        # Verify first update
-        first_update = mock_db.update_calls[0]
-        assert first_update["where"] == {"id": 1}
-        assert json.loads(first_update["data"]["model_aliases"]) == {
+        update = mock_prisma.db.litellm_modeltable.update
+        assert update.call_count == 1  # only team1's row
+        assert update.call_args.kwargs["where"] == {"id": 1}
+        assert json.loads(update.call_args.kwargs["data"]["model_aliases"]) == {
             "alias2": "public_model_2"
         }
-
-        # Verify second update
-        second_update = mock_db.update_calls[1]
-        assert second_update["where"] == {"id": 2}
-        assert json.loads(second_update["data"]["model_aliases"]) == {
-            "alias3": "public_model_3"
-        }
+        assert removed == [("team1", "alias1")]
 
     @pytest.mark.asyncio
     async def test_delete_team_model_alias_no_matches(self):
-        """Test deletion when no matching model alias exists"""
+        """No updates when the owning team has no alias for the public name."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_team_model_alias,
         )
 
-        # Setup test data with no matching model
-        model_aliases_list = [
-            {
-                "id": 1,
-                "model_aliases": {
-                    "alias1": "public_model_1",
-                    "alias2": "public_model_2",
-                },
-                "updated_by": "test_user",
-                "created_by": "test_user",
-            },
-            {
-                "id": 2,
-                "model_aliases": {
-                    "alias3": "public_model_3",
-                    "alias4": "public_model_4",
-                },
-                "updated_by": "test_user",
-                "created_by": "test_user",
-            },
+        rows = [
+            self._alias_row(
+                1, {"alias1": "public_model_1", "alias2": "public_model_2"}, "team1"
+            ),
         ]
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=rows)
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
 
-        # Create mock prisma client
-        mock_prisma = MockPrismaClient(team_exists=True)
-        mock_prisma.db = MockPrismaWrapper(model_aliases_list)
-
-        # Call the function with non-existent model
         await delete_team_model_alias(
-            public_model_name="non_existent_model", prisma_client=mock_prisma
+            public_model_name="non_existent_model",
+            team_id="team1",
+            prisma_client=mock_prisma,
         )
 
-        # Verify no updates were made
-        mock_db = mock_prisma.db.litellm_modeltable
-        assert len(mock_db.update_calls) == 0
+        assert mock_prisma.db.litellm_modeltable.update.call_count == 0
 
 
 class TestClearCache:
@@ -2345,8 +2316,9 @@ class TestModelMgmtAuthzHardening:
 
         captured = {}
 
-        async def fake_delete_alias(public_model_name, prisma_client):
+        async def fake_delete_alias(public_model_name, team_id, prisma_client):
             captured["public_model_name"] = public_model_name
+            captured["team_id"] = team_id
             return []
 
         _PS = "litellm.proxy.proxy_server"
@@ -2469,9 +2441,10 @@ class TestModelMgmtAuthzHardening:
     def test_destination_change_partial_resupply_is_rejected(self):
         from litellm.proxy._types import ProxyException
 
-        # Patch redirects api_base AND supplies an UNRELATED credential
-        # (aws_secret_access_key); the inherited api_key is still not re-supplied,
-        # so the change must be rejected rather than letting api_key ride along.
+        # Patch redirects api_base but supplies only an UNRELATED credential
+        # (aws_secret_access_key, which an OpenAI-compatible api_base does not
+        # consume), so the change must be rejected rather than letting the stored
+        # api_key (or the env fallback) ride along to the new endpoint.
         db = {"api_base": "https://real.example", "api_key": "sk-inherited"}
         with pytest.raises(ProxyException) as e:
             self._assert_resupply(
@@ -2481,7 +2454,7 @@ class TestModelMgmtAuthzHardening:
                 },
                 db,
             )
-        assert e.value.param == "api_key"
+        assert e.value.param == "api_base"
 
     # --- Veria sweep follow-ups: authoritative pricing set, base_model, extra URLs ---
 
@@ -2558,3 +2531,76 @@ class TestModelMgmtAuthzHardening:
             self._assert_resupply(
                 {"aws_sts_endpoint": "https://sts.attacker", "api_key": "x"}, db
             )
+
+    def test_unrelated_credential_does_not_satisfy_aws_endpoint_override(self):
+        from litellm.proxy._types import ProxyException
+
+        # AWS providers sign with ambient credentials regardless of api_key, so an
+        # api_key must NOT satisfy an AWS endpoint override (it would leave ambient
+        # AWS creds to be SigV4-signed to the attacker host). Model has no stored
+        # AWS credential (ambient).
+        db = {"aws_bedrock_runtime_endpoint": "https://real.aws"}
+        with pytest.raises(ProxyException) as e:
+            self._assert_resupply(
+                {
+                    "aws_bedrock_runtime_endpoint": "https://attacker.example",
+                    "api_key": "sk-unrelated",
+                },
+                db,
+            )
+        assert e.value.param == "aws_bedrock_runtime_endpoint"
+        # Supplying an actual AWS credential is accepted.
+        self._assert_resupply(
+            {
+                "aws_bedrock_runtime_endpoint": "https://attacker.example",
+                "aws_secret_access_key": "ak",
+            },
+            db,
+        )
+        # Conversely, an unrelated AWS credential does not satisfy a generic
+        # api_base override (OpenAI ignores it and falls back to OPENAI_API_KEY).
+        with pytest.raises(ProxyException):
+            self._assert_resupply(
+                {"api_base": "https://attacker", "aws_secret_access_key": "ak"},
+                {"api_base": "https://real"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_delete_team_model_alias_only_touches_owning_team(self):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        # Two teams have an alias pointing at the same public model name.
+        row_a = SimpleNamespace(
+            id="A",
+            model_aliases={"gpt4": "shared-public"},
+            team=SimpleNamespace(team_id="teamA"),
+        )
+        row_b = SimpleNamespace(
+            id="B",
+            model_aliases={"gpt4": "shared-public"},
+            team=SimpleNamespace(team_id="teamB"),
+        )
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(
+            return_value=[row_a, row_b]
+        )
+        mock_prisma.db.litellm_modeltable.update = AsyncMock()
+
+        removed = await delete_team_model_alias(
+            public_model_name="shared-public",
+            team_id="teamA",
+            prisma_client=mock_prisma,
+        )
+
+        # Only the owning team's alias row is updated; teamB's is untouched.
+        assert mock_prisma.db.litellm_modeltable.update.call_count == 1
+        assert mock_prisma.db.litellm_modeltable.update.call_args.kwargs["where"] == {
+            "id": "A"
+        }
+        assert removed == [("teamA", "gpt4")]
