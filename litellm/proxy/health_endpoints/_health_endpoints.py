@@ -88,6 +88,8 @@ _HEALTH_CREDENTIAL_FIELDS = (
 _HEALTH_DESTINATION_FIELDS = (
     "api_base",
     "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "aws_sts_endpoint",
     "api_version",
     "vertex_location",
     "vertex_project",

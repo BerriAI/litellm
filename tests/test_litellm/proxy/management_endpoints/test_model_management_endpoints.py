@@ -2044,6 +2044,11 @@ class TestModelMgmtAuthzHardening:
                 _validate_model_url_params(
                     {"api_base": "http://169.254.169.254/latest/meta-data/"}
                 )
+            # Provider-specific endpoint URLs are guarded too, not just api_base.
+            with pytest.raises(ProxyException):
+                _validate_model_url_params(
+                    {"aws_bedrock_runtime_endpoint": "http://169.254.169.254/"}
+                )
         # Honors the opt-out toggle (internal endpoints / Ollama).
         with (
             patch.object(litellm, "user_url_validation", False),

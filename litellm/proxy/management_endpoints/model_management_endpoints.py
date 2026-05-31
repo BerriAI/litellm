@@ -77,7 +77,16 @@ _CREDENTIAL_LITELLM_PARAMS = (
     "aws_session_token",
     "vertex_credentials",
 )
-_DESTINATION_LITELLM_PARAMS = ("api_base", "base_url", "custom_llm_provider")
+# Caller-controlled endpoint URLs that must be SSRF-validated on write.
+_URL_LITELLM_PARAMS = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "aws_sts_endpoint",
+)
+# Destination fields whose change must drop an inherited credential (URLs above
+# plus the provider selector, which isn't a URL so isn't SSRF-validated).
+_DESTINATION_LITELLM_PARAMS = _URL_LITELLM_PARAMS + ("custom_llm_provider",)
 
 
 def _field_explicitly_set(model: Optional[BaseModel], field: str) -> bool:
@@ -92,7 +101,7 @@ def _validate_model_url_params(litellm_params: dict) -> None:
     with user_url_allowed_hosts as the escape hatch for internal endpoints."""
     if not getattr(litellm, "user_url_validation", False):
         return
-    for url_field in ("api_base", "base_url"):
+    for url_field in _URL_LITELLM_PARAMS:
         url_value = litellm_params.get(url_field)
         if not url_value or not isinstance(url_value, str):
             continue
@@ -151,13 +160,18 @@ def _is_pricing_field(field: str) -> bool:
 
 def _contains_env_reference(value: object) -> bool:
     """True if any (possibly nested) string is an `os.environ/` reference, which
-    resolves to a server-side environment secret at call time."""
-    if isinstance(value, str):
-        return value.startswith("os.environ/")
-    if isinstance(value, dict):
-        return any(_contains_env_reference(v) for v in value.values())
-    if isinstance(value, list):
-        return any(_contains_env_reference(v) for v in value)
+    resolves to a server-side environment secret at call time. Iterative (stack)
+    rather than recursive, matching _reject_os_environ_references."""
+    stack: List[object] = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if item.startswith("os.environ/"):
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
     return False
 
 
