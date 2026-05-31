@@ -20,6 +20,8 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   "/key/list": "Member can list virtual keys belonging to this team",
   "/key/block": "Member can block a virtual key belonging to this team",
   "/key/unblock": "Member can unblock a virtual key belonging to this team",
+  "/key/access_group_assignment":
+    "Member can assign access groups to virtual keys for this team",
   "/team/daily/activity":
     "Member can view all team usage data (not just their own)",
   "/spend/logs":
