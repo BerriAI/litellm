@@ -1839,6 +1839,17 @@ class JWTAuthManager:
         # Derive org_id from org_object if resolved by alias
         resolved_org_id = org_object.organization_id if org_object else org_id
 
+        # Canonicalize user_id: when user_id_jwt_field points at a non-UUID
+        # claim (e.g. "email"), user_id is whatever that claim contains.
+        # get_objects() resolves the canonical LiteLLM_UserTable row via
+        # fuzzy SSO matching, so user_object.user_id is the stable UUID we
+        # must use everywhere (BYOK credentials, spend tracking, team
+        # membership).  Overwrite the raw JWT value here so every downstream
+        # consumer (BYOK lookup, audit log, validate_object_id) sees the same
+        # identity regardless of which JWT field was configured.
+        if user_object is not None and user_object.user_id:
+            user_id = user_object.user_id
+
         await JWTAuthManager.sync_user_role_and_teams(
             jwt_handler=jwt_handler,
             jwt_valid_token=jwt_valid_token,

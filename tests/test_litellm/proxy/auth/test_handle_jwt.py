@@ -3179,3 +3179,136 @@ def test_build_decode_kwargs_no_warning_when_scoped(
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert matching == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for user_id canonicalization (issue #28537)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_canonicalizes_user_id_from_user_object():
+    """auth_builder must return user_object.user_id, not the raw JWT claim.
+
+    When user_id_jwt_field is set to a non-UUID field (e.g. "email"), the raw
+    JWT user_id is the claim value (an email address). get_objects() resolves
+    the canonical LiteLLM_UserTable row whose user_id is a stable UUID.
+    JWTAuthBuilderResult.user_id must carry that UUID so that BYOK credential
+    lookups, spend tracking, and team membership all use the same identity.
+    """
+    canonical_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    email_user_id = "alice@example.com"
+
+    canonical_user_object = LiteLLM_UserTable(
+        user_id=canonical_uuid,
+        user_email=email_user_id,
+        models=[],
+        max_budget=None,
+        spend=0.0,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=[],
+        tpm_limit=None,
+        rpm_limit=None,
+        max_parallel_requests=None,
+    )
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="email",
+    )
+    jwt_handler.is_jwt.return_value = True
+    jwt_valid_token = {
+        "sub": "some-sub",
+        "email": email_user_id,
+    }
+    jwt_handler.auth_jwt = AsyncMock(return_value=jwt_valid_token)
+    jwt_handler.get_rbac_role.return_value = None
+    jwt_handler.get_scopes.return_value = []
+    jwt_handler.get_org_id.return_value = None
+    jwt_handler.get_end_user_id.return_value = None
+    jwt_handler.get_object_id.return_value = None
+    jwt_handler.get_team_id.return_value = None
+    jwt_handler.get_org_alias.return_value = None
+    jwt_handler.get_all_team_ids = MagicMock(return_value=set())
+
+    with (
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new=AsyncMock(return_value=(email_user_id, email_user_id, True)),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "check_rbac_role",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "check_admin_access",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_all_team_ids",
+            new=MagicMock(return_value=set()),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_team_id_from_header",
+            new=MagicMock(return_value=None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "find_and_validate_specific_team_id",
+            new=AsyncMock(return_value=(None, None)),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "find_team_with_model_access",
+            new=AsyncMock(return_value=(None, None)),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new=AsyncMock(
+                return_value=(canonical_user_object, None, None, None)
+            ),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "sync_user_role_and_teams",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "_resolve_single_team_fallback",
+            new=AsyncMock(return_value=(None, None, None)),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "map_user_to_teams",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "validate_object_id",
+            new=MagicMock(return_value=None),
+        ),
+    ):
+        result = await JWTAuthManager.auth_builder(
+            api_key="eyJ.fake.token",
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-4"},
+            general_settings={},
+            route="/v1/chat/completions",
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert result["user_id"] == canonical_uuid, (
+        f"Expected canonical UUID {canonical_uuid!r}, "
+        f"got {result['user_id']!r}. "
+        "auth_builder returned the raw JWT claim instead of user_object.user_id."
+    )
