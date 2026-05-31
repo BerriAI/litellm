@@ -4,6 +4,22 @@
 > This is community maintained, Please make an issue if you run into a bug
 > We recommend using [Docker or Kubernetes for production deployments](https://docs.litellm.ai/docs/proxy/prod)
 
+## Which LiteLLM Helm chart should I use?
+
+This README documents `deploy/charts/litellm-helm`, the existing single-proxy
+LiteLLM chart used by the current Helm documentation path.
+
+The repository also contains `helm/litellm`, a newer componentized chart that
+splits the deployment into gateway, backend, and UI services. Use that chart
+only when you intentionally want to evaluate the split-service deployment model
+and can provide the required external Secrets, database, and optional Redis
+settings. See [`helm/litellm/README.md`](../../../helm/litellm/README.md) for
+its current scope and install notes.
+
+When you do not need separate gateway/backend/UI workloads, start with this
+chart because it is the documented path and includes the standalone Postgres /
+Redis dependency wiring described below.
+
 ## Prerequisites
 
 - Kubernetes 1.21+
