@@ -87,13 +87,13 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        for key in (
+        _WORKSPACE_KEYS = {
             "workspace_id",
             "aws_workspace_id",
             "anthropic_workspace_id",
             "anthropic-workspace-id",
-        ):
-            optional_params.pop(key, None)
+        }
+        optional_params = {k: v for k, v in optional_params.items() if k not in _WORKSPACE_KEYS}
         return super().transform_request(
             model=model,
             messages=messages,
