@@ -604,6 +604,48 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_read_only_ui_dir_falls_back_to_temp_dir_for_extensionless_routes(tmp_path):
+    """
+    Regression for pip-install 404: when the UI directory cannot be restructured
+    in-place (e.g., read-only site-packages), copying it to a writable temp dir
+    and restructuring there must make /ui/login return 200.
+    """
+    import shutil
+    import tempfile
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "login.html").write_text("<html>login</html>")
+    (ui_root / "_next").mkdir()
+
+    # Confirm that without restructuring the extensionless route returns 404.
+    fastapi_before = FastAPI()
+    fastapi_before.mount(
+        "/ui", StaticFiles(directory=str(ui_root), html=True), name="ui"
+    )
+    assert TestClient(fastapi_before).get("/ui/login").status_code == 404
+
+    # Apply the read-only fallback: copy to a temp dir and restructure.
+    tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_test_")
+    try:
+        shutil.copytree(str(ui_root), tmp_dir, dirs_exist_ok=True)
+        proxy_server._restructure_ui_html_files(tmp_dir)
+
+        assert (Path(tmp_dir) / "login" / "index.html").exists()
+        assert not (Path(tmp_dir) / "login.html").exists()
+
+        fastapi_after = FastAPI()
+        fastapi_after.mount("/ui", StaticFiles(directory=tmp_dir, html=True), name="ui")
+        response = TestClient(fastapi_after).get("/ui/login")
+        assert response.status_code == 200
+        assert "login" in response.text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def test_admin_ui_export_serves_nested_extensionless_routes():
     out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
