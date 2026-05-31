@@ -172,6 +172,34 @@ def test_map_openai_params_forwards_supported_params(fake_token_creator):
         assert result == {"dimensions": 1024}
 
 
+def test_encoding_format_forwarded_to_model_params(
+    fake_token_creator, fake_deployment_url
+):
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        body = GenAIHubEmbeddingConfig().transform_embedding_request(
+            model="text-embedding-3-large",
+            input="Hi",
+            optional_params={"encoding_format": "float"},
+            headers={},
+        )
+        assert (
+            body["config"]["modules"]["embeddings"]["model"]["params"][
+                "encoding_format"
+            ]
+            == "float"
+        )
+
+
 def test_map_openai_params_no_dimensions_for_non_v3_model(fake_token_creator):
     with patch(
         "litellm.llms.sap.embed.transformation.get_token_creator",
