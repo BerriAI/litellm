@@ -79,10 +79,7 @@ def record_output_text_delta_chunk(
     )
     if content_item is None:
         return
-    current_text = content_item.get("text")
-    if not isinstance(current_text, str):
-        current_text = ""
-    content_item["text"] = f"{current_text}{text_delta}"
+    content_item["text"] = f"{content_item['text']}{text_delta}"
 
 
 def record_output_text_chunk(
