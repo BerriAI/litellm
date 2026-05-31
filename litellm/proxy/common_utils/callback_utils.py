@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
     mask_url_credentials,
+    mask_url_query_values,
 )
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -652,7 +653,12 @@ def process_callback(
             if _is_sensitive_callback_var(k) or k.upper().endswith("_HEADERS")
         }
         env_vars_dict = mask_sensitive_keys(env_vars_dict, sensitive_keys)
-        env_vars_dict = {k: mask_url_credentials(v) for k, v in env_vars_dict.items()}
+        # URL-valued callback vars (e.g. GENERIC_LOGGER_ENDPOINT) can embed a
+        # token in userinfo or as a query param, so redact both.
+        env_vars_dict = {
+            k: mask_url_query_values(mask_url_credentials(v))
+            for k, v in env_vars_dict.items()
+        }
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 

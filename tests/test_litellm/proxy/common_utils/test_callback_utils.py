@@ -163,6 +163,24 @@ def test_process_callback_masks_headers_vars(mock_get_env_vars):
     assert result["variables"]["OTEL_ENDPOINT"] == "http://collector.internal:4317"
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["GENERIC_LOGGER_ENDPOINT"],
+)
+def test_process_callback_masks_url_query_secrets(mock_get_env_vars):
+    """A URL-valued callback var can carry a token as a query param; it is
+    redacted even though the var name is not credential-like."""
+    result = process_callback(
+        _callback="generic",
+        callback_type="success",
+        environment_variables={
+            "GENERIC_LOGGER_ENDPOINT": "https://logs.example.com/ingest?token=qp-secret-token"
+        },
+        mask_sensitive=True,
+    )
+    assert "qp-secret-token" not in result["variables"]["GENERIC_LOGGER_ENDPOINT"]
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []
