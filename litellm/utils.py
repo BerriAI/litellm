@@ -5773,8 +5773,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                     )
                     if provider_model_info is not None:
                         return provider_model_info
-                except Exception:
-                    verbose_logger.debug("Could not get dynamic model info.")
+                except Exception as e:
+                    verbose_logger.warning(
+                        "Could not get dynamic model info for model=%s, provider=%s; "
+                        "falling back to the static cost map: %s",
+                        model,
+                        custom_llm_provider,
+                        e,
+                    )
 
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
