@@ -255,6 +255,62 @@ class TestMCPRequestHandler:
             result = await MCPRequestHandler.get_allowed_mcp_servers(mock_user_auth)
         assert sorted(result) == sorted(expected)
 
+    async def test_access_group_extras_returns_empty_when_no_auth(self):
+        """No auth object → no additive grants."""
+        result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(None)
+        assert result == []
+
+    async def test_access_group_extras_returns_empty_without_access_group_ids(self):
+        """A key with no resolvable access groups yields no additive grants
+        (the `if not raw_server_ids: return []` branch)."""
+        auth = UserAPIKeyAuth(api_key="k", access_group_ids=[])
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+                auth
+            )
+        assert result == []
+        # expand_permission_list must not be reached when there are no raw ids.
+        mock_mgr.expand_permission_list.assert_not_called()
+
+    async def test_access_group_extras_expands_resolved_server_ids(self):
+        """Resolved access-group server ids/names are expanded to server ids."""
+        auth = UserAPIKeyAuth(api_key="k", access_group_ids=["grp-mcp"])
+        with (
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new=AsyncMock(return_value=["alias-a", "srv-b"]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.expand_permission_list.return_value = ["srv-a", "srv-b"]
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+                auth
+            )
+        assert sorted(result) == ["srv-a", "srv-b"]
+        mock_mgr.expand_permission_list.assert_called_once_with(["alias-a", "srv-b"])
+
+    async def test_access_group_extras_swallows_errors(self):
+        """Resolution failures degrade to no grants rather than raising."""
+        auth = UserAPIKeyAuth(api_key="k", access_group_ids=["grp-mcp"])
+        with patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new=AsyncMock(side_effect=Exception("db down")),
+        ):
+            result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+                auth
+            )
+        assert result == []
+
     @pytest.mark.parametrize(
         "headers,expected_api_key,expected_mcp_auth_header,expected_server_auth_headers",
         [
