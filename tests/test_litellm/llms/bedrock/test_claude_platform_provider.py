@@ -278,7 +278,7 @@ def test_chat_completion_routes_bedrock_claude_platform_to_messages_api():
 
 @pytest.mark.parametrize(
     "workspace_key",
-    ["workspace_id", "aws_workspace_id", "anthropic_workspace_id"],
+    ["workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id"],
 )
 def test_workspace_id_not_leaked_into_request_body(workspace_key):
     import litellm
