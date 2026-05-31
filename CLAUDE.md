@@ -1,194 +1,70 @@
-# CLAUDE.md
+Do not write comments unless they are absolutely necessary to explain some very complex business logic. Please clean up if there are comments that are not absolutely necessary. Do not remove comments that are unrelated to the addition of the code of this PR
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Explanation: code comments are, in a way, a violation of DRY code. You must update logic in two locations to change the code and "hard to change" is literally the definition of tech debt. We should instead aim to write code that is intuitive to the reader, while being both easy to maintain and high performance
 
-## Confidentiality: Customer and Company Names in Code
+Don't assume that the existing code is correct or the right way of doing things / good coding patterns. In fact, there are a lot of bad coding practices, overly complex code, code smells, etc. If something doesn't look right, speak up. Feel free to break existing patterns or question weird existing code to make new code high quality, as in:
+- correct
+- secure
+- performant
+- readable
+- easy to maintain/change
+- modern
+In that order of importance
 
-The codebase is public. Before writing **any** third-party organization name into this repository — in source code, file or directory names, docstrings, comments, tests, fixtures, mock payloads, error messages, log lines, commit messages, or PR descriptions — pause and check:
+When adding new features, add meaningful tests. Don't add tests that don't check anything substantial and is there just to make the code coverage pass. Yes, code coverage is important, but I'd rather have no signal whether the code is working than tests that don't fail when code is broken. The goal is to have tests that would fail before the feature was added/if the code was mutated in a way that breaks the feature and succeed only when the feature is fully working. I should run mutation testing and see > 90% kill rate
 
-**Already in the codebase** (OpenAI, Anthropic, Google, Azure, Bedrock, Fireworks, and other established LLM providers / integrations) — fine to use. Quick check: `git grep -i "<name>"` — if it returns hits in real code (not just your current diff), the name is established.
+Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
-**Anything else** — customers, prospects, partners, new vendor integrations, observability tools, infra vendors, or any organization name that does not already appear in the repo. STOP and surface it to the user. Ask for explicit consent before writing the name into any file, commit message, or PR description. Do not write it speculatively and clean up later. Do not substitute a placeholder and proceed. Do not assume it is safe because it "looks like" a public company. The user must approve first.
+When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
-**What to do instead of a customer-specific reference:**
-- If you find yourself reaching for a customer name — real or fake — step back. The code shouldn't be customer-specific in the first place. Generalize the feature, or capture the customer motivation in internal docs (Notion / Linear / the internal staging PR description), never in the repo.
-- Frame changes by the capability they add, not the customer who asked for it ("add per-team Bedrock guardrail routing", not "add routing for $CUSTOMER").
-- Standard "fake value" markers (`example.com`, `localhost`, `127.0.0.1`, `test@example.com`) and abstract identifiers (`team_a`, `user_1`, `tenant_x`) are fine — those are not customer stand-ins.
+Always use @.github/pull_request_template.md as a guide for your PR body
 
-## Documentation
+Never use `pytest` commands or the like as "Screenshots / Proof of Fix". We prefer curl'ing a live proxy instance running on localhost:4000 (I like to run it with `python litellm/proxy/proxy_cli.py --config litellm/proxy/dev_config.yaml --detailed_debug --reload --use_v2_migration_resolver 2>&1 | tee litellm.log`) and showing both the command run and the output. Also, it should hit real LLM provider APIs, not mocks, and cost real $$$ because that is the most realistic test. The proof of fix should be exactly what the end user / customer would see / do. The run logs in PR #27703 is a prime example of how to do it (not a huge fan of using a python test script that future me and the team will have no visibility into; I prefer just curl commands or a short list of bash commands (e.g., using `for`)). If it's a UI thing, just tell me which URLs to go to (e.g., http://localhost:4000/ui/?page=logs), where to click, what fields to fill out, etc. along with the other commands to run in an ordered list, and I'll do it myself and post the screenshots after you make the PR
 
-Documentation lives in a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). It is served at [docs.litellm.ai](https://docs.litellm.ai). Do not create or edit documentation files in this repository — open doc PRs against `BerriAI/litellm-docs` instead.
+If you ever make public-facing PR descriptions, comments, issues, commit messages, etc., always follow these guidelines to sound less AI-y:
+- don't use emojis
+- don't use "—". Instead, reach for ";", ".", etc.
+- don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
+- don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 
-## Development Commands
+Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
-### Installation
-- `make install-dev` - Install core development dependencies
-- `make install-proxy-dev` - Install proxy development dependencies with full feature set
-- `make install-test-deps` - Install the full local test environment and generate the Prisma client
+Run tests, format your code, and lint your code before each commit
 
-### Testing
-- `make test` - Run all tests
-- `make test-unit` - Run unit tests (tests/test_litellm) with 4 parallel workers
-- `make test-integration` - Run integration tests (excludes unit tests)
-- `pytest tests/` - Direct pytest execution
+Ask to commit and push your work when you're done (or if you're confident that your code is good and works, just do it)
 
-### Code Quality
-- `make lint` - Run all linting (Ruff, MyPy, Black, circular imports, import safety)
-- `make format` - Apply Black code formatting
-- `make lint-ruff` - Run Ruff linting only
-- `make lint-mypy` - Run MyPy type checking only
-- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
+When you must use real LLM models to, for example, write e2e tests, write a QA runbook, etc., make sure to use the latest models (doesn't have to be smartest, can also be a modern small, fast one. No strong preference for smart vs fast here, just use something modern) as of the year and month of the current date. Do a web search as necessary to figure that out
 
-### Single Test Files
-- `uv run pytest tests/path/to/test_file.py -v` - Run specific test file
-- `uv run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
+If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
 
-### Running Scripts
-- `uv run python script.py` - Run Python scripts (use for non-test files)
+Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
 
-### GitHub Issue & PR Templates
-When contributing to the project, use the appropriate templates:
+When working on a PR, keep the PR description in sync with new commits being made
 
-**Bug Reports** (`.github/ISSUE_TEMPLATE/bug_report.yml`):
-- Describe what happened vs. what you expected
-- Include relevant log output
-- Specify your LiteLLM version
+Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
 
-**Feature Requests** (`.github/ISSUE_TEMPLATE/feature_request.yml`):
-- Describe the feature clearly
-- Explain the motivation and use case
+Do not put names of customers or customer company names in code, PRs, and issues. The codebase is public
 
-**Pull Requests** (`.github/pull_request_template.md`):
-- Add at least 1 test in `tests/litellm/`
-- Ensure `make test-unit` passes
+CI supply-chain safety: Never pipe a remote script into a shell (`curl ... | bash`, `wget ... | sh`); download the artifact to a file, verify its SHA-256 checksum, then install. Pin every external tool to a specific version with a full URL (not `latest` or `stable`). Verify checksums for all downloaded binaries, using the provider's official `.sha256` / `.sha256sum` sidecar when available. These rules apply to every download in CI
 
-## Architecture Overview
+## Think Before Coding
 
-LiteLLM is a unified interface for 100+ LLM providers with two main components:
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-### Core Library (`litellm/`)
-- **Main entry point**: `litellm/main.py` - Contains core completion() function
-- **Provider implementations**: `litellm/llms/` - Each provider has its own subdirectory
-- **Router system**: `litellm/router.py` + `litellm/router_utils/` - Load balancing and fallback logic
-- **Type definitions**: `litellm/types/` - Pydantic models and type hints
-- **Integrations**: `litellm/integrations/` - Third-party observability, caching, logging
-- **Caching**: `litellm/caching/` - Multiple cache backends (Redis, in-memory, S3, etc.)
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them. Don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-### Proxy Server (`litellm/proxy/`)
-- **Main server**: `proxy_server.py` - FastAPI application
-- **Authentication**: `auth/` - API key management, JWT, OAuth2
-- **Database**: `db/` - Prisma ORM with PostgreSQL/SQLite support
-- **Management endpoints**: `management_endpoints/` - Admin APIs for keys, teams, models
-- **Pass-through endpoints**: `pass_through_endpoints/` - Provider-specific API forwarding
-- **Guardrails**: `guardrails/` - Safety and content filtering hooks
-- **UI Dashboard**: Served from `_experimental/out/` (Next.js build)
+## Simplicity First
 
-## Key Patterns
+**Minimum code that solves the problem. Nothing speculative.**
 
-### Provider Implementation
-- Providers inherit from base classes in `litellm/llms/base.py`
-- Each provider has transformation functions for input/output formatting
-- Support both sync and async operations
-- Handle streaming responses and function calling
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
 
-### Error Handling
-- Provider-specific exceptions mapped to OpenAI-compatible errors
-- Fallback logic handled by Router system
-- Comprehensive logging through `litellm/_logging.py`
-
-### Configuration
-- YAML config files for proxy server (see `proxy/example_config_yaml/`)
-- Environment variables for API keys and settings
-- Database schema managed via Prisma (`proxy/schema.prisma`)
-
-## Development Notes
-
-### Code Style
-- Uses Black formatter, Ruff linter, MyPy type checker
-- Pydantic v2 for data validation
-- Async/await patterns throughout
-- Type hints required for all public APIs
-- **Avoid imports within methods** — place all imports at the top of the file (module-level). Inline imports inside functions/methods make dependencies harder to trace and hurt readability. The only exception is avoiding circular imports where absolutely necessary.
-- **Use dict spread for immutable copies** — prefer `{**original, "key": new_value}` over `dict(obj)` + mutation. The spread produces the final dict in one step and makes intent clear.
-- **Guard at resolution time** — when resolving an optional value through a fallback chain (`a or b or ""`), raise immediately if the resolved result being empty is an error. Don't pass empty strings or sentinel values downstream for the callee to deal with.
-- **Extract complex comprehensions to named helpers** — a set/dict comprehension that calls into the DB or manager (e.g. "which of these server IDs are OAuth2?") belongs in a named helper function, not inline in the caller.
-- **FastAPI parameter declarations** — mark required query/form params with `= Query(...)` / `= Form(...)` explicitly when other params in the same handler are optional. Mixing `str` (required) with `Optional[str] = None` in the same signature causes silent 422s when the required param is missing.
-
-### Testing Strategy
-- Unit tests in `tests/test_litellm/`
-- Integration tests for each provider in `tests/llm_translation/`
-- Proxy tests in `tests/proxy_unit_tests/`
-- Load tests in `tests/load_tests/`
-- **Always add tests when adding new entity types or features** — if the existing test file covers other entity types, add corresponding tests for the new one
-- **Keep monkeypatch stubs in sync with real signatures** — when a function gains a new optional parameter, update every `fake_*` / `stub_*` in tests that patch it to also accept that kwarg (even as `**kwargs`). Stale stubs fail with `unexpected keyword argument` and mask real bugs.
-- **Test all branches of name→ID resolution** — when adding server/resource lookup that resolves names to UUIDs, test: (1) name resolves and UUID is allowed, (2) name resolves but UUID is not allowed, (3) name does not resolve at all. The silent-fallback path is where access-control bugs hide.
-
-### UI / Backend Consistency
-- When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
-
-### UI Component Library
-- **Always use `antd` for new UI components** — we are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file. Use `antd` equivalents: `Tag` for labels, `Typography.Text` / `Typography.Title` / `Typography.Paragraph` for textual content (avoid plain text-only `<span>`, `<p>`, `<h*>` when Typography fits), and `Card` from `antd`. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
-
-### MCP OAuth / OpenAPI Transport Mapping
-- **`available_on_public_internet: false` with `delegate_auth_to_upstream: true` (oauth2, interactive — not `client_credentials`)** — LiteLLM still allows the anonymous upstream PKCE path (no proxy API key for `/authorize` and matching MCP routes). The internal-only flag mainly affects other surfaces (e.g. IP-based discovery). Rely on the upstream IdP and network policy; the dashboard shows a warning when both are set, and the proxy logs a warning when the server is loaded from config or the database.
-- `TRANSPORT.OPENAPI` is a UI-only concept. The backend only accepts `"http"`, `"sse"`, or `"stdio"`. Always map it to `"http"` before any API call (including pre-OAuth temp-session calls).
-- FastAPI validation errors return `detail` as an array of `{loc, msg, type}` objects. Error extractors must handle: array (map `.msg`), string, nested `{error: string}`, and fallback.
-- When an MCP server already has `authorization_url` stored, skip OAuth discovery (`_discovery_metadata`) — the server URL for OpenAPI MCPs is the spec file, not the API base, and fetching it causes timeouts.
-- `client_id` should be optional in the `/authorize` endpoint — if the server has a stored `client_id` in credentials, use that. Never require callers to re-supply it.
-
-### MCP Credential Storage
-- OAuth credentials and BYOK credentials share the `litellm_mcpusercredentials` table, distinguished by a `"type"` field in the JSON payload (`"oauth2"` vs plain string).
-- When deleting OAuth credentials, check type before deleting to avoid accidentally deleting a BYOK credential for the same `(user_id, server_id)` pair.
-- Always pass the raw `expires_at` timestamp to the client — never set it to `None` for expired credentials. Let the frontend compute the "Expired" display state from the timestamp.
-- Use `RecordNotFoundError` (not bare `except Exception`) when catching "already deleted" in credential delete endpoints.
-
-### Browser Storage Safety (UI)
-- Never write LiteLLM access tokens or API keys to `localStorage` — use `sessionStorage` only. `localStorage` survives browser close and is readable by any injected script (XSS).
-- Shared utility functions (e.g. `extractErrorMessage`) belong in `src/utils/` — never define them inline in hooks or duplicate them across files.
-
-### Database Migrations
-- Prisma handles schema migrations
-- Migration files auto-generated with `prisma migrate dev`
-- Always test migrations against both PostgreSQL and SQLite
-
-### Proxy database access
-- **Do not write raw SQL** for proxy DB operations. Use Prisma model methods instead of `execute_raw` / `query_raw`.
-- Use the generated client: `prisma_client.db.<model>` (e.g. `litellm_tooltable`, `litellm_usertable`) with `.upsert()`, `.find_many()`, `.find_unique()`, `.update()`, `.update_many()` as appropriate. This avoids schema/client drift, keeps code testable with simple mocks, and matches patterns used in spend logs and other proxy code.
-- **No N+1 queries.** Never query the DB inside a loop. Batch-fetch with `{"in": ids}` and distribute in-memory.
-- **Batch writes.** Use `create_many`/`update_many`/`delete_many` instead of individual calls (these return counts only; `update_many`/`delete_many` no-op silently on missing rows). When multiple separate writes target the same table (e.g. in `batch_()`), order by primary key to avoid deadlocks.
-- **Push work to the DB.** Filter, sort, group, and aggregate in SQL, not Python. Verify Prisma generates the expected SQL — e.g. prefer `group_by` over `find_many(distinct=...)` which does client-side processing.
-- **Bound large result sets.** Prisma materializes full results in memory. For results over ~10 MB, paginate with `take`/`skip` or `cursor`/`take`, always with an explicit `order`. Prefer cursor-based pagination (`skip` is O(n)). Don't paginate naturally small result sets.
-- **Limit fetched columns on wide tables.** Use `select` to fetch only needed fields — returns a partial object, so downstream code must not access unselected fields.
-- **Check index coverage.** For new or modified queries, check `schema.prisma` for a supporting index. Prefer extending an existing index (e.g. `@@index([a])` → `@@index([a, b])`) over adding a new one, unless it's a `@@unique`. Only add indexes for large/frequent queries.
-- **Keep schema files in sync.** Apply schema changes to all `schema.prisma` copies (`schema.prisma`, `litellm/proxy/`, `litellm-proxy-extras/`) with a migration under `litellm-proxy-extras/litellm_proxy_extras/migrations/`.
-
-### Setup Wizard (`litellm/setup_wizard.py`)
-- The wizard is implemented as a single `SetupWizard` class with `@staticmethod` methods — keep it that way. No module-level functions except `run_setup_wizard()` (the public entrypoint) and pure helpers (color, ANSI).
-- Use `litellm.utils.check_valid_key(model, api_key)` for credential validation — never roll a custom completion call.
-- Do not hardcode provider env-key names or model lists that already exist in the codebase. Add a `test_model` field to each provider entry to drive `check_valid_key`; set it to `None` for providers that can't be validated with a single API key (Azure, Bedrock, Ollama).
-
-### Enterprise Features
-- Enterprise-specific code in `enterprise/` directory
-- Optional features enabled via environment variables
-- Separate licensing and authentication for enterprise features
-
-### CI Supply-Chain Safety
-- **Never pipe a remote script into a shell** (`curl ... | bash`, `wget ... | sh`). Download the artifact to a file, verify its SHA-256 checksum, then install.
-- **Pin every external tool to a specific version** with a full URL (not `latest` or `stable`). Unversioned downloads silently change under you.
-- **Verify checksums for all downloaded binaries.** Use the provider's official `.sha256` / `.sha256sum` sidecar file when available; otherwise compute and hardcode the digest.
-- **Prefer reusable CircleCI commands** (`commands:` section) so a tool is installed and verified in exactly one place, then referenced everywhere with `- install_<tool>` or `- wait_for_service`.
-- **Don't add tools just because they were there before.** Audit whether an external dependency is still needed. If it can be replaced with a shell one-liner or a tool already in the image, remove it.
-- These rules apply to every download in CI: binaries, install scripts, language version managers, package repos. No exceptions.
-
-### HTTP Client Cache Safety
-- **Never close HTTP/SDK clients on cache eviction.** `LLMClientCache._remove_key()` must not call `close()`/`aclose()` on evicted clients — they may still be used by in-flight requests. Doing so causes `RuntimeError: Cannot send a request, as the client has been closed.` after the 1-hour TTL expires. Cleanup happens at shutdown via `close_litellm_async_clients()`.
-
-### Troubleshooting: DB schema out of sync after proxy restart
-`litellm-proxy-extras` runs `prisma migrate deploy` on startup using **its own** bundled migration files, which may lag behind schema changes in the current worktree. Symptoms: `Unknown column`, `Invalid prisma invocation`, or missing data on new fields.
-
-**Diagnose:** Run `\d "TableName"` in psql and compare against `schema.prisma` — missing columns confirm the issue.
-
-**Fix options:**
-1. **Create a Prisma migration** (permanent) — run `prisma migrate dev --name <description>` in the worktree. The generated file will be picked up by `prisma migrate deploy` on next startup.
-2. **Apply manually for local dev** — `psql -d litellm -c "ALTER TABLE ... ADD COLUMN IF NOT EXISTS ..."` after each proxy start. Fine for dev, not for production.
-3. **Update litellm-proxy-extras** — if the package is installed from PyPI, its migration directory must include the new file. Either update the package or run the migration manually until the next release ships it.
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.

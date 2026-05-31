@@ -82,7 +82,7 @@ async def _vertex_ai_mocks():
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
         "openai/self_hosted",
-        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
         "vertex_ai/gemini-1.5-flash",
     ],
 )
@@ -147,7 +147,7 @@ async def test_litellm_overhead_non_streaming(model):
     [
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
-        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
         "openai/self_hosted",
     ],
 )
