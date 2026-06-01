@@ -62,6 +62,18 @@ class BedrockClaudePlatformMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        # workspace_id is auth metadata for the AWS gateway: it is sent via the
+        # ``anthropic-workspace-id`` header (see validate_anthropic_messages_environment),
+        # never as a body field. Anthropic's /v1/messages rejects unknown top-level
+        # fields, so strip every accepted alias from the optional params before
+        # the parent transform spreads them into the serialized body.
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic-workspace-id",
+            "anthropic_workspace_id",
+        ):
+            anthropic_messages_optional_request_params.pop(key, None)
         return super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,
