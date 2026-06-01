@@ -2115,6 +2115,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request (no query params needed - existing_key is in state)
         mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {}
 
         # CLI state with existing_key embedded: {PREFIX}:{key}:{existing_key}
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456:sk-existing-cli-key-123"
