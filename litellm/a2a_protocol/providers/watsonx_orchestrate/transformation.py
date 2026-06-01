@@ -42,9 +42,8 @@ class WatsonxOrchestrateTransformation:
         for part in parts:
             if not isinstance(part, dict):
                 continue
-            if part.get("kind") == "text" and part.get("text"):
-                texts.append(part["text"])
-            elif "text" in part and part["text"]:
+            kind = part.get("kind")
+            if kind in (None, "", "text") and part.get("text"):
                 texts.append(part["text"])
         return " ".join(texts) or ""
 
@@ -72,12 +71,15 @@ class WatsonxOrchestrateTransformation:
         return body
 
     @staticmethod
-    def extract_text_from_wxo_result(result: Dict[str, Any]) -> str:
+    def extract_text_from_wxo_result(result: Any) -> str:
         """
         Extract response text from a WXO run result.
 
         WXO can return text in several locations; checks in priority order per the API spec.
         """
+        if not isinstance(result, dict):
+            return ""
+
         # Primary: last_message.content[0].text
         try:
             text = result["last_message"]["content"][0]["text"]

@@ -14,6 +14,35 @@ from litellm.a2a_protocol.providers.watsonx_orchestrate.transformation import (
 )
 
 
+class _JsonResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.payload
+
+
+class _ShortTtlTokenClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def post(self, *args, **kwargs):
+        self.calls += 1
+        return _JsonResponse({"access_token": f"token-{self.calls}", "expires_in": 30})
+
+
+class _SSELines:
+    def __init__(self, lines):
+        self.lines = lines
+
+    async def aiter_lines(self):
+        for line in self.lines:
+            yield line
+
+
 class TestWatsonxOrchestrateTransformation:
     def test_get_api_base_url(self):
         url = WatsonxOrchestrateTransformation.get_api_base_url(
@@ -37,6 +66,24 @@ class TestWatsonxOrchestrateTransformation:
         assert (
             WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
             == "Hello world"
+        )
+
+    def test_extract_text_from_a2a_params_ignores_non_text_parts_with_text(self):
+        params = {
+            "message": {
+                "role": "user",
+                "parts": [
+                    {"kind": "data", "text": "metadata label", "data": {}},
+                    {"kind": "file", "text": "file label", "file": {}},
+                    {"kind": "text", "text": "Hello"},
+                    {"text": "legacy"},
+                    {"kind": "", "text": "empty-kind"},
+                ],
+            }
+        }
+        assert (
+            WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
+            == "Hello legacy empty-kind"
         )
 
     def test_build_wxo_run_body_with_thread(self):
@@ -113,6 +160,40 @@ def test_cp4d_token_ttl_from_absolute_expiration():
         WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_750_003_600, wall) == 3600
     )
     assert WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_749_999_000, wall) == 0
+
+
+@pytest.mark.asyncio
+async def test_accumulate_wxo_sse_text_ignores_non_dict_json_events():
+    response = _SSELines(
+        [
+            "data: null",
+            "data: true",
+            'data: {"results": "streamed text"}',
+        ]
+    )
+    assert await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response) == (
+        "streamed text"
+    )
+
+
+@pytest.mark.asyncio
+async def test_short_lived_tokens_are_not_served_from_cache():
+    client = _ShortTtlTokenClient()
+    token_1 = await WatsonxOrchestrateHandler._get_bearer_token(
+        cp4d_host="https://cpd.example.com",
+        auth_mode="ibm_cloud",
+        api_key="short-ttl-cache-key",
+        client=client,
+    )
+    token_2 = await WatsonxOrchestrateHandler._get_bearer_token(
+        cp4d_host="https://cpd.example.com",
+        auth_mode="ibm_cloud",
+        api_key="short-ttl-cache-key",
+        client=client,
+    )
+    assert token_1 == "token-1"
+    assert token_2 == "token-2"
+    assert client.calls == 2
 
 
 def test_config_manager_returns_wxo_provider():

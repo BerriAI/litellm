@@ -104,7 +104,7 @@ class WatsonxOrchestrateHandler:
             else:
                 ttl_s = WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(expiration)
 
-        expires_at = now + max(ttl_s - _TOKEN_CACHE_TTL_BUFFER_S, 60)
+        expires_at = now + max(ttl_s - _TOKEN_CACHE_TTL_BUFFER_S, 0)
         _token_cache[cache_key] = (token, expires_at)
         return token
 
