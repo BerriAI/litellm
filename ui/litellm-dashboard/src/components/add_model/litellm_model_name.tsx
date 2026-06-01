@@ -1,14 +1,45 @@
 import React from "react";
-import { Form, Select as AntSelect } from "antd";
+import { Alert, Form, Select as AntSelect } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col } from "antd";
 import { Providers } from "../provider_info_helpers";
+import { validateModelName } from "./model_name_validation";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: Providers;
   providerModels: string[];
   getPlaceholder: (provider: Providers) => string;
 }
+
+interface ModelNameWarningProps {
+  modelName: string | undefined | null;
+  providerModels: string[];
+  selectedProvider: Providers;
+}
+
+const ModelNameWarning: React.FC<ModelNameWarningProps> = ({ modelName, providerModels, selectedProvider }) => {
+  const { isMisnamed, suggestions } = validateModelName(modelName, providerModels);
+
+  if (!isMisnamed) {
+    return null;
+  }
+
+  return (
+    <Alert
+      data-testid="model-name-warning"
+      type="warning"
+      showIcon
+      className="mt-2"
+      message={`"${modelName}" doesn't match a known ${selectedProvider} model`}
+      description={
+        <span>
+          Requests using this name will likely fail at the provider. Did you mean one of:{" "}
+          <strong>{suggestions.join(", ")}</strong>?
+        </span>
+      }
+    />
+  );
+};
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
@@ -162,18 +193,29 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             const modelArray = Array.isArray(selectedModels) ? selectedModels : [selectedModels];
             return (
               modelArray.includes("custom") && (
-                <Form.Item
-                  name="custom_model_name"
-                  rules={[{ required: true, message: "Please enter a custom model name." }]}
-                  className="mt-2"
-                >
-                  <TextInput
-                    placeholder={
-                      selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
-                    }
-                    onChange={handleCustomModelNameChange}
-                  />
-                </Form.Item>
+                <>
+                  <Form.Item
+                    name="custom_model_name"
+                    rules={[{ required: true, message: "Please enter a custom model name." }]}
+                    className="mt-2"
+                  >
+                    <TextInput
+                      placeholder={
+                        selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
+                      }
+                      onChange={handleCustomModelNameChange}
+                    />
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.custom_model_name !== curr.custom_model_name}>
+                    {({ getFieldValue }) => (
+                      <ModelNameWarning
+                        modelName={getFieldValue("custom_model_name")}
+                        providerModels={providerModels}
+                        selectedProvider={selectedProvider}
+                      />
+                    )}
+                  </Form.Item>
+                </>
               )
             );
           }}
