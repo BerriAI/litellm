@@ -1,0 +1,26 @@
+name: Require Linear ticket
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches:
+      - litellm_internal_staging
+
+permissions: {}
+
+jobs:
+  require-linear-ticket:
+    name: Verify Resolves LIT-XXXX in PR description
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check PR description for Linear ticket reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -qiE 'Resolves LIT-[0-9]+'; then
+            echo "Found Linear ticket reference."
+            exit 0
+          fi
+          echo "::error::PRs targeting 'litellm_internal_staging' must reference a Linear ticket in the description using the format 'Resolves LIT-XXXX' (e.g. 'Resolves LIT-1234')."
+          exit 1
