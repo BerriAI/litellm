@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -15,10 +14,12 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import SpendLogsPayload
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
 else:
+    SpendLogsPayload = Any
     ChatCompletionSession = Any
 
 ########################################################

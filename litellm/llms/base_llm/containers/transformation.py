@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from litellm.types.containers.main import ContainerCreateOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -21,6 +20,7 @@ if TYPE_CHECKING:
     from litellm.types.containers.main import (
         DeleteContainerResult as _DeleteContainerResult,
     )
+    from litellm.types.router import GenericLiteLLMParams
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     ContainerListResponse = _ContainerListResponse
     ContainerFileListResponse = _ContainerFileListResponse
 else:
+    GenericLiteLLMParams = Any
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     ContainerObject = Any
