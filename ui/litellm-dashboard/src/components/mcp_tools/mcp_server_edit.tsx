@@ -536,8 +536,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcpServer.alias ||
         "unknown";
 
-      const mcpInfoBase =
-        mcpServer.mcp_info && typeof mcpServer.mcp_info === "object" ? mcpServer.mcp_info : {};
+      const mcpInfoBase: Record<string, unknown> =
+        mcpServer.mcp_info && typeof mcpServer.mcp_info === "object"
+          ? (mcpServer.mcp_info as Record<string, unknown>)
+          : {};
       const wasAllowlistEnforced = Boolean(mcpInfoBase.tool_allowlist_enforced);
       const toolAllowlistEnforced = wasAllowlistEnforced || allowedTools.length > 0;
 
