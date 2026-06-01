@@ -69,11 +69,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const currentTokenUrl = Form.useWatch("token_url", form);
   const currentRegistrationUrl = Form.useWatch("registration_url", form);
   const hasExistingToolAllowlist =
-    Boolean(
-      mcpServer.mcp_info &&
-        typeof mcpServer.mcp_info === "object" &&
-        mcpServer.mcp_info.tool_allowlist_enforced,
-    ) || (mcpServer.allowed_tools?.length ?? 0) > 0;
+    Boolean(mcpServer.mcp_info?.tool_allowlist_enforced) ||
+    (mcpServer.allowed_tools?.length ?? 0) > 0;
   const existingAllowedTools = hasExistingToolAllowlist ? (mcpServer.allowed_tools ?? []) : null;
 
   const persistEditUiState = () => {
@@ -536,11 +533,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcpServer.alias ||
         "unknown";
 
-      const mcpInfoBase: Record<string, unknown> =
-        mcpServer.mcp_info && typeof mcpServer.mcp_info === "object"
-          ? (mcpServer.mcp_info as Record<string, unknown>)
-          : {};
-      const wasAllowlistEnforced = Boolean(mcpInfoBase.tool_allowlist_enforced);
+      const wasAllowlistEnforced = Boolean(mcpServer.mcp_info?.tool_allowlist_enforced);
       const toolAllowlistEnforced = wasAllowlistEnforced || allowedTools.length > 0;
 
       const payload: Record<string, any> = {
@@ -551,7 +544,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
-          ...mcpInfoBase,
+          ...(mcpServer.mcp_info ?? {}),
           server_name: mcpInfoServerName,
           description: restValues.description,
           logo_url: logoUrl || undefined,
