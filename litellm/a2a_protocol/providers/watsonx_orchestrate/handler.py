@@ -44,7 +44,9 @@ class WatsonxOrchestrateHandler:
         return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
-    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: Optional[float] = None) -> int:
+    def _cp4d_token_ttl_seconds(
+        expiration: Any, now_wall: Optional[float] = None
+    ) -> int:
         # CP4D returns expiration as absolute Unix epoch seconds, not a duration.
         expires_at = int(expiration)
         wall = now_wall if now_wall is not None else time.time()
