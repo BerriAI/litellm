@@ -45,6 +45,34 @@ describe("MCPToolConfiguration", () => {
     });
   });
 
+  it("preserves a restored selection on a legacy server instead of clearing it on init", async () => {
+    const onAllowedToolsChange = vi.fn();
+
+    render(
+      <MCPToolConfiguration
+        accessToken="token"
+        formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+        allowedTools={["read_user"]}
+        existingAllowedTools={null}
+        hasToolAllowlistInteraction
+        onAllowedToolsChange={onAllowedToolsChange}
+        toolNameToDisplayName={{}}
+        toolNameToDescription={{}}
+        onToolNameToDisplayNameChange={vi.fn()}
+        onToolNameToDescriptionChange={vi.fn()}
+        externalTools={tools}
+        externalCanFetch
+        isEditMode
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onAllowedToolsChange).toHaveBeenCalled();
+    });
+    expect(onAllowedToolsChange).toHaveBeenLastCalledWith(["read_user"]);
+    expect(onAllowedToolsChange).not.toHaveBeenCalledWith([]);
+  });
+
   it("keeps legacy unrestricted tools disabled after all are toggled off", async () => {
     const Wrapper = () => {
       const [allowedTools, setAllowedTools] = useState<string[]>([]);

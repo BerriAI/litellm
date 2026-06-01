@@ -275,8 +275,11 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
           const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
           onAllowedToolsChange(validExistingTools);
         } else if (isEditMode) {
-          // Unrestricted legacy server — do not auto-select before the user chooses tools.
-          onAllowedToolsChange([]);
+          // Unrestricted legacy server: preserve a restored/in-progress
+          // selection, otherwise do not auto-select before the user picks tools.
+          onAllowedToolsChange(
+            hasToolAllowlistInteraction ? allowedTools.filter((toolName) => availableToolNames.includes(toolName)) : [],
+          );
         } else if (suggestedTools.length > 0) {
           // OpenAPI preset: only enable suggested tools by default
           onAllowedToolsChange(suggestedTools.map((t) => t.name).filter((name) => availableToolNames.includes(name)));
@@ -292,7 +295,15 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     }
 
     previousToolsRef.current = tools;
-  }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange, suggestedTools]);
+  }, [
+    tools,
+    allowedTools,
+    existingAllowedTools,
+    onAllowedToolsChange,
+    suggestedTools,
+    hasToolAllowlistInteraction,
+    isEditMode,
+  ]);
 
   const isLegacyUnrestrictedEdit =
     isEditMode && existingAllowedTools === null && allowedTools.length === 0 && !hasToolAllowlistInteraction;
