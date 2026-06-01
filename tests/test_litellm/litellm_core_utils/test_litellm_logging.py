@@ -1975,6 +1975,91 @@ def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_co
     assert assembled is None
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Tests for _handle_anthropic_messages_response_logging stream early return
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _make_anthropic_messages_logging_obj(stream: bool) -> LitellmLogging:
+    return LitellmLogging(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-anthropic-1",
+        function_id="test-fn",
+    )
+
+
+def _make_responses_api_response():
+    import datetime
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_test",
+        created_at=int(datetime.datetime.now().timestamp()),
+        status="completed",
+        model="test-model",
+        object="response",
+        output=[],
+    )
+
+
+@pytest.mark.parametrize(
+    "event_cls_name,event_type_attr",
+    [
+        ("ResponseCompletedEvent", "RESPONSE_COMPLETED"),
+        ("ResponseIncompleteEvent", "RESPONSE_INCOMPLETE"),
+        ("ResponseFailedEvent", "RESPONSE_FAILED"),
+    ],
+)
+def test_handle_anthropic_messages_response_logging_passes_through_response_events(
+    event_cls_name, event_type_attr
+):
+    """When /v1/messages is routed through the Responses API bridge, streaming
+    success logging receives raw Response*Event objects. They must be returned
+    untouched instead of crashing in AnthropicResponse.model_validate.
+
+    Regression test for BerriAI/litellm#28595 and #28943.
+    """
+    from litellm.types.llms import openai as openai_types
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    event_cls = getattr(openai_types, event_cls_name)
+    event_type = getattr(openai_types.ResponsesAPIStreamEvents, event_type_attr)
+    event = event_cls(type=event_type, response=_make_responses_api_response())
+
+    logging_obj = _make_anthropic_messages_logging_obj(stream=True)
+    with patch.object(AnthropicResponse, "model_validate") as mock_validate:
+        result = logging_obj._handle_anthropic_messages_response_logging(result=event)
+
+    assert result is event
+    mock_validate.assert_not_called()
+
+
+def test_handle_anthropic_messages_response_logging_does_not_swallow_response_events_for_non_streaming():
+    """Non-streaming requests should not take the new early-return path: a raw
+    Response*Event is unexpected here and must still flow into the existing
+    AnthropicResponse validation branch.
+    """
+    from litellm.types.llms import openai as openai_types
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    event = openai_types.ResponseCompletedEvent(
+        type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=_make_responses_api_response(),
+    )
+
+    logging_obj = _make_anthropic_messages_logging_obj(stream=False)
+    with patch.object(AnthropicResponse, "model_validate") as mock_validate:
+        mock_validate.side_effect = RuntimeError("validation reached")
+        with pytest.raises(RuntimeError, match="validation reached"):
+            logging_obj._handle_anthropic_messages_response_logging(result=event)
+    mock_validate.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_non_streaming_computes_standard_logging_object_once():
     """

@@ -3424,7 +3424,7 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> Any:
         """
         Handles logging for Anthropic messages responses.
 
@@ -3436,9 +3436,19 @@ class Logging(LiteLLMLoggingBaseClass):
 
         - For Non-streaming responses, we need to transform the response to a ModelResponse object.
         - For streaming responses, anthropic_messages handler calls success_handler with a assembled ModelResponse.
+        - When /v1/messages is routed through the OpenAI Responses API bridge, the
+          streaming handler emits raw Response*Event objects. They have already been
+          translated to anthropic-shape SSE for the client by
+          AnthropicResponsesStreamWrapper, so pass them through untouched here instead
+          of crashing in AnthropicResponse.model_validate.
         """
         import httpx
 
+        if self.stream and isinstance(
+            result,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            return result
         if self.stream and isinstance(result, ModelResponse):
             return result
         elif isinstance(result, ModelResponse):
