@@ -118,15 +118,19 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            get_request_route,
+        )
+
+        request_route = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
-        # Match on request.url.path (path-only, exact prefix) so the substring
-        # cannot be smuggled via query string, hostname, or a deeper URL segment.
-        if request.url.path.startswith("/.well-known/"):
+        if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
             not litellm_api_key
             and MCPRequestHandler._target_servers_delegate_auth_to_upstream(  # noqa: E501
-                path=request.url.path, mcp_servers=mcp_servers
+                path=request_route, mcp_servers=mcp_servers
             )
         ):
             # Operator opted this oauth2 server into upstream-delegated auth
@@ -174,7 +178,7 @@ class MCPRequestHandler:
                     "401",
                     "403",
                 ) and MCPRequestHandler._target_servers_use_oauth2(
-                    path=request.url.path, mcp_servers=mcp_servers
+                    path=request_route, mcp_servers=mcp_servers
                 ):
                     verbose_logger.debug(
                         "MCP OAuth2: target server is OAuth2-mode, treating "
@@ -562,25 +566,33 @@ class MCPRequestHandler:
                 )
             )
 
+            key_access_group_grants = (
+                await MCPRequestHandler._get_key_access_group_mcp_server_extras(
+                    user_api_key_auth
+                )
+            )
+
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            allowed_mcp_servers: List[str] = []
-            has_lower_level_mcp_restrictions = (
-                len(allowed_mcp_servers_for_key) > 0
-                or len(allowed_mcp_servers_for_team) > 0
-            )
-            if len(allowed_mcp_servers_for_team) > 0:
-                if len(allowed_mcp_servers_for_key) > 0:
-                    # Key has its own MCP permissions - use intersection with team permissions
-                    for _mcp_server in allowed_mcp_servers_for_key:
-                        if _mcp_server in allowed_mcp_servers_for_team:
-                            allowed_mcp_servers.append(_mcp_server)
-                else:
-                    # Key has no MCP permissions - inherit from team
-                    allowed_mcp_servers = allowed_mcp_servers_for_team
+            key_set = set(allowed_mcp_servers_for_key)
+            team_set = set(allowed_mcp_servers_for_team)
+            grants_set = set(key_access_group_grants)
+
+            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
+
+            # 1. Key/team ceiling. An empty set means "this level does not restrict".
+            if not team_set:
+                base = key_set  # no team restriction
+            elif not key_set:
+                base = team_set  # key has no own perms → inherits team
             else:
-                allowed_mcp_servers = allowed_mcp_servers_for_key
+                base = key_set & team_set  # both restrict → intersect
+
+            # 2. Add the key's access-group grants on top. These are additive:
+            # attaching a group to the key grants its servers regardless of the
+            # team ceiling.
+            allowed_mcp_servers: List[str] = list(base | grants_set)
 
             #########################################################
             # Check end_user permissions if end_user_id is set
@@ -874,42 +886,97 @@ class MCPRequestHandler:
         return False
 
     @staticmethod
+    async def _get_key_access_group_mcp_server_extras(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Resolve the key's unified `access_group_ids` (LiteLLM_AccessGroupTable) to
+        MCP server IDs as additive grants: a group attached to the key extends the
+        key's allowed servers on top of the key/team ceiling rather than being
+        capped by the team. Attaching the group to the key is itself the grant —
+        no `assigned_key_ids` / `assigned_team_ids` re-check. Tag-style
+        `mcp_access_groups` (per-server tags) live in the key's object_permission
+        scope, not here.
+        """
+        if user_api_key_auth is None:
+            return []
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            raw_server_ids = await _get_mcp_server_ids_from_access_groups(
+                access_group_ids=user_api_key_auth.access_group_ids or [],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if not raw_server_ids:
+                return []
+            # Permission entries may be server_ids OR names/aliases — expand to ids.
+            return global_mcp_server_manager.expand_permission_list(raw_server_ids)
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get key access group MCP server grants: {str(e)}"
+            )
+            return []
+
+    @staticmethod
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
+        """
+        Get the key's own MCP ceiling from its object_permission
+        (mcp_servers, tag-style mcp_access_groups, mcp_tool_permissions).
+
+        Unified key.access_group_ids are NOT resolved here — they are additive
+        grants handled by _get_key_access_group_mcp_server_extras and unioned on
+        top of the key/team ceiling, so they must not enter this scope (which is
+        intersected against the team).
+        """
+        if user_api_key_auth is None:
+            return []
         try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_checks import (
+                get_object_permission,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
             if (
                 key_object_permission is None
-                and user_api_key_auth
                 and user_api_key_auth.object_permission_id
+                and prisma_client is not None
             ):
-                from litellm.proxy.auth.auth_checks import get_object_permission
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
+                key_object_permission = await get_object_permission(
+                    object_permission_id=user_api_key_auth.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_auth.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
-
-                if prisma_client is not None:
-                    key_object_permission = await get_object_permission(
-                        object_permission_id=user_api_key_auth.object_permission_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=user_api_key_auth.parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
             if key_object_permission is None:
                 return []
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
-
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
                 key_object_permission.mcp_servers or []
             )
@@ -944,42 +1011,78 @@ class MCPRequestHandler:
         """
         Get allowed MCP servers for a team.
 
-        Note: object_permission is automatically loaded by get_team_object() in main auth flow.
+        Unions two sources:
+        - Legacy team.object_permission (mcp_servers, mcp_access_groups,
+          mcp_tool_permissions).
+        - Unified team.access_group_ids → access_group.access_mcp_server_ids.
+          Mirrors the model-side pattern in can_team_access_model — the group
+          is already attached to the team, so the team relationship is itself
+          the gate (no assigned_team_ids check needed here).
         """
         try:
-            # Get team object permission (already loaded in main auth flow)
-            object_permissions = await MCPRequestHandler._get_team_object_permission(
-                user_api_key_auth
-            )
-
-            if object_permissions is None:
-                return []
-
-            # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+                get_team_object,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            if (
+                user_api_key_auth is None
+                or not user_api_key_auth.team_id
+                or prisma_client is None
+            ):
+                return []
+
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_obj is None:
+                return []
+
+            team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+                access_group_ids=team_obj.access_group_ids or [],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+            object_permissions = team_obj.object_permission
+            if object_permissions is None:
+                return list(set(team_access_group_servers))
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
                 object_permissions.mcp_servers or []
             )
 
-            # Get MCP servers from access groups
-            access_group_servers = (
+            legacy_access_group_servers = (
                 await MCPRequestHandler._get_mcp_servers_from_access_groups(
                     object_permissions.mcp_access_groups or []
                 )
             )
 
-            # servers referenced in tool permissions should also be accessible
             tool_perm_servers = list(
                 global_mcp_server_manager.expand_tool_permissions(
                     object_permissions.mcp_tool_permissions
                 ).keys()
             )
 
-            # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + legacy_access_group_servers
+                + tool_perm_servers
+                + team_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(

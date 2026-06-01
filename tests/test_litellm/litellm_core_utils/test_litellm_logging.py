@@ -1,6 +1,7 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -786,6 +787,211 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def test_is_sync_litellm_request():
+    assert LitellmLogging._is_sync_litellm_request({}) is True
+    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_invokes_callbacks_once_for_final_stream(
+    logging_obj,
+):
+    """Second final-stream dispatch must not re-export (CSW + deferred guardrail paths)."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [mock_callback]
+
+    result = ModelResponse(
+        id="resp-dedupe",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    try:
+        logging_obj.stream = True
+        logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+
+        with (
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+            patch.object(
+                logging_obj,
+                "_success_handler_helper_fn",
+                return_value=(time.time(), time.time(), result),
+            ),
+            patch.object(
+                logging_obj,
+                "_get_assembled_streaming_response",
+                return_value=result,
+            ),
+            patch.object(
+                logging_obj,
+                "_should_run_sync_callbacks_for_async_calls",
+                return_value=True,
+            ),
+        ):
+            await logging_obj.dispatch_success_handlers(result=result)
+            await logging_obj.dispatch_success_handlers(result=result)
+
+        mock_async_log.assert_awaited_once()
+        mock_sync_log.assert_not_called()
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_sync_path_invokes_callback_once_for_final_stream(
+    logging_obj,
+):
+    """Sync dispatch path must also dedupe when dispatch is called twice."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_success_callbacks = list(litellm.success_callback or [])
+    litellm.success_callback = [mock_callback]
+
+    result = ModelResponse(
+        id="resp-sync-dedupe",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    try:
+        logging_obj.stream = True
+        logging_obj.model_call_details["litellm_params"] = {}
+
+        with (
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(
+                logging_obj,
+                "_success_handler_helper_fn",
+                return_value=(time.time(), time.time(), result),
+            ),
+            patch.object(
+                logging_obj,
+                "_get_assembled_streaming_response",
+                return_value=result,
+            ),
+        ):
+            await logging_obj.dispatch_success_handlers(result=result)
+            await logging_obj.dispatch_success_handlers(result=result)
+
+        mock_sync_log.assert_called_once()
+        mock_async_log.assert_not_awaited()
+    finally:
+        litellm.success_callback = original_success_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prefer_async_handlers_runs_legacy_callbacks(
+    logging_obj,
+):
+    """``prefer_async_handlers`` must not skip executor.submit for string callbacks."""
+    result = ModelResponse(
+        id="resp-prefer-async",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+    )
+
+    logging_obj.stream = True
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_success_handlers(
+            result=result,
+            prefer_async_handlers=True,
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+    mock_submit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through(
+    logging_obj,
+):
+    """Pass-through must use async_success_handler (CustomLogger skips sync success_handler)."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import CallTypes
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [mock_callback]
+
+    logging_obj.call_type = CallTypes.pass_through.value
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    try:
+        with (
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+        ):
+            await logging_obj.dispatch_success_handlers(result={"id": "pt-1"})
+
+        mock_async_log.assert_awaited_once()
+        mock_sync_log.assert_not_called()
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+
 def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
     """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
     import datetime
@@ -1351,7 +1557,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
     """
     from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -1404,7 +1610,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
     """
     from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

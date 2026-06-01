@@ -439,6 +439,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       // Update the formValues with the final metadata
       formValues.metadata = JSON.stringify(metadata);
 
+      // disable_global_guardrails is premium-gated server-side; only send it when enabled
+      // so non-premium key creation isn't blocked by that gate.
+      if (!formValues.disable_global_guardrails) {
+        delete formValues.disable_global_guardrails;
+      }
+
       // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
         formValues.object_permission = {

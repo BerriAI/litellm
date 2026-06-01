@@ -11,6 +11,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     request_type: Literal[
         "chat_completion", "embeddings", "transcription"
     ] = "chat_completion",
+    base_model: Optional[str] = None,
 ) -> Optional[list]:
     """
     Returns the supported openai params for a given model + provider
@@ -19,6 +20,11 @@ def get_supported_openai_params(  # noqa: PLR0915
     ```
     get_supported_openai_params(model="anthropic.claude-3", custom_llm_provider="bedrock")
     ```
+
+    Args:
+        base_model: For Azure, the true underlying model (e.g. ``"azure/gpt-5.2"``)
+            when the deployment name differs. Used for model-type detection so that
+            non-standard deployment names route to the correct config.
 
     Returns:
     - List if custom_llm_provider is mapped
@@ -32,17 +38,21 @@ def get_supported_openai_params(  # noqa: PLR0915
 
     if custom_llm_provider in LlmProvidersSet:
         provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+            base_model=base_model,
         )
     elif custom_llm_provider.split("/")[0] in LlmProvidersSet:
         provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider.split("/")[0])
+            model=model,
+            provider=LlmProviders(custom_llm_provider.split("/")[0]),
+            base_model=base_model,
         )
     else:
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        return provider_config.get_supported_openai_params(model=model)
+        return provider_config.get_supported_openai_params(model=base_model or model)
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
@@ -130,16 +140,23 @@ def get_supported_openai_params(  # noqa: PLR0915
                 model=model
             )
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+        _azure_detection_model = base_model or model
+        if litellm.AzureOpenAIO1Config().is_o_series_model(
+            model=_azure_detection_model
+        ):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
-                model=model
+                model=_azure_detection_model
             )
-        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+            model=_azure_detection_model
+        ):
             return litellm.AzureOpenAIGPT5Config().get_supported_openai_params(
-                model=model
+                model=_azure_detection_model
             )
         else:
-            return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
+            return litellm.AzureOpenAIConfig().get_supported_openai_params(
+                model=_azure_detection_model
+            )
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vercel_ai_gateway":

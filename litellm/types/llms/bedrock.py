@@ -49,9 +49,24 @@ class DocumentBlock(TypedDict):
     name: str
 
 
+class SearchResultBlock(TypedDict, total=False):
+    """
+    Search result block used in Bedrock toolResult content.
+
+    Reference:
+    https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultBlock.html
+    """
+
+    source: str
+    title: str
+    content: List[dict]
+    citations: dict
+
+
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    searchResult: SearchResultBlock
     json: dict
     text: str
 
@@ -106,24 +121,41 @@ class CitationWebLocationBlock(TypedDict, total=False):
     domain: str
 
 
+class CitationSearchResultLocationBlock(TypedDict, total=False):
+    """
+    Character span of a Nova grounding citation within the cited content,
+    plus the index of the search result it refers to.
+    """
+
+    start: int
+    end: int
+    searchResultIndex: int
+
+
 class CitationLocationBlock(TypedDict, total=False):
     """
-    Location block containing the web location for a citation.
+    Location block describing where a citation points to.
     """
 
     web: CitationWebLocationBlock
+    searchResultLocation: CitationSearchResultLocationBlock
 
 
 class CitationReferenceBlock(TypedDict, total=False):
     """
-    Citation reference block containing a single citation with its location.
-
-    Each citation contains:
-    - location.web.url: The URL of the source
-    - location.web.domain: The domain of the source
+    Citation reference block containing a single citation with its location,
+    source URL and title.
     """
 
     location: CitationLocationBlock
+    source: str
+    title: str
+
+
+class CitationGeneratedContentBlock(TypedDict, total=False):
+    """A piece of generated text associated with a citationsContent block."""
+
+    text: str
 
 
 class CitationsContentBlock(TypedDict, total=False):
@@ -131,27 +163,33 @@ class CitationsContentBlock(TypedDict, total=False):
     Citations content block returned by Nova grounding (web search) tool.
 
     When Nova grounding is enabled via systemTool, the model may return
-    citationsContent blocks containing web search citation references.
+    citationsContent blocks containing the grounded text and its citation
+    references.
 
     Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
 
     Example response structure:
         {
             "citationsContent": {
+                "content": [{"text": "The grounded answer text ..."}],
                 "citations": [
                     {
                         "location": {
-                            "web": {
-                                "url": "https://example.com/article",
-                                "domain": "example.com"
+                            "searchResultLocation": {
+                                "start": 0,
+                                "end": 42,
+                                "searchResultIndex": 0
                             }
-                        }
+                        },
+                        "source": "https://example.com/article",
+                        "title": "Example Article"
                     }
                 ]
             }
         }
     """
 
+    content: List[CitationGeneratedContentBlock]
     citations: List[CitationReferenceBlock]
 
 
