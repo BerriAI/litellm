@@ -1313,9 +1313,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     if oauth_error:
         oauth_error_detail = f"OAuth error: {oauth_error}"
         if oauth_error_description:
-            oauth_error_detail += (
-                f", error_description: {oauth_error_description}"
-            )
+            oauth_error_detail += f", error_description: {oauth_error_description}"
         raise HTTPException(
             status_code=400,
             detail=oauth_error_detail,
