@@ -3376,7 +3376,15 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        secure_flag = request.url.scheme == "https"
+        redirect_response.set_cookie(
+            key="token",
+            value=jwt_token,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=secure_flag,
+        )
         return redirect_response
 
     @staticmethod
