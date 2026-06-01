@@ -317,6 +317,7 @@ from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
+from litellm.proxy.managed_agents_endpoints import router as managed_agents_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
     initialize_guardrails,
@@ -970,8 +971,77 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## [Optional] Managed agents — Fargate orphan task reconciler
+    managed_agents_reconciler_task: Optional[asyncio.Task] = None
+    from litellm.proxy.managed_agents_endpoints import (
+        config_loader as managed_agents_config_loader,
+    )
+
+    managed_agents_config_loader.initialize(general_settings)
+    managed_agents_config = managed_agents_config_loader.MANAGED_AGENTS_CONFIG
+    if (
+        managed_agents_config is not None
+        and managed_agents_config.enabled
+        and prisma_client is not None
+    ):
+        from litellm.proxy.managed_agents_endpoints.lifecycle import reconcile_loop
+
+        cluster_name = managed_agents_config.aws.cluster or "litellm-agents"
+        managed_agents_reconciler_task = asyncio.create_task(
+            reconcile_loop(
+                prisma_client=prisma_client,
+                region=managed_agents_config.aws_region or "us-east-1",
+                cluster=cluster_name,
+                interval_seconds=managed_agents_config.reconcile_interval_seconds,
+            )
+        )
+        verbose_proxy_logger.info(
+            f"managed_agents: started Fargate orphan reconciler (cluster={cluster_name})"
+        )
+
+        if managed_agents_config.pool_enabled:
+            from litellm.proxy.managed_agents_endpoints.warm_pool import (
+                warm_pool_startup,
+            )
+
+            asyncio.create_task(
+                warm_pool_startup(
+                    prisma_client=prisma_client,
+                    region=managed_agents_config.aws_region or "us-east-1",
+                    aws_overrides=managed_agents_config.aws,
+                    cluster=cluster_name,
+                    min_warm=managed_agents_config.pool_min_warm,
+                )
+            )
+            verbose_proxy_logger.info(
+                "managed_agents: warm pool startup kicked "
+                f"(min_warm={managed_agents_config.pool_min_warm})"
+            )
+
     # End of startup event
     yield
+
+    # Shutdown event - cancel managed_agents reconciler
+    if managed_agents_reconciler_task is not None:
+        managed_agents_reconciler_task.cancel()
+        try:
+            await managed_agents_reconciler_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping managed_agents reconciler: {e}")
+
+    # Shutdown event - drain pooled passthrough HTTP client
+    try:
+        from litellm.proxy.managed_agents_endpoints.endpoints_passthrough import (
+            close_passthrough_http_client,
+        )
+
+        await close_passthrough_http_client()
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error closing managed_agents passthrough http client: {e}"
+        )
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
@@ -15687,6 +15757,7 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
+app.include_router(managed_agents_router)
 
 attach_lazy_features(app)
 app.add_middleware(

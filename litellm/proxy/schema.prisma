@@ -38,11 +38,13 @@ model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
   credential_values Json
-  credential_info Json? 
+  credential_info Json?
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+
+  managed_agent_sandbox_templates LiteLLM_ManagedAgentSandboxTemplateTable[]
 }
 
 // Models on proxy
@@ -1375,4 +1377,87 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+// Managed Agents: sandbox harness template (admin-defined recipe).
+// Maps harness type → ECR image. e.g. opencode/claude-code/aider.
+model LiteLLM_ManagedAgentSandboxTemplateTable {
+  template_id        String   @id @default(uuid())
+  template_name      String?
+  dockerfile_id      String
+  image_uri          String?
+  task_def_arn       String?
+  image_hash         String?
+  build_status       String   @default("pending")
+  build_error        String?
+  container_port     Int      @default(4096)
+  repo_url           String
+  default_branch     String   @default("main")
+  visibility         String   @default("public")
+  git_credential_id  String?
+  description        String?
+  created_at         DateTime @default(now())
+  created_by         String?
+  updated_at         DateTime @default(now()) @updatedAt
+  updated_by         String?
+
+  git_credential     LiteLLM_CredentialsTable? @relation(fields: [git_credential_id], references: [credential_id], onDelete: SetNull)
+  agents             LiteLLM_ManagedAgentTable[]
+
+  @@index([dockerfile_id])
+  @@index([created_by])
+  @@index([git_credential_id])
+}
+
+// Managed Agents: agent config — model + prompt + tools + template ref.
+model LiteLLM_ManagedAgentTable {
+  agent_id        String   @id @default(uuid())
+  agent_name      String?
+  model           String
+  prompt          String?
+  tools           Json     @default("[]")
+  template_id     String
+  branch          String?
+  metadata        Json?    @default("{}")
+  created_at      DateTime @default(now())
+  created_by      String?
+  team_id         String?
+  organization_id String?
+  updated_at      DateTime @default(now()) @updatedAt
+  updated_by      String?
+
+  template        LiteLLM_ManagedAgentSandboxTemplateTable @relation(fields: [template_id], references: [template_id], onDelete: Cascade)
+  sessions        LiteLLM_ManagedAgentSessionTable[]
+
+  @@index([template_id])
+  @@index([created_by])
+  @@index([team_id])
+  @@index([organization_id])
+}
+
+// Managed Agents: live Fargate task instance bound to one agent.
+model LiteLLM_ManagedAgentSessionTable {
+  session_id            String    @id @default(uuid())
+  agent_id              String
+  status                String    @default("creating")
+  task_arn              String?
+  sandbox_url           String?
+  harness_session_id    String?
+  fargate_cluster       String?
+  fargate_task_def_arn  String?
+  virtual_key_hash      String?
+  failure_reason        String?
+  created_at            DateTime  @default(now())
+  created_by            String?
+  team_id               String?
+  last_seen_at          DateTime?
+  expires_at            DateTime?
+  stopped_at            DateTime?
+
+  agent                 LiteLLM_ManagedAgentTable @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+
+  @@index([agent_id])
+  @@index([status])
+  @@index([created_by])
+  @@index([last_seen_at])
 }
