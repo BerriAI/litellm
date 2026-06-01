@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -66,6 +67,33 @@ class _InvalidJsonStreamClient:
             return _InvalidJsonStreamResponse()
         if url.endswith("/runs"):
             return _JsonResponse({"status": "completed", "results": "fallback text"})
+        raise AssertionError(url)
+
+
+class _JsonStreamResponse:
+    headers = {"content-type": "application/json"}
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    async def aread(self):
+        return json.dumps(self.payload).encode()
+
+
+class _JsonStreamClient:
+    def __init__(self, stream_payload):
+        self.stream_payload = stream_payload
+        self.post_urls = []
+
+    async def post(self, url, **kwargs):
+        self.post_urls.append(url)
+        if "identity/token" in url:
+            return _JsonResponse({"access_token": "token", "expires_in": 3600})
+        if url.endswith("/runs/stream"):
+            return _JsonStreamResponse(self.stream_payload)
         raise AssertionError(url)
 
 
@@ -223,6 +251,91 @@ async def test_short_lived_tokens_are_not_served_from_cache():
 
 
 @pytest.mark.asyncio
+async def test_handle_streaming_polls_non_sse_json_until_complete(monkeypatch):
+    client = _JsonStreamClient({"status": "running", "run_id": "run-1"})
+    poll_calls = []
+
+    async def poll_run(base_url, run_id, auth_headers, client, **kwargs):
+        poll_calls.append((base_url, run_id, auth_headers, client))
+        return {"status": "completed", "results": "polled text"}
+
+    monkeypatch.setattr(
+        WatsonxOrchestrateHandler,
+        "_http_client",
+        lambda timeout=90.0: client,
+    )
+    monkeypatch.setattr(WatsonxOrchestrateHandler, "_poll_run", poll_run)
+
+    params = {
+        "message": {
+            "parts": [
+                {"kind": "text", "text": "Hello"},
+            ],
+        }
+    }
+    litellm_params = {
+        "cp4d_host": "https://cpd.example.com",
+        "instance_id": "instance-id",
+        "wxo_agent_id": "agent-id",
+        "api_key": "pending-json-stream-cache-key",
+        "auth_mode": "ibm_cloud",
+    }
+
+    events = [
+        event
+        async for event in WatsonxOrchestrateHandler.handle_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params=litellm_params,
+            delay_ms=0,
+        )
+    ]
+    artifact_text = "".join(
+        event["result"]["artifact"]["parts"][0]["text"]
+        for event in events
+        if event["result"].get("kind") == "artifact-update"
+    )
+
+    assert len(poll_calls) == 1
+    assert poll_calls[0][1] == "run-1"
+    assert artifact_text == "polled text"
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_raises_for_non_sse_json_failure(monkeypatch):
+    client = _JsonStreamClient({"status": "failed", "run_id": "run-1"})
+    monkeypatch.setattr(
+        WatsonxOrchestrateHandler,
+        "_http_client",
+        lambda timeout=90.0: client,
+    )
+
+    params = {
+        "message": {
+            "parts": [
+                {"kind": "text", "text": "Hello"},
+            ],
+        }
+    }
+    litellm_params = {
+        "cp4d_host": "https://cpd.example.com",
+        "instance_id": "instance-id",
+        "wxo_agent_id": "agent-id",
+        "api_key": "failed-json-stream-cache-key",
+        "auth_mode": "ibm_cloud",
+    }
+
+    with pytest.raises(RuntimeError, match="non-success status 'failed'"):
+        async for _ in WatsonxOrchestrateHandler.handle_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params=litellm_params,
+            delay_ms=0,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_handle_streaming_does_not_fallback_on_invalid_json(monkeypatch):
     client = _InvalidJsonStreamClient()
     monkeypatch.setattr(
@@ -263,3 +376,18 @@ def test_config_manager_returns_wxo_provider():
     )
     assert config is not None
     assert config.__class__.__name__ == "WatsonxOrchestrateA2AConfig"
+
+
+def test_wxo_cp4d_default_requires_username_in_dashboard_fields():
+    fields_path = (
+        Path(__file__).resolve().parents[5]
+        / "litellm/proxy/public_endpoints/agent_create_fields.json"
+    )
+    agent_fields = json.loads(fields_path.read_text())
+    wxo_agent = next(
+        agent for agent in agent_fields if agent["agent_type"] == "watsonx_orchestrate"
+    )
+    fields_by_key = {field["key"]: field for field in wxo_agent["credential_fields"]}
+
+    assert fields_by_key["auth_mode"]["default_value"] == "cp4d"
+    assert fields_by_key["username"]["required"] is True

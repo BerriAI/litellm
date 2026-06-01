@@ -139,6 +139,33 @@ class WatsonxOrchestrateHandler:
         )
 
     @staticmethod
+    async def _get_successful_run_data(
+        run_data: Dict[str, Any],
+        base_url: str,
+        auth_headers: Dict[str, str],
+        client: AsyncHTTPHandler,
+    ) -> Dict[str, Any]:
+        status = run_data.get("status", "")
+        if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
+            run_id = run_data.get("run_id") or run_data.get("id") or ""
+            if not run_id:
+                raise ValueError(f"WXO: No run_id in response: {run_data}")
+            run_data = await WatsonxOrchestrateHandler._poll_run(
+                base_url=base_url,
+                run_id=run_id,
+                auth_headers=auth_headers,
+                client=client,
+            )
+            status = run_data.get("status", "")
+
+        if status not in WatsonxOrchestrateTransformation.SUCCESS_STATES:
+            raise RuntimeError(
+                f"WXO run ended with non-success status '{status}': {run_data}"
+            )
+
+        return run_data
+
+    @staticmethod
     async def _accumulate_wxo_sse_text(response: Any) -> str:
         accumulated_text = ""
         async for line in response.aiter_lines():
@@ -237,23 +264,12 @@ class WatsonxOrchestrateHandler:
         run_response.raise_for_status()
         run_data: Dict[str, Any] = run_response.json()
 
-        status = run_data.get("status", "")
-        if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
-            run_id = run_data.get("run_id") or run_data.get("id") or ""
-            if not run_id:
-                raise ValueError(f"WXO: No run_id in response: {run_data}")
-            run_data = await WatsonxOrchestrateHandler._poll_run(
-                base_url=base_url,
-                run_id=run_id,
-                auth_headers=auth_headers,
-                client=client,
-            )
-            status = run_data.get("status", "")
-
-        if status not in WatsonxOrchestrateTransformation.SUCCESS_STATES:
-            raise RuntimeError(
-                f"WXO run ended with non-success status '{status}': {run_data}"
-            )
+        run_data = await WatsonxOrchestrateHandler._get_successful_run_data(
+            run_data=run_data,
+            base_url=base_url,
+            auth_headers=auth_headers,
+            client=client,
+        )
 
         response_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(
             run_data
@@ -313,6 +329,12 @@ class WatsonxOrchestrateHandler:
             if "text/event-stream" not in content_type:
                 response_body = await response.aread()
                 result = json.loads(response_body)
+                result = await WatsonxOrchestrateHandler._get_successful_run_data(
+                    run_data=result,
+                    base_url=base_url,
+                    auth_headers=auth_headers,
+                    client=client,
+                )
                 accumulated_text = (
                     WatsonxOrchestrateTransformation.extract_text_from_wxo_result(
                         result
