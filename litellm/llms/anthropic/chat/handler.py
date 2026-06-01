@@ -820,7 +820,13 @@ class ModelResponseIterator:
                     "type"
                 ]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    # Anthropic Messages streaming spec: the initial text on a
+                    # content_block_start text block is conventionally "" and the
+                    # real content arrives via subsequent content_block_delta
+                    # chunks. Some Anthropic-compatible upstreams omit the field
+                    # entirely rather than sending "", so default to "" to avoid
+                    # aborting the stream with KeyError.
+                    text = content_block_start["content_block"].get("text", "")
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
