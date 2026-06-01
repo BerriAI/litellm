@@ -4889,3 +4889,124 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_map_tool_helper_strict_from_function_level():
+    """strict on tool.function (OpenAI canonical location) should be placed
+    at the tool top level, not inside input_schema."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("strict") is True
+    assert "strict" not in result["input_schema"]
+
+
+def test_map_tool_helper_strict_from_parameters():
+    """strict inside tool.function.parameters (legacy placement) should be
+    moved to the tool top level."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+                "strict": True,
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("strict") is True
+    assert "strict" not in result["input_schema"]
+
+
+def test_map_tool_helper_no_strict_omits_field():
+    """When strict is not set, it should not appear on the tool."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert "strict" not in result
+    assert "strict" not in result["input_schema"]
+
+
+def test_map_tool_helper_strict_false_omits_field():
+    """strict=False should not be forwarded to Anthropic."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "strict": False,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert "strict" not in result
+
+
+def test_map_tool_helper_strict_false_function_overrides_parameters_true():
+    """strict=False on function level must not be overridden by a leftover
+    strict=True in parameters."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "strict": False,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "strict": True,
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert "strict" not in result
+    assert "strict" not in result["input_schema"]

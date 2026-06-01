@@ -25,7 +25,6 @@ AnthropicInputSchema = TypedDict(
         "additionalProperties": Optional[bool],
         "required": Optional[List[str]],
         "$defs": Optional[Dict],
-        "strict": Optional[bool],
     },
     total=False,
 )
@@ -52,6 +51,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     defer_loading: bool
     allowed_callers: Optional[List[str]]
     input_examples: Optional[List[Dict[str, Any]]]
+    strict: bool
 
 
 class AnthropicComputerTool(TypedDict, total=False):
