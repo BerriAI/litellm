@@ -8,6 +8,8 @@ import json
 import time
 from typing import Any, AsyncIterator, Dict, Optional, Tuple, cast
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.watsonx_orchestrate.transformation import (
     WatsonxOrchestrateTransformation,
@@ -331,10 +333,11 @@ class WatsonxOrchestrateHandler:
             ):
                 yield chunk
 
-        except Exception as exc:
+        except httpx.TransportError as exc:
             verbose_logger.warning(
-                f"WXO: Streaming request failed ({exc!r}), "
-                "falling back to non-streaming + fake streaming"
+                f"WXO: Streaming transport failed ({exc!r}), "
+                "falling back to non-streaming + fake streaming",
+                exc_info=True,
             )
             result = await WatsonxOrchestrateHandler.handle_non_streaming(
                 request_id=request_id,

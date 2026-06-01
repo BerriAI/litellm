@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -41,6 +42,31 @@ class _SSELines:
     async def aiter_lines(self):
         for line in self.lines:
             yield line
+
+
+class _InvalidJsonStreamResponse:
+    headers = {"content-type": "application/json"}
+
+    def raise_for_status(self):
+        pass
+
+    async def aread(self):
+        return b"not-json"
+
+
+class _InvalidJsonStreamClient:
+    def __init__(self):
+        self.post_urls = []
+
+    async def post(self, url, **kwargs):
+        self.post_urls.append(url)
+        if "identity/token" in url:
+            return _JsonResponse({"access_token": "token", "expires_in": 3600})
+        if url.endswith("/runs/stream"):
+            return _InvalidJsonStreamResponse()
+        if url.endswith("/runs"):
+            return _JsonResponse({"status": "completed", "results": "fallback text"})
+        raise AssertionError(url)
 
 
 class TestWatsonxOrchestrateTransformation:
@@ -194,6 +220,41 @@ async def test_short_lived_tokens_are_not_served_from_cache():
     assert token_1 == "token-1"
     assert token_2 == "token-2"
     assert client.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_does_not_fallback_on_invalid_json(monkeypatch):
+    client = _InvalidJsonStreamClient()
+    monkeypatch.setattr(
+        WatsonxOrchestrateHandler,
+        "_http_client",
+        lambda timeout=90.0: client,
+    )
+
+    params = {
+        "message": {
+            "parts": [
+                {"kind": "text", "text": "Hello"},
+            ],
+        }
+    }
+    litellm_params = {
+        "cp4d_host": "https://cpd.example.com",
+        "instance_id": "instance-id",
+        "wxo_agent_id": "agent-id",
+        "api_key": "invalid-json-stream-cache-key",
+        "auth_mode": "ibm_cloud",
+    }
+
+    with pytest.raises(json.JSONDecodeError):
+        async for _ in WatsonxOrchestrateHandler.handle_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params=litellm_params,
+        ):
+            pass
+
+    assert not any(url.endswith("/runs") for url in client.post_urls)
 
 
 def test_config_manager_returns_wxo_provider():
