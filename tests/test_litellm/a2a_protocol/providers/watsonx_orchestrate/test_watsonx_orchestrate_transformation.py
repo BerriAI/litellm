@@ -6,6 +6,9 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
+from litellm.a2a_protocol.providers.watsonx_orchestrate.handler import (
+    WatsonxOrchestrateHandler,
+)
 from litellm.a2a_protocol.providers.watsonx_orchestrate.transformation import (
     WatsonxOrchestrateTransformation,
 )
@@ -102,6 +105,14 @@ class TestWatsonxOrchestrateTransformation:
             )
             == ""
         )
+
+
+def test_cp4d_token_ttl_from_absolute_expiration():
+    wall = 1_750_000_000.0
+    assert (
+        WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_750_003_600, wall) == 3600
+    )
+    assert WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(1_749_999_000, wall) == 0
 
 
 def test_config_manager_returns_wxo_provider():

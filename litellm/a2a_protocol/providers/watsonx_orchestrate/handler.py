@@ -44,6 +44,13 @@ class WatsonxOrchestrateHandler:
         return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
+    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: Optional[float] = None) -> int:
+        # CP4D returns expiration as absolute Unix epoch seconds, not a duration.
+        expires_at = int(expiration)
+        wall = now_wall if now_wall is not None else time.time()
+        return max(expires_at - int(wall), 0)
+
+    @staticmethod
     async def _get_bearer_token(
         cp4d_host: str,
         auth_mode: str,
@@ -89,7 +96,11 @@ class WatsonxOrchestrateHandler:
             response.raise_for_status()
             payload = response.json()
             token = str(payload["token"])
-            ttl_s = int(payload.get("expiration", 3600))
+            expiration = payload.get("expiration")
+            if expiration is None:
+                ttl_s = 3600
+            else:
+                ttl_s = WatsonxOrchestrateHandler._cp4d_token_ttl_seconds(expiration)
 
         expires_at = now + max(ttl_s - _TOKEN_CACHE_TTL_BUFFER_S, 60)
         _token_cache[cache_key] = (token, expires_at)
