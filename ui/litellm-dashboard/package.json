@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "e2e": "playwright test --config e2e_tests/playwright.config.ts",
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
+    "e2e:agents": "playwright test --config e2e_tests/playwright.agents.config.ts",
     "knip": "knip",
     "knip:fix": "knip --fix"
   },
