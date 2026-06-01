@@ -103,9 +103,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     def _get_file_bound_batch_model(self, data: Dict) -> Optional[str]:
         """Resolve the model bound to the batch input file ID.
 
-        Used only as a fallback routing model when the request omits a
-        top-level ``model``; the provider is then read from that deployment's
-        trusted credentials for the provider-level skip decision.
+        ``create_batch`` routes a file-bound id (model-embedded ``file-...`` or
+        unified managed file) on that bound model and ignores the top-level
+        ``model``, so this is the authoritative routing model whenever the file
+        binds one. The provider is then read from that deployment's trusted
+        credentials for the provider-level skip decision.
         """
         input_file_id = data.get("input_file_id")
         if not isinstance(input_file_id, str) or not input_file_id:
@@ -130,12 +132,23 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         return None
 
     def _get_batch_routing_model(self, data: Dict) -> Optional[str]:
-        """Resolve the deployment/model used for this batch from request data."""
+        """Resolve the deployment/model used for this batch from request data.
+
+        Mirrors ``create_batch`` routing precedence: a model bound to the input
+        file id wins over the top-level ``model``, because the batch endpoint
+        ignores the top-level model for file-bound ids. Resolving the provider
+        skip from the top-level model first would let a caller point ``model``
+        at a skip-listed provider while the file routes a rate-limited one.
+        """
+        file_bound_model = self._get_file_bound_batch_model(data)
+        if file_bound_model:
+            return file_bound_model
+
         model = data.get("model")
         if isinstance(model, str) and model:
             return model
 
-        return self._get_file_bound_batch_model(data)
+        return None
 
     def _resolve_batch_provider(self, batch_model: Optional[str]) -> Optional[str]:
         """Resolve the provider from the deployment that serves ``batch_model``.

@@ -521,10 +521,31 @@ def _make_rate_limiter():
     )
 
 
-def test_get_batch_routing_model_prefers_request_model():
+def test_get_batch_routing_model_uses_request_model_for_plain_file():
     rate_limiter = _make_rate_limiter()
     assert (
         rate_limiter._get_batch_routing_model({"model": "gpt-4o-mini"}) == "gpt-4o-mini"
+    )
+
+
+def test_get_batch_routing_model_prefers_file_bound_over_request_model():
+    """``create_batch`` routes a model-embedded file id on its bound model and
+    ignores the top-level ``model``. The skip decision must use the same
+    precedence, otherwise a caller could point ``model`` at a skip-listed
+    provider while the file routes a rate-limited one."""
+    import base64
+
+    rate_limiter = _make_rate_limiter()
+    encoded = (
+        base64.urlsafe_b64encode(b"litellm:file-xyz;model,vllm-batch")
+        .decode()
+        .rstrip("=")
+    )
+    assert (
+        rate_limiter._get_batch_routing_model(
+            {"input_file_id": f"file-{encoded}", "model": "gpt-4o-mini"}
+        )
+        == "vllm-batch"
     )
 
 
@@ -706,6 +727,91 @@ def test_should_not_skip_for_skip_listed_top_level_model():
             )
         )
     assert should_skip is False
+
+
+def test_should_not_skip_when_file_bound_provider_is_rate_limited():
+    """A caller must not bypass batch rate limits by pointing the top-level
+    ``model`` at a skip-listed provider while the model-embedded ``input_file_id``
+    routes to a rate-limited provider. ``create_batch`` runs the batch on the
+    file-bound model, so the skip decision must resolve the provider from that
+    model and still process the file when its provider is not skip-listed."""
+    import base64
+
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+    encoded = (
+        base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch")
+        .decode()
+        .rstrip("=")
+    )
+
+    def _creds(model_id, **kwargs):
+        provider = "hosted_vllm" if model_id == "vllm-batch" else "openai"
+        return {"custom_llm_provider": provider}
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["openai"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            side_effect=_creds,
+        ),
+    ):
+        should_skip, descriptors = (
+            rate_limiter._should_skip_batch_input_file_processing(
+                data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
+                user_api_key_dict=user,
+            )
+        )
+    assert should_skip is False
+    assert descriptors is not None
+
+
+def test_should_skip_when_file_bound_provider_is_skip_listed():
+    """The provider skip must still fire when the model the batch actually runs
+    on (the file-bound model) resolves to a skip-listed provider, even if the
+    top-level ``model`` resolves to a different, non-skipped provider."""
+    import base64
+
+    rate_limiter = _make_rate_limiter()
+    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+        {"rate_limit": {"requests_per_unit": 5}}
+    ]
+    user = UserAPIKeyAuth(api_key="sk", models=["*"])
+    encoded = (
+        base64.urlsafe_b64encode(b"litellm:file-orig;model,vllm-batch")
+        .decode()
+        .rstrip("=")
+    )
+
+    def _creds(model_id, **kwargs):
+        provider = "hosted_vllm" if model_id == "vllm-batch" else "openai"
+        return {"custom_llm_provider": provider}
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            side_effect=_creds,
+        ),
+    ):
+        should_skip, descriptors = (
+            rate_limiter._should_skip_batch_input_file_processing(
+                data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
+                user_api_key_dict=user,
+            )
+        )
+    assert should_skip is True
 
 
 def test_warns_once_for_unsupported_model_skip_setting():
