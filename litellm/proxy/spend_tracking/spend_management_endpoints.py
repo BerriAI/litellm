@@ -21,7 +21,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -3149,18 +3148,12 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
+        router_budget_logger = llm_router._get_router_deployment_budget_limiter()
+        if router_budget_logger is None:
+            raise ValueError("No router budget logger found")
+
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
-            )
-            if router_budget_logger is None:
-                raise ValueError("No router budget logger found")
             _provider_spend = (
                 await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             )

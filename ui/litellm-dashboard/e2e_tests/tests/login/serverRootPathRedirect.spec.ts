@@ -26,7 +26,7 @@ test("unauth redirect preserves SERVER_ROOT_PATH prefix", async ({ page }) => {
 
   await page.goto(`http://localhost:4000${ROOT_PATH}/ui/?page=virtual-keys`);
 
-  await page.waitForURL((url) => url.pathname.endsWith("/ui/login"), { timeout: 15_000 });
+  await page.waitForURL((url) => url.pathname.includes("/ui/login"), { timeout: 15_000 });
 
   expect(page.url()).toContain(`${ROOT_PATH}/ui/login`);
 });

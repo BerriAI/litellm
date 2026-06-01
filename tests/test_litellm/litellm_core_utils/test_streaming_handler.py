@@ -569,8 +569,6 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
                 == final_usage_block
             )
 
-        print(mock_log_success_event.call_args.kwargs.keys())
-
 
 def test_streaming_handler_with_stop_chunk(
     initialized_custom_stream_wrapper: CustomStreamWrapper,

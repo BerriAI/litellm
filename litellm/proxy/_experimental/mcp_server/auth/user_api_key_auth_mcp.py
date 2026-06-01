@@ -566,7 +566,7 @@ class MCPRequestHandler:
                 )
             )
 
-            key_access_group_extras = (
+            key_access_group_grants = (
                 await MCPRequestHandler._get_key_access_group_mcp_server_extras(
                     user_api_key_auth
                 )
@@ -577,11 +577,11 @@ class MCPRequestHandler:
             #########################################################
             key_set = set(allowed_mcp_servers_for_key)
             team_set = set(allowed_mcp_servers_for_team)
-            extras_set = set(key_access_group_extras)
+            grants_set = set(key_access_group_grants)
 
-            has_lower_level_mcp_restrictions = bool(key_set or team_set or extras_set)
+            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
 
-            # 1. Team-gated base scope.
+            # 1. Key/team ceiling. An empty set means "this level does not restrict".
             if not team_set:
                 base = key_set  # no team restriction
             elif not key_set:
@@ -589,9 +589,10 @@ class MCPRequestHandler:
             else:
                 base = key_set & team_set  # both restrict → intersect
 
-            # 2. Extend with access-group extras (LIT-3189 — bypasses team
-            # ceiling, gated by group's assigned_team_ids / assigned_key_ids).
-            allowed_mcp_servers: List[str] = list(base | extras_set)
+            # 2. Add the key's access-group grants on top. These are additive:
+            # attaching a group to the key grants its servers regardless of the
+            # team ceiling.
+            allowed_mcp_servers: List[str] = list(base | grants_set)
 
             #########################################################
             # Check end_user permissions if end_user_id is set
@@ -890,11 +891,12 @@ class MCPRequestHandler:
     ) -> List[str]:
         """
         Resolve the key's unified `access_group_ids` (LiteLLM_AccessGroupTable) to
-        MCP server IDs, gated by the access group's `assigned_team_ids` /
-        `assigned_key_ids`. These servers extend the team's MCP scope rather
-        than being capped by it. Tag-style `mcp_access_groups` (per-server tags)
-        are intentionally not handled here — they have no assignment fields and
-        remain subject to the team ceiling.
+        MCP server IDs as additive grants: a group attached to the key extends the
+        key's allowed servers on top of the key/team ceiling rather than being
+        capped by the team. Attaching the group to the key is itself the grant —
+        no `assigned_key_ids` / `assigned_team_ids` re-check. Tag-style
+        `mcp_access_groups` (per-server tags) live in the key's object_permission
+        scope, not here.
         """
         if user_api_key_auth is None:
             return []
@@ -903,13 +905,19 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
             from litellm.proxy.auth.auth_checks import (
-                get_authorized_resources_from_key_access_groups,
+                _get_mcp_server_ids_from_access_groups,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
             )
 
-            raw_server_ids = await get_authorized_resources_from_key_access_groups(
-                valid_token=user_api_key_auth,
-                team_object=None,
-                resource_field="access_mcp_server_ids",
+            raw_server_ids = await _get_mcp_server_ids_from_access_groups(
+                access_group_ids=user_api_key_auth.access_group_ids or [],
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
             )
             if not raw_server_ids:
                 return []
@@ -917,7 +925,7 @@ class MCPRequestHandler:
             return global_mcp_server_manager.expand_permission_list(raw_server_ids)
         except Exception as e:
             verbose_logger.warning(
-                f"Failed to get key access group MCP server extras: {str(e)}"
+                f"Failed to get key access group MCP server grants: {str(e)}"
             )
             return []
 
@@ -925,39 +933,50 @@ class MCPRequestHandler:
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
+        """
+        Get the key's own MCP ceiling from its object_permission
+        (mcp_servers, tag-style mcp_access_groups, mcp_tool_permissions).
+
+        Unified key.access_group_ids are NOT resolved here — they are additive
+        grants handled by _get_key_access_group_mcp_server_extras and unioned on
+        top of the key/team ceiling, so they must not enter this scope (which is
+        intersected against the team).
+        """
+        if user_api_key_auth is None:
+            return []
         try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+            from litellm.proxy.auth.auth_checks import (
+                get_object_permission,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
             if (
                 key_object_permission is None
-                and user_api_key_auth
                 and user_api_key_auth.object_permission_id
+                and prisma_client is not None
             ):
-                from litellm.proxy.auth.auth_checks import get_object_permission
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
+                key_object_permission = await get_object_permission(
+                    object_permission_id=user_api_key_auth.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_auth.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
-
-                if prisma_client is not None:
-                    key_object_permission = await get_object_permission(
-                        object_permission_id=user_api_key_auth.object_permission_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=user_api_key_auth.parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
             if key_object_permission is None:
                 return []
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
-
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
                 key_object_permission.mcp_servers or []
             )

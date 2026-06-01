@@ -21,6 +21,8 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
+from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -694,11 +696,17 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
         start_time=start_time,
         headers=_safe_get_request_headers(request),
     )
-    open_telemetry_logger.set_proxy_request_route_attributes(
-        parent_otel_span,
-        url_path=get_request_route(request=request),
-        http_route=get_request_route_template(request),
+    # Under V2 the FastAPI instrumentor stamps http.route / url.path on the server
+    # span; only the legacy logger needs these set explicitly.
+    set_route_attrs = getattr(
+        open_telemetry_logger, "set_proxy_request_route_attributes", None
     )
+    if not is_otel_v2_enabled() and set_route_attrs is not None:
+        set_route_attrs(
+            parent_otel_span,
+            url_path=get_request_route(request=request),
+            http_route=get_request_route_template(request),
+        )
     request.state.parent_otel_span = parent_otel_span
 
 
@@ -917,6 +925,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             proxy_logging_obj=proxy_logging_obj,
                             parent_otel_span=parent_otel_span,
                             request_headers=_safe_get_request_headers(request),
+                            request_method=RouteChecks._get_request_method(
+                                request=request
+                            ),
                         )
 
                     is_proxy_admin = result["is_proxy_admin"]
@@ -2187,73 +2198,85 @@ async def user_api_key_auth(
     route: str = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 
-    user_api_key_auth_obj = await _user_api_key_auth_builder(
-        request=request,
-        api_key=api_key,
-        azure_api_key_header=azure_api_key_header,
-        anthropic_api_key_header=anthropic_api_key_header,
-        google_ai_studio_api_key_header=google_ai_studio_api_key_header,
-        azure_apim_header=azure_apim_header,
-        request_data=request_data,
-        custom_litellm_key_header=custom_litellm_key_header,
-    )
-    user_api_key_auth_obj.budget_reservation = None
-
-    ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
-    RouteChecks.should_call_route(
-        route=route, valid_token=user_api_key_auth_obj, request=request
-    )
-
-    # Single authorization point. Builder paths MUST NOT call common_checks.
-    # Route through the same exception handler the builder uses so
-    # authorization failures (ProxyException, or plain Exception from
-    # admin-only-route / model-access / budget checks) surface as
-    # ProxyException consistently with pre-refactor behavior.
-    try:
-        await _run_centralized_common_checks(
-            user_api_key_auth_obj=user_api_key_auth_obj,
+    # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
+    # triggers (key/user/team object reads) nest under it instead of flattening
+    # onto the server span. No-op when OTel V2 isn't active.
+    with phase_span(f"auth {route}"):
+        user_api_key_auth_obj = await _user_api_key_auth_builder(
             request=request,
-            request_data=request_data,
-            route=route,
-        )
-    except Exception as e:
-        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
-            e=e,
-            request=request,
-            request_data=request_data,
-            route=route,
-            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
             api_key=api_key,
+            azure_api_key_header=azure_api_key_header,
+            anthropic_api_key_header=anthropic_api_key_header,
+            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+            azure_apim_header=azure_apim_header,
+            request_data=request_data,
+            custom_litellm_key_header=custom_litellm_key_header,
+        )
+        user_api_key_auth_obj.budget_reservation = None
+
+        ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
+        RouteChecks.should_call_route(
+            route=route, valid_token=user_api_key_auth_obj, request=request
         )
 
-    # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
-    # paths (no master key, /user/auth route, JWT short-circuits) that bypass
-    # the end-user resolution block. If those paths produced an auth obj
-    # without an ``end_user_id`` set, fall back to extracting from the request
-    # body so spend logs are still attributed correctly. Validation honours
-    # ``litellm.validate_end_user_id_in_db``.
-    if user_api_key_auth_obj.end_user_id is None:
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-
-        raw_end_user_id = get_end_user_id_from_request_body(
-            request_data, _safe_get_request_headers(request)
-        )
-        if raw_end_user_id is not None:
-            resolved_end_user_id = await resolve_and_validate_end_user_id(
-                raw_end_user_id=raw_end_user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
+        # Single authorization point. Builder paths MUST NOT call common_checks.
+        # Route through the same exception handler the builder uses so
+        # authorization failures (ProxyException, or plain Exception from
+        # admin-only-route / model-access / budget checks) surface as
+        # ProxyException consistently with pre-refactor behavior.
+        try:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=user_api_key_auth_obj,
+                request=request,
+                request_data=request_data,
                 route=route,
             )
-            if resolved_end_user_id is not None:
-                user_api_key_auth_obj.end_user_id = resolved_end_user_id
+        except Exception as e:
+            return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                e=e,
+                request=request,
+                request_data=request_data,
+                route=route,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                api_key=api_key,
+            )
 
+        # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
+        # paths (no master key, /user/auth route, JWT short-circuits) that bypass
+        # the end-user resolution block. If those paths produced an auth obj
+        # without an ``end_user_id`` set, fall back to extracting from the request
+        # body so spend logs are still attributed correctly. Validation honours
+        # ``litellm.validate_end_user_id_in_db``.
+        if user_api_key_auth_obj.end_user_id is None:
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
+
+            raw_end_user_id = get_end_user_id_from_request_body(
+                request_data, _safe_get_request_headers(request)
+            )
+            if raw_end_user_id is not None:
+                resolved_end_user_id = await resolve_and_validate_end_user_id(
+                    raw_end_user_id=raw_end_user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    route=route,
+                )
+                if resolved_end_user_id is not None:
+                    user_api_key_auth_obj.end_user_id = resolved_end_user_id
+
+    # Identity is now resolved. Seed it AFTER the auth span closes so the Baggage
+    # persists on the request task (detaching the span's context token inside the
+    # ``with`` would unwind a Baggage attach made within it) and every post-auth
+    # span — pre-call, LLM call, guardrail, spend write — inherits team/key/user.
+    seed_request_identity(
+        user_api_key_auth_obj,
+        model=request_data.get("model") if isinstance(request_data, dict) else None,
+    )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj
 

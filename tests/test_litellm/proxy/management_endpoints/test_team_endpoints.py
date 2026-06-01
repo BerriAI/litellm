@@ -2832,6 +2832,7 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         ]
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
 
         with patch(
             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
@@ -2888,6 +2889,7 @@ async def test_list_team_v2_security_check_admin_user():
         ]
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
 
         # Should NOT raise an exception
         result = await list_team_v2(
@@ -3036,6 +3038,7 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         }
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
 
         result = await list_team_v2(
             http_request=mock_request,
@@ -3211,6 +3214,7 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
         }
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
 
         result = await list_team_v2(
             http_request=mock_request,
@@ -3388,6 +3392,163 @@ async def test_list_team_v2_search_composes_with_user_id_filter():
             {"team_alias": {"contains": "team_a", "mode": "insensitive"}},
         ]
         assert where["team_id"] == {"in": ["team_a", "team_b"]}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_populates_keys_count():
+    """
+    Test that list_team_v2 returns a keys_count per team derived from a single
+    batched group_by against LiteLLM_VerificationToken.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        team_a = Mock()
+        team_a.team_id = "team_a"
+        team_a.model_dump = lambda: {
+            "team_id": "team_a",
+            "team_alias": "Team A",
+            "members_with_roles": [{"user_id": "u1", "role": "user"}],
+        }
+        team_b = Mock()
+        team_b.team_id = "team_b"
+        team_b.model_dump = lambda: {
+            "team_id": "team_b",
+            "team_alias": "Team B",
+            "members_with_roles": [],
+        }
+
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a, team_b])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(
+            return_value=[
+                {"team_id": "team_a", "_count": {"team_id": 3}},
+                # team_b intentionally absent → expect 0
+            ]
+        )
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert result["total"] == 2
+        by_id = {t.team_id: t for t in result["teams"]}
+        assert by_id["team_a"].keys_count == 3
+        assert by_id["team_b"].keys_count == 0
+
+        # The aggregate is one batched query, filtered by the page's team IDs.
+        group_by_kwargs = mock_db.litellm_verificationtoken.group_by.call_args.kwargs
+        assert group_by_kwargs["by"] == ["team_id"]
+        assert group_by_kwargs["where"] == {"team_id": {"in": ["team_a", "team_b"]}}
+        assert group_by_kwargs["count"] == {"team_id": True}
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_keys_count_skipped_for_empty_page():
+    """
+    When the page has no teams, the keys-count group_by must not be issued.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert result["total"] == 0
+        assert result["teams"] == []
+        mock_db.litellm_verificationtoken.group_by.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_keys_count_skipped_for_deleted_status():
+    """
+    The deleted-table branch returns LiteLLM_DeletedTeamTable items, which do
+    not carry keys_count — group_by must not be issued.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_deleted = Mock()
+        mock_deleted.team_id = "team_d"
+        mock_deleted.model_dump = lambda: {
+            "team_id": "team_d",
+            "team_alias": "Deleted Team",
+        }
+
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(
+            return_value=[mock_deleted]
+        )
+        mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=1)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status="deleted",
+        )
+
+        assert result["total"] == 1
+        mock_db.litellm_verificationtoken.group_by.assert_not_called()
 
 
 @pytest.mark.asyncio
