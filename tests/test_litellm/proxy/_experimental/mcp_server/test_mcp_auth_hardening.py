@@ -7,7 +7,6 @@ Regression tests for MCP auth/redaction hardening:
 - client-IP enforcement on tools/call (not just discovery)
 """
 
-import json
 import os
 import sys
 
