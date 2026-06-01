@@ -5,7 +5,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import polars as pl
-import pytest
 
 from litellm.integrations.focus.transformer import FocusTransformer
 
