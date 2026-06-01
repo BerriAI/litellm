@@ -1862,9 +1862,11 @@ async def test_get_tools_for_single_server():
     )
     from mcp.types import Tool as MCPTool
 
-    # Create a mock server
+    # Create a mock server (pin allowlist fields; MagicMock auto-attrs are truthy)
     mock_server = MagicMock()
     mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
 
     # Create mock tools
     mock_tools = [
