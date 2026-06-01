@@ -419,6 +419,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/watsonx",
     ]
 
     #########################################################

@@ -2433,3 +2433,89 @@ def create_generic_websocket_passthrough_endpoint(
         _forward_headers=forward_headers,
         cost_per_request=cost_per_request,
     )
+
+
+@router.api_route(
+    "/watsonx/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Watsonx Pass-through", "pass-through"],
+)
+async def watsonx_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Watsonx pass-through endpoint.
+    Allows using Watsonx APIs with automatic IAM token management and version parameter injection.
+
+    Example:
+        POST /watsonx/ml/v1/text/tokenization
+        POST /watsonx/ml/v1/text/generation
+    """
+    # Direct passthrough with WatsonxPassthroughConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    provider_config = ProviderConfigManager.get_provider_passthrough_config(
+        provider=LlmProviders.WATSONX,
+        model="",
+    )
+
+    if provider_config is None:
+        raise HTTPException(
+            status_code=404, detail="Watsonx passthrough config not found"
+        )
+
+    # Get complete URL with version parameter
+    complete_url, _ = provider_config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="",
+        endpoint=endpoint,
+        request_query_params=None,
+        litellm_params={},
+    )
+
+    # Get auth headers with IAM token
+    auth_headers = provider_config.validate_environment(
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    # Check for streaming
+    is_streaming_request = False
+    if request.method == "POST":
+        if "multipart/form-data" not in request.headers.get("content-type", ""):
+            _request_body = await request.json()
+        else:
+            _request_body = await get_form_data(request)
+
+        if _request_body.get("stream"):
+            is_streaming_request = True
+
+    request_query_params = dict(request.query_params)
+    if request_query_params.get("version") is None:
+        request_query_params["version"] = litellm.WATSONX_DEFAULT_API_VERSION
+
+    # Create pass-through endpoint
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(complete_url),
+        custom_headers=auth_headers,
+        is_streaming_request=is_streaming_request,
+        custom_llm_provider="watsonx",
+        query_params=request_query_params,
+    )
+
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
