@@ -12,19 +12,31 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
+    SpendLogsPartitionManager,
+)
 from litellm.proxy.utils import PrismaClient
 
 
 class SpendLogCleanup:
     """
     Handles cleaning up old spend logs based on maximum retention period.
-    Deletes logs in batches to prevent timeouts.
+
+    When LiteLLM_SpendLogs is range-partitioned, expired data is reclaimed by
+    dropping whole partitions (instant, frees disk immediately). Otherwise it
+    falls back to deleting logs in batches.
     Uses PodLockManager to ensure only one pod runs cleanup in multi-pod deployments.
     """
 
-    def __init__(self, general_settings=None, redis_cache: Optional[RedisCache] = None):
+    def __init__(
+        self,
+        general_settings=None,
+        redis_cache: Optional[RedisCache] = None,
+        partition_manager: Optional[SpendLogsPartitionManager] = None,
+    ):
         self.batch_size = SPEND_LOG_CLEANUP_BATCH_SIZE
         self.retention_seconds: Optional[int] = None
+        self.partition_manager = partition_manager or SpendLogsPartitionManager()
         from litellm.proxy.proxy_server import general_settings as default_settings
 
         self.general_settings = general_settings or default_settings
@@ -195,12 +207,22 @@ class SpendLogCleanup:
                 seconds=float(self.retention_seconds)
             )
             verbose_proxy_logger.info(
-                f"Deleting logs older than {cutoff_date.isoformat()}"
+                f"Removing logs older than {cutoff_date.isoformat()}"
             )
 
-            # Perform the actual deletion
-            total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-            verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
+            if await self.partition_manager.is_partitioned(prisma_client):
+                await self.partition_manager.ensure_partitions(prisma_client)
+                dropped = await self.partition_manager.drop_partitions_older_than(
+                    prisma_client, cutoff_date
+                )
+                verbose_proxy_logger.info(
+                    "Dropped %d expired spend-log partitions: %s",
+                    len(dropped),
+                    dropped,
+                )
+            else:
+                total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
+                verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
