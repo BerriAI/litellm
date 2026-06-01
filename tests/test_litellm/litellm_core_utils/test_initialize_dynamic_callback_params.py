@@ -36,6 +36,22 @@ def test_resolves_plain_values_from_metadata():
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
 
+def test_resolves_langfuse_environment_at_top_level():
+    kwargs = {"langfuse_environment": "production"}
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("langfuse_environment") == "production"
+
+
+def test_resolves_langfuse_environment_from_metadata():
+    kwargs = {"metadata": {"langfuse_environment": "staging"}}
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("langfuse_environment") == "staging"
+
+
 def test_env_reference_at_top_level_raises_with_guidance():
     kwargs = {"langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY"}
 
