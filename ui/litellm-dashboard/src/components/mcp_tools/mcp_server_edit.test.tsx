@@ -35,8 +35,33 @@ vi.mock("./MCPPermissionManagement", () => ({
 }));
 
 vi.mock("./mcp_tool_configuration", () => ({
-  default: ({ existingAllowedTools }: { existingAllowedTools: string[] | null }) => (
-    <div data-testid="mcp-tool-config" data-existing-allowed-tools={JSON.stringify(existingAllowedTools)} />
+  default: ({
+    existingAllowedTools,
+    onAllowedToolsChange,
+    onToolAllowlistInteraction,
+    onToolNameToDisplayNameChange,
+    onToolNameToDescriptionChange,
+  }: any) => (
+    <div data-testid="mcp-tool-config" data-existing-allowed-tools={JSON.stringify(existingAllowedTools)}>
+      <button
+        type="button"
+        onClick={() => {
+          onToolAllowlistInteraction?.();
+          onAllowedToolsChange([]);
+        }}
+      >
+        Disable all tools
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onToolNameToDisplayNameChange({ read_user: "Read User" });
+          onToolNameToDescriptionChange({ read_user: "Reads users" });
+        }}
+      >
+        Set tool overrides
+      </button>
+    </div>
   ),
 }));
 
@@ -45,7 +70,7 @@ vi.mock("./mcp_tool_configuration", () => ({
 const interactiveOAuthServer = {
   server_id: "oauth_server_1",
   server_name: "OAuthServer",
-  alias: "oauth_server",   // underscores: hyphens fail validateMCPServerName
+  alias: "oauth_server", // underscores: hyphens fail validateMCPServerName
   description: "Interactive OAuth MCP server",
   transport: "http",
   url: "https://example.com/mcp",
@@ -259,6 +284,86 @@ describe("MCPServerEdit (tool allowlist)", () => {
     );
 
     expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute("data-existing-allowed-tools", "[]");
+  });
+
+  it("saves an explicit empty allowlist after legacy unrestricted tools are disabled", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      allowed_tools: [],
+      mcp_info: { server_name: "OAuthServer", tool_allowlist_enforced: true },
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer" },
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.mcp_info.tool_allowlist_enforced).toBe(true);
+    expect(payload.allowed_tools).toEqual([]);
+  });
+
+  it("saves tool overrides for legacy unrestricted servers", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      tool_name_to_display_name: { read_user: "Read User" },
+      tool_name_to_description: { read_user: "Reads users" },
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer" },
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Set tool overrides" }));
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.mcp_info.tool_allowlist_enforced).toBe(false);
+    expect(payload.allowed_tools).toBeUndefined();
+    expect(payload.tool_name_to_display_name).toEqual({ read_user: "Read User" });
+    expect(payload.tool_name_to_description).toEqual({ read_user: "Reads users" });
   });
 });
 

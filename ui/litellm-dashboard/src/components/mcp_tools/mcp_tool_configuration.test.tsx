@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -41,6 +42,43 @@ describe("MCPToolConfiguration", () => {
 
     await waitFor(() => {
       expect(onAllowedToolsChange).toHaveBeenLastCalledWith(["delete_user"]);
+    });
+  });
+
+  it("keeps legacy unrestricted tools disabled after all are toggled off", async () => {
+    const Wrapper = () => {
+      const [allowedTools, setAllowedTools] = useState<string[]>([]);
+      const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
+
+      return (
+        <MCPToolConfiguration
+          accessToken="token"
+          formValues={{ url: "https://example.com/mcp", transport: "http", auth_type: "none" }}
+          allowedTools={allowedTools}
+          existingAllowedTools={null}
+          hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+          onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
+          onAllowedToolsChange={setAllowedTools}
+          toolNameToDisplayName={{}}
+          toolNameToDescription={{}}
+          onToolNameToDisplayNameChange={vi.fn()}
+          onToolNameToDescriptionChange={vi.fn()}
+          externalTools={tools}
+          externalCanFetch
+          isEditMode
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    fireEvent.click(screen.getByText("Flat List"));
+    fireEvent.click(screen.getByText("read_user"));
+    fireEvent.click(screen.getByText("delete_user"));
+
+    await waitFor(() => {
+      expect(screen.getByText("0 of 2 tools enabled for user access")).toBeInTheDocument();
+      expect(screen.getAllByText("Disabled")).toHaveLength(2);
     });
   });
 });
