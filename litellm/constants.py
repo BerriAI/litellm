@@ -1147,6 +1147,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
@@ -1408,6 +1409,13 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 # Prometheus metrics, audit trails, or any other downstream consumer.
 LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
 
+# Marker placed in ``model_call_details`` on a synthetic ``Logging`` object that
+# records a proxy-gate error (auth/rate-limit rejection) for a request that never
+# reached an upstream provider. Tracing callbacks key off it to avoid fabricating
+# an LLM-call span for a call that did not happen. See
+# ``ProxyLogging._handle_logging_proxy_only_error``.
+LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL = "litellm_no_upstream_llm_call"
+
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
@@ -1443,6 +1451,12 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
+# Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
+# "employment_type->acme_employment_type,org_info.department->department"
+CLI_SSO_CLAIM_MAP = (
+    os.getenv("CLI_SSO_CLAIM_MAP") or os.getenv("LITELLM_CLI_SSO_CLAIM_MAP") or ""
+)
+CLI_SSO_CLAIM_MAX_SCALAR_LENGTH = 1024
 
 ########################### UI SESSION DURATION ###########################
 # Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
