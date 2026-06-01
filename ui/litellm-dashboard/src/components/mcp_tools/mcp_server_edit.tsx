@@ -68,6 +68,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
   const currentTokenUrl = Form.useWatch("token_url", form);
   const currentRegistrationUrl = Form.useWatch("registration_url", form);
+  const hasExistingToolAllowlist =
+    mcpServer.mcp_info?.tool_allowlist_enforced || (mcpServer.allowed_tools?.length ?? 0) > 0;
+  const existingAllowedTools = hasExistingToolAllowlist ? (mcpServer.allowed_tools ?? []) : null;
 
   const persistEditUiState = () => {
     if (typeof window === "undefined") {
@@ -1108,7 +1111,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
                 }}
                 allowedTools={allowedTools}
-                existingAllowedTools={mcpServer.allowed_tools ?? null}
+                existingAllowedTools={existingAllowedTools}
                 onAllowedToolsChange={setAllowedTools}
                 toolNameToDisplayName={toolNameToDisplayName}
                 toolNameToDescription={toolNameToDescription}

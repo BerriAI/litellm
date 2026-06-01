@@ -35,7 +35,9 @@ vi.mock("./MCPPermissionManagement", () => ({
 }));
 
 vi.mock("./mcp_tool_configuration", () => ({
-  default: () => <div data-testid="mcp-tool-config" />,
+  default: ({ existingAllowedTools }: { existingAllowedTools: string[] | null }) => (
+    <div data-testid="mcp-tool-config" data-existing-allowed-tools={JSON.stringify(existingAllowedTools)} />
+  ),
 }));
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -215,6 +217,48 @@ describe("MCPServerEdit (delegate auth)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.auth_type).toBe("none");
     expect(payload.delegate_auth_to_upstream).toBe(false);
+  });
+});
+
+describe("MCPServerEdit (tool allowlist)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("treats legacy empty allowed_tools as unrestricted", () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer" },
+        }}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute("data-existing-allowed-tools", "null");
+  });
+
+  it("honors enforced empty allowed_tools", () => {
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          allowed_tools: [],
+          mcp_info: { server_name: "OAuthServer", tool_allowlist_enforced: true },
+        }}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute("data-existing-allowed-tools", "[]");
   });
 });
 
