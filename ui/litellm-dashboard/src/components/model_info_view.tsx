@@ -256,14 +256,26 @@ export default function ModelInfoView({
         tags: values.tags,
       };
 
-      if (form.isFieldTouched("input_cost") && values.input_cost !== undefined && values.input_cost !== null) {
-        updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // Explicit null signals the backend to remove the pricing override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
       }
-      if (form.isFieldTouched("output_cost") && values.output_cost !== undefined && values.output_cost !== null) {
-        updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.output_cost_per_token = null;
+        }
       }
 
-      // Cache Read Cost: explicit value if provided, else fall back to input cost (when input cost touched).
+      // Cache Read Cost:
+      //   - explicit value provided → use it
+      //   - field touched but empty → explicit null (signals backend to remove override)
+      //   - only input_cost touched → fall back to input_cost (guarded against null)
       if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
         if (
           values.cache_read_cost !== undefined &&
@@ -271,14 +283,19 @@ export default function ModelInfoView({
           values.cache_read_cost !== ""
         ) {
           updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
-        } else if (updatedLitellmParams.input_cost_per_token !== undefined) {
+        } else if (form.isFieldTouched("cache_read_cost")) {
+          updatedLitellmParams.cache_read_input_token_cost = null;
+        } else if (
+          updatedLitellmParams.input_cost_per_token !== undefined &&
+          updatedLitellmParams.input_cost_per_token !== null
+        ) {
           updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
         }
       }
 
-      // Cache Write Cost: explicit value if provided, else clear the override
-      // so the backend falls back to the model-level default. Sending 0 here
-      // would persist a zero rate even when the user intended to unset it.
+      // Cache Write Cost: explicit value if provided, else explicit null so the
+      // backend removes the override and falls back to the model-level default.
+      // Sending 0 here would persist a zero rate even when the user intended to unset it.
       if (form.isFieldTouched("cache_write_cost")) {
         if (
           values.cache_write_cost !== undefined &&
@@ -287,7 +304,7 @@ export default function ModelInfoView({
         ) {
           updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
         } else {
-          delete updatedLitellmParams.cache_creation_input_token_cost;
+          updatedLitellmParams.cache_creation_input_token_cost = null;
         }
       }
 
