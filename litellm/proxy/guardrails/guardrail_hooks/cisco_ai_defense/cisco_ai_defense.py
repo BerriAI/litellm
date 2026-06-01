@@ -80,7 +80,7 @@ DEFAULT_INSPECTION_TYPE = "chat"
 # async_moderation_hook with the call_type set accordingly.
 _MCP_CALL_TYPES: Tuple[str, ...] = ("mcp_call", "call_mcp_tool")
 
-# Action vocabulary Cisco AI Defense can return / our heuristic produces.
+# Action vocabulary Cisco AI Defense can return.
 _ACTION_BLOCK = "block"
 _ACTION_REDACT = "redact"
 _ACTION_ALLOW = "allow"
@@ -1073,10 +1073,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_text = self._extract_sanitized_text(verdict)
         sanitized_messages = self._extract_sanitized_messages(verdict)
         sanitized_mcp_arguments = self._extract_sanitized_mcp_arguments(verdict)
-        sanitized_payload_present = bool(
-            sanitized_text or sanitized_messages or sanitized_mcp_arguments
-        )
-
         self._stash_verdict_on_request(
             request_data=request_data,
             surface=surface,
@@ -1088,15 +1084,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             event_id=event_id,
         )
 
-        flagged = self._is_flagged(is_safe, classifications)
-
         action_raw = verdict.get("action")
         if isinstance(action_raw, str) and action_raw.strip():
             action = self._normalize_action(action_raw)
-        elif flagged and sanitized_payload_present:
-            action = _ACTION_REDACT
-        elif flagged:
-            action = _ACTION_BLOCK
         else:
             action = _ACTION_ALLOW
 
@@ -1867,14 +1857,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     continue
                 counts[entity_type] = counts.get(entity_type, 0) + 1
         return counts or None
-
-    @staticmethod
-    def _is_flagged(is_safe: Optional[bool], classifications: List[str]) -> bool:
-        if is_safe is False:
-            return True
-        if is_safe is True:
-            return False
-        return bool(classifications)
 
     # ------------------------------------------------------------------
     # Error handling

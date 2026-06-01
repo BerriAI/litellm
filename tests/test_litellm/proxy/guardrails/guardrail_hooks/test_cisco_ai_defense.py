@@ -70,6 +70,7 @@ def _safe_response(url: str = CHAT_URL) -> Response:
             "classifications": [],
             "severity": "NONE_SEVERITY",
             "rules": [],
+            "action": "allow",
         },
         url=url,
     )
@@ -87,6 +88,7 @@ def _violation_response(url: str = CHAT_URL) -> Response:
             ],
             "explanation": "Detected jailbreak attempt with PII exfiltration",
             "event_id": "evt_123",
+            "action": "block",
         },
         url=url,
     )
@@ -3620,7 +3622,12 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
 
     @pytest.mark.parametrize(
         "is_safe,action,should_block",
-        [(False, "Block", True), (True, "Allow", False)],
+        [
+            (False, "Block", True),
+            (True, "Allow", False),
+            (False, "Allow", False),
+            (True, "Block", True),
+        ],
     )
     @pytest.mark.asyncio
     async def test_mcp_jsonrpc_envelope_respects_verdict(
@@ -3760,23 +3767,17 @@ class TestCiscoAIDefenseJsonRpcError:
                 assert result == data
 
 
-class TestCiscoAIDefenseFlaggedHeuristic:
+class TestCiscoAIDefenseActionOnlyVerdict:
     @pytest.mark.parametrize(
-        "is_safe,classifications,action,expected_flagged,expected_action",
+        "action,expected_action",
         [
-            (False, [], "Block", True, "block"),
-            (True, ["SECURITY_VIOLATION"], "Allow", False, "allow"),
-            (None, ["PRIVACY_VIOLATION"], "redacted", True, "redact"),
-            (None, [], "safe", False, "allow"),
+            ("Block", "block"),
+            ("Allow", "allow"),
+            ("redacted", "redact"),
+            ("safe", "allow"),
         ],
     )
-    def test_verdict_helpers(
-        self, is_safe, classifications, action, expected_flagged, expected_action
-    ):
-        assert (
-            CiscoAIDefenseGuardrail._is_flagged(is_safe, classifications)
-            is expected_flagged
-        )
+    def test_action_normalization(self, action, expected_action):
         assert CiscoAIDefenseGuardrail._normalize_action(action) == expected_action
 
 
