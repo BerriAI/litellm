@@ -673,15 +673,19 @@ async def test_tool_index_pruned_alongside_spend_logs():
 
 
 @pytest.mark.asyncio
-async def test_tool_index_cleanup_batch_failure_does_not_abort_spend_log_cleanup():
+async def test_tool_index_cleanup_batch_failure_does_not_abort_spend_log_cleanup(
+    monkeypatch,
+):
     """A single batch-level DB failure in the tool-index loop must not propagate
     out; we recover the same way `_delete_old_logs` does."""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
     from unittest.mock import AsyncMock, MagicMock
 
-    monkeypatch_failures = 5  # > max so the loop aborts cleanly
-    cleanup_module.SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = (
-        monkeypatch_failures
+    # > max so the loop aborts cleanly. monkeypatch (not direct assignment) so the
+    # module-level default is restored after this test — otherwise the mutated
+    # value leaks into other tests under randomized ordering.
+    monkeypatch.setattr(
+        cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 5
     )
 
     mock_prisma_client = MagicMock()
@@ -698,7 +702,9 @@ async def test_tool_index_cleanup_batch_failure_does_not_abort_spend_log_cleanup
     mock_pod_lock_manager.release_lock = AsyncMock()
 
     # Patch backoff sleep to 0 so the test doesn't actually sleep.
-    cleanup_module.SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = 0.0
+    monkeypatch.setattr(
+        cleanup_module, "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.0
+    )
 
     cleaner = SpendLogCleanup(
         general_settings={"maximum_spend_logs_retention_period": "1d"}
