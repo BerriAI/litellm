@@ -5212,8 +5212,11 @@ class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
 
         ctx, detected_span = otel._get_span_context(kwargs)
         self.assertIsNotNone(ctx)
-        # metadata span should be used (first priority), not litellm_metadata.
         self.assertIsNone(detected_span)
+        # metadata span is found first, so get_span_context on the
+        # litellm_metadata span should never be called — proving
+        # metadata takes priority over litellm_metadata.
+        span_from_litellm_metadata.get_span_context.assert_not_called()
 
     def test_span_context_no_parent_when_neither_has_span(self):
         """When neither metadata nor litellm_metadata has a span, returns (None, None)."""
@@ -5227,9 +5230,10 @@ class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
         }
 
         ctx, detected_span = otel._get_span_context(kwargs)
-        # Falls through to priority 3 (active span) or priority 4 (no parent)
-        # In test context with no active spans, should return None
-        # (we're just verifying it doesn't crash)
+        # No parent span in either metadata dict and no active span in test
+        # context, so both should be None.
+        self.assertIsNone(ctx)
+        self.assertIsNone(detected_span)
 
 
 class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
