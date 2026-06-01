@@ -41342,5 +41342,61 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "salad_cloud/qwen3.6-35b-a3b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "source": "https://docs.salad.com/ai-gateway/reference/pricing"
+    },
+    "salad_cloud/qwen3.6-27b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "source": "https://docs.salad.com/ai-gateway/reference/pricing"
+    },
+    "salad_cloud/qwen3.5-9b": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 9e-08,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "source": "https://docs.salad.com/ai-gateway/reference/pricing"
+    },
+    "salad_cloud/gemma-4-26b-a4b-instruct": {
+        "litellm_provider": "salad_cloud",
+        "mode": "chat",
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 2e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "source": "https://docs.salad.com/ai-gateway/reference/pricing"
     }
 }
