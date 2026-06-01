@@ -537,10 +537,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
+          ...(mcpServer.mcp_info && typeof mcpServer.mcp_info === "object" ? mcpServer.mcp_info : {}),
           server_name: mcpInfoServerName,
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+          tool_allowlist_enforced: true,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,

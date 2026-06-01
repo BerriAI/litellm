@@ -366,8 +366,11 @@ if MCP_AVAILABLE:
         )
 
         # Filter tools based on allowed_tools configuration
-        # Only filter if allowed_tools is explicitly configured (not None and not empty)
-        if server.allowed_tools is not None and len(server.allowed_tools) > 0:
+        from litellm.proxy._experimental.mcp_server.utils import (
+            server_applies_tool_allowlist,
+        )
+
+        if server_applies_tool_allowlist(server):
             tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions

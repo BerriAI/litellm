@@ -2429,7 +2429,13 @@ class MCPServerManager:
         """
         Check if the tool is allowed or banned for the given server
         """
-        if server.allowed_tools:
+        from litellm.proxy._experimental.mcp_server.utils import (
+            server_applies_tool_allowlist,
+        )
+
+        if server_applies_tool_allowlist(server):
+            if not server.allowed_tools:
+                return False
             return (
                 tool_name in server.allowed_tools
                 or f"{server.name}-{tool_name}" in server.allowed_tools
