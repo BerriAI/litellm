@@ -263,3 +263,79 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     ]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
+
+
+@pytest.mark.asyncio
+async def test_azure_sentinel_flush_attempts_audit_logs_when_standard_logs_fail():
+    with patch("asyncio.create_task", side_effect=_close_periodic_flush_task):
+        logger = AzureSentinelLogger(
+            dcr_immutable_id="dcr-test123456789",
+            stream_name="Custom-LiteLLM-Standard",
+            audit_stream_name="Custom-LiteLLM-Audit",
+            endpoint="https://test-dce.eastus-1.ingest.monitor.azure.com",
+            tenant_id="test-tenant-id",
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+        )
+
+    standard_payload = StandardLoggingPayload(
+        id="standard-123",
+        call_type="completion",
+        model="gpt-3.5-turbo",
+        status="success",
+        messages=[{"role": "user", "content": "Hello"}],
+        response={"choices": [{"message": {"content": "Hi"}}]},
+    )
+    audit_log = StandardAuditLogPayload(
+        id="audit-123",
+        updated_at="2026-05-06T04:39:00+00:00",
+        changed_by="user-1",
+        changed_by_api_key="sk-test",
+        action="created",
+        table_name="LiteLLM_TeamTable",
+        object_id="team-1",
+        before_value=None,
+        updated_values='{"team_alias": "sentinel-demo"}',
+    )
+    logger.log_queue.append(standard_payload)
+    logger.audit_log_queue.append(audit_log)
+
+    mock_token_response = MagicMock()
+    mock_token_response.status_code = 200
+    mock_token_response.json = MagicMock(
+        return_value={
+            "access_token": "test-bearer-token",
+            "expires_in": 3600,
+        }
+    )
+    mock_token_response.text = "Success"
+
+    mock_standard_error_response = MagicMock()
+    mock_standard_error_response.status_code = 500
+    mock_standard_error_response.text = "Standard endpoint unavailable"
+    mock_audit_success_response = MagicMock()
+    mock_audit_success_response.status_code = 204
+    mock_audit_success_response.text = "Success"
+
+    async def mock_post(*args, **kwargs):
+        url = kwargs.get("url", "")
+        if "oauth2/v2.0/token" in url:
+            return mock_token_response
+        if "Custom-LiteLLM-Standard" in url:
+            return mock_standard_error_response
+        return mock_audit_success_response
+
+    logger.async_httpx_client.post = AsyncMock(side_effect=mock_post)
+
+    await logger.flush_queue()
+
+    ingestion_calls = [
+        call
+        for call in logger.async_httpx_client.post.call_args_list
+        if "dataCollectionRules" in call.kwargs["url"]
+    ]
+    assert len(ingestion_calls) == 2
+    assert "Custom-LiteLLM-Standard" in ingestion_calls[0].kwargs["url"]
+    assert "Custom-LiteLLM-Audit" in ingestion_calls[1].kwargs["url"]
+    assert logger.log_queue == [standard_payload]
+    assert logger.audit_log_queue == []

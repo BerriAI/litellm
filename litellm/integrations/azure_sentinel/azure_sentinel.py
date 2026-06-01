@@ -374,15 +374,24 @@ class AzureSentinelLogger(CustomBatchLogger):
             return
 
         async with self.flush_lock:
-            try:
-                if self.log_queue:
+            flush_failed = False
+            if self.log_queue:
+                try:
                     await self.async_send_batch()
-                if self.audit_log_queue:
+                except Exception:
+                    flush_failed = True
+                    verbose_logger.exception(
+                        "Azure Sentinel: log flush failed; preserving events for retry"
+                    )
+            if self.audit_log_queue:
+                try:
                     await self.async_send_audit_batch()
-            except Exception:
-                verbose_logger.exception(
-                    "Azure Sentinel: flush failed; preserving events for retry"
-                )
+                except Exception:
+                    flush_failed = True
+                    verbose_logger.exception(
+                        "Azure Sentinel: audit log flush failed; preserving events for retry"
+                    )
+            if flush_failed:
                 if not self._is_in_failure_state:
                     self.handle_callback_failure(
                         callback_name=self._get_callback_failure_name()

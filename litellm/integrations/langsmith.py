@@ -409,11 +409,24 @@ class LangsmithLogger(CustomBatchLogger):
             return
 
         batch_groups = self._group_batches_by_credentials()
+        sent_queue_objects: List[LangsmithQueueObject] = []
         for batch_group in batch_groups.values():
-            await self._log_batch_on_langsmith(
-                credentials=batch_group.credentials,
-                queue_objects=batch_group.queue_objects,
-            )
+            try:
+                await self._log_batch_on_langsmith(
+                    credentials=batch_group.credentials,
+                    queue_objects=batch_group.queue_objects,
+                )
+            except Exception:
+                sent_queue_object_ids = {
+                    id(queue_object) for queue_object in sent_queue_objects
+                }
+                self.log_queue = [
+                    queue_object
+                    for queue_object in self.log_queue
+                    if id(queue_object) not in sent_queue_object_ids
+                ]
+                raise
+            sent_queue_objects.extend(batch_group.queue_objects)
 
     def _add_endpoint_to_url(
         self, url: str, endpoint: str, api_version: str = "/api/v1"
