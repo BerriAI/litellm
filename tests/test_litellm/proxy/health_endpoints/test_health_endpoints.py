@@ -844,9 +844,14 @@ def test_health_readiness(proxy_client):
         duration_ms < 500
     ), f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
 
-    # Assert response contains only low-detail public probe fields
+    # Assert response contains only low-detail public probe fields. `db` is
+    # included so unauthenticated probes can distinguish "DB unreachable"
+    # from a fully-healthy worker; its value depends on whether the test env
+    # exposes DATABASE_URL.
     response_data = response.json()
-    assert response_data == {"status": "healthy"}
+    assert set(response_data.keys()) == {"status", "db"}
+    assert response_data["status"] == "healthy"
+    assert response_data["db"] in {"connected", "disconnected", "Not connected"}
     print(f"Response time: {duration_ms:.2f}ms")
 
 
@@ -1750,7 +1755,7 @@ async def test_health_readiness_returns_503_when_db_disconnected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 503
-    assert result == {"status": "healthy"}
+    assert result == {"status": "healthy", "db": "disconnected"}
 
 
 @pytest.mark.asyncio
@@ -1773,7 +1778,7 @@ async def test_health_readiness_returns_200_when_db_connected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result == {"status": "healthy"}
+    assert result == {"status": "healthy", "db": "connected"}
 
 
 @pytest.mark.asyncio
@@ -1792,7 +1797,7 @@ async def test_health_readiness_returns_200_when_no_db_configured():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result == {"status": "healthy"}
+    assert result == {"status": "healthy", "db": "Not connected"}
 
 
 def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():

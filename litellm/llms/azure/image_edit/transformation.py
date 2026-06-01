@@ -3,8 +3,10 @@ from typing import Optional, cast
 import httpx
 
 import litellm
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 
@@ -30,20 +32,42 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         litellm_params: Optional[dict] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
-        )
+        """
+        Validate Azure environment and set up authentication headers.
 
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+        Delegates to ``BaseAzureLLM._base_validate_azure_environment`` so the
+        Azure image-edit route uses the same auth resolution as every other
+        Azure provider (videos, vector_stores, responses, containers, ...):
+
+        - prefers the Azure-style ``api-key`` header when an API key is available
+        - falls back to ``Authorization: Bearer <azure_ad_token>`` only when AAD
+          auth is configured
+
+        The previous implementation unconditionally set
+        ``Authorization: Bearer <api_key>``, which is correct for OpenAI direct
+        but not for Azure OpenAI / API Management gateways that expect the
+        ``api-key`` header. Subscription-key-based deployments (e.g., behind
+        Azure APIM) responded with ``401 "Access denied due to missing
+        subscription key"``.
+
+        API-key precedence (matches ``AzureVideosConfig``):
+
+        - ``litellm_params["api_key"]`` is the source of truth.
+        - The positional ``api_key`` kwarg only fills in when
+          ``litellm_params["api_key"]`` is empty.
+        - This is a deliberate change from the old ``or`` chain (where the
+          positional ``api_key`` argument won) so behavior matches every other
+          Azure ``validate_environment`` implementation. In production the only
+          caller (``llm_http_handler.image_edit``) sources both values from
+          the same ``litellm_params.api_key``, so the precedence only matters
+          for direct callers of this method.
+        """
+        params = GenericLiteLLMParams(**(litellm_params or {}))
+        if api_key is not None and params.api_key is None:
+            params.api_key = api_key
+        return BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, litellm_params=params
         )
-        return headers
 
     def get_complete_url(
         self,

@@ -34,8 +34,15 @@ interface KeyInfoViewProps {
   backButtonText?: string;
 }
 
-// Must stay in sync with LiteLLM_ManagementEndpoint_MetadataFields_Premium
-// in litellm/proxy/_types.py — limited to fields the key-edit form submits.
+// Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
+// litellm/proxy/_types.py) that the key-edit form submits as arrays/strings, where
+// "empty" means "unset". The loop below drops them when they're empty-and-were-empty
+// so a non-premium edit of unrelated fields doesn't trip the server's premium gate.
+//
+// Boolean premium fields (e.g. disable_global_guardrails) do NOT belong here: false is
+// a real value, not "empty", so isEmptyValue(false) is false and the loop would never
+// drop it — we'd resend false on every edit and trip the gate. Booleans get their own
+// "send only when changed" guard instead (see disable_global_guardrails below).
 const PREMIUM_METADATA_FIELDS = [
   "policies",
   "guardrails",
@@ -172,6 +179,15 @@ export default function KeyInfoView({
         if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
           delete formValues[field];
         }
+      }
+
+      // disable_global_guardrails is premium-gated server-side; only send it when it
+      // changed so a non-premium edit of unrelated fields isn't blocked by that gate.
+      const previousDisableGlobalGuardrails = Boolean(
+        (currentKeyData.metadata as Record<string, unknown> | undefined)?.disable_global_guardrails,
+      );
+      if (Boolean(formValues.disable_global_guardrails) === previousDisableGlobalGuardrails) {
+        delete formValues.disable_global_guardrails;
       }
 
       // Handle max budget empty string
@@ -403,10 +419,16 @@ export default function KeyInfoView({
           keyId: currentKeyData.token_id || currentKeyData.token,
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
-          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          userAlias: currentKeyData.user?.user_alias ?? null,
+          createdBy:
+            currentKeyData.created_by_user?.user_alias ||
+            currentKeyData.created_by_user?.user_email ||
+            currentKeyData.created_by ||
+            "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
           lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+          expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
         onBack={onClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
@@ -503,7 +525,7 @@ export default function KeyInfoView({
                   <Text>
                     of{" "}
                     {currentKeyData.max_budget !== null
-                      ? `$${formatNumberWithCommas(currentKeyData.max_budget)}`
+                      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                       : "Unlimited"}
                   </Text>
                 </div>

@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.oci.chat.transformation import OCIChatConfig
-from litellm.llms.oci.common_utils import OCIError
+from litellm.llms.oci.common_utils import OCIError, sign_with_manual_credentials
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ class TestOCIKeyNormalization:
         # We can't fully test signing without a real key, but we can verify
         # the error message indicates the key was processed (not a type error)
         with pytest.raises(Exception) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -67,7 +67,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(Exception) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -88,7 +88,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(OCIError) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},
@@ -110,7 +110,7 @@ class TestOCIKeyNormalization:
         }
 
         with pytest.raises(OCIError) as exc_info:
-            config._sign_with_manual_credentials(
+            sign_with_manual_credentials(
                 headers={},
                 optional_params=optional_params,
                 request_data={"test": "data"},

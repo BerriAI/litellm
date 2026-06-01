@@ -25,7 +25,8 @@ import {
   Text,
 } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Popover, Skeleton, Tooltip } from "antd";
+import { Popover, Skeleton, Tooltip, Typography } from "antd";
+import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -339,18 +340,59 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 70,
         enableSorting: false,
         cell: (info) => {
-          const value = info.getValue() as string | null;
-          const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
+          const userId = info.getValue() as string | null;
+          if (!userId) return "-";
+          const { created_by_user } = info.row.original;
+          const userAlias = created_by_user?.user_alias ?? null;
+          const userEmail = created_by_user?.user_email ?? null;
+          const isDefaultAdmin = userId === "default_user_id";
+          const displayValue = userAlias || userEmail || userId;
           const width = info.cell.column.getSize();
+
+          const popoverContent = (
+            <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
+              {[
+                { label: "User Alias", value: userAlias },
+                { label: "User Email", value: userEmail },
+                { label: "User ID", value: userId },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex flex-col min-w-0">
+                  <span className="text-gray-400">{label}</span>
+                  {value ? (
+                    <Typography.Text
+                      className="font-mono text-xs"
+                      ellipsis={{ tooltip: value }}
+                      copyable
+                    >
+                      {value}
+                    </Typography.Text>
+                  ) : (
+                    <span className="font-mono">-</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+
+          if (isDefaultAdmin && !userAlias && !userEmail) {
+            return (
+              <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
+                <span className="cursor-default">
+                  <DefaultProxyAdminTag userId={userId} />
+                </span>
+              </Popover>
+            );
+          }
+
           return (
-            <Tooltip title={displayValue}>
+            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
               <span
-                className="font-mono text-xs truncate block"
+                className="font-mono text-xs truncate block cursor-default"
                 style={{ maxWidth: width, overflow: "hidden" }}
               >
-                {displayValue ?? "-"}
+                {displayValue}
               </span>
-            </Tooltip>
+            </Popover>
           );
         },
       },

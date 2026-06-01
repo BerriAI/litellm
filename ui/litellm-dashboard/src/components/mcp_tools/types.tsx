@@ -163,6 +163,13 @@ export interface MCPToolsViewerProps {
   serverId: string;
   accessToken: string | null;
   auth_type?: string | null;
+  /**
+   * When set, indicates the server uses the OAuth2 M2M (client_credentials)
+   * flow — the backend handles token acquisition internally, so the UI must
+   * not gate tool listing behind an interactive PKCE authorization. Mirrors
+   * the heuristic used in `mcp_server_edit.tsx` (`token_url` set => M2M).
+   */
+  tokenUrl?: string | null;
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
@@ -202,6 +209,7 @@ export interface MCPServer {
   tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+  delegate_auth_to_upstream?: boolean;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;

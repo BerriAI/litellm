@@ -1454,40 +1454,34 @@ def test_extract_file_data_with_path_object():
         os.unlink(tmp_path)
 
 
-def test_extract_file_data_with_string_path():
-    """Test that filename is correctly extracted from string paths."""
+def test_extract_file_data_with_pathlib_path():
+    """Test that filename is correctly extracted from pathlib.Path inputs.
+    Bare str paths are rejected — when this runs in a proxy request handler
+    the value is attacker-controlled and opening it as a path is an LFI."""
     import os
     import tempfile
+    from pathlib import Path
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         extract_file_data,
     )
 
-    # Create a temporary WAV file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(b"fake wav content")
-        tmp_path = tmp.name
+        tmp_path = Path(tmp.name)
 
     try:
-        # Test with string path
         extracted = extract_file_data(tmp_path)
 
-        # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".wav")
-
-        # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
         assert extracted["content_type"] in [
             "audio/wav",
             "audio/x-wav",
         ], f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
-
-        # Verify content was read
         assert extracted["content"] == b"fake wav content"
-
     finally:
-        # Clean up temporary file
-        os.unlink(tmp_path)
+        os.unlink(str(tmp_path))
 
 
 def test_extract_file_data_with_tuple_format():
@@ -1510,35 +1504,29 @@ def test_extract_file_data_with_tuple_format():
 
 
 def test_extract_file_data_fallback_to_octet_stream():
-    """Test that unknown file types fall back to application/octet-stream."""
+    """Unknown file types fall back to application/octet-stream."""
     import os
     import tempfile
+    from pathlib import Path
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         extract_file_data,
     )
 
-    # Create a temporary file with unknown extension
     with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
         tmp.write(b"unknown content")
-        tmp_path = tmp.name
+        tmp_path = Path(tmp.name)
 
     try:
-        # Test with unknown file type
         extracted = extract_file_data(tmp_path)
 
-        # Verify filename was extracted
         assert extracted["filename"] is not None
         assert extracted["filename"].endswith(".xyz123")
-
-        # Verify MIME type falls back to octet-stream
         assert (
             extracted["content_type"] == "application/octet-stream"
         ), f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
-
     finally:
-        # Clean up temporary file
-        os.unlink(tmp_path)
+        os.unlink(str(tmp_path))
 
 
 def test_convert_tool_response_with_pdf_file():
