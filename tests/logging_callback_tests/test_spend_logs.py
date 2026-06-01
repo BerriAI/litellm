@@ -558,3 +558,60 @@ def test_truncation_preserves_beginning_and_end():
     kept_chars = expected_start_chars + expected_end_chars
     expected_skipped = total_chars - kept_chars
     assert str(expected_skipped) in truncated_content
+
+
+def test_disable_end_user_cost_tracking_blocks_or_fallback():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/27038
+
+    When litellm.disable_end_user_cost_tracking=True, the or-fallback inside
+    get_logging_payload() must not repopulate end_user from
+    standard_logging_payload["metadata"]["user_api_key_end_user_id"].
+    """
+    original = litellm.disable_end_user_cost_tracking
+    try:
+        litellm.disable_end_user_cost_tracking = True
+
+        input_args: dict = {
+            "kwargs": {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": "fake_key",
+                        "user_api_key_end_user_id": "should-be-blocked",
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": {
+                        "user_api_key_end_user_id": "should-be-blocked",
+                    },
+                    "request_tags": [],
+                    "model_map_information": {"tpm": 0, "rpm": 0},
+                },
+            },
+            "response_obj": litellm.ModelResponse(
+                id="chatcmpl-test-disable-end-user",
+                choices=[
+                    litellm.Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=litellm.Message(content="Hi", role="assistant"),
+                    )
+                ],
+                model="gpt-3.5-turbo",
+                usage=litellm.Usage(
+                    completion_tokens=1, prompt_tokens=1, total_tokens=2
+                ),
+            ),
+            "start_time": datetime.datetime.now(),
+            "end_time": datetime.datetime.now(),
+        }
+
+        payload: SpendLogsPayload = get_logging_payload(**input_args)
+
+        assert payload["end_user"] == "", (
+            f"Expected end_user='' when disable_end_user_cost_tracking=True, got {payload['end_user']!r}"
+        )
+    finally:
+        litellm.disable_end_user_cost_tracking = original
