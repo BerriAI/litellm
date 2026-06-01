@@ -242,7 +242,7 @@
         "label": "Username (CP4D only)",
         "placeholder": "admin",
         "tooltip": "Your CP4D username. Required when auth_mode is 'cp4d'.",
-        "required": true,
+        "required": false,
         "field_type": "text",
         "default_value": null,
         "include_in_litellm_params": true
