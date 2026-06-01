@@ -96,8 +96,12 @@ def _kwargs(payload=None):
     }
 
 
-def _logger(legacy_compat=True):
-    cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=legacy_compat)
+def _logger(legacy_compat=True, team_metadata_keys=None):
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=legacy_compat,
+        baggage_team_metadata_keys=team_metadata_keys or [],
+    )
     exporter = InMemorySpanExporter()
     tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
     return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
@@ -541,8 +545,9 @@ class _Auth:
 def test_provider_model_and_team_metadata_on_real_boundary_flow():
     """End-to-end on the proxy boundary path (the gap a pure-emitter test misses):
 
-    - ``litellm.team.metadata`` is known at auth, so it rides identity Baggage
-      seeded there onto EVERY span (server + LLM call).
+    - ``litellm.team.metadata`` (filtered to the allowlisted sub-keys) is known
+      at auth, so it rides identity Baggage seeded there onto EVERY span
+      (server + LLM call).
     - ``litellm.provider.model`` is only known once routing picks a deployment
       (in the payload at close), AFTER the auth seed and AFTER the boundary span
       starts — so it can't ride Baggage. It's stamped directly on the LLM-call
@@ -550,7 +555,7 @@ def test_provider_model_and_team_metadata_on_real_boundary_flow():
     """
     import json
 
-    logger, exporter = _logger()
+    logger, exporter = _logger(team_metadata_keys=["tier", "cost_center"])
     server = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
     )
