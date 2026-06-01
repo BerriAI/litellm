@@ -1038,7 +1038,9 @@ class LLMCachingHandler:
                     _track_cache_task(
                         asyncio.create_task(
                             litellm.cache.async_add_cache_pipeline(
-                                result, dynamic_cache_object=self.dual_cache, **new_kwargs
+                                result,
+                                dynamic_cache_object=self.dual_cache,
+                                **new_kwargs,
                             )
                         )
                     )
