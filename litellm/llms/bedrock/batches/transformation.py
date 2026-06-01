@@ -243,11 +243,25 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # Get original request data from litellm_params if available
         original_request = litellm_params.get("original_batch_request", {})
 
+        # Prefer the endpoint the caller explicitly set; fall back to the
+        # model-id heuristic so embedding batches don't get mislabelled as
+        # chat completions when `original_batch_request` is missing. We
+        # check `is not None` rather than truthiness so a caller passing
+        # an empty string keeps that explicit signal instead of being
+        # silently overridden by the heuristic - the heuristic only runs
+        # when the field is genuinely absent.
+        explicit_endpoint = original_request.get("endpoint")
+        resolved_endpoint = (
+            explicit_endpoint
+            if explicit_endpoint is not None
+            else self._infer_openai_endpoint_from_model_id(model)
+        )
+
         # Create LiteLLM batch object
         return LiteLLMBatch(
             id=job_arn,  # Use ARN as the batch ID
             object="batch",
-            endpoint=original_request.get("endpoint", "/v1/chat/completions"),
+            endpoint=resolved_endpoint,
             errors=None,
             input_file_id=original_request.get("input_file_id", ""),
             completion_window=original_request.get("completion_window", "24h"),
@@ -268,6 +282,75 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
                 original_request.get("metadata", {})
             ),
         )
+
+    # OpenAI endpoints we can route a Bedrock batch job to. Kept as constants
+    # so the inference helper below can be extended without scattering string
+    # literals; today AWS supports CreateModelInvocationJob for chat and
+    # embedding workloads, both surfaced as OpenAI-shaped endpoints.
+    _OPENAI_CHAT_ENDPOINT = "/v1/chat/completions"
+    _OPENAI_EMBEDDINGS_ENDPOINT = "/v1/embeddings"
+
+    @staticmethod
+    def _lookup_registry_mode(model_id: str) -> Optional[str]:
+        """
+        Read `mode` for `model_id` from `model_prices_and_context_window.json`.
+
+        Returns the mode string (e.g. `"embedding"`, `"chat"`) when the
+        registry knows the id, or `None` when `get_model_info` raises
+        (ARN forms, cross-region inference profile prefixes, unreleased
+        models). Isolating this means the dispatch logic in
+        `_infer_openai_endpoint_from_model_id` stays linear and the
+        registry-vs-fallback split is unit-testable on its own.
+        """
+        try:
+            from litellm import get_model_info
+
+            info = get_model_info(model_id)
+        except Exception:
+            return None
+        if not isinstance(info, dict):
+            return None
+        mode = info.get("mode")
+        return mode if isinstance(mode, str) and mode else None
+
+    @staticmethod
+    def _infer_openai_endpoint_from_model_id(model_id: Optional[str]) -> str:
+        """
+        Map a Bedrock model id to the OpenAI endpoint the batch job represents.
+
+        Used when we cannot read the original `endpoint` field off
+        `litellm_params` (the retrieve path is the main case: by the time
+        a caller polls `GET /batches/{id}` we no longer have the create
+        request body, and the AWS GetModelInvocationJob response only
+        exposes the model id).
+
+        Resolution order:
+          1. `model_prices_and_context_window.json` via `_lookup_registry_mode`.
+             This is the project-wide source of truth: every current Bedrock
+             embedding model is registered with `"mode": "embedding"`, so
+             future additions get classified automatically once their entry
+             lands - no code change here is required.
+          2. Substring fallback (`"embed" in model_id.lower()`) for ids the
+             registry can't resolve. This catches cross-region inference
+             profile prefixes (e.g. `us.amazon.titan-embed-text-v2:0`) and
+             Bedrock ARN forms, neither of which `get_model_info` handles
+             today.
+          3. Default to `/v1/chat/completions` for everything else, so the
+             existing chat batches keep the endpoint they always reported.
+        """
+        if not model_id:
+            return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
+
+        registry_mode = BedrockBatchesConfig._lookup_registry_mode(model_id)
+        if registry_mode == "embedding":
+            return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
+        if registry_mode is not None:
+            # Registry knows the mode and it's not embedding - trust it.
+            return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
+
+        if "embed" in model_id.lower():
+            return BedrockBatchesConfig._OPENAI_EMBEDDINGS_ENDPOINT
+        return BedrockBatchesConfig._OPENAI_CHAT_ENDPOINT
 
     @staticmethod
     def _get_openai_compatible_batch_metadata(metadata: Any) -> Dict[str, str]:
@@ -543,10 +626,17 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             response_data, raw_response
         )
 
+        # GetModelInvocationJob doesn't echo the OpenAI endpoint, so infer
+        # from the Bedrock modelId surfaced on the response. The `model`
+        # parameter is preferred when the caller passed it through.
+        resolved_endpoint = self._infer_openai_endpoint_from_model_id(
+            model or response_data.get("modelId")
+        )
+
         return LiteLLMBatch(
             id=job_arn,
             object="batch",
-            endpoint="/v1/chat/completions",
+            endpoint=resolved_endpoint,
             errors=errors,
             input_file_id=input_file_id,
             completion_window="24h",
