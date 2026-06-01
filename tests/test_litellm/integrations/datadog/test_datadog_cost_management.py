@@ -225,6 +225,36 @@ async def test_async_send_batch_preserves_events_added_during_upload(clean_env):
 
 
 @pytest.mark.asyncio
+async def test_flush_queue_preserves_events_added_during_upload(clean_env):
+    logger = DatadogCostManagementLogger()
+    later_event = StandardLoggingPayload(
+        custom_llm_provider="anthropic",
+        model="claude-3",
+        response_cost=0.02,
+        startTime=time.time(),
+    )
+
+    async def slow_put(*args, **kwargs):
+        logger.log_queue.append(later_event)
+        return Response(202, json={"status": "ok"}, request=_PUT_REQUEST)
+
+    logger.async_client = AsyncMock()
+    logger.async_client.put.side_effect = slow_put
+    logger.log_queue = [
+        StandardLoggingPayload(
+            custom_llm_provider="openai",
+            model="gpt-4",
+            response_cost=0.01,
+            startTime=time.time(),
+        )
+    ]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [later_event]
+
+
+@pytest.mark.asyncio
 async def test_async_send_batch_requeues_on_upload_failure(clean_env):
     """Failed upload requeues the original batch (no data loss)."""
     logger = DatadogCostManagementLogger()

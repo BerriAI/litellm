@@ -44,6 +44,8 @@ _RESERVED_TAG_KEYS: frozenset = frozenset(
 
 
 class DatadogCostManagementLogger(CustomBatchLogger):
+    preserve_events_added_during_flush = True
+
     def __init__(self, cost_tag_keys: Optional[List[str]] = None, **kwargs):
         self.cost_tag_keys: List[str] = list(cost_tag_keys) if cost_tag_keys else []
         self.dd_api_key = os.getenv("DD_API_KEY")

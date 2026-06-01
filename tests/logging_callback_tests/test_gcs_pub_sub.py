@@ -2,7 +2,6 @@ import io
 import os
 import sys
 
-
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
@@ -295,3 +294,47 @@ async def test_async_gcs_pub_sub_v1():
     assert_gcs_pubsub_request_matches_expected(
         actual_request, "spend_logs_payload.json"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_gcs_pub_sub_partial_failure_retries_failed_and_unsent_only():
+    gcs_pub_sub_logger = GcsPubSubLogger.__new__(GcsPubSubLogger)
+    gcs_pub_sub_logger.flush_lock = asyncio.Lock()
+    gcs_pub_sub_logger.max_queue_size = 50_000
+    gcs_pub_sub_logger._is_in_failure_state = False
+    gcs_pub_sub_logger.callback_name = None
+    gcs_pub_sub_logger.log_queue = [
+        {"id": "sent"},
+        {"id": "failed"},
+        {"id": "unsent"},
+    ]
+    sent_ids = []
+
+    async def publish_with_partial_failure(message):
+        sent_ids.append(message["id"])
+        if message["id"] == "failed":
+            raise Exception("boom")
+        return {}
+
+    gcs_pub_sub_logger.publish_message = publish_with_partial_failure
+
+    await gcs_pub_sub_logger.flush_queue()
+
+    assert sent_ids == ["sent", "failed"]
+    assert gcs_pub_sub_logger.log_queue == [
+        {"id": "failed"},
+        {"id": "unsent"},
+    ]
+
+    retried_ids = []
+
+    async def successful_publish(message):
+        retried_ids.append(message["id"])
+        return {}
+
+    gcs_pub_sub_logger.publish_message = successful_publish
+
+    await gcs_pub_sub_logger.flush_queue()
+
+    assert retried_ids == ["failed", "unsent"]
+    assert gcs_pub_sub_logger.log_queue == []

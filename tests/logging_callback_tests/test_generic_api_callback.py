@@ -348,6 +348,51 @@ async def test_generic_api_callback_single_format():
 
 
 @pytest.mark.asyncio
+async def test_generic_api_callback_single_format_partial_failure_retries_failed_only():
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        headers={},
+        flush_interval=999,
+        log_format="single",
+    )
+    generic_logger.log_queue = [
+        {"id": "sent-1"},
+        {"id": "failed"},
+        {"id": "sent-2"},
+    ]
+    sent_ids = []
+
+    async def post_with_partial_failure(data: str):
+        event = json.loads(data)
+        sent_ids.append(event["id"])
+        if event["id"] == "failed":
+            raise Exception("boom")
+        return type("Response", (), {"status_code": 200})()
+
+    generic_logger._post_with_retries = post_with_partial_failure
+
+    await generic_logger.flush_queue()
+
+    assert sent_ids == ["sent-1", "failed", "sent-2"]
+    assert generic_logger.log_queue == [{"id": "failed"}]
+
+    retried_ids = []
+
+    async def successful_post(data: str):
+        event = json.loads(data)
+        retried_ids.append(event["id"])
+        return type("Response", (), {"status_code": 200})()
+
+    generic_logger._post_with_retries = successful_post
+
+    await generic_logger.flush_queue()
+
+    assert retried_ids == ["failed"]
+    assert generic_logger.log_queue == []
+
+
+@pytest.mark.asyncio
 async def test_generic_api_callback_json_array_format_explicit():
     """
     Test the GenericAPILogger callback with explicit json_array format.

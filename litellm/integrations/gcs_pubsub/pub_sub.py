@@ -152,8 +152,13 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         verbose_logger.debug(f"PubSub - about to flush {len(self.log_queue)} events")
 
-        for message in self.log_queue:
-            await self.publish_message(message)
+        batch_to_send = self.log_queue[:]
+        for idx, message in enumerate(batch_to_send):
+            try:
+                await self.publish_message(message)
+            except Exception:
+                del self.log_queue[:idx]
+                raise
 
     async def publish_message(
         self, message: Union[SpendLogsPayload, StandardLoggingPayload]

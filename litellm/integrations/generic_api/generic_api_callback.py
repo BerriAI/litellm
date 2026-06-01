@@ -379,18 +379,20 @@ class GenericAPILogger(CustomBatchLogger):
         )
 
         if self.log_format == "single":
-            # Send each log as individual HTTP request in parallel
-            tasks = []
-            for log_entry in self.log_queue:
-                task = self._post_with_retries(data=safe_dumps(log_entry))
-                tasks.append(task)
+            batch_to_send = self.log_queue[:]
+            tasks = [
+                self._post_with_retries(data=safe_dumps(log_entry))
+                for log_entry in batch_to_send
+            ]
 
             # Execute all requests in parallel
             responses = await asyncio.gather(*tasks, return_exceptions=True)
 
             errors = [r for r in responses if isinstance(r, Exception)]
+            failed_entries = []
             for idx, result in enumerate(responses):
                 if isinstance(result, Exception):
+                    failed_entries.append(batch_to_send[idx])
                     verbose_logger.exception(
                         f"Generic API Logger - Error sending log {idx}: {result}"
                     )
@@ -399,6 +401,9 @@ class GenericAPILogger(CustomBatchLogger):
                         f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
                     )
             if errors:
+                self.log_queue[:] = (
+                    failed_entries + self.log_queue[len(batch_to_send) :]
+                )
                 raise errors[0]
         else:
             # Format the payload based on log_format

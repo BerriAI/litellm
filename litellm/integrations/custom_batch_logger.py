@@ -67,6 +67,7 @@ class CustomBatchLogger(CustomLogger):
 
         async with self.flush_lock:
             if self.log_queue:
+                log_queue = self.log_queue
                 log_queue_length = len(self.log_queue)
                 verbose_logger.debug(
                     "CustomLogger: Flushing batch of %s events", len(self.log_queue)
@@ -100,7 +101,8 @@ class CustomBatchLogger(CustomLogger):
                         )
                     return
                 if self.preserve_events_added_during_flush:
-                    del self.log_queue[:log_queue_length]
+                    if self.log_queue is log_queue:
+                        del self.log_queue[:log_queue_length]
                 else:
                     self.log_queue.clear()
                 self.last_flush_time = time.time()
