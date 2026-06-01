@@ -16,6 +16,7 @@ from litellm.proxy.guardrails.guardrail_hooks.vigil_guard import (
     initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.vigil_guard.vigil_guard import (
+    _DEFAULT_VIGIL_TIMEOUT,
     VigilGuardMissingConfig,
 )
 from litellm.types.guardrails import LitellmParams, SupportedGuardrailIntegrations
@@ -58,11 +59,13 @@ def _make_guardrail(
     api_base="https://vigil.test",
     api_key="vg_secret_key_123",
     guardrail_name="vigil-guard",
+    timeout=None,
 ) -> VigilGuardGuardrail:
     return VigilGuardGuardrail(
         api_base=api_base,
         api_key=api_key,
         unreachable_fallback=unreachable_fallback,
+        timeout=timeout,
         async_handler=handler,
         guardrail_name=guardrail_name,
         event_hook="pre_call",
@@ -382,6 +385,44 @@ async def test_request_url_headers_and_body():
     assert call.json["mode"] == "full"
     assert set(call.json.keys()) == {"text", "source", "mode", "metadata"}
     assert "metadata" in call.json
+
+
+async def test_default_timeout_forwarded_when_unset():
+    handler = FakeHandler([_resp({"decision": "ALLOWED"})])
+    g = _make_guardrail(handler)
+    assert g.timeout == _DEFAULT_VIGIL_TIMEOUT
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
+    assert handler.calls[0].timeout == _DEFAULT_VIGIL_TIMEOUT
+
+
+async def test_configured_timeout_forwarded_to_handler():
+    handler = FakeHandler([_resp({"decision": "ALLOWED"})])
+    g = _make_guardrail(handler, timeout=30)
+    expected = httpx.Timeout(30, connect=5.0)
+    assert g.timeout == expected
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
+    assert handler.calls[0].timeout == expected
+
+
+def test_short_timeout_caps_connect():
+    g = _make_guardrail(FakeHandler([]), timeout=2)
+    assert g.timeout == httpx.Timeout(2, connect=2.0)
+
+
+def test_initialize_guardrail_forwards_timeout():
+    lp = LitellmParams(
+        guardrail="vigil_guard",
+        mode="pre_call",
+        api_base="https://vigil.test",
+        api_key="k",
+        timeout="30",
+    )
+    cb = initialize_guardrail(lp, {"guardrail_name": "vg"})
+    assert cb.timeout == httpx.Timeout(30, connect=5.0)
 
 
 async def test_api_key_only_in_header_never_in_payload():

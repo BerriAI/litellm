@@ -85,6 +85,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         unreachable_fallback: Optional[str] = None,
+        timeout: Optional[float] = None,
         async_handler: Optional[_AsyncPostHandler] = None,
         **kwargs: Any,
     ) -> None:
@@ -107,6 +108,12 @@ class VigilGuardGuardrail(CustomGuardrail):
         fallback = (unreachable_fallback or "fail_closed").lower()
         self.unreachable_fallback: _FallbackMode = (
             "fail_open" if fallback == "fail_open" else "fail_closed"
+        )
+
+        self.timeout: httpx.Timeout = (
+            _DEFAULT_VIGIL_TIMEOUT
+            if timeout is None
+            else httpx.Timeout(timeout, connect=min(timeout, 5.0))
         )
 
         self.async_handler: _AsyncPostHandler = async_handler or get_async_httpx_client(
@@ -362,7 +369,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     url=endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=_DEFAULT_VIGIL_TIMEOUT,
+                    timeout=self.timeout,
                 )
                 response.raise_for_status()
                 return response
