@@ -1622,6 +1622,29 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_output_config_format_preservation_and_beta_header():
+    """Test that output_config.format is preserved and treated as structured output."""
+    config = AnthropicConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+    optional_params = {"output_config": {"format": output_format, "effort": "xhigh"}}
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    headers = config.update_headers_with_optional_anthropic_beta({}, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1648,7 +1671,7 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(

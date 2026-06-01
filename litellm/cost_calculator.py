@@ -133,6 +133,8 @@ _VIDEO_CALL_TYPES = frozenset(
     {
         CallTypes.create_video.value,
         CallTypes.acreate_video.value,
+        CallTypes.video_edit.value,
+        CallTypes.avideo_edit.value,
         CallTypes.video_remix.value,
         CallTypes.avideo_remix.value,
     }

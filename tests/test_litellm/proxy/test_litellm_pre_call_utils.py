@@ -4235,6 +4235,209 @@ class TestApplyClientTagPolicyPreAuth:
             assert exc_info.value.max_budget == 0.10
 
 
+class TestApplyKeyTagsPreAuth:
+    def test_merges_key_tags_into_metadata(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering", "production"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["metadata"]["tags"] == ["engineering", "production"]
+
+    def test_unions_key_tags_with_existing_request_tags(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": {"tags": ["request-tag"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag", "request-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # request-tag deduplicated; key-tag appended
+        assert data["metadata"]["tags"] == ["request-tag", "key-tag"]
+
+    def test_no_key_tags_no_mutation(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data or "tags" not in data.get("metadata", {})
+
+    def test_empty_key_metadata_no_mutation(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data
+
+    def test_uses_litellm_metadata_when_present(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_metadata": {"foo": "bar"},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["litellm_metadata"]["tags"] == ["key-tag"]
+        assert "tags" not in data.get("metadata", {})
+
+    def test_string_metadata_parsed_before_merge(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["existing"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert isinstance(data["metadata"], dict)
+        assert data["metadata"]["tags"] == ["existing", "key-tag"]
+
+    @pytest.mark.asyncio
+    async def test_key_tags_visible_to_tag_max_budget_check(self):
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="engineering",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:engineering":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"engineering": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    async def test_key_tags_within_budget_passes_check(self):
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="engineering",
+            spend=0.05,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(counter_key, fallback_spend):
+            if counter_key == "spend:tag:engineering":
+                return 0.05
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"engineering": tag_object},
+            ),
+        ):
+            await _tag_max_budget_check(
+                request_body=data,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+
+
 # ============================================================================
 # Tests for #27516: provider hint resolution from deployment when the
 # user-facing model name has no provider prefix.
