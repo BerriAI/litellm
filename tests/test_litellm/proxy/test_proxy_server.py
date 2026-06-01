@@ -605,9 +605,7 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
 
 
 def test_admin_ui_export_serves_nested_extensionless_routes():
-    out_dir = (
-        Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
-    )
+    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
 
     nested_html_offenders = [
@@ -619,8 +617,7 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
         and "litellm-asset-prefix" not in path.parts
     ]
     assert not nested_html_offenders, (
-        "Nested routes must be named index.html. Offenders: "
-        f"{nested_html_offenders}"
+        "Nested routes must be named index.html. Offenders: " f"{nested_html_offenders}"
     )
 
     callback_index = out_dir / "mcp" / "oauth" / "callback" / "index.html"
@@ -630,9 +627,7 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
     )
 
     fastapi_app = FastAPI()
-    fastapi_app.mount(
-        "/ui", StaticFiles(directory=str(out_dir), html=True), name="ui"
-    )
+    fastapi_app.mount("/ui", StaticFiles(directory=str(out_dir), html=True), name="ui")
     client = TestClient(fastapi_app)
 
     redirect = client.get(
@@ -640,7 +635,9 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
         follow_redirects=False,
     )
     assert redirect.status_code == 307
-    assert redirect.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz")
+    assert redirect.headers["location"].endswith(
+        "/ui/mcp/oauth/callback/?code=abc&state=xyz"
+    )
 
     landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
     assert landed.status_code == 200
@@ -5902,15 +5899,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
@@ -7136,6 +7134,25 @@ class TestLazyFeatureRegistry:
 
         names = [f.name for f in LAZY_FEATURES]
         assert len(names) == len(set(names)), "duplicate feature names"
+
+    def test_matches_covers_prefix_and_suffix(self):
+        """``matches`` is the single matcher shared by the middleware (request
+        paths) and the warm endpoint (registered route paths), so a route that
+        only matches via suffix — e.g. ``/v1/a2a/{id}/message/send`` against the
+        ``/a2a`` prefix — must still be claimed by the feature."""
+        from litellm.proxy._lazy_features import LazyFeature
+
+        feat = LazyFeature(
+            name="a2a",
+            module_path="json",
+            path_prefixes=("/a2a",),
+            path_suffixes=("/message/send",),
+        )
+        assert feat.matches("/a2a/abc/message/send")
+        assert feat.matches("/v1/a2a/abc/message/send")
+        assert feat.matches("/a2a/abc/.well-known/agent-card.json")
+        assert not feat.matches("/v1/a2a/discover")
+        assert not feat.matches("/unrelated")
 
 
 class TestLazyFeaturesNotImportedAtStartup:
