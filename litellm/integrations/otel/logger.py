@@ -254,6 +254,7 @@ class OpenTelemetryV2(CustomLogger):
             data.request_model,
             promoted_keys=tuple(self.config.baggage_promoted_keys),
             metadata_keys=tuple(self.config.baggage_metadata_keys),
+            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
         )
         if bag:
             parent_ctx = set_request_baggage(bag, context=parent_ctx)
@@ -380,6 +381,7 @@ class OpenTelemetryV2(CustomLogger):
                 model,
                 promoted_keys=tuple(self.config.baggage_promoted_keys),
                 metadata_keys=tuple(self.config.baggage_metadata_keys),
+                team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
             )
             if bag:
                 # Attach (no detach): the contextvar is scoped to this request's

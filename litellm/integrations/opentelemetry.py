@@ -83,6 +83,19 @@ _VALID_CAPTURE_MODES = {
 }
 
 
+def _normalize_team_metadata_keys(value: Any) -> List[str]:
+    """Coerce a team-metadata allowlist from a list or comma-separated string.
+
+    config.yaml passes a YAML list; an env var passes a comma-separated string.
+    Both collapse to a list of stripped, non-empty keys.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 @dataclass
 class OpenTelemetryConfig:
     exporter: Union[str, SpanExporter] = "console"
@@ -100,6 +113,10 @@ class OpenTelemetryConfig:
     # One of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT (or "true" as legacy alias).
     capture_message_content: Optional[str] = None
     semconv_stability_opt_in: Set[OTELSemconvCategory] = field(default_factory=set)
+    # Sub-keys of the team's free-form metadata stamped onto the inference span
+    # under ``litellm.team.metadata``. Empty by default so none of a team's
+    # metadata leaves the process until explicitly allowlisted.
+    baggage_team_metadata_keys: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -129,6 +146,11 @@ class OpenTelemetryConfig:
         # single source of truth: the union of programmatic and env categories.
         self.semconv_stability_opt_in |= parse_semconv_opt_in(
             os.getenv(OTEL_SEMCONV_STABILITY_OPT_IN_ENV)
+        )
+        self.baggage_team_metadata_keys = _normalize_team_metadata_keys(
+            self.baggage_team_metadata_keys
+        ) or _normalize_team_metadata_keys(
+            os.getenv("LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS")
         )
 
     @classmethod
@@ -188,8 +210,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         meter_provider: Optional[Any] = None,
         **kwargs,
     ):
+        team_metadata_keys_override = kwargs.pop("baggage_team_metadata_keys", None)
         if config is None:
             config = OpenTelemetryConfig.from_env()
+        if team_metadata_keys_override is not None:
+            config.baggage_team_metadata_keys = _normalize_team_metadata_keys(
+                team_metadata_keys_override
+            )
 
         self.config = config
         self.callback_name = callback_name
@@ -1245,7 +1272,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             or {}
         )
         team_metadata = self._team_metadata_json(
-            raw_metadata.get("user_api_key_team_metadata")
+            raw_metadata.get("user_api_key_team_metadata"),
+            self.config.baggage_team_metadata_keys,
         )
         if team_metadata:
             self.safe_set_attribute(
@@ -1268,15 +1296,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
 
     @staticmethod
-    def _team_metadata_json(value: Any) -> Optional[str]:
-        """JSON-serialize a team's metadata dict for a single span attribute.
+    def _team_metadata_json(value: Any, allowed_keys: List[str]) -> Optional[str]:
+        """JSON-serialize only the allowlisted sub-keys of a team's metadata.
 
-        Returns ``None`` for a missing, non-dict, or empty mapping so the
-        empty case is dropped rather than stamping a useless ``"{}"``.
+        Returns ``None`` when nothing is allowlisted or no allowlisted key is
+        present, so the empty case is dropped rather than stamping a useless
+        ``"{}"`` (and so a team's metadata never leaves the process until an
+        operator opts each sub-key in via ``baggage_team_metadata_keys``).
         """
-        if not isinstance(value, dict) or not value:
+        if not isinstance(value, dict) or not value or not allowed_keys:
             return None
-        return safe_dumps(value)
+        filtered = {key: value[key] for key in allowed_keys if key in value}
+        if not filtered:
+            return None
+        return safe_dumps(filtered)
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
