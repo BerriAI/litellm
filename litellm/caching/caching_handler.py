@@ -631,6 +631,8 @@ class LLMCachingHandler:
                 final_data_list.append(api_item)
                 idx += 1
             else:
+                if item is not None:
+                    item["index"] = pos
                 final_data_list.append(item)
 
         _caching_handler_response.final_embedding_cached_response.data = final_data_list
